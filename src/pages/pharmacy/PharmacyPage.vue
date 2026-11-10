@@ -33,6 +33,15 @@ const { data: detail, loading: detailLoading } = useQuery(async () => (selectedI
 const d = computed(() => (detail.value?.id === selectedId.value ? detail.value : undefined))
 const shortages = computed(() => (d.value?.items ?? []).filter((i) => i.shortage))
 
+// 分頁跟著「選中那張單」的狀態走：核對後它移到「已核對」、發藥後移到「已發藥」，分頁就跟過去，
+// 右邊顯示的病人一定找得到在左邊哪個清單。使用者自己切分頁時，單的狀態沒變，不會被拉回來。
+watch(
+  () => d.value?.status,
+  (s) => {
+    if (s) tab.value = s
+  },
+)
+
 // ---------- 核對、發藥 ----------
 const verify = useAction(pharmacyApi.verifyDispense, { success: (x) => `領藥號 ${x.pickupNo} 核對完成` })
 const give = useAction(pharmacyApi.dispense, { success: (x) => `領藥號 ${x.pickupNo} 已發藥給 ${x.patientName}` })
@@ -42,10 +51,8 @@ const nextPending = computed(() => (all.value ?? []).find((x) => x.status !== 'd
 async function onDispense() {
   if (!d.value) return
   if (await give.run(d.value.id)) {
-    if (nextPending.value) {
-      selectedId.value = nextPending.value.id
-      tab.value = nextPending.value.status
-    }
+    // 自動帶到下一張；分頁由上面的 watch 跟著那張單的狀態切換
+    if (nextPending.value) selectedId.value = nextPending.value.id
   }
 }
 
