@@ -89,7 +89,8 @@ export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢')
     const dp = db.dispenses.find((d) => d.visitId === c.visitId)
-    if (dp?.status === 'dispensed') fail('藥品已發出，請先辦理退藥', 'CONFLICT')
+    // 訊息不能指向不存在的功能：本系統沒有退藥，要明說，使用者才不會到處找「退藥」按鈕
+    if (dp?.status === 'dispensed') fail('藥品已發出，收據無法作廢。實務上需先辦理退藥，本展示系統未提供退藥功能。', 'CONFLICT')
     c.voided = true
     db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
     const v = must(find.visit(c.visitId), '掛號紀錄')
