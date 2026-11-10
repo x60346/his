@@ -6,6 +6,8 @@
 
 技術：Vue 3、TypeScript、Pinia、Vue Router、Tailwind CSS、Vite。不使用 UI 套件，所有元件自行實作。
 
+**線上展示：https://x60346.github.io/his/**（每次推送到 `main`，GitHub Actions 會先跑流程測試與建置，通過後自動部署，見 `.github/workflows/deploy.yml`）
+
 ---
 
 ## 快速開始

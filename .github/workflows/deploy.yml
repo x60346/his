@@ -1,0 +1,56 @@
+# 部署到 GitHub Pages：每次推送到 main，先跑流程測試與建置，全部通過才部署。
+# 測試沒過就不會部署——壞掉的版本不會上線。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 也可以在 Actions 頁面手動觸發
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一時間只跑一個部署；新的推送進來時，取消還在排隊的舊部署
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # 規則大量依賴「現在幾點」（掛號截止、給藥時間窗、展示資料以今天為基準），
+  # GitHub 的機器預設 UTC，測試要在台灣時區跑才會和實際使用一致
+  TZ: Asia/Taipei
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 流程測試：直接呼叫服務層跑完整就醫流程與各項規則
+      - run: npm run smoke
+
+      # 型別檢查＋正式建置（vite.config.ts 的 base 為 './'，路由為 hash 模式，放在 /his/ 子路徑也能運作）
+      - run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
