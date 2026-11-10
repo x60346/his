@@ -13,7 +13,9 @@ import type {
 } from '@/types'
 
 export const departments: Department[] = [
-  { id: 'D01', code: 'IM', name: '家醫科', active: true },
+  // 代碼依慣例：FM＝Family Medicine。以前寫成 IM（一般指內科），又和給藥途徑 IM（肌肉注射）同名。
+  // 內科維持 MED，不改成 IM——用過的代碼不重新指派，免得舊資料、匯出檔裡的 IM 意思變了
+  { id: 'D01', code: 'FM', name: '家醫科', active: true },
   { id: 'D02', code: 'MED', name: '內科', active: true },
   { id: 'D03', code: 'SUR', name: '外科', active: true },
   { id: 'D04', code: 'PED', name: '小兒科', active: true },

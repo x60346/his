@@ -388,6 +388,11 @@ try {
   console.log('\n[系統管理] 帳號、科別、醫師、稽核、匯出入')
   await as('admin')
   const A = api.adminApi
+  // I3：科別代碼不重複、家醫科是 FM（以前誤為 IM）
+  {
+    const codes = dbm.db.departments.map((d) => d.code)
+    ok(new Set(codes).size === codes.length && dbm.db.departments.find((d) => d.name === '家醫科')?.code === 'FM', `種子科別代碼不重複，家醫科為 FM（${codes.join('、')}）`)
+  }
   const self = dbm.db.users.find((u) => u.username === 'admin')
   await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'admin', active: false }), '停用自己的帳號')
   await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'clerk', active: true }), '拿掉自己的管理員角色')
