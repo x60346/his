@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（136 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（169 項） |
 
 ### 展示帳號
 
@@ -96,11 +96,12 @@ src/
 ├─ mock/             codes（代碼）、db（資料庫與版本）、seed（展示資料）
 ├─ services/
 │  ├─ http.ts        query / mutate（延遲、交易、回滾、複本）、requireUser、audit
-│  ├─ *-rules.ts     純函式規則：計費、資格、護理時間窗、庫存 FEFO
+│  ├─ *-rules.ts     純函式規則：資格、護理時間窗、庫存 FEFO、劑量與天數（計費規則在 billing.ts）
 │  ├─ views.ts       查表、組合檢視資料（後端的 JOIN + DTO）、usable（可開立檢查）
 │  └─ 各業務模組      booking、opd、charge、pharmacy、inventory、admission、ipd、nursing、prevent、schedule、admin…
-├─ composables/      useQuery、useAction、useDebounced、useNow
+├─ composables/      useQuery、useAction、useDebounced、useClock（共用時鐘）、useRevealOnNarrow
 ├─ stores/           auth（登入者）、ui（提示與確認框）
+├─ utils/            日期、代碼標籤、身分證驗證、clonePlain、safeRedirect
 ├─ components/ui/    UButton、UTable、UDialog、USearchSelect、UQueryState、ULineChart…
 ├─ layouts/          主版面（選單由路由表與權限自動產生）
 ├─ router/           路由表：頁面、選單、權限的單一來源
@@ -129,10 +130,14 @@ scripts/smoke-flow.mjs   流程測試
 | 規則 | 位置 |
 |---|---|
 | 批價與部分負擔 | `services/billing.ts`（收費設定頁的試算也用它） |
+| 現金收款（不足、非整數、找零異常） | `billing.checkCash` |
 | 預防保健資格 | `services/prevent-rules.ts` |
 | 給藥時間窗、班別、生命徵象範圍 | `services/nursing-rules.ts` |
 | FEFO 扣庫存、可用天數 | `services/stock-rules.ts` |
 | 過敏比對 | `services/allergy.ts` |
+| 劑量合理性、處方天數 | `services/dose-rules.ts` |
+
+**防打錯的規則看「倍數」，不看絕對值。** 各藥的劑量刻度差很多（1 顆錠劑對 10 U Insulin），所以劑量以「該藥常用劑量的幾倍」判斷：超過 3 倍（高警訊藥品 2 倍）要醫師確認，超過 20 倍幾乎一定是多打了 0，直接擋下。處方天數限 1–30 天，收款找零上萬元視為輸入錯誤。這些不是臨床上限，而是攔住「多打一個 0」的防線，門診、住院、頁面即時提示都呼叫同一個函式。
 
 **規則是程式，參數是資料。** 部分負擔的金額可以在系統管理調整，計算方式不行；預防保健項目可以調整間隔與欄位，但不能在畫面上新增項目，因為新項目代表新的資格邏輯。
 
@@ -146,10 +151,15 @@ scripts/smoke-flow.mjs   流程測試
 | 角色 | `requireUser(...roles)`，管理員也不會自動通過 |
 | 主檔停用 | `usable.drug / procedure / icd`：開立新單一律經過它，顯示舊紀錄則用 `find` |
 | 庫存異動 | `inventory.postStock`：唯一能改庫存的函式 |
+| 登入後導向 | `utils/redirect.ts` 的 `safeRedirect`：路由守衛與登入頁共用；只接受站內路徑（拒絕 `//`、反斜線、外部網址），權限仍交給守衛 |
 
 ### 4. 寫入是交易；回傳的是複本；參數經過「網路」
 
 `services/http.ts` 的 `mutate()` 先拍快照，失敗就整個回滾，不會留下改到一半的資料；成功時先複製回傳值，再存檔。`overNetwork()` 讓所有參數經過 JSON 序列化，模擬真實後端只收得到純資料，頁面的 Vue Proxy 不會被存進資料庫。
+
+- **存檔失敗也是交易失敗**：`mock/db.ts` 的 `commit()` 寫不進 localStorage（通常是空間已滿）時丟出錯誤，由 `mutate()` 回滾並告訴使用者。以前是默默吞掉，畫面顯示收款成功、給了收據號，重新整理後資料卻不見了。
+- **讀取時順便產生的資料例外**：診次、給藥排程這類「查詢時才補產生」的資料用 `commitIfPossible()`，存不進去也不影響這次查詢，下次會再產生；使用者的操作一律走 `mutate → commit`。
+- **頁面層要複製資料用 `clonePlain`**（`utils/clone.ts`）：頁面的資料常是 Vue 的 Proxy，`structuredClone` 複製不了會直接丟錯（病患資料頁按「修改」曾因此打不開）。頁面資料都是純資料，用 JSON 來回一次，和 `overNetwork` 同一個道理。
 
 ### 5. 狀態機
 
@@ -184,7 +194,8 @@ scripts/smoke-flow.mjs   流程測試
 
 ### 9. 時間是資料的一部分
 
-- 「逾時、待給、太早」依「現在幾點」即時計算（`useNow` 時鐘＋`marUrgency`）。
+- **全系統只有一個時鐘**：`composables/useClock.ts` 一個計時器、每 30 秒更新，所有頁面讀同一個「現在」與「今天」（`useNow` 是它的舊名稱）。「逾時、待給、太早」依它即時計算（＋`marUrgency`）。
+- **「今天」會走動**：頁面打開時記下 `today()` 就不會再變，開著跨過午夜，護理站還停在昨天，而大夜班正是跨夜的人。`followToday(date)` 讓日期欄位跟著新的一天走；使用者自己選了別的日期（例如查昨天的日結）就不去動它。
 - 「每 N 年」定義為同月同日（`addYears`，2/29 會進位到 3/1），不用 N × 365 天。
 - 帳本依寫入順序排序，不依時間排序：時間只到分鐘，同一分鐘的兩筆分不出先後。
 
@@ -198,7 +209,23 @@ scripts/smoke-flow.mjs   流程測試
 - 不能有晚於「現在」的時間（早上 8 點不該已經有 10:30 的發藥紀錄）。
 - 流程測試會逐一驗證以上幾點；測試裡的檢查是**另外獨立寫的**，不重用種子資料裡的函式。
 
-### 11. 資料版本號
+### 11. 多分頁：資料共用，登入身分各自獨立
+
+| 存什麼 | 存在哪 | 範圍 |
+|---|---|---|
+| 資料（病人、醫囑…） | `localStorage`（`mock/db.ts`） | 所有分頁共用 |
+| 誰登入了 | `sessionStorage`（`services/http.ts` 的 `setSessionUser`） | 只屬於這一個分頁 |
+
+- **資料要同步**：每個分頁在記憶體各握一份資料庫，寫入時整份寫回。若不同步，分頁 B 的下一次寫入會把分頁 A 剛建的病人蓋掉。所以監聽 `storage` 事件（只有**其他**分頁寫入才會觸發），收到就重新載入並通知頁面重新查詢。
+- **登入身分刻意不共用**：展示時常一個分頁登入醫師、另一個登入藥師，並排看醫囑送到藥局。代價是在 A 分頁登入，B 分頁按 F5 仍是未登入（「複製分頁」會帶走一份當下的登入）。真實系統多半相反：憑證放在 cookie，所有分頁共用。
+
+### 12. 替使用者擋下意外
+
+- **對話框防誤關**（`components/ui/UDialog.vue`）：輸入或選擇過內容後，點背景、按 Esc 都不會關，只能按「取消」或 ×，醫囑、出院摘要寫到一半不會消失；沒輸入過的確認框照舊可以點背景關閉。
+- **游標位置**：對話框打開時游標移到第一個輸入欄位，關閉時回到打開前的按鈕，鍵盤使用者不必按一堆 Tab。
+- **窄螢幕捲到明細**（`composables/useRevealOnNarrow.ts`）：手機上左右兩欄變成上下堆疊，點清單後明細出現在畫面外，使用者以為沒反應。選取改變時把 `data-detail` 區塊捲進畫面；寬螢幕兩欄並排時不動作。
+
+### 13. 資料版本號
 
 `mock/db.ts` 的 `SCHEMA_VERSION` 一變，瀏覽器裡的舊資料會自動重建。
 
@@ -219,6 +246,8 @@ scripts/smoke-flow.mjs   流程測試
 - 系統管理：帳號自我保護、科別醫師停用檢查、管理員不能執行臨床操作、稽核、匯出入
 - 排班：每週範本、代診、停診與通知
 - 收費設定、主檔停用、未登入不能讀取任何資料
+- 防打錯：劑量倍數、處方天數、現金收款、病人資料欄位範圍
+- 儲存空間已滿時寫入失敗並回滾；登入後導向只接受站內路徑
 - 資料不變式：所有時間戳記不晚於現在、回傳的是複本
 
 ---
@@ -233,4 +262,3 @@ scripts/smoke-flow.mjs   流程測試
 - **門診開藥的庫存提示**使用總庫存（含待報廢的過期品），藥局發藥時才以可用量為準。
 - **權限是程式設定**：角色與可做的事寫在程式碼中，系統管理頁只能檢視，不能勾選調整（原因寫在權限頁）。
 - **稽核紀錄只保留最近 500 筆**（受瀏覽器儲存空間限制），「最近登入」也取自這裡。
-- 已登入的使用者打開帶有 `redirect` 參數的登入網址時，會回到首頁而不是 `redirect` 指定的頁面。
