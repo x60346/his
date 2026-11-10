@@ -254,6 +254,11 @@ try {
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '', { 報告: 'NILM' }), '補登報告沒選結果')
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '待報告', { 報告: 'NILM' }), '補登報告選「待報告」')
   await api.preventApi.fillReport(pendingRec.id, '正常', { 報告: 'NILM' })
+  {
+    const log = dbm.db.auditLogs[0]
+    const itemName = dbm.db.preventItems.find((i) => i.code === pendingRec.itemCode).name
+    ok(log.action === '補登預防保健報告' && log.detail.includes(itemName) && !log.detail.includes(pendingRec.itemCode), `補登報告稽核寫中文項目名稱（${log.detail}）`)
+  }
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '異常需追蹤', { 報告: '改寫' }), '已有結果的報告再補登（紀錄只能增補不能改寫）')
 
   // H3：量測欄位格式；BMI 由身高體重計算

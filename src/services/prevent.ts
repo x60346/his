@@ -146,7 +146,8 @@ export function fillReport(recordId: string, result: PreventRecord['result'], da
     r.result = result
     r.data = { ...r.data, ...filled }
     r.reportedAt = now()
-    audit('補登預防保健報告', `${nameOf.patient(r.patientId)} ${r.itemCode} ${result}`)
+    // 稽核一律寫中文項目名稱（和登錄、作廢一致；以前寫代碼 CERVIX，非工程人員看不懂）
+    audit('補登預防保健報告', `${nameOf.patient(r.patientId)} ${item.name} ${result}`)
     return r
   })
 }
