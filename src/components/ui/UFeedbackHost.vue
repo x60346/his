@@ -29,7 +29,8 @@ const confirmOpen = computed({
       <TransitionGroup enter-from-class="-translate-y-2 opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-200" leave-active-class="transition duration-150">
         <div v-for="t in ui.toasts" :key="t.id" :class="['pointer-events-auto flex items-start gap-2 rounded-md border bg-white px-3 py-2.5 text-sm shadow-lg', colors[t.kind]]">
           <component :is="icons[t.kind]" class="mt-0.5 h-4 w-4 shrink-0" />
-          <span class="flex-1">{{ t.message }}</span>
+          <!-- pre-line：訊息裡的換行要照樣顯示（例：匯入錯誤第二行列出缺少的資料） -->
+          <span class="flex-1 whitespace-pre-line break-words">{{ t.message }}</span>
           <button class="text-slate-400 hover:text-slate-600" aria-label="關閉" @click="ui.dismiss(t.id)"><X class="!text-slate-400 h-3.5 w-3.5" /></button>
         </div>
       </TransitionGroup>

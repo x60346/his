@@ -243,9 +243,13 @@ export function importData(json: string): Promise<{ users: number; sessionKept: 
       fail('檔案不是有效的 JSON')
     }
     if (!parsed! || typeof parsed !== 'object') fail('檔案內容不是資料庫格式')
-    if (parsed!.schema !== SCHEMA_VERSION) fail(`資料版本不符：檔案為第 ${parsed!.schema ?? '?'} 版，系統為第 ${SCHEMA_VERSION} 版`)
+    if (parsed!.schema !== SCHEMA_VERSION) fail(`資料版本不符：檔案為第 ${parsed!.schema ?? '?'} 版，系統為第 ${SCHEMA_VERSION} 版。請在相同版本的系統匯出後再匯入`)
     const missing = (Object.keys(db) as (keyof Database)[]).filter((k) => !(k in parsed!) || (Array.isArray(db[k]) && !Array.isArray(parsed![k])))
-    if (missing.length) fail(`檔案缺少資料表：${missing.join('、')}`)
+    // 先說「怎麼辦」（使用者看得懂），缺少的名稱只列前 5 個放在後面給工程人員查（以前一口氣列出約 40 個英文表名）
+    if (missing.length) {
+      const names = missing.slice(0, 5).join('、') + (missing.length > 5 ? `… 等 ${missing.length} 項` : '')
+      fail(`這不是完整的匯出檔（缺少 ${missing.length} 項資料），請使用本系統「匯出資料」產生的檔案。\n缺少：${names}`)
+    }
     if (!parsed!.users.some((u) => u.role === 'admin' && u.active)) fail('匯入的資料沒有啟用中的管理員，匯入後將無人能管理系統')
 
     replaceDatabase(parsed!)

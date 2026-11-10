@@ -444,6 +444,17 @@ try {
   const dump = await A.exportData()
   await expectError(() => A.importData('{not json'), '匯入非 JSON 檔')
   await expectError(() => A.importData(JSON.stringify({ ...JSON.parse(dump), schema: 1 })), '匯入舊版本資料')
+  // I5：不完整的檔案先說怎麼辦，缺少的名稱最多列 5 個
+  try {
+    await A.importData(JSON.stringify({ schema: dbm.SCHEMA_VERSION, patients: [] }))
+    ok(false, '匯入不完整的檔案應被擋下')
+  } catch (e) {
+    const listed = (e.message.split('缺少：')[1] ?? '').split('…')[0].split('、').length
+    ok(e.message.startsWith('這不是完整的匯出檔') && listed <= 5 && /等 \d+ 項/.test(e.message), `匯入不完整的檔案 → 「${e.message.replace('\n', '／')}」`)
+  }
+  const partial = JSON.parse(dump)
+  delete partial.mar
+  await expectError(() => A.importData(JSON.stringify(partial)), '匯入只缺一項的檔案（不加「等 N 項」）')
   const noAdmin = JSON.parse(dump)
   noAdmin.users = noAdmin.users.filter((u) => u.role !== 'admin')
   await expectError(() => A.importData(JSON.stringify(noAdmin)), '匯入沒有管理員的資料')
