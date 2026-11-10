@@ -8,7 +8,7 @@
 import type { Drug, DrugLot, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { allocateFefo, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, usableQty, type StockFlag, type StockStatus } from './stock-rules'
 import { find, nameOf } from './views'
 
@@ -186,10 +186,12 @@ export function receiveStock(input: ReceiveInput): Promise<StockTxn> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const lotNo = input.lotNo.trim().toUpperCase()
-    if (!lotNo) failField('lotNo', '請輸入批號')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry ?? '')) failField('expiry', '請輸入效期')
-    if (input.expiry <= today()) failField('expiry', '效期已過或為今天，不可進貨')
-    if (!Number.isInteger(input.qty) || input.qty <= 0) failField('qty', '進貨數量需為正整數')
+    const v = fieldErrors()
+    if (!Number.isInteger(input.qty) || input.qty <= 0) v.add('qty', '進貨數量需為正整數')
+    if (!lotNo) v.add('lotNo', '請輸入批號')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry ?? '')) v.add('expiry', '請輸入效期')
+    else if (input.expiry <= today()) v.add('expiry', '效期已過或為今天，不可進貨')
+    v.done()
     const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref: input.ref?.trim() || undefined }, u.id)
     audit('藥品進貨', `${find.drug(input.drugId)?.name} +${input.qty}（批號 ${lotNo}）`)
     return txn

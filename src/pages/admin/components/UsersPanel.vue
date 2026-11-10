@@ -98,7 +98,7 @@ async function submitPw() {
 
     <UDialog v-model="editOpen" :title="form.id ? `編輯帳號：${form.username}` : '新增帳號'">
       <div class="grid grid-cols-2 gap-3">
-        <UInput v-model="form.username" label="帳號" required :disabled="!!form.id" hint="3–20 個英數字，建立後不可修改" :error="save.fieldErrors.value.username" />
+        <UInput v-model="form.username" label="帳號" required :disabled="!!form.id" :hint="`${adminApi.USERNAME_RULE}，建立後不可修改`" :error="save.fieldErrors.value.username" />
         <USelect v-model="form.role" label="角色" required :options="roles" :disabled="isSelf" :hint="isSelf ? '不能變更自己的角色' : ''" :error="save.fieldErrors.value.role" />
         <USelect
           v-if="form.role === 'doctor'"

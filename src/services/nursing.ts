@@ -4,7 +4,7 @@
 import type { HandoverNote, MarRecord, NursingNote, VitalRecord } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { isAbnormal, MAR_EARLY_MIN, marUrgency, vitalInputProblem, vitalSpecs, type Shift, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
@@ -144,16 +144,18 @@ export function addVitals(input: VitalInput): Promise<VitalRecord> {
     const nurse = requireUser('nurse')
     const a = admitted(input.admissionId)
     const v: VitalRecord = { admissionId: a.id, id: newId('VS'), at: now(), nurseId: nurse.id }
-    // 只收已知欄位、逐項檢查合理範圍（輸入錯誤直接擋下；「異常但合理」照常記錄）
+    // 只收已知欄位、逐項檢查合理範圍（輸入錯誤直接擋下；「異常但合理」照常記錄）；所有錯誤一次標出
+    const errs = fieldErrors()
     for (const k of Object.keys(vitalSpecs) as VitalKey[]) {
       const val = input[k]
       if (val === undefined || val === null || Number.isNaN(val)) continue
       const problem = vitalInputProblem(k, val)
-      if (problem) failField(k, problem)
+      if (problem) errs.add(k, problem)
       v[k] = val
     }
+    if (v.sbp !== undefined && v.dbp !== undefined && !errs.has('sbp') && v.dbp >= v.sbp) errs.add('dbp', '舒張壓應小於收縮壓')
+    errs.done()
     if (Object.keys(v).length === 4) fail('請至少輸入一項生命徵象')
-    if (v.sbp !== undefined && v.dbp !== undefined && v.dbp >= v.sbp) failField('dbp', '舒張壓應小於收縮壓')
     db.vitals.push(v)
     audit('生命徵象', a.admitNo)
     return v
@@ -184,8 +186,10 @@ export function addNursingNote(input: Pick<NursingNote, 'admissionId' | 'focus' 
       at: now(),
       nurseId: nurse.id,
     }
-    if (!n.focus) failField('focus', '請輸入焦點（Focus）')
-    if (!n.data && !n.action) failField('data', '資料（D）與措施（A）至少填寫一項')
+    const errs = fieldErrors()
+    if (!n.focus) errs.add('focus', '請輸入焦點（Focus）')
+    if (!n.data && !n.action) errs.add('data', '資料（D）與措施（A）至少填寫一項')
+    errs.done()
     db.nursingNotes.push(n)
     return n
   })

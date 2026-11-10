@@ -38,6 +38,28 @@ export function failFields(errors: Record<string, string>): void {
   throw new ServiceError(errors[keys[0]], 'BAD_REQUEST', keys[0], errors)
 }
 
+/**
+ * 欄位檢查的收集器：表單的必填、格式、範圍先全部收集，最後 done() 一次回報。
+ *
+ *   const v = fieldErrors()
+ *   if (!name) v.add('name', '請輸入姓名')
+ *   if (!(qty > 0)) v.add('qty', '數量需大於 0')
+ *   v.done()            // 有錯就丟出（全部欄位一起標出），沒錯就繼續
+ *   // 欄位都正確之後，才檢查重複、停用前影響等「規則」——那些常常要依賴欄位已經是對的
+ *
+ * 同一個欄位只留第一個錯誤：效期空白時只說「請輸入效期」，不會再接著說「效期已過」。
+ */
+export function fieldErrors() {
+  const errors: Record<string, string> = {}
+  return {
+    add(field: string, message: string) {
+      if (!(field in errors)) errors[field] = message
+    },
+    has: (field: string) => field in errors,
+    done: () => failFields(errors),
+  }
+}
+
 /** 找不到就丟 NOT_FOUND，省去每個服務重複寫判斷 */
 export function must<T>(value: T | undefined | null, what: string): T {
   if (value === undefined || value === null) fail(`找不到${what}`, 'NOT_FOUND')

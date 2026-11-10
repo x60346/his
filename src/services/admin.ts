@@ -7,11 +7,14 @@
 import type { BillingSettings, Department, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser, sessionUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
 
 const ROLES: Role[] = ['admin', 'doctor', 'nurse', 'pharmacist', 'clerk']
+/** 帳號規則：檢查與說明文字放在一起，表單的提示直接用同一句（以前提示寫「英數字」、錯誤卻說「英數字、底線或點」） */
+const USERNAME_RE = /^[a-z0-9_.]{3,20}$/
+export const USERNAME_RULE = '3–20 個英數字、底線或點'
 
 /** 依前綴產生下一個流水代號，例：DR10 */
 function nextCode(prefix: string, existing: string[], width = 2): string {
@@ -44,23 +47,28 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     const me = requireUser('admin')
     const username = input.username.trim().toLowerCase()
     const name = input.name.trim()
-    if (!/^[a-z0-9_.]{3,20}$/.test(username)) failField('username', '帳號需為 3–20 個英數字、底線或點')
-    if (!name) failField('name', '請輸入姓名')
-    if (!ROLES.includes(input.role)) failField('role', '請選擇角色')
-    if (db.users.some((u) => u.username === username && u.id !== input.id)) failField('username', '帳號已存在', 'CONFLICT')
+    const old = input.id ? must(db.users.find((u) => u.id === input.id), '使用者') : undefined
+    // 欄位：一次收集、一起標出
+    const v = fieldErrors()
+    if (!USERNAME_RE.test(username)) v.add('username', `帳號需為 ${USERNAME_RULE}`)
+    if (!name) v.add('name', '請輸入姓名')
+    if (!ROLES.includes(input.role)) v.add('role', '請選擇角色')
+    if (input.role === 'doctor' && !db.doctors.some((x) => x.id === input.doctorId)) v.add('doctorId', '醫師帳號需對應醫師')
+    if (!old && (!input.password || input.password.length < 4)) v.add('password', '新帳號需設定至少 4 碼的密碼')
+    v.done()
 
+    // 規則：欄位都正確後才檢查
+    if (db.users.some((u) => u.username === username && u.id !== input.id)) failField('username', '帳號已存在', 'CONFLICT')
     // 醫師帳號必須對應一位在職醫師，且一位醫師只能有一個帳號（否則開的醫囑算誰的？）
     let doctorId: string | undefined
     if (input.role === 'doctor') {
-      const d = db.doctors.find((x) => x.id === input.doctorId)
-      if (!d) failField('doctorId', '醫師帳號需對應醫師')
-      if (!d!.active) failField('doctorId', `${d!.name} 已停用，不能建立帳號`)
-      const taken = db.users.find((u) => u.doctorId === d!.id && u.id !== input.id)
-      if (taken) failField('doctorId', `${d!.name} 已有帳號（${taken.username}）`, 'CONFLICT')
-      doctorId = d!.id
+      const d = db.doctors.find((x) => x.id === input.doctorId)!
+      if (!d.active) failField('doctorId', `${d.name} 已停用，不能建立帳號`)
+      const taken = db.users.find((u) => u.doctorId === d.id && u.id !== input.id)
+      if (taken) failField('doctorId', `${d.name} 已有帳號（${taken.username}）`, 'CONFLICT')
+      doctorId = d.id
     }
 
-    const old = input.id ? must(db.users.find((u) => u.id === input.id), '使用者') : undefined
     if (old && old.id === me.id) {
       // 防止把自己鎖在門外
       if (input.role !== 'admin') failField('role', '不能變更自己的管理員角色')
@@ -71,11 +79,7 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
       if (admins.length <= 1) fail('系統至少要保留一個啟用中的管理員帳號', 'CONFLICT')
     }
 
-    let password = old?.password
-    if (!old) {
-      if (!input.password || input.password.length < 4) failField('password', '新帳號需設定至少 4 碼的密碼')
-      password = input.password
-    }
+    const password = old ? old.password : input.password
 
     const saved: User = { id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, role: input.role, doctorId, active: input.active, password: password! }
     if (old) Object.assign(old, saved)
@@ -110,8 +114,10 @@ export function saveDepartment(input: Omit<Department, 'id'> & { id?: string }):
     requireUser('admin')
     const code = input.code.trim().toUpperCase()
     const name = input.name.trim()
-    if (!/^[A-Z0-9]{2,4}$/.test(code)) failField('code', '科別代碼為 2–4 個英數字')
-    if (!name) failField('name', '請輸入科別名稱')
+    const v = fieldErrors()
+    if (!/^[A-Z0-9]{2,4}$/.test(code)) v.add('code', '科別代碼為 2–4 個英數字')
+    if (!name) v.add('name', '請輸入科別名稱')
+    v.done()
     if (db.departments.some((d) => d.code === code && d.id !== input.id)) failField('code', '科別代碼已存在', 'CONFLICT')
     if (db.departments.some((d) => d.name === name && d.id !== input.id)) failField('name', '科別名稱已存在', 'CONFLICT')
     const old = input.id ? must(db.departments.find((d) => d.id === input.id), '科別') : undefined
@@ -164,11 +170,13 @@ export function saveDoctor(input: Omit<Doctor, 'id'> & { id?: string }): Promise
     requireUser('admin')
     const name = input.name.trim()
     const licenseNo = input.licenseNo.trim()
-    if (!name) failField('name', '請輸入姓名')
     const dept = db.departments.find((d) => d.id === input.deptId)
-    if (!dept) failField('deptId', '請選擇科別')
+    const v = fieldErrors()
+    if (!name) v.add('name', '請輸入姓名')
+    if (!dept) v.add('deptId', '請選擇科別')
+    if (!licenseNo) v.add('licenseNo', '請輸入醫事人員代碼')
+    v.done()
     if (!dept!.active) failField('deptId', `${dept!.name}已停用`)
-    if (!licenseNo) failField('licenseNo', '請輸入醫事人員代碼')
     if (db.doctors.some((d) => d.licenseNo === licenseNo && d.id !== input.id)) failField('licenseNo', '醫事人員代碼重複', 'CONFLICT')
 
     const old = input.id ? must(db.doctors.find((d) => d.id === input.id), '醫師') : undefined
@@ -260,12 +268,14 @@ export function saveBillingSettings(input: BillingSettings): Promise<{ settings:
   return mutate(() => {
     const u = requireUser('admin')
     const keys: (keyof BillingSettings)[] = ['basicCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax']
+    const v = fieldErrors()
     for (const k of keys) {
-      const v = input[k] as number
-      if (!Number.isInteger(v) || v < 0 || v > 10000) failField(k, '需為 0–10000 的整數')
+      const n = input[k] as number
+      if (!Number.isInteger(n) || n < 0 || n > 10000) v.add(k, '需為 0–10000 的整數')
     }
-    if (input.drugCopayStep < 1) failField('drugCopayStep', '級距至少 1 元（不能為 0，否則無法計算）')
-    if (input.drugCopayMax < input.drugCopayPerStep) failField('drugCopayMax', '上限不能小於每級加收金額')
+    if (input.drugCopayStep < 1) v.add('drugCopayStep', '級距至少 1 元（不能為 0，否則無法計算）')
+    if (input.drugCopayMax < input.drugCopayPerStep) v.add('drugCopayMax', '上限不能小於每級加收金額')
+    v.done()
     const old = { ...db.billingSettings }
     db.billingSettings = {
       basicCopay: input.basicCopay, drugCopayFreeUpTo: input.drugCopayFreeUpTo, drugCopayStep: input.drugCopayStep,
@@ -282,8 +292,10 @@ export function saveIdentity(input: Identity): Promise<{ identity: Identity; aff
     requireUser('admin')
     // 身分代碼對應健保規定，只能調整參數，不能新增或改代碼
     const idt = must(db.identities.find((x) => x.code === input.code), '就醫身分')
-    if (!input.name.trim()) failField('name', '請輸入名稱')
-    if (!Number.isInteger(input.regFee) || input.regFee < 0 || input.regFee > 2000) failField('regFee', '掛號費需為 0–2000 的整數')
+    const v = fieldErrors()
+    if (!input.name.trim()) v.add('name', '請輸入名稱')
+    if (!Number.isInteger(input.regFee) || input.regFee < 0 || input.regFee > 2000) v.add('regFee', '掛號費需為 0–2000 的整數')
+    v.done()
     const before = `${idt.regFee}`
     Object.assign(idt, { name: input.name.trim(), regFee: input.regFee, copayExempt: !!input.copayExempt, selfPay: !!input.selfPay })
     audit('修改就醫身分', `${idt.code} ${idt.name} 掛號費 ${before}→${idt.regFee}`)

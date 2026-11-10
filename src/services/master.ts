@@ -3,7 +3,7 @@
 import type { Department, Doctor, Drug, Frequency, IcdCode, Identity, PreventItem, Procedure } from '@/types'
 import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
 import { describeDrugs, needsSameNameCheck, sameNameDrugs } from './drug-rules'
 
@@ -96,17 +96,20 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     if (input.id && !old) fail('找不到藥品', 'NOT_FOUND')
     const name = input.name.trim().replace(/\s+/g, ' ') // 連續空白存成一個，避免「看起來一樣」的兩種寫法
     const nhiCode = input.nhiCode.trim().toUpperCase()
-    if (!name) failField('name', '請輸入藥名')
-    if (!input.unit.trim()) failField('unit', '請輸入調劑單位')
-    if (!['口服', '外用', '注射', '吸入', '眼用'].includes(input.category)) failField('category', '請選擇劑型')
-    if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
+    const v = fieldErrors()
+    if (!name) v.add('name', '請輸入藥名')
+    if (!input.unit.trim()) v.add('unit', '請輸入調劑單位')
+    if (!['口服', '外用', '注射', '吸入', '眼用'].includes(input.category)) v.add('category', '請選擇劑型')
     // 價格必須大於 0：批價會把 0 元的健保藥照 0 元申報、病人也付 0 元（醫令有「0 點改收自費」，藥品沒有）
-    if (!(input.nhiPrice > 0)) failField('nhiPrice', '健保價需大於 0')
-    if (!(input.selfPrice > 0)) failField('selfPrice', '自費價需大於 0')
-    if (!Number.isInteger(input.safetyStock) || input.safetyStock < 0) failField('safetyStock', '安全庫存需為 0 以上的整數')
-    if (!(input.defaultDose > 0)) failField('defaultDose', '預設劑量需大於 0')
-    if (!db.frequencies.some((f) => f.code === input.defaultFreq)) failField('defaultFreq', '請選擇預設頻率')
-    if (!codes.routes.some((r) => r.code === input.defaultRoute)) failField('defaultRoute', '請選擇預設途徑')
+    if (!(input.nhiPrice > 0)) v.add('nhiPrice', '健保價需大於 0')
+    if (!(input.selfPrice > 0)) v.add('selfPrice', '自費價需大於 0')
+    if (!Number.isInteger(input.safetyStock) || input.safetyStock < 0) v.add('safetyStock', '安全庫存需為 0 以上的整數')
+    if (!(input.defaultDose > 0)) v.add('defaultDose', '預設劑量需大於 0')
+    if (!db.frequencies.some((f) => f.code === input.defaultFreq)) v.add('defaultFreq', '請選擇預設頻率')
+    if (!codes.routes.some((r) => r.code === input.defaultRoute)) v.add('defaultRoute', '請選擇預設途徑')
+    v.done()
+    // 規則：欄位都正確後才檢查
+    if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
     // 同名：不直接擋（真實醫院同成分不同廠牌是常態），但要使用者明確確認——這裡醫師開藥只看得到藥名
     const same = needsSameNameCheck(old?.name, name) ? sameNameDrugs(db.drugs, name, old?.id) : []
     if (same.length && !input.allowSameName) failField('name', `已有同名藥品：${describeDrugs(same)}。若是停用中的同一種藥，請直接啟用那一筆`, 'CONFLICT')
@@ -135,12 +138,14 @@ export function saveProcedure(input: Omit<Procedure, 'id'> & { id?: string }): P
     const old = input.id ? db.procedures.find((x) => x.id === input.id) : undefined
     if (input.id && !old) fail('找不到醫令', 'NOT_FOUND')
     const code = input.code.trim().toUpperCase()
-    if (!code) failField('code', '請輸入醫令代碼')
-    if (!input.name.trim()) failField('name', '請輸入名稱')
+    const v = fieldErrors()
+    if (!code) v.add('code', '請輸入醫令代碼')
+    if (!input.name.trim()) v.add('name', '請輸入名稱')
+    if (!['診察', '檢驗', '影像', '處置', '復健'].includes(input.category)) v.add('category', '請選擇類別')
+    if (!Number.isInteger(input.points) || input.points < 0) v.add('points', '健保點數需為 0 以上的整數')
+    if (!(input.selfPrice >= 0)) v.add('selfPrice', '自費價不可為負數')
+    v.done()
     if (db.procedures.some((p) => p.code === code && p.id !== input.id)) failField('code', '醫令代碼重複', 'CONFLICT')
-    if (!['診察', '檢驗', '影像', '處置', '復健'].includes(input.category)) failField('category', '請選擇類別')
-    if (!Number.isInteger(input.points) || input.points < 0) failField('points', '健保點數需為 0 以上的整數')
-    if (!(input.selfPrice >= 0)) failField('selfPrice', '自費價不可為負數')
     if (old && old.id === 'P001' && !input.active) failField('active', '一般門診診察費是每次看診必收的項目，不能停用')
     const saved: Procedure = { id: old?.id ?? nextCode('P', db.procedures.map((p) => p.id), 3), code, name: input.name.trim(), category: input.category, points: input.points, selfPrice: input.selfPrice, active: input.active }
     audit(old ? '修改醫令主檔' : '新增醫令', `${code} ${saved.name}`)
@@ -155,8 +160,11 @@ export function saveIcd(input: IcdCode & { isNew?: boolean }): Promise<IcdCode> 
   return mutate(() => {
     requireUser('admin')
     const code = input.code.trim().toUpperCase()
-    if (!/^[A-Z][0-9][0-9A-Z](.[0-9A-Z]{1,4})?$/.test(code)) failField('code', 'ICD-10 格式：英文字母＋兩碼，可接小數點，例：J06.9')
-    if (!input.name.trim()) failField('name', '請輸入中文名稱')
+    const v = fieldErrors()
+    // 小數點要跳脫：沒跳脫的「.」代表任意字元，「J06-9」也會被當成合法代碼
+    if (!/^[A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/.test(code)) v.add('code', 'ICD-10 格式：英文字母＋兩碼，可接小數點，例：J06.9')
+    if (!input.name.trim()) v.add('name', '請輸入中文名稱')
+    v.done()
     const old = db.icdCodes.find((c) => c.code === code)
     if (input.isNew && old) failField('code', '此診斷碼已存在', 'CONFLICT')
     if (!input.isNew && !old) fail('找不到診斷碼', 'NOT_FOUND')
@@ -176,10 +184,12 @@ export function savePreventItem(input: PreventItem): Promise<PreventItem> {
   return mutate(() => {
     requireUser('admin')
     const item = must(db.preventItems.find((i) => i.code === input.code), '預防保健項目')
-    if (!input.name.trim()) failField('name', '請輸入名稱')
-    if (!Number.isInteger(input.intervalYears) || input.intervalYears < 0 || input.intervalYears > 10) failField('intervalYears', '間隔需為 0–10 年（0 表示終身一次）')
     const fields = [...new Set(input.fields.map((f) => f.trim()).filter(Boolean))]
-    if (!fields.length) failField('fields', '至少要有一個登錄欄位')
+    const v = fieldErrors()
+    if (!input.name.trim()) v.add('name', '請輸入名稱')
+    if (!Number.isInteger(input.intervalYears) || input.intervalYears < 0 || input.intervalYears > 10) v.add('intervalYears', '間隔需為 0–10 年（0 表示終身一次）')
+    if (!fields.length) v.add('fields', '至少要有一個登錄欄位')
+    v.done()
     Object.assign(item, { name: input.name.trim(), ruleText: input.ruleText.trim(), intervalYears: input.intervalYears, fields, needsReport: !!input.needsReport, active: input.active !== false })
     audit('修改預防保健項目', `${item.code} ${item.name}`)
     return item

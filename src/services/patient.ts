@@ -3,7 +3,7 @@ import type { Patient } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, toDateStr } from '@/utils/date'
 import { checkBirthDate, checkName, isValidIdNo, isValidPhone, makeIdNo } from '@/utils/validators'
-import { audit, failField, must, mutate, query, requireUser } from './http'
+import { audit, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains, find } from './views'
 
 export function searchPatients(keyword: string, limit = 50): Promise<Patient[]> {
@@ -22,14 +22,16 @@ export type PatientInput = Omit<Patient, 'id' | 'chartNo' | 'createdAt'>
 
 function validate(p: PatientInput, selfId?: string): void {
   // 與建檔表單的即時提示共用同一套檢查（validators.ts）
+  const v = fieldErrors()
   const nameProblem = checkName(p.name)
-  if (nameProblem) failField('name', nameProblem)
+  if (nameProblem) v.add('name', nameProblem)
   const birthProblem = checkBirthDate(p.birthDate, toDateStr(new Date()))
-  if (birthProblem) failField('birthDate', birthProblem)
-  if (!isValidIdNo(p.idNo)) failField('idNo', '身分證字號格式或檢查碼錯誤')
-  if (p.phone && !isValidPhone(p.phone)) failField('phone', '電話格式錯誤')
-  if (p.emergencyPhone && !isValidPhone(p.emergencyPhone)) failField('emergencyPhone', '電話格式錯誤')
-  if (!find.identity(p.defaultIdentity)) failField('defaultIdentity', '請選擇就醫身分')
+  if (birthProblem) v.add('birthDate', birthProblem)
+  if (!isValidIdNo(p.idNo)) v.add('idNo', '身分證字號格式或檢查碼錯誤')
+  if (p.phone && !isValidPhone(p.phone)) v.add('phone', '電話格式錯誤')
+  if (p.emergencyPhone && !isValidPhone(p.emergencyPhone)) v.add('emergencyPhone', '電話格式錯誤')
+  if (!find.identity(p.defaultIdentity)) v.add('defaultIdentity', '請選擇就醫身分')
+  v.done()
   // 只有服務層才查得出來的錯誤，一樣標出欄位
   const dup = db.patients.find((x) => x.idNo === p.idNo.toUpperCase() && x.id !== selfId)
   if (dup) failField('idNo', `已建檔：病歷號 ${dup.chartNo}（${dup.name}）`, 'CONFLICT')

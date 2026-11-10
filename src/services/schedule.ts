@@ -8,7 +8,7 @@
 import type { ClinicSession, Period, Visit, WeeklySlot } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
 
 const sessionId = (date: string, slotId: string) => `S${date.replace(/-/g, '')}${slotId}`
@@ -138,13 +138,15 @@ export function saveWeeklySlot(input: Omit<WeeklySlot, 'id'> & { id?: string }):
   return mutate(() => {
     requireUser('admin')
     const doc = find.doctor(input.doctorId)
-    if (!doc) failField('doctorId', '請選擇醫師')
-    if (!doc!.active) failField('doctorId', `${doc!.name} 已停用，不能排班`)
-    if (!Number.isInteger(input.weekday) || input.weekday < 0 || input.weekday > 6) failField('weekday', '請選擇星期')
-    if (!periodOrder.hasOwnProperty(input.period)) failField('period', '請選擇時段')
     const roomNo = input.roomNo.trim()
-    if (!roomNo) failField('roomNo', '請輸入診間')
-    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200) failField('limit', '人數上限需為 1–200')
+    const v = fieldErrors()
+    if (!doc) v.add('doctorId', '請選擇醫師')
+    if (!Number.isInteger(input.weekday) || input.weekday < 0 || input.weekday > 6) v.add('weekday', '請選擇星期')
+    if (!periodOrder.hasOwnProperty(input.period)) v.add('period', '請選擇時段')
+    if (!roomNo) v.add('roomNo', '請輸入診間')
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200) v.add('limit', '人數上限需為 1–200')
+    v.done()
+    if (!doc!.active) failField('doctorId', `${doc!.name} 已停用，不能排班`)
     const clash = db.weeklySlots.find((s) => s.id !== input.id && s.weekday === input.weekday && s.period === input.period && (s.doctorId === input.doctorId || s.roomNo === roomNo))
     if (clash) {
       if (clash.doctorId === input.doctorId) failField('period', `${doc!.name} 週${'日一二三四五六'[input.weekday]}${periodLabel[input.period]}已有門診（${clash.roomNo} 診）`, 'CONFLICT')
@@ -229,9 +231,11 @@ export function substituteSession(id: string, doctorId: string, reason: string):
     const s = must(find.session(id), '診次')
     const blocked = blockReason(s)
     if (blocked) fail(blocked, 'CONFLICT')
-    if (!reason.trim()) failField('reason', '請輸入代診原因')
     const sub = find.doctor(doctorId)
-    if (!sub || !sub.active) failField('doctorId', '請選擇在職的代診醫師')
+    const v = fieldErrors()
+    if (!sub || !sub.active) v.add('doctorId', '請選擇在職的代診醫師')
+    if (!reason.trim()) v.add('reason', '請輸入代診原因')
+    v.done()
     if (sub!.deptId !== s.deptId) failField('doctorId', '代診醫師需為同一科別（病人掛的是這一科）')
     if (!candidatesFor(s).some((c) => c.id === doctorId)) failField('doctorId', `${sub!.name} 同一時段已有門診`, 'CONFLICT')
 
