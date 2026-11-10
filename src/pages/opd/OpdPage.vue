@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 門診看診：左邊候診清單，右邊看診工作區（SOAP、診斷、醫令、歷史病歷）。
 // 草稿在頁面裡編輯；「暫存」才寫入，「完成看診」才做完整驗證並推進狀態。
+import { clonePlain } from '@/utils/clone'
 import { computed, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { CheckCircle2, Lock, Megaphone, Pencil, Save, SkipForward } from 'lucide-vue-next'
@@ -67,7 +68,7 @@ const autoQtyOf = (m: { drugId: string; dose: number; freq: string; days: number
 
 function toDraft(e: Encounter | null | undefined): Draft {
   if (!e) return emptyDraft()
-  const { subjective, objective, assessment, plan, vitals, diagnoses, medications, procedures, refillTimes, admissionRequested } = structuredClone(e)
+  const { subjective, objective, assessment, plan, vitals, diagnoses, medications, procedures, refillTimes, admissionRequested } = clonePlain(e)
   return {
     subjective, objective, assessment, plan, vitals, diagnoses, procedures, refillTimes, admissionRequested,
     // 總量和自動計算結果不同，代表當初是手動修改的
@@ -187,10 +188,10 @@ function copyFrom(h: HistoryItem) {
     if (draft.value.medications.some((x) => x.drugId === m.drugId)) continue
     // 可換算的藥依目前頻率重算總量；無法換算的（Insulin、眼藥水）沿用上次的總量並標示為手動
     const q = autoQtyOf(m)
-    draft.value.medications.push({ ...structuredClone(m), _manual: q === null, qty: q ?? m.qty })
+    draft.value.medications.push({ ...clonePlain(m), _manual: q === null, qty: q ?? m.qty })
     added++
   }
-  if (!draft.value.diagnoses.length) draft.value.diagnoses = structuredClone(h.diagnoses)
+  if (!draft.value.diagnoses.length) draft.value.diagnoses = clonePlain(h.diagnoses)
   ui.toast.success(added ? `已複製 ${added} 項藥品（重複的略過）` : '處方中已有相同藥品，未新增')
   tab.value = 'orders'
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts" generic="R extends Record<string, any>">
 // 主檔通用表格：搜尋 → 表格 → 編輯對話框。藥品、醫令、診斷碼、預防保健項目共用。
 // 每種主檔只提供「欄位定義」與「儲存函式」；驗證規則在服務層，這裡只負責收集與顯示。
+import { clonePlain } from '@/utils/clone'
 import { computed, reactive, ref } from 'vue'
 import { Pencil, Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect, UTable, type Column, type SelectOption } from '@/components/ui'
@@ -45,7 +46,7 @@ const isNew = ref(false)
 const form = reactive<Record<string, any>>({})
 function edit(r?: R) {
   isNew.value = !r
-  const src: Record<string, any> = r ? structuredClone({ ...r }) : props.blank!()
+  const src: Record<string, any> = r ? clonePlain(r) : props.blank!()
   // list 欄位在表單上用逗號分隔的文字編輯
   for (const f of props.fields) if (f.type === 'list') src[f.key] = (src[f.key] ?? []).join('、')
   for (const k of Object.keys(form)) delete form[k]

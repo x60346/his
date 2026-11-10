@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 病患建檔／修改對話框。掛號頁（初診建檔、讀卡）與病患資料頁共用。
+import { clonePlain } from '@/utils/clone'
 import { ref, watch } from 'vue'
 import { UButton, UDialog } from '@/components/ui'
 import PatientForm from './PatientForm.vue'
@@ -33,9 +34,9 @@ watch(open, (v) => {
   save.fieldErrors.value = {}
   if (props.patient) {
     const { id: _id, chartNo: _c, createdAt: _t, ...rest } = props.patient
-    form.value = structuredClone(rest)
+    form.value = clonePlain(rest)
   } else {
-    form.value = { ...empty(), ...structuredClone(props.prefill ?? {}) }
+    form.value = { ...empty(), ...clonePlain(props.prefill ?? {}) }
   }
 })
 
