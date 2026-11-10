@@ -6,7 +6,7 @@ import {
   UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
-import { bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
+import { admissionApi, bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
 import { useAction, useQuery } from '@/composables/useService'
@@ -46,6 +46,11 @@ function newPatient() {
 
 const { data: upcoming } = useQuery(
   async () => (patient.value ? bookingApi.listVisits({ patientId: patient.value.id, upcoming: true, status: ['registered'] }) : []),
+  [patient],
+)
+// 住院中的病人掛門診：不禁止（住院中也可能需要會診其他科），但櫃台要知道
+const { data: admittedNow } = useQuery(
+  async () => (patient.value ? (await admissionApi.listAdmissions({ patientId: patient.value.id, status: ['admitted'] }))[0] ?? null : null),
   [patient],
 )
 
@@ -181,6 +186,9 @@ async function onCancel(v: VisitView) {
             </div>
             <div class="mt-1 text-slate-600">病歷號 {{ patient.chartNo }}・{{ maskId(patient.idNo) }}</div>
             <div v-if="patient.allergies.length" class="mt-1 font-medium text-red-600">過敏：{{ patient.allergies.join('、') }}</div>
+            <div v-if="admittedNow && admittedNow.patientId === patient.id" class="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" role="status">
+              目前住院中：{{ admittedNow.bed?.ward }} {{ admittedNow.bed?.bedNo }}（第 {{ admittedNow.days }} 天，{{ admittedNow.doctorName }}）。如需掛門診請確認。
+            </div>
             <div v-if="upcoming?.length" class="mt-2 border-t border-brand-100 pt-2 text-xs text-slate-600">
               <div class="mb-0.5 font-medium">已有預約：</div>
               <div v-for="u in upcoming" :key="u.id">{{ u.date }} {{ periodLabel[u.period] }} {{ u.deptName }} {{ u.doctorName }} 第 {{ u.seqNo }} 號</div>
