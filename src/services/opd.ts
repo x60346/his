@@ -4,7 +4,7 @@ import type { Admission, Encounter, VisitStatus } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { autoQty, doseUnitOf } from './billing'
-import { doseLevel, doseNote } from './dose-rules'
+import { checkDays, doseLevel, doseNote } from './dose-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { audit, fail, must, mutate, query, requireUser } from './http'
 import { find, nameOf, usable, visitView, type VisitView } from './views'
@@ -110,7 +110,9 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     if (e.diagnoses.filter((d) => d.primary).length > 1) fail('主診斷只能有一個')
     for (const m of e.medications) {
       const d = usable.drug(m.drugId)
-      if (m.dose <= 0 || m.days <= 0) fail(`${d.name} 的劑量與天數必須大於 0`)
+      if (m.dose <= 0) fail(`${d.name} 的劑量必須大於 0`)
+      const dayProblem = checkDays(m.days)
+      if (dayProblem) fail(`${d.name}：${dayProblem}`)
       const level = doseLevel(d, m.dose)
       if (level === 'absurd') fail(`${d.name}：${doseNote(d, m.dose)}，請確認是否打錯`)
       if (level === 'high' && !opts.confirmHighDose) fail(`${d.name} 劑量偏高：${doseNote(d, m.dose)}，如確定請確認`, 'CONFLICT')

@@ -29,3 +29,13 @@ export function doseNote(drug: Drug, dose: number): string {
   const ratio = Math.round((dose / drug.defaultDose) * 10) / 10
   return `每次 ${dose} ${u}，是常用劑量 ${drug.defaultDose} ${u} 的 ${ratio} 倍`
 }
+
+/** 單張處方天數上限：慢性病連續處方也是每次 30 天以內，超過幾乎一定是打錯（999 天 → 2997 顆） */
+export const MAX_RX_DAYS = 30
+
+/** 處方天數檢查：有問題回傳訊息，沒問題回傳 null */
+export function checkDays(days: number | undefined): string | null {
+  if (days === undefined || days === null || !Number.isInteger(days) || days < 1) return '天數需為 1 以上的整數'
+  if (days > MAX_RX_DAYS) return `天數最多 ${MAX_RX_DAYS} 天`
+  return null
+}

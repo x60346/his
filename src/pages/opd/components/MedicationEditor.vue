@@ -7,7 +7,7 @@
 //   - 過敏：顯示警示但不阻擋，最終由醫師判斷；庫存不足、高警訊藥品也標示出來
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UEmpty, USearchSelect } from '@/components/ui'
-import { autoQty, doseLevel, doseUnitOf, masterApi, type AllergyWarning } from '@/services'
+import { autoQty, checkDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning } from '@/services'
 import { useUi } from '@/stores/ui'
 import type { Drug, Frequency, MedicationOrder } from '@/types'
 
@@ -115,7 +115,17 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
               </select>
             </td>
             <td class="px-2 py-1.5">
-              <input v-model.number="r.days" type="number" min="1" class="form-control w-16 px-2" :disabled="readonly" @input="recalc(r)" />
+              <input
+                v-model.number="r.days"
+                type="number"
+                min="1"
+                :max="MAX_RX_DAYS"
+                :class="['form-control w-16 px-2', !readonly && checkDays(r.days) && 'form-control-error']"
+                :title="checkDays(r.days) ?? ''"
+                :disabled="readonly"
+                @input="recalc(r)"
+              />
+              <div v-if="!readonly && checkDays(r.days)" class="mt-0.5 text-xs text-red-600">{{ checkDays(r.days) }}</div>
             </td>
             <td class="px-2 py-1.5">
               <div class="flex items-center gap-1">
