@@ -22,14 +22,15 @@ const { data: rows, loading } = useQuery(
 
 const selectedId = ref<string>()
 useRevealOnNarrow(selectedId, 1280) // 窄螢幕點選後把明細捲進畫面
-const statusView = { out: { label: '缺貨', tone: 'red' }, low: { label: '偏低', tone: 'yellow' }, ok: { label: '正常', tone: 'green' } } as const
+// 狀態標籤：服務層算好的 flags（可同時多項），空陣列顯示「正常」
+const flagView = { out: { label: '缺貨', tone: 'red' }, low: { label: '偏低', tone: 'yellow' }, expired: { label: '待報廢', tone: 'red' }, expiring: { label: '近效期', tone: 'yellow' } } as const
 
 const columns: Column<InventoryRow>[] = [
   { key: 'name', label: '藥品' },
   { key: 'usable', label: '可用庫存', align: 'right', width: '7rem' },
   { key: 'daysLeft', label: '可用天數', align: 'right', width: '5.5rem' },
   { key: 'nearestExpiry', label: '最近效期', width: '7rem' },
-  { key: 'status', label: '狀態', width: '5rem' },
+  { key: 'status', label: '狀態', width: '6.5rem' },
 ]
 const categories = ['口服', '外用', '注射', '吸入', '眼用']
 const shown = computed(() => rows.value?.length ?? 0)
@@ -79,7 +80,12 @@ const shown = computed(() => rows.value?.length ?? 0)
           <template #cell-nearestExpiry="{ row }">
             <span :class="['tabular text-xs', row.expiringSoon ? 'font-semibold text-amber-700' : 'text-slate-600']">{{ row.nearestExpiry ?? '—' }}</span>
           </template>
-          <template #cell-status="{ row }"><UBadge :tone="statusView[row.status].tone">{{ statusView[row.status].label }}</UBadge></template>
+          <template #cell-status="{ row }">
+            <div class="flex flex-wrap gap-1">
+              <UBadge v-for="f in row.flags" :key="f" :tone="flagView[f].tone">{{ flagView[f].label }}</UBadge>
+              <UBadge v-if="!row.flags.length" tone="green">正常</UBadge>
+            </div>
+          </template>
         </UTable>
       </UCard>
 

@@ -48,3 +48,20 @@ export function daysOfSupply(usable: number, usedInPeriod: number, periodDays: n
 /** 效期提醒門檻：60 天內到期 */
 export const EXPIRY_WARN_DAYS = 60
 export const isExpiringSoon = (expiry: string, today: string) => expiry >= today && expiry <= addDays(today, EXPIRY_WARN_DAYS)
+
+/**
+ * 需要藥師處理的事項（可以同時有好幾項，例：偏低又近效期）；空陣列就是「正常」。
+ * 庫存清單的狀態標籤、「只看需處理」篩選、上方摘要卡片的數字都用這一份結果——
+ * 以前狀態只看庫存量，篩選和卡片另外算效期，結果「需處理」清單裡出現標著「正常」的藥。
+ * 陣列順序就是嚴重度（清單依第一項排序）。
+ */
+export type StockFlag = 'out' | 'low' | 'expired' | 'expiring'
+export const STOCK_FLAG_ORDER: StockFlag[] = ['out', 'low', 'expired', 'expiring']
+
+export function stockFlags(r: { status: StockStatus; expiredQty: number; expiringSoon: boolean }): StockFlag[] {
+  const flags: StockFlag[] = []
+  if (r.status !== 'ok') flags.push(r.status)
+  if (r.expiredQty > 0) flags.push('expired')
+  if (r.expiringSoon) flags.push('expiring')
+  return flags
+}

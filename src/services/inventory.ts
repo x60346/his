@@ -9,7 +9,7 @@ import type { Drug, DrugLot, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
-import { allocateFefo, daysOfSupply, isExpiringSoon, stockStatus, usableQty, type StockStatus } from './stock-rules'
+import { allocateFefo, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, usableQty, type StockFlag, type StockStatus } from './stock-rules'
 import { find, nameOf } from './views'
 
 // ---------- 唯一的寫入點（服務層內部） ----------
@@ -69,6 +69,8 @@ export interface InventoryRow extends Drug {
   /** 最近到期的批號效期（有剩餘量者） */
   nearestExpiry?: string
   expiringSoon: boolean
+  /** 需要處理的事項（缺貨／偏低／待報廢／近效期），空陣列表示正常；見 stock-rules.ts 的 stockFlags */
+  flags: StockFlag[]
 }
 
 function inventoryRow(d: Drug, t: string): InventoryRow {
@@ -77,7 +79,7 @@ function inventoryRow(d: Drug, t: string): InventoryRow {
   const since = addDays(t, -USAGE_DAYS)
   const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.type === 'dispense' && x.at >= since).reduce((s, x) => s + x.qty, 0)
   const nearestExpiry = lots.filter((l) => l.expiry >= t).map((l) => l.expiry).sort()[0]
-  return {
+  const row = {
     ...d,
     usable,
     expiredQty: lots.filter((l) => l.expiry < t).reduce((s, l) => s + l.qty, 0),
@@ -87,6 +89,7 @@ function inventoryRow(d: Drug, t: string): InventoryRow {
     nearestExpiry,
     expiringSoon: !!nearestExpiry && isExpiringSoon(nearestExpiry, t),
   }
+  return { ...row, flags: stockFlags(row) }
 }
 
 export interface InventoryQuery {
@@ -100,15 +103,17 @@ export function listInventory(q: InventoryQuery = {}): Promise<InventoryRow[]> {
   return query(() => {
     const t = today()
     const kw = q.keyword?.trim().toLowerCase()
-    const order: Record<StockStatus, number> = { out: 0, low: 1, ok: 2 }
     return db.drugs
       .filter((d) => d.active && (!q.category || d.category === q.category))
       .filter((d) => !kw || [d.id, d.name, d.generic, d.nhiCode].some((x) => x.toLowerCase().includes(kw)))
       .map((d) => inventoryRow(d, t))
-      .filter((r) => !q.attentionOnly || r.status !== 'ok' || r.expiringSoon || r.expiredQty > 0)
-      .sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name))
+      .filter((r) => !q.attentionOnly || r.flags.length > 0)
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   })
 }
+
+/** 排序：依最嚴重的一項（缺貨 → 偏低 → 待報廢 → 近效期 → 正常） */
+const rank = (r: InventoryRow) => (r.flags.length ? STOCK_FLAG_ORDER.indexOf(r.flags[0]) : STOCK_FLAG_ORDER.length)
 
 export interface InventorySummary {
   total: number
@@ -124,10 +129,11 @@ export function inventorySummary(): Promise<InventorySummary> {
     const rows = db.drugs.filter((d) => d.active).map((d) => inventoryRow(d, t))
     return {
       total: rows.length,
-      out: rows.filter((r) => r.status === 'out').length,
-      low: rows.filter((r) => r.status === 'low').length,
-      expiring: rows.filter((r) => r.expiringSoon).length,
-      expired: rows.filter((r) => r.expiredQty > 0).length,
+      // 和清單的標籤同一個來源：卡片上的數字 = 有該標籤的藥品數
+      out: rows.filter((r) => r.flags.includes('out')).length,
+      low: rows.filter((r) => r.flags.includes('low')).length,
+      expiring: rows.filter((r) => r.flags.includes('expiring')).length,
+      expired: rows.filter((r) => r.flags.includes('expired')).length,
     }
   })
 }
