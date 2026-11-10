@@ -505,7 +505,19 @@ try {
     const notices = await S.listSuspendNotices()
     await S.markNotified(notice[0].visitId)
     await expectError(() => S.markNotified(notice[0].visitId), '重複記錄通知')
-    ok(notices.length >= notice.length && (await S.listSuspendNotices()).find((n) => n.visitId === notice[0].visitId).notifiedAt, '停診通知名單：可逐一記錄已通知')
+    const marked = (await S.listSuspendNotices()).find((n) => n.visitId === notice[0].visitId)
+    ok(notices.length >= notice.length && marked.notifiedAt && marked.notifiedByName === dbm.db.users.find((u) => u.username === 'admin').name, '停診通知名單：可逐一記錄已通知，並記下記錄者')
+    // I4：按錯可以撤銷，撤銷寫入稽核紀錄
+    await as('clerk01')
+    await expectError(() => S.unmarkNotified(notice[0].visitId), '非管理員撤銷停診通知')
+    await as('admin')
+    await S.unmarkNotified(notice[0].visitId)
+    const undone = (await S.listSuspendNotices()).find((n) => n.visitId === notice[0].visitId)
+    ok(!undone.notifiedAt && !undone.notifiedByName && dbm.db.auditLogs[0].action === '撤銷停診通知' && dbm.db.auditLogs[0].detail.includes('原記錄'), '撤銷停診通知：回到待通知，稽核紀錄留下原記錄時間與記錄者')
+    await expectError(() => S.unmarkNotified(notice[0].visitId), '撤銷尚未通知的病人')
+    const normalVisit = dbm.db.visits.find((v) => !v.cancelReason?.startsWith('停診'))
+    await expectError(() => S.unmarkNotified(normalVisit.id), '撤銷非停診退掛的掛號')
+    await S.markNotified(notice[0].visitId)
 
     // 今天已開始看診的診次不能停
     const started = dbm.db.sessions.find((s) => s.date === T && dbm.db.visits.some((v) => v.sessionId === s.id && v.status === 'dispensed'))

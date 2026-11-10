@@ -6,9 +6,17 @@ import { UBadge, UButton, UQueryState } from '@/components/ui'
 import { scheduleApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { periodLabel, weekdayLabel } from '@/utils/date'
+import { useUi } from '@/stores/ui'
+import type { NoticeRow } from '@/services/schedule'
 
+const ui = useUi()
 const { data: notices, loading } = useQuery(() => scheduleApi.listSuspendNotices())
 const mark = useAction(scheduleApi.markNotified, { success: '已記錄通知' })
+// 「已通知」不先確認（要連續按很多次），改成可以撤銷；撤銷較少用，所以先確認
+const unmark = useAction(scheduleApi.unmarkNotified, { success: '已改回待通知' })
+const undo = async (n: NoticeRow) => {
+  if (await ui.confirm({ title: '撤銷通知紀錄', message: `把 ${n.patientName}（${n.date.slice(5)} #${n.seqNo}）改回待通知？\n撤銷會寫入稽核紀錄。`, okText: '改回待通知' })) unmark.run(n.visitId)
+}
 </script>
 
 <template>
@@ -25,7 +33,10 @@ const mark = useAction(scheduleApi.markNotified, { success: '已記錄通知' })
         <span class="tabular flex items-center gap-1"><Phone class="h-3.5 w-3.5" />{{ n.phone }}</span>
         <UBadge tone="gray">{{ n.reason }}</UBadge>
         <span class="ml-auto">
-          <span v-if="n.notifiedAt" class="tabular text-xs">{{ n.notifiedAt.slice(5) }} 已通知</span>
+          <span v-if="n.notifiedAt" class="tabular flex items-center gap-2 text-xs">
+            {{ n.notifiedAt.slice(5) }} {{ n.notifiedByName ?? '' }} 已通知
+            <button type="button" class="text-brand-600 underline-offset-2 hover:underline disabled:opacity-50" :disabled="unmark.pending.value" @click="undo(n)">撤銷</button>
+          </span>
           <UButton v-else size="sm" variant="secondary" :icon="Check" :loading="mark.pending.value" @click="mark.run(n.visitId)">已通知</UButton>
         </span>
       </li>

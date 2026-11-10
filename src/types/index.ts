@@ -148,6 +148,8 @@ export interface Visit {
   cancelReason?: string
   /** 停診退掛後，已電話通知病人的時間 */
   notifiedAt?: string
+  /** 記錄「已通知」的人（使用者 id）；撤銷時與 notifiedAt 一起清掉，撤銷經過留在稽核紀錄 */
+  notifiedBy?: string
 }
 
 export interface VitalSigns {

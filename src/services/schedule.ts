@@ -278,6 +278,8 @@ export interface NoticeRow extends AffectedVisit {
   doctorName: string
   reason: string
   notifiedAt?: string
+  /** 記錄通知的人（姓名） */
+  notifiedByName?: string
 }
 
 /** 今天以後因停診而退掛的病人（含已通知者，方便核對） */
@@ -293,6 +295,7 @@ export function listSuspendNotices(): Promise<NoticeRow[]> {
         return {
           visitId: v.id, seqNo: v.seqNo, patientName: p?.name ?? '', phone: p?.phone ?? '', status: v.status,
           date: v.date, period: s?.period ?? 'AM', doctorName: nameOf.doctor(s?.originalDoctorId ?? s?.doctorId), reason: v.cancelReason!.slice(3), notifiedAt: v.notifiedAt,
+          notifiedByName: v.notifiedBy ? (db.users.find((u) => u.id === v.notifiedBy)?.name ?? v.notifiedBy) : undefined,
         }
       })
       .sort((a, b) => Number(!!a.notifiedAt) - Number(!!b.notifiedAt) || a.date.localeCompare(b.date) || periodOrder[a.period] - periodOrder[b.period] || a.seqNo - b.seqNo)
@@ -301,11 +304,30 @@ export function listSuspendNotices(): Promise<NoticeRow[]> {
 
 export function markNotified(visitId: string): Promise<void> {
   return mutate(() => {
-    requireUser('admin')
+    const u = requireUser('admin')
     const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (v.notifiedAt) fail('已記錄通知', 'CONFLICT')
     v.notifiedAt = now()
+    v.notifiedBy = u.id
     audit('停診通知', `${find.patient(v.patientId)?.name} ${v.date}`)
+  })
+}
+
+/**
+ * 撤銷「已通知」：按錯人時用。病人回到待通知名單。
+ * 「已通知」按鈕平常要連續按幾十次，所以不在按下前確認，改成可以撤銷——
+ * 狀態改回去，但「曾記錄通知、何時被誰撤銷」留在稽核紀錄（原記錄者與時間一併寫入）。
+ */
+export function unmarkNotified(visitId: string): Promise<void> {
+  return mutate(() => {
+    requireUser('admin')
+    const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
+    if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
+    if (!v.notifiedAt) fail('這位病人尚未記錄通知', 'CONFLICT')
+    const by = v.notifiedBy ? (db.users.find((x) => x.id === v.notifiedBy)?.name ?? v.notifiedBy) : '未知'
+    audit('撤銷停診通知', `${find.patient(v.patientId)?.name} ${v.date}（原記錄：${v.notifiedAt.slice(5)} ${by}）`)
+    delete v.notifiedAt
+    delete v.notifiedBy
   })
 }

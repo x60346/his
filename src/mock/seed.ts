@@ -650,6 +650,8 @@ export function buildSeed(): Database {
       })
     }
     for (let k = daysIn - 1; k >= 0; k--) {
+      // 今天的查房紀錄在 08:30 之後才存在（清晨開啟展示時不能出現未來的紀錄）
+      if (`${addDays(T, -k)} 08:30` >= nowStr) continue
       progressNotes.push({
         id: id('PN'), admissionId: adm.id, at: `${addDays(T, -k)} 08:30`, doctorId: sc.doctor,
         subjective: k === 0 ? '病人自覺症狀改善，食慾恢復中。' : '病人仍有不適，夜間睡眠普通。',
