@@ -10,7 +10,7 @@ import ReasonDialog from '@/components/ReasonDialog.vue'
 import RecordDialog from './components/RecordDialog.vue'
 import ReportDialog from './components/ReportDialog.vue'
 import StatsPanel from './components/StatsPanel.vue'
-import { patientApi, preventApi, type Eligibility, type PreventRecordView, type WorklistRow } from '@/services'
+import { FIELD_FORMATS, patientApi, preventApi, type Eligibility, type PreventRecordView, type WorklistRow } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { toRoc } from '@/utils/date'
 import type { Patient } from '@/types'
@@ -96,7 +96,8 @@ const pendingColumns: Column<PreventRecordView>[] = [
   { key: 'doctorName', label: '醫師', width: '6rem' },
   { key: 'act', label: '', width: '6rem', align: 'right' },
 ]
-const dataText = (d: Record<string, string>) => Object.entries(d).map(([k, v]) => `${k} ${v}`).join('・') || '—'
+/** 檢查內容：數值加上單位（單位來自 FIELD_FORMATS，和登錄時的提示同一個來源） */
+const dataText = (d: Record<string, string>) => Object.entries(d).map(([k, v]) => `${k} ${v}${FIELD_FORMATS[k]?.unit ? ' ' + FIELD_FORMATS[k].unit : ''}`).join('・') || '—'
 </script>
 
 <template>

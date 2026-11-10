@@ -3,7 +3,7 @@ import type { PreventItem, PreventRecord } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
-import { checkEligibility, checkPreventResult, type Eligibility } from './prevent-rules'
+import { checkEligibility, checkPreventResult, withDerivedFields, type Eligibility } from './prevent-rules'
 import { find, nameOf, patientBrief, visitView, type PatientBrief, type VisitView } from './views'
 
 /** 提供中的項目（停用的項目不再判斷資格、不能登錄；歷史紀錄照常顯示） */
@@ -122,7 +122,8 @@ export function addPreventRecord(input: PreventRecordInput): Promise<PreventReco
       if (v.patientId !== p.id || v.date !== t) fail('掛號紀錄與病人或日期不符')
     }
     // 只保留有填的欄位
-    const data = Object.fromEntries(Object.entries(input.data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v))
+    // BMI 等衍生欄位由系統計算（見 withDerivedFields）
+    const data = withDerivedFields(Object.fromEntries(Object.entries(input.data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v)))
 
     const r: PreventRecord = { id: newId('PR'), patientId: p.id, itemCode: item.code, date: t, visitId: input.visitId, doctorId: doctorId!, result: input.result, data }
     db.preventRecords.push(r)
@@ -141,7 +142,7 @@ export function fillReport(recordId: string, result: PreventRecord['result'], da
     // 和登錄同一條規則：定案的結果，欄位都要填（補登時不能再選「待報告」）
     const item = must(db.preventItems.find((i) => i.code === r.itemCode), '預防保健項目')
     failFields(checkPreventResult(item, result, data, { allowPending: false }))
-    const filled = Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v))
+    const filled = withDerivedFields(Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v)))
     r.result = result
     r.data = { ...r.data, ...filled }
     r.reportedAt = now()

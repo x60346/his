@@ -2,7 +2,7 @@
 // 補登報告：抹片、糞便潛血等檢體送驗後，報告回來再補上結果。只能補「待報告」的紀錄，補完即定案。
 import { reactive, watch } from 'vue'
 import { UButton, UDialog, UInput, USelect } from '@/components/ui'
-import { preventApi, type PreventRecordView } from '@/services'
+import { FIELD_FORMATS, preventApi, type PreventRecordView } from '@/services'
 import { useAction } from '@/composables/useService'
 import { toRoc } from '@/utils/date'
 import type { PreventItem } from '@/types'
@@ -33,7 +33,7 @@ async function submit() {
       </div>
       <USelect v-model="form.result" label="報告結果" required placeholder="請選擇" :options="['正常', '異常需追蹤']" :error="save.fieldErrors.value.result" />
       <div class="grid grid-cols-2 gap-3">
-        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" required :error="save.fieldErrors.value[`data:${f}`]" />
+        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" :hint="FIELD_FORMATS[f]?.hint" required :error="save.fieldErrors.value[`data:${f}`]" />
       </div>
       <p class="text-xs text-slate-500">報告補登後即定案，不可再修改。</p>
     </div>

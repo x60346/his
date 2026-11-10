@@ -240,7 +240,7 @@ export const procedures: Procedure[] = [
 ]
 
 export const preventItems: PreventItem[] = [
-  { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', 'BMI'], needsReport: false },
+  { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },
   { code: 'CERVIX', name: '子宮頸抹片檢查', caseCode: '95', ruleText: '30 歲以上女性，每 3 年 1 次', intervalYears: 3, fields: ['報告'], needsReport: true },
   { code: 'BREAST', name: '乳房 X 光攝影', caseCode: '81', ruleText: '45–69 歲女性，或 40–44 歲有乳癌家族史者，每 2 年 1 次', intervalYears: 2, fields: ['報告'], needsReport: true },
   { code: 'COLON', name: '糞便潛血檢查', caseCode: '85', ruleText: '45–74 歲，每 2 年 1 次', intervalYears: 2, fields: ['糞便潛血'], needsReport: true },

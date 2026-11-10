@@ -27,7 +27,7 @@ import type {
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
-import { checkEligibility } from '@/services/prevent-rules'
+import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
 import { allocateFefo } from '@/services/stock-rules'
 import { makeIdNo } from '@/utils/validators'
 import * as codes from './codes'
@@ -449,11 +449,11 @@ export function buildSeed(): Database {
 
   // 預防保健紀錄
   const prevent = (pt: Patient, itemCode: string, daysAgo: number, result: PreventRecord['result'], data: Record<string, string>) => {
-    preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode, date: addDays(T, -daysAgo), doctorId: 'DR01', result, data })
+    preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode, date: addDays(T, -daysAgo), doctorId: 'DR01', result, data: withDerivedFields(data) })
   }
-  prevent(patients[0], 'ADULT', 420, '異常需追蹤', { 血壓: '146/92', 空腹血糖: '108', 總膽固醇: '232', BMI: '26.1' })
+  prevent(patients[0], 'ADULT', 420, '異常需追蹤', { 血壓: '146/92', 空腹血糖: '108', 總膽固醇: '232', 身高: '168', 體重: '74' })
   prevent(patients[1], 'BREAST', 900, '正常', { 報告: 'BI-RADS 1' })
-  prevent(patients[3], 'ADULT', 300, '正常', { 血壓: '128/80', 空腹血糖: '96', 總膽固醇: '188', BMI: '23.4' })
+  prevent(patients[3], 'ADULT', 300, '正常', { 血壓: '128/80', 空腹血糖: '96', 總膽固醇: '188', 身高: '160', 體重: '60' })
   prevent(patients[7], 'COLON', 500, '正常', { 糞便潛血: '陰性' })
   prevent(patients[8], 'LUNG', 400, '異常需追蹤', { 報告: 'Lung-RADS 3，6 個月後追蹤' })
   prevent(patients[5], 'CERVIX', 200, '正常', { 報告: 'NILM' })
@@ -461,14 +461,25 @@ export function buildSeed(): Database {
 
   // 近半年的服務紀錄（統計用）：每一筆都先經過 checkEligibility，展示資料不能出現「不符資格卻做了」的紀錄
   const sampleData: Record<string, () => [PreventRecord['result'], Record<string, string>]> = {
-    ADULT: () => (rand() < 0.3 ? ['異常需追蹤', { 血壓: `${int(140, 160)}/${int(88, 98)}`, 空腹血糖: String(int(100, 130)), 總膽固醇: String(int(210, 260)), BMI: '27.2' }] : ['正常', { 血壓: `${int(110, 135)}/${int(70, 85)}`, 空腹血糖: String(int(80, 99)), 總膽固醇: String(int(150, 199)), BMI: '22.8' }]),
+    // 身高體重依目標 BMI 推算（異常組約 27–30、正常組約 19–24），BMI 本身由 withDerivedFields 算出
+    ADULT: () => {
+      const h = int(150, 182)
+      const w = (bmi: number) => String(Math.round(bmi * (h / 100) ** 2))
+      return rand() < 0.3
+        ? ['異常需追蹤', { 血壓: `${int(140, 160)}/${int(88, 98)}`, 空腹血糖: String(int(100, 130)), 總膽固醇: String(int(210, 260)), 身高: String(h), 體重: w(int(27, 30)) }]
+        : ['正常', { 血壓: `${int(110, 135)}/${int(70, 85)}`, 空腹血糖: String(int(80, 99)), 總膽固醇: String(int(150, 199)), 身高: String(h), 體重: w(int(19, 24)) }]
+    },
     CERVIX: () => ['正常', { 報告: 'NILM' }],
     BREAST: () => (rand() < 0.15 ? ['異常需追蹤', { 報告: 'BI-RADS 0，需進一步檢查' }] : ['正常', { 報告: 'BI-RADS 1' }]),
     COLON: () => (rand() < 0.1 ? ['異常需追蹤', { 糞便潛血: '陽性，轉介大腸鏡' }] : ['正常', { 糞便潛血: '陰性' }]),
     ORAL: () => ['正常', { 檢查結果: '未見異常' }],
     LUNG: () => (rand() < 0.2 ? ['異常需追蹤', { 報告: 'Lung-RADS 3' }] : ['正常', { 報告: 'Lung-RADS 1' }]),
     BCLIVER: () => ['正常', { HBsAg: '陰性', 'Anti-HCV': '陰性' }],
-    CHILD: () => ['正常', { 身高: `${int(85, 120)} cm`, 體重: `${int(12, 24)} kg`, 發展評估: '正常' }],
+    // 兒童：體重由身高與合理 BMI（14–17）推算——兩者各自亂數會出現 115 cm、12 kg（BMI 9.1）這種不可能的組合
+    CHILD: () => {
+      const h = int(85, 120)
+      return ['正常', { 身高: String(h), 體重: String(Math.round(int(14, 17) * (h / 100) ** 2)), 發展評估: '正常' }]
+    },
   }
   // 依時間先後產生：資格判斷只看「當時以前」的紀錄，若先產生較晚的紀錄，較早那筆就看不到它，間隔規則會被破壞
   const historyDays = Array.from({ length: 60 }, () => int(1, 180)).sort((a, b) => b - a)
@@ -481,7 +492,7 @@ export function buildSeed(): Database {
     const [result, data] = sampleData[item.code]()
     // 抹片、肺癌篩檢兩週內的報告通常還沒出來
     const pendingReport = daysAgo <= 14 && (item.code === 'CERVIX' || item.code === 'LUNG')
-    preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode: item.code, date, doctorId: pick(['DR01', 'DR02', 'DR03']), result: pendingReport ? '待報告' : result, data: pendingReport ? {} : data })
+    preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode: item.code, date, doctorId: pick(['DR01', 'DR02', 'DR03']), result: pendingReport ? '待報告' : result, data: pendingReport ? {} : withDerivedFields(data) })
   }
 
   // 今天的掛號：部分病人在掛號時勾了預防保健（預防保健頁的「今日待執行」）
@@ -500,7 +511,7 @@ export function buildSeed(): Database {
     const code = eligibleCodes(patients.find((p) => p.id === doneVisit.patientId)!)[0]
     doneVisit.preventItems = [code]
     const [result, data] = sampleData[code]()
-    preventRecords.push({ id: id('PR'), patientId: doneVisit.patientId, itemCode: code, date: T, visitId: doneVisit.id, doctorId: doneVisit.doctorId, result, data })
+    preventRecords.push({ id: id('PR'), patientId: doneVisit.patientId, itemCode: code, date: T, visitId: doneVisit.id, doctorId: doneVisit.doctorId, result, data: withDerivedFields(data) })
   }
 
   // ---------- 病床與住院 ----------

@@ -7,6 +7,7 @@
 //   例：上次 2023-05-02、每 3 年 → 2026-05-01 不可，2026-05-02 可
 import type { Patient, PreventItem, PreventRecord } from '@/types'
 import { addYears, ageOf, toRoc } from '@/utils/date'
+import { vitalSpecs } from './nursing-rules'
 
 export interface Eligibility {
   itemCode: string
@@ -103,6 +104,74 @@ export function checkPreventResult(
   if (!result || !allowed.includes(result)) return { result: '請選擇結果' }
   if (result === '待報告') return {}
   const errors: Record<string, string> = {}
-  for (const f of item.fields) if (!String(data?.[f] ?? '').trim()) errors[`data:${f}`] = `請填寫${f}`
+  for (const f of item.fields) {
+    const v = String(data?.[f] ?? '').trim()
+    const msg = v ? checkFieldFormat(f, v) : `請填寫${f}`
+    if (msg) errors[`data:${f}`] = msg
+  }
   return errors
+}
+
+// ---------- 量測欄位的格式 ----------
+// 預防保健的欄位名稱是在系統管理設定的文字（item.fields），所以格式依「欄位名稱」對應。
+// 表上沒有的欄位（報告、檢查結果、發展評估…）是自由文字，只檢查有沒有填。
+// 範圍是「打錯攔得住」的合理上下限，不是臨床正常值；血壓直接沿用護理站生命徵象的範圍，兩處判斷一致。
+
+export interface FieldFormat {
+  unit: string
+  /** 欄位下方的提示，例：「mmHg，例：128/82」 */
+  hint: string
+  check: (v: string) => string | null
+}
+
+const NUM = /^\d+(\.\d+)?$/
+function numberIn(label: string, unit: string, min: number, max: number) {
+  return (v: string) => {
+    if (!NUM.test(v)) return `${label}請填數字（${unit}）`
+    const n = Number(v)
+    return n < min || n > max ? `${label}需介於 ${min}–${max} ${unit}` : null
+  }
+}
+
+export const FIELD_FORMATS: Record<string, FieldFormat> = {
+  血壓: {
+    unit: 'mmHg',
+    hint: 'mmHg，收縮壓/舒張壓，例：128/82',
+    check: (v) => {
+      const m = /^(\d{2,3})\s*\/\s*(\d{2,3})$/.exec(v)
+      if (!m) return '血壓格式為「收縮壓/舒張壓」，例：128/82'
+      const [sbp, dbp] = [Number(m[1]), Number(m[2])]
+      const { sbp: S, dbp: D } = vitalSpecs
+      if (sbp < S.limit[0] || sbp > S.limit[1]) return `收縮壓需介於 ${S.limit[0]}–${S.limit[1]} mmHg`
+      if (dbp < D.limit[0] || dbp > D.limit[1]) return `舒張壓需介於 ${D.limit[0]}–${D.limit[1]} mmHg`
+      return sbp > dbp ? null : '收縮壓應大於舒張壓（是否前後顛倒？）'
+    },
+  },
+  空腹血糖: { unit: 'mg/dL', hint: 'mg/dL，例：95', check: numberIn('空腹血糖', 'mg/dL', 20, 600) },
+  總膽固醇: { unit: 'mg/dL', hint: 'mg/dL，例：180', check: numberIn('總膽固醇', 'mg/dL', 50, 500) },
+  身高: { unit: 'cm', hint: 'cm，例：165', check: numberIn('身高', 'cm', 40, 220) },
+  體重: { unit: 'kg', hint: 'kg，例：62.5', check: numberIn('體重', 'kg', 2, 250) },
+  BMI: { unit: '', hint: '例：23.4', check: numberIn('BMI', '', 10, 60) },
+}
+
+/** 單一欄位的格式檢查；表上沒有的欄位不檢查格式 */
+export function checkFieldFormat(field: string, value: string): string | null {
+  return FIELD_FORMATS[field]?.check(value.trim()) ?? null
+}
+
+/**
+ * BMI = 體重(kg) ÷ 身高(m)²，四捨五入到小數一位。
+ * 參照 jian-HIS：BMI 由身高體重算出，不讓人手動輸入——手算的 BMI 容易算錯，又和身高體重對不起來。
+ * 身高或體重不是合理數字時回傳 undefined。
+ */
+export function calcBmi(height: string | undefined, weight: string | undefined): string | undefined {
+  if (!height || !weight || checkFieldFormat('身高', height) || checkFieldFormat('體重', weight)) return undefined
+  const bmi = Number(weight) / (Number(height) / 100) ** 2
+  return (Math.round(bmi * 10) / 10).toFixed(1)
+}
+
+/** 儲存前補上衍生欄位：有身高、體重就算出 BMI（一律由系統計算，覆蓋任何手動填的值） */
+export function withDerivedFields(data: Record<string, string>): Record<string, string> {
+  const bmi = calcBmi(data['身高'], data['體重'])
+  return bmi ? { ...data, BMI: bmi } : data
 }

@@ -4,7 +4,7 @@
 // 執行醫師：醫師登錄就是本人；護理師登錄要指定（從掛號帶入預設）。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UDialog, UInput, USelect } from '@/components/ui'
-import { masterApi, preventApi, type PatientBrief } from '@/services'
+import { calcBmi, FIELD_FORMATS, masterApi, preventApi, type PatientBrief } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import type { PreventItem, PreventRecord } from '@/types'
@@ -26,6 +26,9 @@ watch(open, (v) => {
   form.doctorId = props.defaultDoctorId
   form.data = Object.fromEntries(props.item.fields.map((f) => [f, '']))
 })
+
+// 有身高、體重的項目：BMI 由系統計算，邊填邊顯示（儲存時服務層用同一個函式再算一次）
+const bmi = computed(() => (props.item?.fields.includes('身高') && props.item.fields.includes('體重') ? calcBmi(form.data['身高'], form.data['體重']) : undefined))
 
 const save = useAction(preventApi.addPreventRecord, { success: (r) => `已登錄：${props.item?.name}（${r.result}）` })
 async function submit() {
@@ -64,8 +67,9 @@ async function submit() {
       <!-- 待報告：結果還沒出來，不填數值；報告回來後由「待補登報告」補上 -->
       <p v-if="form.result === '待報告'" class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">檢體送驗中，報告回來後請至「今日工作 → 待補登報告」補上結果。</p>
       <div v-else class="grid grid-cols-2 gap-3">
-        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" :required="!!form.result" :error="save.fieldErrors.value[`data:${f}`]" />
+        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" :hint="FIELD_FORMATS[f]?.hint" :required="!!form.result" :error="save.fieldErrors.value[`data:${f}`]" />
       </div>
+      <p v-if="bmi && form.result !== '待報告'" class="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">BMI <b class="tabular">{{ bmi }}</b><span class="ml-1 text-xs text-slate-500">（由身高、體重自動計算）</span></p>
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
