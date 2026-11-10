@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // 日結報表：櫃台下班前對帳用。數字全部來自服務層 dailyReport。
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { Ban, Coins, FileText, Printer, Stethoscope } from 'lucide-vue-next'
 import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
 import { chargeApi } from '@/services'
 import type { DailyReport } from '@/services/charge'
 import { useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
-import { today } from '@/utils/date'
+import { now, toRoc, today } from '@/utils/date'
+import { useAuth } from '@/stores/auth'
 import { money, payMethodLabel } from '@/utils/labels'
 import type { PayMethod } from '@/types'
 
@@ -27,16 +28,32 @@ const columns: Column<Row>[] = [
   { key: 'nhiPoints', label: '申報點數', align: 'right', format: (c) => c.nhiPoints.toLocaleString() },
 ]
 const methods: PayMethod[] = ['cash', 'card', 'mobile']
-// 模板裡不能直接用 window（Vue 模板只開放少數全域物件），所以包成函式
-const print = () => window.print()
+
+// 列印表頭：報表名稱、日期、列印時間與列印人——日後對帳時才知道這張紙是誰、何時印的
+// （同一天印兩次、數字不同時查得出原因）。列印時間在按下「列印」那一刻取值，不是頁面打開的時間。
+const auth = useAuth()
+const printedAt = ref('')
+const print = async () => {
+  printedAt.value = now()
+  await nextTick() // 讓表頭先更新成這一刻的時間，再叫出列印視窗
+  window.print() // 模板裡不能直接用 window（Vue 模板只開放少數全域物件），所以包成函式
+}
 </script>
 
 <template>
   <!-- print-area：列印時只印報表本身（不含側邊選單） -->
   <div class="print-area space-y-4">
-    <div class="flex items-end gap-3">
+    <!-- 只在列印時出現的表頭（畫面上已有日期選擇器，不需要） -->
+    <header class="hidden border-b-2 border-slate-800 pb-2 print:block">
+      <h1 class="text-center text-lg font-bold">HIS 展示醫院　門診日結報表</h1>
+      <div class="mt-1 flex justify-between text-xs">
+        <span>報表日期：{{ toRoc(date) }}</span>
+        <span>列印：{{ printedAt ? toRoc(printedAt.slice(0, 10)) + printedAt.slice(10) : '' }}・{{ auth.user?.name }}</span>
+      </div>
+    </header>
+    <div class="no-print flex items-end gap-3">
       <div class="w-44"><UInput v-model="date" label="報表日期" type="date" :max="todayStr" /></div>
-      <UButton variant="secondary" :icon="Printer" class="no-print" @click="print">列印</UButton>
+      <UButton variant="secondary" :icon="Printer" @click="print">列印</UButton>
     </div>
 
     <template v-if="r">
