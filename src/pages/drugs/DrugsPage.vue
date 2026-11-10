@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 藥品庫存：摘要卡 → 藥品清單（篩選）→ 右側明細（批號、用量、異動帳）。
 // 清單上「可用庫存」「可用天數」「效期」都是服務層依帳本算好的；頁面只負責呈現與篩選條件。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
 import { AlertTriangle, CalendarClock, PackageX, Pill } from 'lucide-vue-next'
 import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, type Column } from '@/components/ui'
@@ -20,6 +21,7 @@ const { data: rows, loading } = useQuery(
 )
 
 const selectedId = ref<string>()
+useRevealOnNarrow(selectedId, 1280) // 窄螢幕點選後把明細捲進畫面
 const statusView = { out: { label: '缺貨', tone: 'red' }, low: { label: '偏低', tone: 'yellow' }, ok: { label: '正常', tone: 'green' } } as const
 
 const columns: Column<InventoryRow>[] = [
@@ -81,8 +83,8 @@ const shown = computed(() => rows.value?.length ?? 0)
         </UTable>
       </UCard>
 
-      <UCard class="self-start">
-        <UEmpty v-if="!selectedId" :icon="Pill" title="請從左側選擇藥品" description="檢視批號、用量趨勢與異動紀錄，並可進貨、盤點" />
+      <UCard data-detail class="self-start">
+        <UEmpty v-if="!selectedId" :icon="Pill" title="請從清單選擇藥品" description="檢視批號、用量趨勢與異動紀錄，並可進貨、盤點" />
         <DrugDetail v-else :drug-id="selectedId" />
       </UCard>
     </div>

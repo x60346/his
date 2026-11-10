@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 批價結帳：左邊當日清單（待批價在上），右邊試算明細 → 結帳 → 收據；另有日結報表分頁。
 // 金額全部來自服務層（previewCharge / pay），頁面只算「實收 − 應收 = 找零」。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { Ban, CreditCard, Printer, Smartphone, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
@@ -24,6 +25,7 @@ const { data: list, loading: listLoading } = useQuery(() => chargeApi.listCharge
 const pendingCount = computed(() => (list.value ?? []).filter((v) => v.status === 'consulted').length)
 
 const visitId = ref<string>()
+useRevealOnNarrow(visitId) // 窄螢幕點選後把明細捲進畫面
 watch(date, () => (visitId.value = undefined))
 
 // ---------- 右側資料：一次取得（狀態、試算、收據在同一時間點讀出，不依賴可能過期的清單） ----------
@@ -112,9 +114,9 @@ async function onVoid() {
       </UCard>
 
       <!-- 右側 -->
-      <UCard v-if="!visitId" class="no-print"><UEmpty title="請從左側選擇病人" description="待批價的病人排在最上方" /></UCard>
-      <UCard v-else-if="!item" class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這筆就醫紀錄" /></UCard>
-      <div v-else class="min-w-0 space-y-4">
+      <UCard v-if="!visitId" data-detail class="no-print"><UEmpty title="請從清單選擇病人" description="待批價的病人排在最上方" /></UCard>
+      <UCard v-else-if="!item" data-detail class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這筆就醫紀錄" /></UCard>
+      <div v-else data-detail class="min-w-0 space-y-4">
         <PatientBanner :patient="item" class="no-print">
           <UBadge tone="blue">{{ item.identityName }}</UBadge>
           <UBadge>案件 {{ item.caseType }}</UBadge>

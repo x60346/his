@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 病患資料：左邊搜尋清單，右邊基本資料、就醫紀錄、預防保健資格。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
 import { Pencil, UserPlus } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UInput, UStatusBadge, UTable, UTabs, type Column } from '@/components/ui'
@@ -18,6 +19,7 @@ const kw = useDebounced(keyword, 250)
 const { data: list, loading } = useQuery(() => patientApi.searchPatients(String(kw.value ?? '')), [kw])
 
 const selectedId = ref<string>()
+useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
 // 選取後以 id 重新查詢，資料被修改（dbVersion 變動）時右側會自動更新
 const { data: patient } = useQuery(async () => (selectedId.value ? patientApi.getPatient(selectedId.value) : null), [selectedId])
 
@@ -94,7 +96,7 @@ const fields = computed(() => {
       </div>
     </UCard>
 
-    <div v-if="patient" class="space-y-4">
+    <div v-if="patient" data-detail class="space-y-4">
       <UCard>
         <template #title>
           <div class="flex items-baseline gap-2">
@@ -148,7 +150,7 @@ const fields = computed(() => {
         </ul>
       </UCard>
     </div>
-    <UCard v-else><UEmpty title="請從左側選擇病患" description="可用病歷號、姓名、身分證或電話搜尋" /></UCard>
+    <UCard v-else data-detail><UEmpty title="請從清單選擇病患" description="可用病歷號、姓名、身分證或電話搜尋" /></UCard>
 
     <PatientEditDialog v-model="editOpen" :patient="editing" @saved="onSaved" />
   </div>

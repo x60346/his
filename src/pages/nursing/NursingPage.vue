@@ -2,7 +2,8 @@
 // 護理站：病房病人總覽 → 給藥紀錄、生命徵象、護理紀錄、交班。
 // 時間是這一頁的核心維度，有兩種「跟著時間更新」的方式：
 //   1. 頁面自己算的（給藥列的逾時顏色）：用 useNow 的時鐘，時鐘走就重新計算，不必查詢
-//   2. 服務層算好的（左側清單的逾時數）：資料是查詢當下算的，所以要定時重新查詢
+//   2. 服務層算好的（病人清單上的逾時數）：資料是查詢當下算的，所以要定時重新查詢
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertTriangle, ClipboardList } from 'lucide-vue-next'
 import { UBadge, UCard, UEmpty, UQueryState, UTabs } from '@/components/ui'
@@ -33,6 +34,7 @@ onMounted(() => (timer = setInterval(reload, 60_000)))
 onBeforeUnmount(() => clearInterval(timer))
 
 const admissionId = ref<string>()
+useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
 const adm = computed(() => patients.value?.find((p) => p.id === admissionId.value))
 // 換病房或病人出院後，取消選取
 watch(patients, (list) => {
@@ -103,7 +105,7 @@ const wardTotals = computed(() => ({
       </UCard>
 
       <!-- 護理工作區 -->
-      <div class="min-w-0 space-y-3">
+      <div data-detail class="min-w-0 space-y-3">
         <template v-if="adm">
           <PatientBanner :patient="adm">
             <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
@@ -115,7 +117,7 @@ const wardTotals = computed(() => ({
           <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="tabs" /></div>
           <!-- 交班是病房層級，不必先選病人 -->
           <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
-          <UEmpty v-else-if="!adm" :icon="ClipboardList" title="請從左側選擇病人" description="執行給藥、記錄生命徵象與護理紀錄" class="py-16" />
+          <UEmpty v-else-if="!adm" :icon="ClipboardList" title="請從清單選擇病人" description="執行給藥、記錄生命徵象與護理紀錄" class="py-16" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />

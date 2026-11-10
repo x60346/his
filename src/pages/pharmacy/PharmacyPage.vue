@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 門診藥局：調劑清單（依領藥號）→ 調劑單 → 核對 → 發藥；可補貨、列印藥袋。
 // 兩段式（核對、發藥）是用藥安全的標準流程；扣庫存只在發藥時發生，且整筆交易（任一藥不足就全部不扣）。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs } from '@/components/ui'
@@ -26,6 +27,7 @@ const tabs = computed(() =>
 const list = computed(() => (all.value ?? []).filter((d) => d.status === tab.value))
 
 const selectedId = ref<string>()
+useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
 watch(date, () => (selectedId.value = undefined))
 
 // 右側以 id 直接查最新的調劑單（不依賴清單上可能過期的狀態）
@@ -96,9 +98,9 @@ const print = () => window.print()
     </UCard>
 
     <!-- 調劑單 -->
-    <UCard v-if="!selectedId" class="no-print"><UEmpty title="請從左側選擇調劑單" description="依領藥號順序處理" /></UCard>
-    <UCard v-else-if="!d" class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這張調劑單" /></UCard>
-    <div v-else class="no-print min-w-0 space-y-3">
+    <UCard v-if="!selectedId" data-detail class="no-print"><UEmpty title="請從清單選擇調劑單" description="依領藥號順序處理" /></UCard>
+    <UCard v-else-if="!d" data-detail class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這張調劑單" /></UCard>
+    <div v-else data-detail class="no-print min-w-0 space-y-3">
       <PatientBanner :patient="d">
         <UBadge tone="blue">領藥號 {{ d.pickupNo }}</UBadge>
         <UStatusBadge :map="dispenseStatus" :value="d.status" />

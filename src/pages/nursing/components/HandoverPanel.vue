@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 交班：以「病房 + 日期」為單位，接班的人要看的是整個病房，不是一個病人。
-// 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為左側選取的那一位。
+// 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為清單上選取的那一位。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { handoverShiftOf, nursingApi, type Shift, type WardPatient } from '@/services'

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 門診看診：左邊候診清單，右邊看診工作區（SOAP、診斷、醫令、歷史病歷）。
 // 草稿在頁面裡編輯；「暫存」才寫入，「完成看診」才做完整驗證並推進狀態。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
 import { computed, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
@@ -51,6 +52,7 @@ const freqs = computed(() => freqList.value ?? [])
 
 // ---------- 目前病人與病歷 ----------
 const visitId = ref<string>()
+useRevealOnNarrow(visitId) // 窄螢幕點選後把明細捲進畫面
 const visit = computed(() => queue.value?.find((v) => v.id === visitId.value))
 const { data: encounter } = useQuery(async () => (visitId.value ? (await opdApi.getEncounterByVisit(visitId.value)) ?? null : null), [visitId])
 const { data: history } = useQuery(async () => (visit.value ? opdApi.patientHistory(visit.value.patientId, visit.value.id) : []), [() => visit.value?.patientId])
@@ -244,8 +246,8 @@ const tabs = computed(() => [
     </UCard>
 
     <!-- 看診工作區 -->
-    <UCard v-if="!visit"><UEmpty title="請從左側選擇病人" description="點選候診病人後按「叫號」開始看診" /></UCard>
-    <div v-else class="min-w-0 space-y-3">
+    <UCard v-if="!visit" data-detail><UEmpty title="請從清單選擇病人" description="點選候診病人後按「叫號」開始看診" /></UCard>
+    <div v-else data-detail class="min-w-0 space-y-3">
       <PatientBanner :patient="visit">
         <UBadge tone="blue">{{ visit.identityName }}</UBadge>
         <UBadge>{{ visit.caseType }} {{ caseTypeName(visit.caseType) }}</UBadge>

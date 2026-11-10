@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 住院醫囑：醫師的住院病人 → 長期／臨時醫囑、病程紀錄。
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
+import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
 import { Plus, Square } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
@@ -26,6 +27,7 @@ const myPatients = computed(() =>
 )
 
 const admissionId = ref<string>()
+useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
 const adm = computed(() => admitted.value?.find((a) => a.id === admissionId.value))
 // 病人出院後從清單消失，取消選取
 watch(adm, (a) => {
@@ -94,8 +96,8 @@ async function submitNote() {
       </UQueryState>
     </UCard>
 
-    <UCard v-if="!adm"><UEmpty title="請從左側選擇病人" description="檢視與開立住院醫囑、病程紀錄" /></UCard>
-    <div v-else class="min-w-0 space-y-3">
+    <UCard v-if="!adm" data-detail><UEmpty title="請從清單選擇病人" description="檢視與開立住院醫囑、病程紀錄" /></UCard>
+    <div v-else data-detail class="min-w-0 space-y-3">
       <PatientBanner :patient="adm">
         <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
         <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天</span>
