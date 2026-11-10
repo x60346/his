@@ -152,10 +152,13 @@ async function onCancel(v: VisitView) {
 
 <template>
   <div class="space-y-4">
-    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_1fr]">
-      <!-- 左：病人 + 確認 -->
-      <div class="space-y-4">
-        <UCard title="1. 病人">
+    <!--
+      元素依 1 → 2 → 3 的順序排在同一層：手機依序往下堆疊，步驟就是 1、2、3。
+      桌機用 col-start / row-start 排成左右兩欄（左：1、3、看診號；右：2）。
+      以前左欄包成一個區塊（1 和 3 在裡面），手機上就變成 1 → 3 → 2。
+    -->
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_1fr] xl:grid-rows-[auto_auto_1fr]">
+        <UCard title="1. 病人" class="xl:col-start-1 xl:row-start-1">
           <template #actions>
             <UButton size="sm" variant="secondary" :icon="CreditCard" :loading="readCard.pending.value" @click="onReadCard">讀健保卡</UButton>
             <UButton size="sm" variant="secondary" :icon="UserPlus" @click="newPatient">初診</UButton>
@@ -186,7 +189,43 @@ async function onCancel(v: VisitView) {
           <p v-else class="mt-3 text-xs text-slate-400">搜尋病人，或按「讀健保卡」。未建檔的新病人請按「初診」。</p>
         </UCard>
 
-        <UCard title="3. 確認掛號">
+        <UCard title="2. 選擇診次" class="xl:col-start-2 xl:row-span-3 xl:row-start-1">
+          <template #actions>
+            <div class="w-36"><USelect v-model="deptFilter" :options="(depts ?? []).map((d) => ({ label: d.name, value: d.id }))" placeholder="全部科別" /></div>
+            <div class="w-40"><UInput v-model="date" type="date" :min="todayStr" /></div>
+          </template>
+          <UEmpty v-if="!sessionsLoading && !sessionsByPeriod.length" title="這天沒有門診" description="請選擇其他日期或科別" />
+          <div v-for="g in sessionsByPeriod" :key="g.period" class="mb-4 last:mb-0">
+            <div class="mb-2 text-xs font-semibold text-slate-500">{{ periodLabel[g.period] }}</div>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+              <button
+                v-for="s in g.list"
+                :key="s.id"
+                :disabled="!s.bookable"
+                :class="[
+                  'rounded-md border px-3 py-2 text-left text-sm transition',
+                  !s.bookable ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60'
+                  : s.id === sessionId ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/30'
+                  : 'border-slate-200 bg-white hover:border-brand-300',
+                ]"
+                @click="pickSession(s)"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="font-medium text-slate-800">{{ s.deptName }}・{{ s.doctorName }}</span>
+                  <UBadge v-if="s.suspended" tone="red">停診</UBadge>
+                  <UBadge v-else-if="s.closed">已截止</UBadge>
+                  <UBadge v-else-if="s.full" tone="red">額滿</UBadge>
+                </div>
+                <div class="mt-0.5 flex justify-between text-xs text-slate-500">
+                  <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
+                  <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </UCard>
+
+        <UCard title="3. 確認掛號" class="xl:col-start-1 xl:row-start-2">
           <div class="space-y-3">
             <div class="rounded-md bg-slate-50 px-3 py-2 text-sm">
               <template v-if="selectedSession">
@@ -217,7 +256,7 @@ async function onCancel(v: VisitView) {
           </div>
         </UCard>
 
-        <div v-if="lastResult" class="flex items-center gap-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+        <div v-if="lastResult" class="self-start xl:col-start-1 xl:row-start-3 flex items-center gap-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
           <div class="text-center">
             <div class="text-xs text-emerald-700">看診號</div>
             <div class="tabular text-4xl font-bold text-emerald-700">{{ lastResult.seqNo }}</div>
@@ -228,44 +267,6 @@ async function onCancel(v: VisitView) {
             <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診</div>
           </div>
         </div>
-      </div>
-
-      <!-- 右：診次 -->
-      <UCard title="2. 選擇診次">
-        <template #actions>
-          <div class="w-36"><USelect v-model="deptFilter" :options="(depts ?? []).map((d) => ({ label: d.name, value: d.id }))" placeholder="全部科別" /></div>
-          <div class="w-40"><UInput v-model="date" type="date" :min="todayStr" /></div>
-        </template>
-        <UEmpty v-if="!sessionsLoading && !sessionsByPeriod.length" title="這天沒有門診" description="請選擇其他日期或科別" />
-        <div v-for="g in sessionsByPeriod" :key="g.period" class="mb-4 last:mb-0">
-          <div class="mb-2 text-xs font-semibold text-slate-500">{{ periodLabel[g.period] }}</div>
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-            <button
-              v-for="s in g.list"
-              :key="s.id"
-              :disabled="!s.bookable"
-              :class="[
-                'rounded-md border px-3 py-2 text-left text-sm transition',
-                !s.bookable ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60'
-                : s.id === sessionId ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/30'
-                : 'border-slate-200 bg-white hover:border-brand-300',
-              ]"
-              @click="pickSession(s)"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-medium text-slate-800">{{ s.deptName }}・{{ s.doctorName }}</span>
-                <UBadge v-if="s.suspended" tone="red">停診</UBadge>
-                <UBadge v-else-if="s.closed">已截止</UBadge>
-                <UBadge v-else-if="s.full" tone="red">額滿</UBadge>
-              </div>
-              <div class="mt-0.5 flex justify-between text-xs text-slate-500">
-                <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
-                <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
-              </div>
-            </button>
-          </div>
-        </div>
-      </UCard>
     </div>
 
     <!-- 當日掛號清單 -->
