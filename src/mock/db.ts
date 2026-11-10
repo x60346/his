@@ -142,3 +142,23 @@ export function newId(prefix: string): string {
 
 // 第一次載入（含重建）時立即寫入，確保重新整理後資料一致
 commit()
+
+/**
+ * 多分頁同步：其他分頁寫入 localStorage 時，這裡會收到 storage 事件（同一分頁自己的寫入不會觸發）。
+ * 重新載入資料並遞增 dbVersion，頁面就會重新查詢。
+ * 少了這一步，每個分頁各自握著一份舊資料，下次寫入時會把整份蓋回去——另一分頁剛建的病人就消失了。
+ * （寫入是同步完成的：mutate 的「快照 → 修改 → 存檔」中間沒有 await，不會被這裡插隊改到一半。）
+ */
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== STORAGE_KEY || !e.newValue) return
+    try {
+      const parsed = JSON.parse(e.newValue) as Database
+      if (parsed.schema !== SCHEMA_VERSION) return
+      db = parsed
+      dbVersion.value++
+    } catch {
+      // 另一分頁寫入的內容無法解析時維持現狀
+    }
+  })
+}
