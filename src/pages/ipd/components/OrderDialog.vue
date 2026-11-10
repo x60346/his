@@ -5,7 +5,7 @@
 // 否則切換類別後殘留的欄位（例如先選了藥又改成飲食）會被一起送出。
 import { computed, reactive, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { doseUnitOf, ipdApi, masterApi, opdApi, type AdmissionView } from '@/services'
+import { doseLevel, doseNote, doseUnitOf, ipdApi, masterApi, opdApi, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -77,6 +77,13 @@ function buildInput(): OrderInput | string {
   }
 }
 
+/** 劑量即時提示：與服務層同一條規則（偏高需確認、不合理直接擋） */
+const doseCheck = computed(() => {
+  if (!form.drug || !form.dose) return { level: 'ok' as const, text: '' }
+  const level = doseLevel(form.drug, form.dose)
+  return { level, text: level === 'ok' ? '' : doseNote(form.drug, form.dose) }
+})
+
 const save = useAction(ipdApi.addOrder, { success: (o) => `已開立：${o.content}${o.type === 'long' && o.category === 'medication' ? '（已產生給藥排程）' : ''}` })
 
 async function submit() {
@@ -87,6 +94,17 @@ async function submit() {
   // 判斷依據是「組裝好要送出的 input」，不是表單：表單上可能殘留切換類別前選的藥
   const drug = input.drugId ? form.drug : null
   if (drug && props.admission) {
+    // 劑量：不合理的直接擋（幾乎一定是打錯）；偏高的請醫師再確認一次
+    const level = doseLevel(drug, input.dose ?? 0)
+    if (level === 'absurd') return ui.toast.warning(`${doseNote(drug, input.dose ?? 0)}，請確認是否打錯`)
+    if (level === 'high') {
+      const ok = await ui.confirm({ title: '劑量偏高', message: `${drug.name}
+${doseNote(drug, input.dose ?? 0)}。
+
+確定劑量無誤？`, okText: '劑量無誤，開立', danger: true })
+      if (!ok) return
+      input.confirmHighDose = true
+    }
     // 已有執行中的同一種藥：列出來讓醫師判斷是忘了已開過，還是刻意加開
     const same = await ipdApi.listActiveSameDrug(props.admission.id, drug.id)
     if (same.length) {
@@ -147,7 +165,15 @@ async function submit() {
           已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge>
         </div>
         <div class="grid grid-cols-3 gap-3">
-          <UInput v-model="form.dose" label="每次劑量" type="number" min="0" step="0.5" :hint="form.drug ? doseUnitOf(form.drug) : ''" />
+          <UInput
+            v-model="form.dose"
+            label="每次劑量"
+            type="number"
+            min="0"
+            step="0.5"
+            :hint="doseCheck.level === 'high' ? `⚠ 劑量偏高：${doseCheck.text}` : form.drug ? doseUnitOf(form.drug) : ''"
+            :error="doseCheck.level === 'absurd' ? `${doseCheck.text}，請確認是否打錯` : save.fieldErrors.value.dose"
+          />
           <USelect v-model="form.freq" label="頻率" :options="freqOptions" />
           <USelect v-model="form.route" label="途徑" :options="routeOptions" />
         </div>

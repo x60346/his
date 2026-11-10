@@ -7,7 +7,7 @@
 //   - 過敏：顯示警示但不阻擋，最終由醫師判斷；庫存不足、高警訊藥品也標示出來
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UEmpty, USearchSelect } from '@/components/ui'
-import { autoQty, doseUnitOf, masterApi, type AllergyWarning } from '@/services'
+import { autoQty, doseLevel, doseUnitOf, masterApi, type AllergyWarning } from '@/services'
 import { useUi } from '@/stores/ui'
 import type { Drug, Frequency, MedicationOrder } from '@/types'
 
@@ -93,6 +93,9 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
                 <UBadge v-if="drugs.get(r.drugId)?.highAlert" tone="purple">高警訊</UBadge>
                 <UBadge v-for="a in warningOf(r.drugId)" :key="a" tone="red"><AlertTriangle class="h-3 w-3" />病人對 {{ a }} 過敏</UBadge>
                 <UBadge v-if="!readonly && (drugs.get(r.drugId)?.stock ?? 0) < r.qty" tone="yellow">庫存不足（存 {{ drugs.get(r.drugId)?.stock }}）</UBadge>
+                <!-- 劑量合理性：與服務層同一條規則 -->
+                <UBadge v-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'absurd'" tone="red">劑量不合理，請確認是否打錯</UBadge>
+                <UBadge v-else-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'high'" tone="yellow">劑量偏高（常用 {{ drugs.get(r.drugId)!.defaultDose }}）</UBadge>
               </div>
             </td>
             <td class="px-2 py-1.5">

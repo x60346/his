@@ -3,7 +3,8 @@
 import type { IpdOrder, MarRecord, ProgressNote } from '@/types'
 import { commit, db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
 import { find, nameOf, usable } from './views'
 
@@ -61,6 +62,8 @@ export function listOrders(admissionId: string): Promise<OrderView[]> {
 export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route'> & {
   /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
   allowDuplicate?: boolean
+  /** 劑量偏高時，醫師確認無誤 */
+  confirmHighDose?: boolean
 }
 
 /** 這位病人執行中的同藥醫囑（重複開立前要先讓醫師看到） */
@@ -83,6 +86,9 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
       if (!input.dose || input.dose <= 0) fail('請輸入劑量')
+      const level = doseLevel(drug, input.dose)
+      if (level === 'absurd') failField('dose', `${doseNote(drug, input.dose)}，請確認是否打錯`)
+      if (level === 'high' && !input.confirmHighDose) fail(`劑量偏高：${doseNote(drug, input.dose)}，如確定請確認`, 'CONFLICT')
       if (!input.freq || !find.freq(input.freq)) fail('請選擇頻率')
       if (input.type === 'long' && input.freq === 'STAT') fail('STAT 請改用臨時醫囑')
       // 重複開立同一種藥：可能是忘了已開過（病人會被給兩倍劑量），也可能是刻意加開。
@@ -100,7 +106,7 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _confirmed, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       content,

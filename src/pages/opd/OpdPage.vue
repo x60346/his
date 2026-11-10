@@ -12,7 +12,7 @@ import DiagnosisEditor from './components/DiagnosisEditor.vue'
 import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue'
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, masterApi, opdApi, preventApi } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, opdApi, preventApi } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -130,8 +130,8 @@ async function onSkip() {
   await skip.run(visit.value.id)
 }
 
-const complete = useAction(async () => {
-  const r = await opdApi.completeEncounter(encounter.value!.id, strip(draft.value))
+const complete = useAction(async (opts: { confirmHighDose?: boolean } = {}) => {
+  const r = await opdApi.completeEncounter(encounter.value!.id, strip(draft.value), opts)
   baseline.value = JSON.stringify(strip(draft.value))
   return r
 }, { success: (r) => (r.admission ? '完成看診，並已建立住院預約' : '完成看診，病人可前往批價') })
@@ -152,7 +152,27 @@ async function onComplete() {
     })
     if (!ok) return
   }
-  await complete.run()
+  // 劑量：不合理的直接擋（幾乎一定是打錯）；偏高的列出來請醫師確認一次
+  const doses = draft.value.medications
+    .map((m) => ({ m, d: drugs.value.get(m.drugId) }))
+    .filter((x): x is { m: typeof x.m; d: NonNullable<typeof x.d> } => !!x.d)
+    .map((x) => ({ ...x, level: doseLevel(x.d, x.m.dose) }))
+  const absurd = doses.filter((x) => x.level === 'absurd')
+  if (absurd.length) {
+    tab.value = 'orders'
+    return ui.toast.warning(`${absurd.map((x) => `${x.d.name}：${doseNote(x.d, x.m.dose)}`).join('；')}，請確認是否打錯`)
+  }
+  const high = doses.filter((x) => x.level === 'high')
+  if (high.length) {
+    const ok = await ui.confirm({
+      title: '劑量偏高',
+      message: `${high.map((x) => `・${x.d.name}：${doseNote(x.d, x.m.dose)}`).join('\n')}\n\n確定劑量無誤？`,
+      okText: '劑量無誤，完成看診',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  await complete.run({ confirmHighDose: high.length > 0 })
 }
 
 const nextWaiting = computed(() => (queue.value ?? []).find((v) => v.status === 'registered' && v.id !== visitId.value))

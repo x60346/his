@@ -4,6 +4,7 @@ import type { Admission, Encounter, VisitStatus } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { autoQty, doseUnitOf } from './billing'
+import { doseLevel, doseNote } from './dose-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { audit, fail, must, mutate, query, requireUser } from './http'
 import { find, nameOf, usable, visitView, type VisitView } from './views'
@@ -96,7 +97,8 @@ export interface CompleteResult {
 }
 
 /** 完成醫囑：驗證 → 病歷完成 → 掛號改為待批價 →（若建議住院）自動建立住院預約 */
-export function completeEncounter(encounterId: string, draft: EncounterDraft): Promise<CompleteResult> {
+/** confirmHighDose：處方中有劑量偏高的藥，醫師已確認無誤（放在選項而不是病歷草稿裡，避免被存進病歷） */
+export function completeEncounter(encounterId: string, draft: EncounterDraft, opts: { confirmHighDose?: boolean } = {}): Promise<CompleteResult> {
   return mutate(() => {
     requireUser('doctor')
     const e = editableEncounter(encounterId)
@@ -109,6 +111,9 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft): P
     for (const m of e.medications) {
       const d = usable.drug(m.drugId)
       if (m.dose <= 0 || m.days <= 0) fail(`${d.name} 的劑量與天數必須大於 0`)
+      const level = doseLevel(d, m.dose)
+      if (level === 'absurd') fail(`${d.name}：${doseNote(d, m.dose)}，請確認是否打錯`)
+      if (level === 'high' && !opts.confirmHighDose) fail(`${d.name} 劑量偏高：${doseNote(d, m.dose)}，如確定請確認`, 'CONFLICT')
       if (m.qty <= 0) {
         const q = autoQty(d, m.dose, find.freq(m.freq)?.timesPerDay ?? 1, m.days)
         if (q === null) fail(`${d.name} 的給藥單位（${doseUnitOf(d)}）與調劑單位（${d.unit}）不同，請填寫總量`)
