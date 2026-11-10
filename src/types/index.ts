@@ -490,6 +490,11 @@ export interface PreventRecord {
   reportedAt?: string
   /** 檢查數值或備註，自由格式 key-value */
   data: Record<string, string>
+  /**
+   * 作廢（登錄錯誤時）：紀錄保留、標示作廢原因與作廢人，不刪除也不改寫——日後查得到「原本記了什麼、為什麼作廢」。
+   * 作廢的紀錄不佔資格、不計統計、不能補登報告。選用欄位：舊資料沒有它就是未作廢。
+   */
+  voided?: { reason: string; at: string; by: string }
 }
 
 export interface AuditLog {

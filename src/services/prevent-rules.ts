@@ -58,7 +58,8 @@ export function checkEligibility(p: Patient, item: PreventItem, records: Prevent
   const age = ageOf(p.birthDate, at)
   const base = { itemCode: item.code, itemName: item.name, ruleText: item.ruleText }
   // 只看判斷日（含）以前的紀錄：用過去的日期判斷時，不能被「未來」的紀錄影響
-  const mine = records.filter((r) => r.patientId === p.id && r.itemCode === item.code && r.date <= at).sort((a, b) => b.date.localeCompare(a.date))
+  // 作廢的紀錄（登錄錯誤）不算做過，不佔資格
+  const mine = records.filter((r) => !r.voided && r.patientId === p.id && r.itemCode === item.code && r.date <= at).sort((a, b) => b.date.localeCompare(a.date))
   const last = mine[0]?.date
 
   const notOk = basicRule(p, item.code, age)

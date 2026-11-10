@@ -6,11 +6,12 @@ import { computed, ref } from 'vue'
 import { Check, ClipboardCheck, FileClock } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UQueryState, USearchSelect, UTable, UTabs, type Column } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import ReasonDialog from '@/components/ReasonDialog.vue'
 import RecordDialog from './components/RecordDialog.vue'
 import ReportDialog from './components/ReportDialog.vue'
 import StatsPanel from './components/StatsPanel.vue'
 import { patientApi, preventApi, type Eligibility, type PreventRecordView, type WorklistRow } from '@/services'
-import { useQuery } from '@/composables/useService'
+import { useAction, useQuery } from '@/composables/useService'
 import { toRoc } from '@/utils/date'
 import type { Patient } from '@/types'
 
@@ -70,6 +71,15 @@ function startReport(r: PreventRecordView) {
   reportOpen.value = true
 }
 
+// 作廢：登錄錯誤時使用。紀錄不會消失，只加上作廢註記（刪除線＋原因），日後查得到原本記了什麼
+const voidTarget = ref<PreventRecordView>()
+const voidOpen = computed({ get: () => !!voidTarget.value, set: (v) => !v && (voidTarget.value = undefined) })
+const voidPresets = ['登錄錯誤', '選錯病人', '選錯項目', '數值輸入錯誤']
+const doVoid = useAction(preventApi.voidPreventRecord, { success: '已作廢，可重新登錄正確的紀錄' })
+async function confirmVoid(reason: string) {
+  if (voidTarget.value && (await doVoid.run(voidTarget.value.id, reason))) voidTarget.value = undefined
+}
+
 const resultTone = { 正常: 'green', 異常需追蹤: 'red', 待報告: 'yellow' } as const
 const recordColumns: Column<PreventRecordView>[] = [
   { key: 'date', label: '日期', width: '7rem', format: (r) => toRoc(r.date) },
@@ -77,7 +87,7 @@ const recordColumns: Column<PreventRecordView>[] = [
   { key: 'result', label: '結果', width: '7rem' },
   { key: 'data', label: '檢查內容' },
   { key: 'doctorName', label: '醫師', width: '6rem' },
-  { key: 'act', label: '', width: '6rem', align: 'right' },
+  { key: 'act', label: '', width: '10rem', align: 'right' },
 ]
 const pendingColumns: Column<PreventRecordView>[] = [
   { key: 'date', label: '執行日', width: '7rem', format: (r) => toRoc(r.date) },
@@ -171,13 +181,24 @@ const dataText = (d: Record<string, string>) => Object.entries(d).map(([k, v]) =
             <section class="mt-5">
               <h3 class="mb-2 text-sm font-semibold text-slate-700">歷次預防保健紀錄</h3>
               <UTable :columns="recordColumns" :rows="profile.records" :row-key="(r) => r.id" dense empty-text="沒有預防保健紀錄">
-                <template #cell-result="{ row }"><UBadge :tone="resultTone[row.result]">{{ row.result }}</UBadge></template>
+                <template #cell-itemName="{ row }"><span :class="row.voided && 'text-slate-400 line-through'">{{ row.itemName }}</span></template>
+                <template #cell-result="{ row }">
+                  <UBadge v-if="row.voided" tone="gray">已作廢</UBadge>
+                  <UBadge v-else :tone="resultTone[row.result]">{{ row.result }}</UBadge>
+                </template>
                 <template #cell-data="{ row }">
-                  <span class="text-slate-600">{{ dataText(row.data) }}</span>
+                  <span :class="row.voided ? 'text-slate-400 line-through' : 'text-slate-600'">{{ dataText(row.data) }}</span>
                   <span v-if="row.reportedAt" class="tabular ml-1 text-xs text-slate-400">（{{ toRoc(row.reportedAt) }} 補登）</span>
+                  <p v-if="row.voided" class="mt-0.5 text-xs text-slate-500">作廢：{{ row.voided.reason }}（{{ row.voidedByName }}・{{ toRoc(row.voided.at) }}）</p>
                 </template>
                 <!-- slot 內容全部被 v-if 掉時，Vue 會改顯示預設內容（—），所以用空 span 佔位 -->
-                <template #cell-act="{ row }"><UButton v-if="row.result === '待報告'" size="sm" variant="secondary" @click="startReport(row)">補登報告</UButton><span v-else /></template>
+                <template #cell-act="{ row }">
+                  <div v-if="!row.voided" class="flex justify-end gap-1.5">
+                    <UButton v-if="row.result === '待報告'" size="sm" variant="secondary" @click="startReport(row)">補登報告</UButton>
+                    <UButton size="sm" variant="ghost" @click="voidTarget = row">作廢</UButton>
+                  </div>
+                  <span v-else />
+                </template>
               </UTable>
             </section>
           </template>
@@ -195,5 +216,17 @@ const dataText = (d: Record<string, string>) => Object.entries(d).map(([k, v]) =
       :default-doctor-id="fromVisit?.visit.doctorId"
     />
     <ReportDialog v-model="reportOpen" :record="reportTarget" :item="itemOf(reportTarget?.itemCode)" />
+    <ReasonDialog
+      v-model="voidOpen"
+      title="作廢預防保健紀錄"
+      :subject="voidTarget && `${voidTarget.patientName}・${voidTarget.itemName}（${toRoc(voidTarget.date)}，${voidTarget.result}）`"
+      label="作廢原因"
+      :presets="voidPresets"
+      ok-text="作廢"
+      danger
+      :pending="doVoid.pending.value"
+      :error="doVoid.fieldErrors.value.reason"
+      @confirm="confirmVoid"
+    />
   </div>
 </template>

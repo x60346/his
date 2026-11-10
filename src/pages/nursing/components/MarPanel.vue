@@ -5,7 +5,7 @@
 import { computed, ref, watch } from 'vue'
 import { Check, CircleSlash, Clock, Pause } from 'lucide-vue-next'
 import { UBadge, UButton, UQueryState } from '@/components/ui'
-import ReasonDialog from './ReasonDialog.vue'
+import ReasonDialog from '@/components/ReasonDialog.vue'
 import { MAR_EARLY_MIN, marUrgency, nursingApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'

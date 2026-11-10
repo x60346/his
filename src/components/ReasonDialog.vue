@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 填寫原因的小對話框：暫停給藥、拒絕給藥、PRN 給藥共用。
+// 填寫原因的小對話框：暫停給藥、拒絕給藥、PRN 給藥、作廢預防保健紀錄共用。
 // 常用原因做成按鈕，護理師點一下就好——臨床現場打字越少越好，但仍可自由修改。
 import { ref, watch } from 'vue'
 import { UButton, UDialog, UTextarea } from '@/components/ui'

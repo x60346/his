@@ -2,7 +2,7 @@
 import type { PreventItem, PreventRecord } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { checkEligibility, checkPreventResult, type Eligibility } from './prevent-rules'
 import { find, nameOf, patientBrief, visitView, type PatientBrief, type VisitView } from './views'
 
@@ -53,7 +53,7 @@ export function todayWorklist(): Promise<WorklistRow[]> {
         items: v.preventItems.map((code) => ({
           code,
           name: db.preventItems.find((i) => i.code === code)?.name ?? code,
-          done: db.preventRecords.some((r) => r.patientId === v.patientId && r.itemCode === code && r.date === t),
+          done: db.preventRecords.some((r) => !r.voided && r.patientId === v.patientId && r.itemCode === code && r.date === t),
         })),
       }))
       .sort((a, b) => Number(a.items.every((i) => i.done)) - Number(b.items.every((i) => i.done)) || a.visit.createdAt.localeCompare(b.visit.createdAt))
@@ -64,13 +64,17 @@ export function todayWorklist(): Promise<WorklistRow[]> {
 export interface PreventRecordView extends PreventRecord, PatientBrief {
   itemName: string
   doctorName: string
+  /** 作廢人姓名（有作廢時） */
+  voidedByName?: string
 }
 
-export function listPreventRecords(q: { patientId?: string; itemCode?: string; from?: string; to?: string; result?: PreventRecord['result'] } = {}): Promise<PreventRecordView[]> {
+/** 紀錄查詢（例：待補登報告）。作廢的紀錄預設不列出；病人的歷次紀錄（getPreventProfile）則照常顯示作廢紀錄 */
+export function listPreventRecords(q: { patientId?: string; itemCode?: string; from?: string; to?: string; result?: PreventRecord['result']; includeVoided?: boolean } = {}): Promise<PreventRecordView[]> {
   return query(() =>
     db.preventRecords
       .filter(
         (r) =>
+          (q.includeVoided || !r.voided) &&
           (!q.patientId || r.patientId === q.patientId) &&
           (!q.itemCode || r.itemCode === q.itemCode) &&
           (!q.from || r.date >= q.from) &&
@@ -88,6 +92,7 @@ function recordView(r: PreventRecord): PreventRecordView {
     ...patientBrief(r.patientId),
     itemName: db.preventItems.find((i) => i.code === r.itemCode)?.name ?? r.itemCode,
     doctorName: nameOf.doctor(r.doctorId),
+    voidedByName: r.voided ? nameOf.user(r.voided.by) : undefined,
   }
 }
 
@@ -131,6 +136,7 @@ export function fillReport(recordId: string, result: PreventRecord['result'], da
   return mutate(() => {
     requireUser('doctor', 'nurse')
     const r = must(db.preventRecords.find((x) => x.id === recordId), '預防保健紀錄')
+    if (r.voided) fail('此紀錄已作廢，不能補登報告', 'CONFLICT')
     if (r.result !== '待報告') fail('此紀錄已有結果，不可修改', 'CONFLICT')
     // 和登錄同一條規則：定案的結果，欄位都要填（補登時不能再選「待報告」）
     const item = must(db.preventItems.find((i) => i.code === r.itemCode), '預防保健項目')
@@ -140,6 +146,24 @@ export function fillReport(recordId: string, result: PreventRecord['result'], da
     r.data = { ...r.data, ...filled }
     r.reportedAt = now()
     audit('補登預防保健報告', `${nameOf.patient(r.patientId)} ${r.itemCode} ${result}`)
+    return r
+  })
+}
+
+/**
+ * 作廢：登錄錯誤（選錯病人、選錯項目、數值打錯）時使用。
+ * 紀錄只能增補不能改寫——不刪除、不修改原內容，只加上作廢註記（原因、時間、作廢人）並寫入稽核。
+ * 作廢後不佔資格（可重新登錄正確的一筆）、不計統計、不能補登報告。
+ */
+export function voidPreventRecord(recordId: string, reason: string): Promise<PreventRecord> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse')
+    const r = must(db.preventRecords.find((x) => x.id === recordId), '預防保健紀錄')
+    if (r.voided) fail('此紀錄已經作廢', 'CONFLICT')
+    if (!reason?.trim()) failField('reason', '請填寫作廢原因')
+    r.voided = { reason: reason.trim(), at: now(), by: u.id }
+    const itemName = db.preventItems.find((i) => i.code === r.itemCode)?.name ?? r.itemCode
+    audit('作廢預防保健紀錄', `${nameOf.patient(r.patientId)} ${itemName}（${r.date}，${r.result}）：${reason.trim()}`)
     return r
   })
 }
@@ -157,7 +181,7 @@ export interface PreventStat {
 export function monthlyStats(month: string): Promise<PreventStat[]> {
   return query(() =>
     db.preventItems.map((i) => {
-      const list = db.preventRecords.filter((r) => r.itemCode === i.code && r.date.startsWith(month))
+      const list = db.preventRecords.filter((r) => !r.voided && r.itemCode === i.code && r.date.startsWith(month))
       return {
         code: i.code,
         name: i.name,

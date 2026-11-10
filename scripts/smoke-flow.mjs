@@ -236,6 +236,42 @@ try {
   await api.preventApi.fillReport(pendingRec.id, '正常', { 報告: 'NILM' })
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '異常需追蹤', { 報告: '改寫' }), '已有結果的報告再補登（紀錄只能增補不能改寫）')
 
+  // H2：作廢——紀錄保留、加註記；作廢後不佔資格、不計統計、不能補登，可重新登錄
+  {
+    const pr = await load('/src/services/prevent-rules.ts')
+    const target = dbm.db.preventRecords.find((r) => r.patientId === todo.visit.patientId && r.itemCode === code && r.date === T)
+    const month = T.slice(0, 7)
+    const statBefore = (await api.preventApi.monthlyStats(month)).find((x) => x.code === code).count
+    await expectError(() => api.preventApi.voidPreventRecord(target.id, '  '), '作廢沒填原因')
+    await as('clerk01')
+    await expectError(() => api.preventApi.voidPreventRecord(target.id, '登錄錯誤'), '掛號人員作廢預防保健紀錄（權限）')
+    await as('nurse01')
+    await api.preventApi.voidPreventRecord(target.id, '選錯項目')
+    const kept = dbm.db.preventRecords.find((r) => r.id === target.id)
+    ok(kept && kept.voided?.reason === '選錯項目' && Object.keys(kept.data).length > 0, '作廢後紀錄仍在、原內容未改，加上作廢原因')
+    await expectError(() => api.preventApi.voidPreventRecord(target.id, '再一次'), '重複作廢')
+    ok((await api.preventApi.monthlyStats(month)).find((x) => x.code === code).count === statBefore - 1, '作廢的紀錄不計入月統計')
+    ok(!(await api.preventApi.todayWorklist()).find((w) => w.visit.id === todo.visit.id).items.find((i) => i.code === code).done, '作廢後，今日工作變回待執行')
+    const pt = dbm.db.patients.find((x) => x.id === todo.visit.patientId)
+    ok(pr.checkEligibility(pt, todoItem, dbm.db.preventRecords, T).eligible, '作廢後資格恢復（不再顯示「今天已執行」）')
+    await api.preventApi.addPreventRecord({ patientId: pt.id, itemCode: code, result: '正常', data: fullData, visitId: todo.visit.id, doctorId: todo.visit.doctorId })
+    ok(true, '作廢後可以重新登錄正確的一筆')
+    // 待報告的紀錄作廢後：不出現在待補登清單、也不能補登
+    // 自己建一筆待報告（不依賴種子資料剛好還剩一筆），確保這段一定會執行
+    let combo
+    for (const it of dbm.db.preventItems.filter((i) => i.needsReport && i.active !== false)) {
+      const who = dbm.db.patients.find((x) => pr.checkEligibility(x, it, dbm.db.preventRecords, T).eligible)
+      if (who) { combo = { it, who }; break }
+    }
+    ok(!!combo, '找得到可登錄「待報告」的病人與項目')
+    const pend = await api.preventApi.addPreventRecord({ patientId: combo.who.id, itemCode: combo.it.code, result: '待報告', data: {}, doctorId: 'DR01' })
+    ok((await api.preventApi.listPreventRecords({ result: '待報告' })).some((r) => r.id === pend.id), '新的待報告紀錄出現在待補登清單')
+    await api.preventApi.voidPreventRecord(pend.id, '選錯病人')
+    ok(!(await api.preventApi.listPreventRecords({ result: '待報告' })).some((r) => r.id === pend.id), '作廢的待報告紀錄不出現在待補登清單')
+    await expectError(() => api.preventApi.fillReport(pend.id, '正常', { 報告: 'NILM' }), '作廢的紀錄補登報告')
+    ok(dbm.db.auditLogs.some((l) => l.action === '作廢預防保健紀錄'), '作廢寫入稽核紀錄')
+  }
+
   console.log('\n[住院] 預約 → 報到 → 醫囑 → 給藥 → 出院')
   await as('nurse01')
   const resv = (await api.admissionApi.listAdmissions({ status: ['reserved'] }))[0]
