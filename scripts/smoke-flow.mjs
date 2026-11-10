@@ -489,6 +489,14 @@ try {
     await as('admin')
   }
 
+  console.log('\n[登入]')
+  {
+    const u = await api.authApi.login('  ADMIN ', '1234')
+    ok(u.username === 'admin', '帳號打大寫、前後有空白也能登入')
+    await expectError(() => api.authApi.login('', ''), '帳號密碼都沒填')
+    await expectError(() => api.authApi.login('admin', 'wrong'), '密碼錯誤')
+  }
+
   console.log('\n[病人資料範圍]')
   {
     await as('clerk01')

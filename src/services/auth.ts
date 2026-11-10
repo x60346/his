@@ -9,7 +9,10 @@ export const toSafeUser = ({ password: _pw, ...rest }: User): SafeUser => rest
 
 export function login(username: string, password: string): Promise<SafeUser> {
   return mutate(() => {
-    const u = db.users.find((x) => x.username === username.trim())
+    // 帳號一律以小寫儲存（系統管理建立帳號時就轉小寫），登入時也轉小寫比對：打成 ADMIN 也能登入
+    const name = username.trim().toLowerCase()
+    if (!name || !password) fail('請輸入帳號與密碼', 'BAD_REQUEST')
+    const u = db.users.find((x) => x.username === name)
     if (!u || u.password !== password) fail('帳號或密碼錯誤', 'UNAUTHORIZED')
     if (!u.active) fail('此帳號已停用', 'FORBIDDEN')
     setSessionUser(u.id)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Hospital, LogIn } from 'lucide-vue-next'
 import { UButton, UInput } from '@/components/ui'
@@ -15,6 +15,13 @@ const router = useRouter()
 
 const username = ref('')
 const password = ref('')
+/** 送出時才檢查的「沒填」：直接標在欄位下方，不必先送到服務層再跳錯誤 */
+const missing = ref<{ username?: string; password?: string }>({})
+
+// HTML 的 autofocus 只在瀏覽器第一次載入頁面時有效；單頁應用程式的登入頁是之後才掛上去的
+// （登出回到登入頁時也不會重新載入），所以要自己把游標放進帳號欄
+const form = ref<HTMLFormElement>()
+onMounted(() => nextTick(() => form.value?.querySelector<HTMLInputElement>('input')?.focus()))
 
 const { data: accounts } = useQuery(() => authApi.demoAccounts())
 const roleOrder: Role[] = ['doctor', 'nurse', 'clerk', 'pharmacist', 'admin']
@@ -23,6 +30,8 @@ const grouped = computed(() => roleOrder.map((role) => ({ role, list: (accounts.
 const doLogin = useAction((u: string, p: string) => auth.login(u, p), { success: (u) => `歡迎，${u.name}` })
 
 async function submit(u = username.value, p = password.value) {
+  missing.value = { username: u.trim() ? undefined : '請輸入帳號', password: p ? undefined : '請輸入密碼' }
+  if (missing.value.username || missing.value.password) return
   const user = await doLogin.run(u, p)
   if (user) router.replace(typeof route.query.redirect === 'string' ? route.query.redirect : '/')
 }
@@ -38,7 +47,7 @@ function quick(u: string) {
 <template>
   <div class="flex min-h-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-brand-900 p-4">
     <div class="grid grid-cols-1 w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-2xl md:grid-cols-2">
-      <form class="space-y-4 p-8" @submit.prevent="submit()">
+      <form ref="form" class="space-y-4 p-8" @submit.prevent="submit()">
         <div class="mb-6 flex items-center gap-2">
           <Hospital class="h-8 w-8 text-brand-600" />
           <div>
@@ -46,8 +55,8 @@ function quick(u: string) {
             <p class="text-xs text-slate-500">醫院資訊系統前端展示（資料皆為虛構）</p>
           </div>
         </div>
-        <UInput v-model="username" label="帳號" autocomplete="username" autofocus />
-        <UInput v-model="password" label="密碼" type="password" autocomplete="current-password" />
+        <UInput v-model="username" label="帳號" autocomplete="username" :error="missing.username" @input="missing.username = undefined" />
+        <UInput v-model="password" label="密碼" type="password" autocomplete="current-password" :error="missing.password" @input="missing.password = undefined" />
         <UButton type="submit" block :icon="LogIn" :loading="doLogin.pending.value">登入</UButton>
         <p class="text-xs text-slate-400">展示帳號密碼皆為 1234，或直接點右側帳號登入。</p>
       </form>
