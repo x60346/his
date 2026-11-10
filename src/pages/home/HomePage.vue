@@ -8,8 +8,8 @@ import {
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
 import { dashboardApi, opdApi } from '@/services'
 import { useQuery } from '@/composables/useService'
+import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
-import { today } from '@/utils/date'
 import { money } from '@/utils/labels'
 
 const auth = useAuth()
@@ -19,7 +19,8 @@ const { data: s, reload } = useQuery(() => dashboardApi.getDashboard())
 
 // 醫師才查自己的候診清單
 const isDoctor = computed(() => auth.user?.role === 'doctor' && !!auth.user.doctorId)
-const { data: myQueue } = useQuery(async () => (isDoctor.value ? opdApi.listQueue({ date: today(), doctorId: auth.user!.doctorId! }) : []))
+const todayStr = useToday()
+const { data: myQueue } = useQuery(async () => (isDoctor.value ? opdApi.listQueue({ date: todayStr.value, doctorId: auth.user!.doctorId! }) : []), [todayStr])
 const myWaiting = computed(() => (myQueue.value ?? []).filter((v) => v.status === 'registered' || v.status === 'in-consult').length)
 
 // 「時間經過」也會讓數字改變（例如給藥逾時），但資料沒變、dbVersion 不會動，所以每分鐘重查一次

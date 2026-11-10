@@ -10,6 +10,7 @@ import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
 import { chargeApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
+import { followToday } from '@/composables/useClock'
 import { periodLabel, today } from '@/utils/date'
 import { visitStatus } from '@/utils/labels'
 import type { PayMethod } from '@/types'
@@ -18,6 +19,7 @@ const tab = ref('charge')
 
 // ---------- 清單 ----------
 const date = ref(today())
+const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: list, loading: listLoading } = useQuery(() => chargeApi.listChargeQueue(date.value), [date])
 const pendingCount = computed(() => (list.value ?? []).filter((v) => v.status === 'consulted').length)
 
@@ -88,7 +90,7 @@ async function onVoid() {
       <!-- 清單 -->
       <UCard :padded="false" class="no-print self-start">
         <template #title><span class="text-sm font-semibold text-slate-800">批價清單</span></template>
-        <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="today()" /></div></template>
+        <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
         <UQueryState :loading="listLoading" :ready="!!list?.length" empty-title="沒有看診完成的病人">
         <ul class="max-h-[calc(100vh-13rem)] divide-y divide-slate-100 overflow-y-auto">
           <li v-for="v in list" :key="v.id">

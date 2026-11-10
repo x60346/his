@@ -5,16 +5,18 @@ import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { handoverShiftOf, nursingApi, type Shift, type WardPatient } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
-import { today } from '@/utils/date'
+import { useToday } from '@/composables/useClock'
 
 const props = defineProps<{ ward: string; patients: WardPatient[]; selectedId?: string; clock: string }>()
+// 交班以「今天」為單位，跨日時自動換成新一天的交班
+const todayStr = useToday()
 
 const { data, loading } = useQuery(
   async () => {
     const ward = props.ward
-    return { ward, list: await nursingApi.listHandovers(ward, today()) }
+    return { ward, list: await nursingApi.listHandovers(ward, todayStr.value) }
   },
-  [() => props.ward],
+  [() => props.ward, todayStr],
 )
 const list = computed(() => (data.value?.ward === props.ward ? data.value.list : undefined))
 

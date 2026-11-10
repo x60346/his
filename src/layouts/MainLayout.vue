@@ -9,7 +9,8 @@ import { dbVersion, masterApi } from '@/services'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
 import { roleLabel } from '@/utils/labels'
-import { toRoc, today, weekdayLabel } from '@/utils/date'
+import { toRoc, weekdayLabel } from '@/utils/date'
+import { useToday } from '@/composables/useClock'
 
 const auth = useAuth()
 const ui = useUi()
@@ -56,7 +57,9 @@ async function logout() {
   router.push({ name: 'login' })
 }
 
-const dateText = `${toRoc(today())}（${weekdayLabel(today())}）`
+// 頂端日期跟著時鐘走，跨過午夜會自動換日
+const todayStr = useToday()
+const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(todayStr.value)}）`)
 </script>
 
 <template>

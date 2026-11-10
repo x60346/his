@@ -15,9 +15,10 @@ import HistoryList from './components/HistoryList.vue'
 import { autoQty, masterApi, opdApi, preventApi } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { useAction, useQuery } from '@/composables/useService'
+import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
-import { ageText, periodLabel, today } from '@/utils/date'
+import { ageText, periodLabel } from '@/utils/date'
 import { visitStatus } from '@/utils/labels'
 import type { Encounter } from '@/types'
 
@@ -28,7 +29,8 @@ const ui = useUi()
 const isAdmin = auth.user?.role === 'admin'
 const doctorId = ref<string | number | undefined>(auth.user?.doctorId ?? 'DR01')
 const { data: doctors } = useQuery(async () => (isAdmin ? masterApi.listDoctors() : []))
-const { data: queue, loading: queueLoading } = useQuery(() => opdApi.listQueue({ date: today(), doctorId: String(doctorId.value) }), [doctorId])
+const todayStr = useToday() // 跨日時候診清單換成新的一天
+const { data: queue, loading: queueLoading } = useQuery(() => opdApi.listQueue({ date: todayStr.value, doctorId: String(doctorId.value) }), [doctorId, todayStr])
 const counts = computed(() => {
   const q = queue.value ?? []
   return {

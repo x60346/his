@@ -10,12 +10,14 @@ import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
 import { pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
+import { followToday } from '@/composables/useClock'
 import { today } from '@/utils/date'
 import { dispenseStatus } from '@/utils/labels'
 import type { DispenseStatus } from '@/types'
 
 // ---------- 清單 ----------
 const date = ref(today())
+const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: all, loading } = useQuery(() => pharmacyApi.listDispenses({ date: date.value }), [date])
 const tab = ref<DispenseStatus>('pending')
 const tabs = computed(() =>
@@ -65,7 +67,7 @@ const print = () => window.print()
     <!-- 清單 -->
     <UCard :padded="false" class="no-print self-start">
       <template #title><span class="text-sm font-semibold text-slate-800">調劑清單</span></template>
-      <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="today()" /></div></template>
+      <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
       <div class="px-3"><UTabs v-model="tab" :tabs="tabs" /></div>
       <UQueryState :loading="loading" :ready="list.length > 0" :empty-title="`沒有${dispenseStatus[tab].label}的單`">
       <ul class="max-h-[calc(100vh-15rem)] divide-y divide-slate-100 overflow-y-auto">

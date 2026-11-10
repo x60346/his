@@ -1,12 +1,7 @@
 // 會走動的「現在時間」：時間相關的顯示（逾時、待給）依它重新計算。
-// 頁面不要各自 setInterval——一個時鐘、一個清理點，元件卸載時自動停止。
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { now } from '@/utils/date'
+// 實際的時鐘在 useClock（全系統共用一個計時器），這裡保留舊名稱供既有頁面使用。
+import { useClock } from './useClock'
 
-export function useNow(intervalMs = 30_000) {
-  const current = ref(now())
-  let timer: ReturnType<typeof setInterval> | undefined
-  onMounted(() => (timer = setInterval(() => (current.value = now()), intervalMs)))
-  onBeforeUnmount(() => clearInterval(timer))
-  return current
+export function useNow() {
+  return useClock()
 }

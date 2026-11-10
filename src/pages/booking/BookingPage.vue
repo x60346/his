@@ -10,6 +10,7 @@ import { bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitV
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
 import { useAction, useQuery } from '@/composables/useService'
+import { followToday } from '@/composables/useClock'
 import { useUi } from '@/stores/ui'
 import { ageText, periodLabel, today, weekdayLabel } from '@/utils/date'
 import { genderLabel, visitStatus } from '@/utils/labels'
@@ -50,6 +51,7 @@ const { data: upcoming } = useQuery(
 
 // ---------- 2. 診次 ----------
 const date = ref(today())
+const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const deptFilter = ref<string | number>()
 const sessionId = ref<string>()
 const { data: depts } = useQuery(() => masterApi.listDepartments())
@@ -232,7 +234,7 @@ async function onCancel(v: VisitView) {
       <UCard title="2. 選擇診次">
         <template #actions>
           <div class="w-36"><USelect v-model="deptFilter" :options="(depts ?? []).map((d) => ({ label: d.name, value: d.id }))" placeholder="全部科別" /></div>
-          <div class="w-40"><UInput v-model="date" type="date" :min="today()" /></div>
+          <div class="w-40"><UInput v-model="date" type="date" :min="todayStr" /></div>
         </template>
         <UEmpty v-if="!sessionsLoading && !sessionsByPeriod.length" title="這天沒有門診" description="請選擇其他日期或科別" />
         <div v-for="g in sessionsByPeriod" :key="g.period" class="mb-4 last:mb-0">

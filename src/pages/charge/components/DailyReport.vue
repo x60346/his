@@ -6,11 +6,13 @@ import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/compon
 import { chargeApi } from '@/services'
 import type { DailyReport } from '@/services/charge'
 import { useQuery } from '@/composables/useService'
+import { followToday } from '@/composables/useClock'
 import { today } from '@/utils/date'
 import { money, payMethodLabel } from '@/utils/labels'
 import type { PayMethod } from '@/types'
 
 const date = ref(today())
+const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: r, loading } = useQuery(() => chargeApi.dailyReport(date.value), [date])
 
 type Row = DailyReport['charges'][number]
@@ -33,7 +35,7 @@ const print = () => window.print()
   <!-- print-area：列印時只印報表本身（不含側邊選單） -->
   <div class="print-area space-y-4">
     <div class="flex items-end gap-3">
-      <div class="w-44"><UInput v-model="date" label="報表日期" type="date" :max="today()" /></div>
+      <div class="w-44"><UInput v-model="date" label="報表日期" type="date" :max="todayStr" /></div>
       <UButton variant="secondary" :icon="Printer" class="no-print" @click="print">列印</UButton>
     </div>
 

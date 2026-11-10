@@ -9,6 +9,7 @@ import ReasonDialog from './ReasonDialog.vue'
 import { MAR_EARLY_MIN, marUrgency, nursingApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
+import { followToday } from '@/composables/useClock'
 import { useUi } from '@/stores/ui'
 import { addDays, parseDate, today } from '@/utils/date'
 
@@ -16,10 +17,12 @@ const props = defineProps<{ admission: AdmissionView; clock: string }>()
 const ui = useUi()
 
 const date = ref(today())
+// 跨過午夜時，原本看「今天」的會自動換到新的一天（大夜班不會看到昨天的給藥）
+const todayStr = followToday(date)
 const dateTabs = computed(() => [
-  { key: addDays(today(), -1), label: '昨天' },
-  { key: today(), label: '今天' },
-  { key: addDays(today(), 1), label: '明天' },
+  { key: addDays(todayStr.value, -1), label: '昨天' },
+  { key: todayStr.value, label: '今天' },
+  { key: addDays(todayStr.value, 1), label: '明天' },
 ])
 
 // 回傳時帶上「這是誰、哪一天的資料」，切換病人時舊資料不會短暫套到新病人身上
@@ -176,7 +179,7 @@ async function complete(o: OrderView) {
         </section>
 
         <!-- PRN -->
-        <section v-if="date === today()">
+        <section v-if="date === todayStr">
           <h3 class="mb-2 text-sm font-semibold text-slate-700">需要時給藥（PRN）</h3>
           <p v-if="!board.prn.length" class="text-sm text-slate-400">沒有 PRN 醫囑</p>
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
@@ -196,7 +199,7 @@ async function complete(o: OrderView) {
         </section>
 
         <!-- 臨時醫囑 -->
-        <section v-if="date === today()">
+        <section v-if="date === todayStr">
           <h3 class="mb-2 text-sm font-semibold text-slate-700">待執行臨時醫囑</h3>
           <p v-if="!board.stat.length" class="text-sm text-slate-400">沒有待執行的臨時醫囑</p>
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-amber-200 bg-amber-50/40">
