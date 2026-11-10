@@ -46,7 +46,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
-    { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天以前', route: 'admission', icon: DoorOpen },
+    { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
     { roles: ['pharmacist'], label: '低於安全庫存', count: s.value.lowStockDrugs, hint: '需要補貨的藥品', route: 'drugs', icon: Package, urgent: true },
   ]
   // 管理員不做第一線作業，下方指標卡已涵蓋全部數字，不再重複列待辦
