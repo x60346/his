@@ -29,13 +29,21 @@ export const useUi = defineStore('ui', () => {
   const toasts = ref<ToastItem[]>([])
   const confirmState = ref<ConfirmState | null>(null)
 
+  /** 每則提示的消失計時器（同一則重複出現時要重新計時） */
+  const timers = new Map<number, ReturnType<typeof setTimeout>>()
+
   function push(kind: ToastKind, message: string, ms = kind === 'error' ? 5000 : 2500) {
-    const id = ++seq
-    toasts.value.push({ id, kind, message })
-    setTimeout(() => dismiss(id), ms)
+    // 同樣的提示已經在畫面上（例如連續登入失敗）：不再疊一個，只重新計時
+    const same = toasts.value.find((t) => t.kind === kind && t.message === message)
+    const id = same?.id ?? ++seq
+    if (!same) toasts.value.push({ id, kind, message })
+    clearTimeout(timers.get(id))
+    timers.set(id, setTimeout(() => dismiss(id), ms))
   }
 
   function dismiss(id: number) {
+    clearTimeout(timers.get(id))
+    timers.delete(id)
     toasts.value = toasts.value.filter((t) => t.id !== id)
   }
 
