@@ -7,6 +7,7 @@ import { authApi } from '@/services'
 import { useQuery, useAction } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { roleLabel } from '@/utils/labels'
+import { safeRedirect } from '@/utils/redirect'
 import type { Role } from '@/types'
 
 const auth = useAuth()
@@ -33,7 +34,7 @@ async function submit(u = username.value, p = password.value) {
   missing.value = { username: u.trim() ? undefined : '請輸入帳號', password: p ? undefined : '請輸入密碼' }
   if (missing.value.username || missing.value.password) return
   const user = await doLogin.run(u, p)
-  if (user) router.replace(typeof route.query.redirect === 'string' ? route.query.redirect : '/')
+  if (user) router.replace(safeRedirect(route.query.redirect))
 }
 
 /** 展示帳號：點一下直接登入（展示資料的密碼皆為 1234） */

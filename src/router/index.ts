@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useAuth } from '@/stores/auth'
+import { safeRedirect } from '@/utils/redirect'
 import { routes } from './routes'
 
 export const router = createRouter({
@@ -12,7 +13,8 @@ export const router = createRouter({
 router.beforeEach((to) => {
   const auth = useAuth()
   if (to.meta.public) {
-    return to.name === 'login' && auth.isLoggedIn ? '/' : true
+    // 已登入卻開登入頁（例如按上一頁退回 #/login?redirect=…）：直接去 redirect 指定的頁，不是一律回首頁
+    return to.name === 'login' && auth.isLoggedIn ? safeRedirect(to.query.redirect) : true
   }
   if (!auth.isLoggedIn) return { name: 'login', query: { redirect: to.fullPath } }
   if (!auth.canAccess(to.meta.roles)) return { name: 'forbidden', query: { from: to.fullPath } }

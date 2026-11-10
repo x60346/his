@@ -509,6 +509,24 @@ try {
     ok(p.name === '前後空白', '姓名前後的空白會被去掉再存')
   }
 
+  console.log('\n[登入後導向]')
+  {
+    const { safeRedirect } = await load('/src/utils/redirect.ts')
+    const cases = [
+      ['/pharmacy', '/pharmacy', '站內路徑'],
+      ['/patients?q=王', '/patients?q=王', '帶查詢參數的站內路徑'],
+      [undefined, '/', '沒帶 redirect'],
+      [['/a', '/b'], '/', '重複參數（陣列）'],
+      ['', '/', '空字串'],
+      ['https://evil.com', '/', '外部網址'],
+      ['//evil.com', '/', '// 開頭（同協定外部網址）'],
+      ['/\\evil.com', '/', '含反斜線'],
+      ['/login', '/', '指回登入頁'],
+      ['/login?redirect=/x', '/', '指回登入頁（帶參數）'],
+    ]
+    for (const [input, want, label] of cases) ok(safeRedirect(input) === want, `${label} → ${want}`)
+  }
+
   console.log('\n[儲存失敗]')
   {
     // 模擬「可以儲存、但這次寫入失敗（空間已滿）」：操作必須失敗並回滾，不能顯示成功
