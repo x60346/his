@@ -59,3 +59,20 @@ export function isAbnormal(key: VitalKey, value: number | undefined): boolean {
   const n = vitalSpecs[key].normal
   return value !== undefined && value !== null && !!n && (value < n[0] || value > n[1])
 }
+
+/**
+ * 輸入檢查：超出「可輸入範圍」就是打錯字，存不進去。頁面即時提示與服務層共用，兩邊說法一致。
+ * 以前頁面只看「正常範圍」，體溫打 98.6（華氏）時先顯示「超出正常範圍」（像是發燒），
+ * 存檔才被服務層說「數值不合理」，前後矛盾。
+ */
+export function vitalInputProblem(key: VitalKey, value: number | undefined): string | null {
+  if (value === undefined || value === null || Number.isNaN(value)) return null
+  const { label, limit } = vitalSpecs[key]
+  if (value >= limit[0] && value <= limit[1]) return null
+  // 華氏 86–113 °F 約等於攝氏 30–45 °C：很可能是單位打錯
+  if (key === 'temp' && value >= 86 && value <= 113) {
+    const c = Math.round(((value - 32) * 5) / 9 * 10) / 10
+    return `體溫請以攝氏輸入：${value} 看起來是華氏，約 ${c} °C`
+  }
+  return `${label}數值不合理（可輸入 ${limit[0]}–${limit[1]}）`
+}

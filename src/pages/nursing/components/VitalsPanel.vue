@@ -6,7 +6,7 @@
 // 趨勢圖每個指標各一張（小倍數圖），不把體溫和脈搏擠在同一張雙 Y 軸圖上。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UInput, ULineChart, UQueryState, UTable, type Column, type LinePoint } from '@/components/ui'
-import { isAbnormal, nursingApi, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
+import { isAbnormal, nursingApi, vitalInputProblem, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { VitalRecord } from '@/types'
 
@@ -32,9 +32,11 @@ async function submit() {
   if (await save.run({ admissionId: props.admission.id, ...form })) Object.assign(form, blank())
 }
 /** 輸入當下就提示「異常」：與服務層、圖表用同一條 isAbnormal 規則 */
+/** 先看「能不能存」（打錯字），再看「正常不正常」（病人異常）——和服務層同一套規則 */
+const errorOf = (k: VitalKey) => vitalInputProblem(k, form[k]) ?? save.fieldErrors.value[k]
 const hintOf = (k: VitalKey) => {
   const { normal: n, unit } = vitalSpecs[k]
-  if (isAbnormal(k, form[k])) return '⚠ 超出正常範圍'
+  if (!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k])) return '⚠ 超出正常範圍'
   return n ? `${unit}・正常 ${n[0]}–${n[1]}` : unit
 }
 
@@ -71,9 +73,9 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
           type="number"
           step="any"
           :label="vitalSpecs[k].label"
-          :error="save.fieldErrors.value[k]"
+          :error="errorOf(k)"
           :hint="hintOf(k)"
-          :class="isAbnormal(k, form[k]) && '[&_input]:!border-red-400 [&_input]:!text-red-700'"
+          :class="!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k]) && '[&_input]:!border-red-400 [&_input]:!text-red-700'"
         />
       </div>
       <div class="mt-2 text-right"><UButton type="submit" size="sm" :loading="save.pending.value">儲存</UButton></div>

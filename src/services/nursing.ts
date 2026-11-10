@@ -6,7 +6,7 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, vitalSpecs, type Shift, type VitalKey } from './nursing-rules'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, vitalInputProblem, vitalSpecs, type Shift, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -148,8 +148,8 @@ export function addVitals(input: VitalInput): Promise<VitalRecord> {
     for (const k of Object.keys(vitalSpecs) as VitalKey[]) {
       const val = input[k]
       if (val === undefined || val === null || Number.isNaN(val)) continue
-      const { label, limit } = vitalSpecs[k]
-      if (val < limit[0] || val > limit[1]) failField(k, `${label}數值不合理（${limit[0]}–${limit[1]}）`)
+      const problem = vitalInputProblem(k, val)
+      if (problem) failField(k, problem)
       v[k] = val
     }
     if (Object.keys(v).length === 4) fail('請至少輸入一項生命徵象')
