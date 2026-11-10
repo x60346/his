@@ -41,7 +41,7 @@ async function submit() {
       <div class="mb-2 text-sm font-semibold text-slate-700">新增交班</div>
       <div class="grid grid-cols-1 gap-2 md:grid-cols-[8rem_14rem_1fr]">
         <USelect v-model="form.shift" label="班別" :options="shifts.map((s) => ({ label: s, value: s }))" />
-        <USelect v-model="form.admissionId" label="病人" :options="patientOptions" placeholder="請選擇" />
+        <USelect v-model="form.admissionId" label="病人" required :options="patientOptions" placeholder="請選擇" />
         <UTextarea v-model="form.content" label="交班重點" :rows="2" :error="save.fieldErrors.value.content" placeholder="例：夜間體溫最高 38.1°C，已給退燒藥；明早空腹抽血" />
       </div>
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>

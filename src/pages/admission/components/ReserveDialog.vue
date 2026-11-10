@@ -25,7 +25,9 @@ watch(open, (v) => {
 })
 
 const save = useAction(admissionApi.reserve, { success: (a) => `已建立住院預約（預計 ${a.expectedDate} 入院）` })
-const canSave = computed(() => !!patient.value && !!form.doctorId && !!form.diagnosis.trim())
+/** 還缺哪些必填：按鈕反灰時直接列出來，不讓人猜為什麼按不下去 */
+const missing = computed(() => [!patient.value && '病人', !form.doctorId && '主治醫師', !form.diagnosis.trim() && '入院診斷'].filter(Boolean) as string[])
+const canSave = computed(() => missing.value.length === 0)
 
 async function submit() {
   if (!patient.value || !canSave.value) return
@@ -48,6 +50,7 @@ async function submit() {
       <div class="col-span-2">
         <USearchSelect
           label="病人"
+          required
           placeholder="病歷號、姓名、身分證"
           :search="(kw) => patientApi.searchPatients(kw, 10)"
           :item-key="(p) => p.id"
@@ -61,13 +64,14 @@ async function submit() {
         </p>
       </div>
       <USelect v-model="form.deptId" label="科別" :options="(depts ?? []).map((d) => ({ label: d.name, value: d.id }))" />
-      <USelect v-model="form.doctorId" label="主治醫師" :options="deptDoctors.map((d) => ({ label: `${d.name} ${d.title}`, value: d.id }))" />
+      <USelect v-model="form.doctorId" label="主治醫師" required :options="deptDoctors.map((d) => ({ label: `${d.name} ${d.title}`, value: d.id }))" />
       <USelect v-model="form.preferBedClass" label="希望床等" :options="['健保床', '雙人房', '單人房']" />
       <UInput v-model="form.expectedDate" label="預計入院日" type="date" :min="today()" :max="addDays(today(), 60)" />
       <div class="col-span-2"><UInput v-model="form.diagnosis" label="入院診斷" required placeholder="例：J18.9 肺炎" /></div>
       <div class="col-span-2"><UTextarea v-model="form.reason" label="入院原因" :rows="2" placeholder="例：發燒咳嗽、血氧偏低" /></div>
     </div>
     <template #footer>
+      <span v-if="missing.length" class="mr-auto self-center text-xs text-slate-500">還需要：{{ missing.join('、') }}</span>
       <UButton variant="secondary" @click="open = false">取消</UButton>
       <UButton :disabled="!canSave" :loading="save.pending.value" @click="submit">建立預約</UButton>
     </template>

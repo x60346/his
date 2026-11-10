@@ -12,6 +12,8 @@ const props = withDefaults(
     itemLabel: (item: T) => string
     itemSub?: (item: T) => string
     label?: string
+    /** 必填標記（*） */
+    required?: boolean
     placeholder?: string
     /** 選取後清空輸入框（連續加入多筆時使用） */
     clearOnSelect?: boolean
@@ -104,7 +106,7 @@ function onFocus() {
 </script>
 
 <template>
-  <UField :label="label" :for-id="id">
+  <UField :label="label" :required="required" :for-id="id">
     <div class="relative">
       <Search class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
       <input

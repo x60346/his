@@ -73,7 +73,13 @@ const reasonPresets = computed(() => (form.mode === 'substitute' ? ['請假', '�
           <UBadge v-if="s.suspended" tone="red">停診：{{ s.suspended.reason }}</UBadge>
           <UBadge v-else-if="s.originalDoctorName" tone="yellow">代診（原{{ s.originalDoctorName }}・{{ s.substituteReason }}）</UBadge>
           <span class="tabular ml-auto text-xs text-slate-500">已掛 {{ s.booked }} / {{ s.limit }}</span>
-          <UButton size="sm" variant="secondary" :disabled="!!s.suspended || s.closed" @click="openAdjust(s)">停診・代診</UButton>
+          <UButton
+            size="sm"
+            variant="secondary"
+            :disabled="!!s.suspended || s.closed"
+            :title="s.suspended ? '此診次已停診' : s.closed ? '此診次已結束，無法停診或代診' : ''"
+            @click="openAdjust(s)"
+          >停診・代診</UButton>
         </li>
       </ul>
     </UQueryState>
