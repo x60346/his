@@ -1,7 +1,7 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
 import type { IpdOrder, MarRecord, ProgressNote } from '@/types'
-import { commit, db, newId } from '@/mock/db'
+import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { doseLevel, doseNote } from './dose-rules'
@@ -191,7 +191,7 @@ export function marViews(admissionId: string, date: string): MarView[] {
 /** 讀取某日給藥紀錄；必要時補產生排程 */
 export function listMar(admissionId: string, date: string): Promise<MarView[]> {
   return query(() => {
-    if (ensureMar(admissionId, date)) commit()
+    if (ensureMar(admissionId, date)) commitIfPossible()
     return marViews(admissionId, date)
   })
 }

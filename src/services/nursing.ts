@@ -2,7 +2,7 @@
 // 「現在幾點」決定一筆給藥是待給、逾時還是太早——判斷集中在 nursing-rules 的純函式，
 // 服務層用它把關（太早不能給），頁面用它上色，兩邊不會各算各的。
 import type { HandoverNote, MarRecord, NursingNote, VitalRecord } from '@/types'
-import { commit, db, newId } from '@/mock/db'
+import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
@@ -47,7 +47,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
-    if (changed) commit()
+    if (changed) commitIfPossible()
     return list
   })
 }
@@ -66,7 +66,7 @@ export interface MarBoard {
 
 export function getMarBoard(admissionId: string, date: string): Promise<MarBoard> {
   return query(() => {
-    if (ensureMar(admissionId, date)) commit()
+    if (ensureMar(admissionId, date)) commitIfPossible()
     const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.status === 'active')
     return {
       mar: marViews(admissionId, date),

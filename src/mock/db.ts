@@ -103,13 +103,38 @@ export let db: Database = load()
 /** 資料版本號：每次寫入遞增，頁面可 watch 它來重新查詢 */
 export const dbVersion = ref(0)
 
-export function commit(): void {
-  dbVersion.value++
+/**
+ * 儲存模式：
+ *   persistent 正常，資料存在瀏覽器
+ *   memory     瀏覽器不允許儲存（隱私設定等），只能暫存在記憶體，重新整理就會消失——畫面會一直顯示警告
+ */
+function probeStorage(): 'persistent' | 'memory' {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db))
+    localStorage.setItem('his-demo-probe', '1')
+    localStorage.removeItem('his-demo-probe')
+    return 'persistent'
   } catch {
-    // 無法儲存時資料仍保留在記憶體中，重新整理後才會遺失
+    return 'memory'
   }
+}
+export const storageMode = ref(probeStorage())
+
+/** 可以儲存、但這次寫入失敗（通常是儲存空間已滿） */
+export class StorageWriteError extends Error {}
+
+/**
+ * 存檔。寫入失敗時丟出 StorageWriteError，由交易（mutate）回滾並告訴使用者「這次沒有完成」。
+ * 以前這裡是默默吞掉錯誤：畫面顯示收款成功、給了收據號，重新整理後資料卻消失。
+ */
+export function commit(): void {
+  if (storageMode.value === 'persistent') {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(db))
+    } catch {
+      throw new StorageWriteError('瀏覽器儲存空間已滿，資料無法儲存')
+    }
+  }
+  dbVersion.value++
 }
 
 /** 以快照取代整個資料庫（服務層交易失敗時回滾用） */
@@ -140,8 +165,13 @@ export function newId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${idSeq.toString(36).padStart(2, '0')}`
 }
 
-// 第一次載入（含重建）時立即寫入，確保重新整理後資料一致
-commit()
+// 第一次載入（含重建）時立即寫入，確保重新整理後資料一致；這時寫不進去就改用暫存模式（畫面會顯示警告）
+try {
+  commit()
+} catch {
+  storageMode.value = 'memory'
+  dbVersion.value++
+}
 
 /**
  * 多分頁同步：其他分頁寫入 localStorage 時，這裡會收到 storage 事件（同一分頁自己的寫入不會觸發）。
@@ -161,4 +191,16 @@ if (typeof window !== 'undefined') {
       // 另一分頁寫入的內容無法解析時維持現狀
     }
   })
+}
+
+/**
+ * 讀取時順便產生的資料（診次、給藥排程）用這個存檔：存不進去也不影響這次讀取，
+ * 下次會再產生一次。真正的寫入（使用者的操作）一律走 mutate → commit，失敗就要讓使用者知道。
+ */
+export function commitIfPossible(): void {
+  try {
+    commit()
+  } catch {
+    dbVersion.value++
+  }
 }

@@ -1,7 +1,7 @@
 // 服務層共用核心：模擬網路延遲、交易（失敗回滾）、回傳複本、統一錯誤、稽核紀錄。
 // 將來改接真實後端時，這個檔案會換成 fetch 包裝，其餘服務的函式簽章不變。
 import type { User } from '@/types'
-import { commit, db, newId, replaceDatabase } from '@/mock/db'
+import { commit, db, newId, replaceDatabase, StorageWriteError } from '@/mock/db'
 import { now } from '@/utils/date'
 
 /** 業務錯誤：頁面 catch 後直接把 message 顯示給使用者 */
@@ -77,6 +77,10 @@ export async function mutate<T>(fn: () => T): Promise<T> {
     return result
   } catch (e) {
     replaceDatabase(snapshot)
+    // 存檔失敗＝交易失敗：資料沒存下來，就不能讓使用者以為完成了
+    if (e instanceof StorageWriteError) {
+      throw new ServiceError('瀏覽器儲存空間已滿，這次操作沒有完成。請通知系統管理員（系統管理 → 展示資料：匯出備份後重置）。', 'CONFLICT')
+    }
     throw e
   }
 }

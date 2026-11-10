@@ -34,7 +34,7 @@ export const inventoryApi = overNetwork(inventory)
 export const adminApi = overNetwork(admin)
 
 export { ServiceError } from './http'
-export { dbVersion } from '@/mock/db'
+export { dbVersion, storageMode } from '@/mock/db'
 export * from './billing'
 export type { SafeUser } from './auth'
 export type { AllergyWarning } from './allergy'

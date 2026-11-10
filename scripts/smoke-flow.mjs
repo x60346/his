@@ -489,6 +489,22 @@ try {
     await as('admin')
   }
 
+  console.log('\n[儲存失敗]')
+  {
+    // 模擬「可以儲存、但這次寫入失敗（空間已滿）」：操作必須失敗並回滾，不能顯示成功
+    await as('clerk01')
+    const savedMode = dbm.storageMode.value
+    const savedLS = globalThis.localStorage
+    globalThis.localStorage = { setItem() { throw new Error('QuotaExceededError') }, getItem() { return null }, removeItem() {} }
+    dbm.storageMode.value = 'persistent'
+    const target = dbm.db.patients[2]
+    const before = target.phone
+    await expectError(() => api.patientApi.updatePatient(target.id, { ...target, phone: '0900-000-000' }), '儲存空間已滿時修改病人資料')
+    ok(dbm.db.patients.find((p) => p.id === target.id).phone === before, '存檔失敗時交易回滾，記憶體中的資料也沒有被改')
+    globalThis.localStorage = savedLS
+    dbm.storageMode.value = savedMode
+  }
+
   console.log('\n[首頁]')
   const dash = await api.dashboardApi.getDashboard()
   console.log(`    今日掛號 ${dash.opd.total}、候診 ${dash.opd.waiting}、待批價 ${dash.opd.toCharge}、待領藥 ${dash.opd.toDispense}；收入 ${dash.revenue.patientTotal} 元；住院 ${dash.ipd.admitted} 人、空床 ${dash.ipd.emptyBeds}`)

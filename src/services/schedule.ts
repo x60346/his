@@ -6,7 +6,7 @@
 //   單日診次——某一天的例外：停診（病人退掛並通知）、代診（病人轉給同科另一位醫師）。
 // 原則：已經有病人掛號的診次，任何調整都不能讓掛號默默消失或默默換醫師。
 import type { ClinicSession, Period, Visit, WeeklySlot } from '@/types'
-import { commit, db, newId } from '@/mock/db'
+import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
@@ -79,7 +79,7 @@ const periodOrder: Record<Period, number> = { AM: 0, PM: 1, NIGHT: 2 }
 export function listSessions(q: { date: string; deptId?: string; doctorId?: string; period?: Period }): Promise<SessionView[]> {
   return query(() => {
     // 讀取時補產生診次屬於「隱性寫入」，需要自行 commit 才會保存
-    if (ensureSessions(q.date)) commit()
+    if (ensureSessions(q.date)) commitIfPossible()
     return db.sessions
       .filter((s) => s.date === q.date && (!q.deptId || s.deptId === q.deptId) && (!q.doctorId || s.doctorId === q.doctorId) && (!q.period || s.period === q.period))
       .sort((a, b) => periodOrder[a.period] - periodOrder[b.period] || a.roomNo.localeCompare(b.roomNo))
