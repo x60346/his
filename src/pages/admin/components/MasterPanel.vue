@@ -1,0 +1,159 @@
+<script setup lang="ts">
+// 主檔維護：藥品、醫令、診斷碼、預防保健項目。每種主檔只描述「欄位」，表格與對話框共用 MasterTable。
+// 停用規則在服務層：被引用的只能停用不能刪除；停用後不能開立，但舊病歷照常顯示。
+import { computed, ref } from 'vue'
+import { UTabs, type Column } from '@/components/ui'
+import MasterTable, { type FieldDef } from './MasterTable.vue'
+import { masterApi, preventApi } from '@/services'
+import { useQuery } from '@/composables/useService'
+import type { Drug, IcdCode, PreventItem, Procedure } from '@/types'
+
+const tab = ref('drugs')
+const { data: drugs, loading: l1 } = useQuery(() => masterApi.listDrugs({ includeInactive: true }))
+const { data: procs, loading: l2 } = useQuery(() => masterApi.listProcedures({ includeInactive: true }))
+const { data: icds, loading: l3 } = useQuery(() => masterApi.listIcdAll())
+const { data: items, loading: l4 } = useQuery(() => preventApi.listPreventItems())
+const { data: freqs } = useQuery(() => masterApi.listFrequencies())
+
+// ---------- 藥品 ----------
+const drugColumns: Column<Drug>[] = [
+  { key: 'id', label: '代碼', width: '5rem' },
+  { key: 'name', label: '藥名' },
+  { key: 'category', label: '劑型', width: '4rem' },
+  { key: 'nhiPrice', label: '健保價', align: 'right', width: '5rem' },
+  { key: 'selfPrice', label: '自費價', align: 'right', width: '5rem' },
+  { key: 'stock', label: '庫存', align: 'right', width: '5rem', format: (d) => `${d.stock} ${d.unit}` },
+]
+const drugFields = computed<FieldDef[]>(() => [
+  { key: 'name', label: '藥名', required: true },
+  { key: 'generic', label: '學名' },
+  { key: 'nhiCode', label: '健保代碼' },
+  { key: 'spec', label: '規格', hint: '例：500 mg/tab' },
+  { key: 'category', label: '劑型', type: 'select', required: true, options: ['口服', '外用', '注射', '吸入', '眼用'] },
+  { key: 'unit', label: '調劑單位', required: true, hint: '藥局發多少：TAB、BTL、PEN…' },
+  { key: 'doseUnit', label: '給藥單位（不同時才填）', hint: '例：Insulin 每次 10 U，但調劑 1 PEN' },
+  { key: 'nhiPrice', label: '健保價（點）', type: 'number' },
+  { key: 'selfPrice', label: '自費價（元）', type: 'number' },
+  { key: 'safetyStock', label: '安全庫存', type: 'number', hint: '庫存請由「藥品庫存」進貨或盤點調整' },
+  { key: 'defaultDose', label: '預設劑量', type: 'number' },
+  { key: 'defaultFreq', label: '預設頻率', type: 'select', options: (freqs.value ?? []).map((f) => ({ label: `${f.code} ${f.label}`, value: f.code })) },
+  { key: 'defaultRoute', label: '預設途徑', type: 'select', options: masterApi.staticCodes.routes.map((r) => ({ label: `${r.code} ${r.name}`, value: r.code })) },
+  { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
+  { key: 'active', label: '使用中', type: 'checkbox', wide: true },
+])
+const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 0, selfPrice: 0, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, active: true })
+
+// ---------- 醫令 ----------
+const procColumns: Column<Procedure>[] = [
+  { key: 'code', label: '代碼', width: '7rem' },
+  { key: 'name', label: '名稱' },
+  { key: 'category', label: '類別', width: '5rem' },
+  { key: 'points', label: '健保點數', align: 'right', width: '6rem' },
+  { key: 'selfPrice', label: '自費價', align: 'right', width: '6rem' },
+]
+const procFields: FieldDef[] = [
+  { key: 'code', label: '醫令代碼', required: true },
+  { key: 'name', label: '名稱', required: true },
+  { key: 'category', label: '類別', type: 'select', required: true, options: ['診察', '檢驗', '影像', '處置', '復健'] },
+  { key: 'points', label: '健保點數', type: 'number', hint: '0 表示一律自費（例：診斷書）' },
+  { key: 'selfPrice', label: '自費價（元）', type: 'number' },
+  { key: 'active', label: '使用中', type: 'checkbox' },
+]
+const blankProc = () => ({ code: '', name: '', category: '處置', points: 0, selfPrice: 0, active: true })
+
+// ---------- 診斷碼 ----------
+const icdColumns: Column<IcdCode>[] = [
+  { key: 'code', label: '代碼', width: '7rem' },
+  { key: 'name', label: '中文名稱' },
+  { key: 'nameEn', label: '英文名稱' },
+]
+const icdFields: FieldDef[] = [
+  { key: 'code', label: 'ICD-10 代碼', required: true, lockOnEdit: true, hint: '例：J06.9' },
+  { key: 'name', label: '中文名稱', required: true },
+  { key: 'nameEn', label: '英文名稱', wide: true },
+  { key: 'active', label: '使用中', type: 'checkbox' },
+]
+
+// ---------- 預防保健項目 ----------
+const itemColumns: Column<PreventItem>[] = [
+  { key: 'code', label: '代碼', width: '6rem' },
+  { key: 'name', label: '名稱' },
+  { key: 'intervalYears', label: '間隔', width: '6rem', format: (i) => (i.intervalYears ? `每 ${i.intervalYears} 年` : '終身／依次數') },
+  { key: 'fields', label: '登錄欄位', format: (i) => i.fields.join('、') },
+]
+const itemFields: FieldDef[] = [
+  { key: 'name', label: '名稱', required: true },
+  { key: 'intervalYears', label: '間隔年數', type: 'number', hint: '0 表示終身一次' },
+  { key: 'ruleText', label: '資格說明（顯示用）', wide: true },
+  { key: 'fields', label: '登錄欄位', type: 'list', wide: true },
+  { key: 'needsReport', label: '需等報告（登錄時預設「待報告」）', type: 'checkbox' },
+  { key: 'active', label: '提供中', type: 'checkbox' },
+]
+
+const tabs = computed(() => [
+  { key: 'drugs', label: '藥品', count: drugs.value?.length },
+  { key: 'procs', label: '醫令', count: procs.value?.length },
+  { key: 'icd', label: '診斷碼', count: icds.value?.length },
+  { key: 'prevent', label: '預防保健項目', count: items.value?.length },
+])
+</script>
+
+<template>
+  <div class="space-y-4">
+    <UTabs v-model="tab" :tabs="tabs" />
+    <MasterTable
+      v-if="tab === 'drugs'"
+      title="藥品"
+      :rows="drugs"
+      :loading="l1"
+      :columns="drugColumns"
+      :fields="drugFields"
+      :row-key="(d) => d.id"
+      :search-keys="['id', 'name', 'generic', 'nhiCode']"
+      :blank="blankDrug"
+      :save="(f) => masterApi.saveDrug(f as never)"
+      note="庫存不在這裡修改：請到「藥品庫存」以進貨、盤點的方式調整，每一筆增減才會留下紀錄。"
+    >
+      <template #cell-name="{ row }">
+        <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span>
+        <div class="text-xs text-slate-500">{{ row.generic }}・{{ row.spec }}</div>
+      </template>
+    </MasterTable>
+    <MasterTable
+      v-else-if="tab === 'procs'"
+      title="醫令"
+      :rows="procs"
+      :loading="l2"
+      :columns="procColumns"
+      :fields="procFields"
+      :row-key="(p) => p.id"
+      :search-keys="['code', 'name']"
+      :blank="blankProc"
+      :save="(f) => masterApi.saveProcedure(f as never)"
+    />
+    <MasterTable
+      v-else-if="tab === 'icd'"
+      title="診斷碼"
+      :rows="icds"
+      :loading="l3"
+      :columns="icdColumns"
+      :fields="icdFields"
+      :row-key="(c) => c.code"
+      :search-keys="['code', 'name', 'nameEn']"
+      :blank="() => ({ code: '', name: '', nameEn: '', active: true })"
+      :save="(f, isNew) => masterApi.saveIcd({ ...(f as IcdCode), isNew })"
+    />
+    <MasterTable
+      v-else
+      title="預防保健項目"
+      :rows="items"
+      :loading="l4"
+      :columns="itemColumns"
+      :fields="itemFields"
+      :row-key="(i) => i.code"
+      :search-keys="['code', 'name']"
+      :save="(f) => masterApi.savePreventItem(f as PreventItem)"
+      note="只能調整既有項目的參數。資格條件（年齡、性別、家族史）是程式規則，新增項目需要修改程式（prevent-rules.ts），不是在這裡新增一筆資料。"
+    />
+  </div>
+</template>

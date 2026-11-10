@@ -1,0 +1,34 @@
+<script setup lang="ts">
+// 停診通知：因停診而退掛的病人，逐一電話通知後打勾。
+// 「退掛」只是系統裡的狀態，病人不知道就還是會來——通知完成才算處理完。
+import { Check, Phone } from 'lucide-vue-next'
+import { UBadge, UButton, UQueryState } from '@/components/ui'
+import { scheduleApi } from '@/services'
+import { useAction, useQuery } from '@/composables/useService'
+import { periodLabel, weekdayLabel } from '@/utils/date'
+
+const { data: notices, loading } = useQuery(() => scheduleApi.listSuspendNotices())
+const mark = useAction(scheduleApi.markNotified, { success: '已記錄通知' })
+</script>
+
+<template>
+  <UQueryState :loading="loading && !notices" :ready="!!notices?.length" empty-title="沒有待通知的停診病人">
+    <p class="mb-2 text-sm text-slate-600">
+      待通知 <b class="tabular text-red-600">{{ notices!.filter((n) => !n.notifiedAt).length }}</b> 位・已通知 {{ notices!.filter((n) => n.notifiedAt).length }} 位
+    </p>
+    <ul class="divide-y divide-slate-100 rounded-md border border-slate-200">
+      <li v-for="n in notices" :key="n.visitId" :class="['flex items-center gap-3 px-3 py-2 text-sm', n.notifiedAt && 'text-slate-400']">
+        <span class="tabular w-28 text-xs">{{ n.date.slice(5) }}（{{ weekdayLabel(n.date) }}）{{ periodLabel[n.period] }}</span>
+        <span class="w-16 text-xs">{{ n.doctorName }}</span>
+        <span class="tabular w-10 text-xs">#{{ n.seqNo }}</span>
+        <span class="w-20 font-medium" :class="!n.notifiedAt && 'text-slate-800'">{{ n.patientName }}</span>
+        <span class="tabular flex items-center gap-1"><Phone class="h-3.5 w-3.5" />{{ n.phone }}</span>
+        <UBadge tone="gray">{{ n.reason }}</UBadge>
+        <span class="ml-auto">
+          <span v-if="n.notifiedAt" class="tabular text-xs">{{ n.notifiedAt.slice(5) }} 已通知</span>
+          <UButton v-else size="sm" variant="secondary" :icon="Check" :loading="mark.pending.value" @click="mark.run(n.visitId)">已通知</UButton>
+        </span>
+      </li>
+    </ul>
+  </UQueryState>
+</template>

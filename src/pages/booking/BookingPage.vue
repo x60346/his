@@ -1,0 +1,285 @@
+<script setup lang="ts">
+// 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
+import { computed, ref, watch } from 'vue'
+import { CreditCard, Ticket, UserPlus, X } from 'lucide-vue-next'
+import {
+  UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
+} from '@/components/ui'
+import PatientEditDialog from '@/components/PatientEditDialog.vue'
+import { bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
+import type { PatientInput } from '@/services/patient'
+import type { SessionView } from '@/services/schedule'
+import { useAction, useQuery } from '@/composables/useService'
+import { useUi } from '@/stores/ui'
+import { ageText, periodLabel, today, weekdayLabel } from '@/utils/date'
+import { genderLabel, visitStatus } from '@/utils/labels'
+import type { Patient, Period, VisitStatus } from '@/types'
+
+const ui = useUi()
+
+// ---------- 1. 病人 ----------
+const patient = ref<Patient | null>(null)
+const maskId = (id: string) => `${id.slice(0, 3)}****${id.slice(-3)}`
+
+const editOpen = ref(false)
+const prefill = ref<Partial<PatientInput>>()
+
+const readCard = useAction(() => patientApi.readNhiCard())
+async function onReadCard() {
+  const r = await readCard.run()
+  if (!r) return
+  if (r.patient) {
+    patient.value = r.patient
+    ui.toast.info(`讀卡成功：${r.patient.name}（病歷號 ${r.patient.chartNo}）`)
+  } else {
+    // 卡上的人還沒建檔 → 初診建檔，把卡片資料先帶入
+    prefill.value = { name: r.card.name, gender: r.card.gender, birthDate: r.card.birthDate, idNo: r.card.idNo }
+    editOpen.value = true
+    ui.toast.info(`${r.card.name} 尚未建檔，請完成初診建檔`)
+  }
+}
+function newPatient() {
+  prefill.value = undefined
+  editOpen.value = true
+}
+
+const { data: upcoming } = useQuery(
+  async () => (patient.value ? bookingApi.listVisits({ patientId: patient.value.id, upcoming: true, status: ['registered'] }) : []),
+  [patient],
+)
+
+// ---------- 2. 診次 ----------
+const date = ref(today())
+const deptFilter = ref<string | number>()
+const sessionId = ref<string>()
+const { data: depts } = useQuery(() => masterApi.listDepartments())
+const { data: sessions, loading: sessionsLoading } = useQuery(() => scheduleApi.listSessions({ date: date.value }), [date])
+watch(date, () => (sessionId.value = undefined))
+
+const periods: Period[] = ['AM', 'PM', 'NIGHT']
+const sessionsByPeriod = computed(() =>
+  periods
+    .map((p) => ({ period: p, list: (sessions.value ?? []).filter((s) => s.period === p && (!deptFilter.value || s.deptId === deptFilter.value)) }))
+    .filter((g) => g.list.length),
+)
+const selectedSession = computed(() => sessions.value?.find((s) => s.id === sessionId.value))
+function pickSession(s: SessionView) {
+  if (s.bookable) sessionId.value = s.id
+}
+
+// ---------- 3. 身分、案件、預防保健 ----------
+const identityCode = ref<string | number>('01')
+const caseType = ref<string | number>('01')
+const preventItems = ref<string[]>([])
+const { data: identities } = useQuery(() => masterApi.listIdentities())
+const caseTypeOptions = masterApi.staticCodes.caseTypes.map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
+
+watch(patient, (p) => {
+  identityCode.value = p?.defaultIdentity ?? '01'
+  preventItems.value = []
+})
+
+// 資格由服務層判斷，頁面只負責顯示與勾選
+const { data: eligibility } = useQuery(async () => (patient.value ? preventApi.eligibilityFor(patient.value.id) : []), [patient])
+const eligibleItems = computed(() => (eligibility.value ?? []).filter((e) => e.eligible))
+
+function togglePrevent(code: string, on: boolean) {
+  preventItems.value = on ? [...preventItems.value, code] : preventItems.value.filter((c) => c !== code)
+}
+
+// ---------- 掛號 ----------
+const lastResult = ref<VisitView>()
+const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
+const canRegister = computed(() => !!patient.value && !!selectedSession.value)
+
+async function submit() {
+  if (!patient.value || !sessionId.value) return
+  const v = await register.run({
+    patientId: patient.value.id,
+    sessionId: sessionId.value,
+    identityCode: String(identityCode.value),
+    caseType: String(caseType.value),
+    preventItems: preventItems.value,
+  })
+  if (v) {
+    lastResult.value = v
+    // 掛完清掉病人，準備服務下一位；診次保留（櫃台常連續掛同一診）
+    patient.value = null
+  }
+}
+
+// ---------- 當日掛號清單 ----------
+const statusTab = ref('all')
+const listSession = ref<string | number>()
+const { data: visits, loading: visitsLoading } = useQuery(() => bookingApi.listVisits({ date: date.value }), [date])
+
+const tabDefs: { key: string; label: string; match: VisitStatus[] }[] = [
+  { key: 'all', label: '全部', match: [] },
+  { key: 'registered', label: '候診', match: ['registered'] },
+  { key: 'in-consult', label: '看診中', match: ['in-consult'] },
+  { key: 'consulted', label: '待批價', match: ['consulted'] },
+  { key: 'done', label: '已完成', match: ['charged', 'dispensed'] },
+  { key: 'cancelled', label: '退掛', match: ['cancelled'] },
+]
+const sessionFiltered = computed(() => (visits.value ?? []).filter((v) => !listSession.value || v.sessionId === listSession.value))
+const tabs = computed(() => tabDefs.map((t) => ({ key: t.key, label: t.label, count: sessionFiltered.value.filter((v) => !t.match.length || t.match.includes(v.status)).length })))
+const filtered = computed(() => {
+  const match = tabDefs.find((t) => t.key === statusTab.value)!.match
+  return sessionFiltered.value.filter((v) => !match.length || match.includes(v.status))
+})
+const listSessionOptions = computed(() => (sessions.value ?? []).map((s) => ({ label: `${periodLabel[s.period]} ${s.roomNo} ${s.deptName} ${s.doctorName}`, value: s.id })))
+
+const columns: Column<VisitView>[] = [
+  { key: 'seqNo', label: '號', align: 'center', width: '50px' },
+  { key: 'session', label: '診別', format: (v) => `${periodLabel[v.period]} ${v.roomNo}` },
+  { key: 'doctor', label: '科別／醫師', format: (v) => `${v.deptName} ${v.doctorName}` },
+  { key: 'chartNo', label: '病歷號' },
+  { key: 'patientName', label: '姓名' },
+  { key: 'identityName', label: '身分' },
+  { key: 'status', label: '狀態' },
+  { key: 'createdAt', label: '掛號時間', format: (v) => v.createdAt.slice(11) },
+  { key: 'actions', label: '', align: 'right' },
+]
+
+const cancel = useAction(bookingApi.cancelVisit, { success: (v) => `已退掛：${v.patientName}` })
+async function onCancel(v: VisitView) {
+  const ok = await ui.confirm({ title: '退掛', message: `確定將 ${v.patientName}（${v.deptName} 第 ${v.seqNo} 號）退掛？`, okText: '退掛', danger: true })
+  if (ok) cancel.run(v.id)
+}
+</script>
+
+<template>
+  <div class="space-y-4">
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_1fr]">
+      <!-- 左：病人 + 確認 -->
+      <div class="space-y-4">
+        <UCard title="1. 病人">
+          <template #actions>
+            <UButton size="sm" variant="secondary" :icon="CreditCard" :loading="readCard.pending.value" @click="onReadCard">讀健保卡</UButton>
+            <UButton size="sm" variant="secondary" :icon="UserPlus" @click="newPatient">初診</UButton>
+          </template>
+          <USearchSelect
+            placeholder="病歷號、姓名、身分證、電話"
+            :search="(kw) => patientApi.searchPatients(kw, 15)"
+            :item-key="(p) => p.id"
+            :item-label="(p) => `${p.chartNo}　${p.name}`"
+            :item-sub="(p) => `${genderLabel[p.gender]}・${ageText(p.birthDate)}・${maskId(p.idNo)}`"
+            @select="(p) => (patient = p)"
+          />
+          <div v-if="patient" class="mt-3 rounded-md border border-brand-200 bg-brand-50/50 p-3 text-sm">
+            <div class="flex items-start justify-between">
+              <div>
+                <span class="text-base font-semibold text-slate-800">{{ patient.name }}</span>
+                <span class="ml-2 text-slate-500">{{ genderLabel[patient.gender] }}・{{ ageText(patient.birthDate) }}</span>
+              </div>
+              <button class="text-slate-400 hover:text-slate-600" aria-label="清除病人" @click="patient = null"><X class="h-4 w-4" /></button>
+            </div>
+            <div class="mt-1 text-slate-600">病歷號 {{ patient.chartNo }}・{{ maskId(patient.idNo) }}</div>
+            <div v-if="patient.allergies.length" class="mt-1 font-medium text-red-600">過敏：{{ patient.allergies.join('、') }}</div>
+            <div v-if="upcoming?.length" class="mt-2 border-t border-brand-100 pt-2 text-xs text-slate-600">
+              <div class="mb-0.5 font-medium">已有預約：</div>
+              <div v-for="u in upcoming" :key="u.id">{{ u.date }} {{ periodLabel[u.period] }} {{ u.deptName }} {{ u.doctorName }} 第 {{ u.seqNo }} 號</div>
+            </div>
+          </div>
+          <p v-else class="mt-3 text-xs text-slate-400">搜尋病人，或按「讀健保卡」。未建檔的新病人請按「初診」。</p>
+        </UCard>
+
+        <UCard title="3. 確認掛號">
+          <div class="space-y-3">
+            <div class="rounded-md bg-slate-50 px-3 py-2 text-sm">
+              <template v-if="selectedSession">
+                {{ selectedSession.date }}（{{ weekdayLabel(selectedSession.date) }}）{{ periodLabel[selectedSession.period] }}<br />
+                <span class="font-medium">{{ selectedSession.deptName }} {{ selectedSession.doctorName }}</span>・{{ selectedSession.roomNo }} 診
+              </template>
+              <span v-else class="text-slate-400">尚未選擇診次</span>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <USelect v-model="identityCode" label="就醫身分" :options="(identities ?? []).map((i) => ({ label: i.name, value: i.code }))" />
+              <USelect v-model="caseType" label="案件分類" :options="caseTypeOptions" />
+            </div>
+            <div v-if="eligibleItems.length">
+              <div class="mb-1 text-xs font-medium text-slate-600">可加做預防保健（資格由系統判斷）</div>
+              <div class="space-y-1 rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2">
+                <UCheckbox
+                  v-for="e in eligibleItems"
+                  :key="e.itemCode"
+                  :model-value="preventItems.includes(e.itemCode)"
+                  @update:model-value="(v) => togglePrevent(e.itemCode, v)"
+                >
+                  {{ e.itemName }} <span class="text-xs text-slate-500">（{{ e.reason }}）</span>
+                </UCheckbox>
+              </div>
+              <p v-if="preventItems.length && caseType === '01'" class="mt-1 text-xs text-slate-500">僅做預防保健時，系統會以 A3 案件申報（免基本部分負擔）。</p>
+            </div>
+            <UButton block :icon="Ticket" :disabled="!canRegister" :loading="register.pending.value" @click="submit">掛號</UButton>
+          </div>
+        </UCard>
+
+        <div v-if="lastResult" class="flex items-center gap-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <div class="text-center">
+            <div class="text-xs text-emerald-700">看診號</div>
+            <div class="tabular text-4xl font-bold text-emerald-700">{{ lastResult.seqNo }}</div>
+          </div>
+          <div class="text-sm text-slate-700">
+            <div class="font-semibold">{{ lastResult.patientName }}（{{ lastResult.chartNo }}）</div>
+            <div>{{ lastResult.date }} {{ periodLabel[lastResult.period] }}</div>
+            <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右：診次 -->
+      <UCard title="2. 選擇診次">
+        <template #actions>
+          <div class="w-36"><USelect v-model="deptFilter" :options="(depts ?? []).map((d) => ({ label: d.name, value: d.id }))" placeholder="全部科別" /></div>
+          <div class="w-40"><UInput v-model="date" type="date" :min="today()" /></div>
+        </template>
+        <UEmpty v-if="!sessionsLoading && !sessionsByPeriod.length" title="這天沒有門診" description="請選擇其他日期或科別" />
+        <div v-for="g in sessionsByPeriod" :key="g.period" class="mb-4 last:mb-0">
+          <div class="mb-2 text-xs font-semibold text-slate-500">{{ periodLabel[g.period] }}</div>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+            <button
+              v-for="s in g.list"
+              :key="s.id"
+              :disabled="!s.bookable"
+              :class="[
+                'rounded-md border px-3 py-2 text-left text-sm transition',
+                !s.bookable ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60'
+                : s.id === sessionId ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/30'
+                : 'border-slate-200 bg-white hover:border-brand-300',
+              ]"
+              @click="pickSession(s)"
+            >
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-slate-800">{{ s.deptName }}・{{ s.doctorName }}</span>
+                <UBadge v-if="s.suspended" tone="red">停診</UBadge>
+                <UBadge v-else-if="s.closed">已截止</UBadge>
+                <UBadge v-else-if="s.full" tone="red">額滿</UBadge>
+              </div>
+              <div class="mt-0.5 flex justify-between text-xs text-slate-500">
+                <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
+                <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
+              </div>
+            </button>
+          </div>
+        </div>
+      </UCard>
+    </div>
+
+    <!-- 當日掛號清單 -->
+    <UCard :title="`${date} 掛號清單`" :padded="false">
+      <template #actions>
+        <div class="w-64"><USelect v-model="listSession" :options="listSessionOptions" placeholder="全部診次" /></div>
+      </template>
+      <div class="px-4"><UTabs v-model="statusTab" :tabs="tabs" /></div>
+      <UTable :columns="columns" :rows="filtered" :row-key="(v) => v.id" :loading="visitsLoading" dense empty-text="沒有符合的掛號">
+        <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
+        <template #cell-actions="{ row }">
+          <UButton v-if="row.status === 'registered'" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
+        </template>
+      </UTable>
+    </UCard>
+
+    <PatientEditDialog v-model="editOpen" :prefill="prefill" @saved="(p) => (patient = p)" />
+  </div>
+</template>

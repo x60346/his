@@ -1,0 +1,167 @@
+// 預防保健：資格查詢（規則在 prevent-rules.ts 的純函式）、今日待執行、服務紀錄、月統計。
+import type { PreventItem, PreventRecord } from '@/types'
+import { db, newId } from '@/mock/db'
+import { now, today } from '@/utils/date'
+import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { checkEligibility, type Eligibility } from './prevent-rules'
+import { find, nameOf, patientBrief, visitView, type PatientBrief, type VisitView } from './views'
+
+/** 提供中的項目（停用的項目不再判斷資格、不能登錄；歷史紀錄照常顯示） */
+const activeItems = () => db.preventItems.filter((i) => i.active !== false)
+
+export const listPreventItems = (): Promise<PreventItem[]> => query(() => db.preventItems)
+
+export function eligibilityFor(patientId: string, at = today()): Promise<Eligibility[]> {
+  return query(() => {
+    const p = must(find.patient(patientId), '病患')
+    return activeItems().map((item) => checkEligibility(p, item, db.preventRecords, at))
+  })
+}
+
+/** 預防保健頁的病人資料（BFF）：病人資訊、各項資格、歷次紀錄一次取回，三者是同一時間點的結果 */
+export interface PreventProfile {
+  patient: PatientBrief
+  eligibility: Eligibility[]
+  records: PreventRecordView[]
+}
+
+export function getPreventProfile(patientId: string): Promise<PreventProfile> {
+  return query(() => {
+    const p = must(find.patient(patientId), '病患')
+    return {
+      patient: patientBrief(p.id),
+      eligibility: activeItems().map((item) => checkEligibility(p, item, db.preventRecords, today())),
+      records: db.preventRecords.filter((r) => r.patientId === p.id).sort((a, b) => b.date.localeCompare(a.date)).map(recordView),
+    }
+  })
+}
+
+// ---------- 今日待執行 ----------
+export interface WorklistRow {
+  visit: VisitView
+  items: { code: string; name: string; done: boolean }[]
+}
+
+/** 今天掛號時勾了預防保健的病人（掛號 → 預防保健的連動）。已登錄的項目標記為完成 */
+export function todayWorklist(): Promise<WorklistRow[]> {
+  return query(() => {
+    const t = today()
+    return db.visits
+      .filter((v) => v.date === t && v.status !== 'cancelled' && v.preventItems.length)
+      .map((v) => ({
+        visit: visitView(v),
+        items: v.preventItems.map((code) => ({
+          code,
+          name: db.preventItems.find((i) => i.code === code)?.name ?? code,
+          done: db.preventRecords.some((r) => r.patientId === v.patientId && r.itemCode === code && r.date === t),
+        })),
+      }))
+      .sort((a, b) => Number(a.items.every((i) => i.done)) - Number(b.items.every((i) => i.done)) || a.visit.createdAt.localeCompare(b.visit.createdAt))
+  })
+}
+
+// ---------- 紀錄 ----------
+export interface PreventRecordView extends PreventRecord, PatientBrief {
+  itemName: string
+  doctorName: string
+}
+
+export function listPreventRecords(q: { patientId?: string; itemCode?: string; from?: string; to?: string; result?: PreventRecord['result'] } = {}): Promise<PreventRecordView[]> {
+  return query(() =>
+    db.preventRecords
+      .filter(
+        (r) =>
+          (!q.patientId || r.patientId === q.patientId) &&
+          (!q.itemCode || r.itemCode === q.itemCode) &&
+          (!q.from || r.date >= q.from) &&
+          (!q.to || r.date <= q.to) &&
+          (!q.result || r.result === q.result),
+      )
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map(recordView),
+  )
+}
+
+function recordView(r: PreventRecord): PreventRecordView {
+  return {
+    ...r,
+    ...patientBrief(r.patientId),
+    itemName: db.preventItems.find((i) => i.code === r.itemCode)?.name ?? r.itemCode,
+    doctorName: nameOf.doctor(r.doctorId),
+  }
+}
+
+export type PreventRecordInput = Pick<PreventRecord, 'patientId' | 'itemCode' | 'result' | 'data'> & { visitId?: string; doctorId?: string }
+
+export function addPreventRecord(input: PreventRecordInput): Promise<PreventRecord> {
+  return mutate(() => {
+    const user = requireUser('doctor', 'nurse')
+    const p = must(find.patient(input.patientId), '病患')
+    const item = must(db.preventItems.find((i) => i.code === input.itemCode), '預防保健項目')
+    if (item.active === false) fail(`「${item.name}」已停止提供`)
+    const t = today()
+
+    // 寫入前再檢查一次資格：畫面上的「可做」是查詢當下的判斷，送出時可能已經不成立（例如另一個櫃台剛登錄）
+    const el = checkEligibility(p, item, db.preventRecords, t)
+    if (!el.eligible) fail(`${p.name} 目前不符合「${item.name}」資格：${el.reason}`, 'CONFLICT')
+
+    // 執行醫師：醫師登錄就是自己；護理師登錄必須指定。不可以默默補一個預設醫師——那是捏造紀錄
+    const doctorId = user.role === 'doctor' ? user.doctorId : input.doctorId
+    if (!doctorId || !find.doctor(doctorId)) failField('doctorId', '請選擇執行醫師')
+
+    if (!['正常', '異常需追蹤', '待報告'].includes(input.result)) failField('result', '請選擇結果')
+    if (input.visitId) {
+      const v = must(find.visit(input.visitId), '掛號紀錄')
+      if (v.patientId !== p.id || v.date !== t) fail('掛號紀錄與病人或日期不符')
+    }
+    // 只保留有填的欄位
+    const data = Object.fromEntries(Object.entries(input.data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v))
+
+    const r: PreventRecord = { id: newId('PR'), patientId: p.id, itemCode: item.code, date: t, visitId: input.visitId, doctorId: doctorId!, result: input.result, data }
+    db.preventRecords.push(r)
+    audit('預防保健服務', `${p.name} ${item.name} ${input.result}`)
+    return r
+  })
+}
+
+/** 補登報告：只有「待報告」的紀錄可以補，補一次就定案（紀錄只能增補，不能改寫） */
+export function fillReport(recordId: string, result: PreventRecord['result'], data: Record<string, string>): Promise<PreventRecord> {
+  return mutate(() => {
+    requireUser('doctor', 'nurse')
+    const r = must(db.preventRecords.find((x) => x.id === recordId), '預防保健紀錄')
+    if (r.result !== '待報告') fail('此紀錄已有結果，不可修改', 'CONFLICT')
+    if (result !== '正常' && result !== '異常需追蹤') failField('result', '請選擇報告結果')
+    const filled = Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v))
+    if (!Object.keys(filled).length) fail('請填寫報告內容')
+    r.result = result
+    r.data = { ...r.data, ...filled }
+    r.reportedAt = now()
+    audit('補登預防保健報告', `${nameOf.patient(r.patientId)} ${r.itemCode} ${result}`)
+    return r
+  })
+}
+
+// ---------- 統計 ----------
+export interface PreventStat {
+  code: string
+  name: string
+  count: number
+  abnormal: number
+  pending: number
+}
+
+/** 某月（YYYY-MM）各項目服務人次 */
+export function monthlyStats(month: string): Promise<PreventStat[]> {
+  return query(() =>
+    db.preventItems.map((i) => {
+      const list = db.preventRecords.filter((r) => r.itemCode === i.code && r.date.startsWith(month))
+      return {
+        code: i.code,
+        name: i.name,
+        count: list.length,
+        abnormal: list.filter((r) => r.result === '異常需追蹤').length,
+        pending: list.filter((r) => r.result === '待報告').length,
+      }
+    }),
+  )
+}

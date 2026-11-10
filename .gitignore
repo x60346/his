@@ -1,0 +1,7 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# 本機工具設定
+.claude/
