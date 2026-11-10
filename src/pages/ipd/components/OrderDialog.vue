@@ -87,6 +87,14 @@ async function submit() {
   // 判斷依據是「組裝好要送出的 input」，不是表單：表單上可能殘留切換類別前選的藥
   const drug = input.drugId ? form.drug : null
   if (drug && props.admission) {
+    // 已有執行中的同一種藥：列出來讓醫師判斷是忘了已開過，還是刻意加開
+    const same = await ipdApi.listActiveSameDrug(props.admission.id, drug.id)
+    if (same.length) {
+      const list = same.map((o) => `・每次 ${o.dose} ${o.unit}、${o.freq}、${o.route}（${o.type === 'long' ? '長期' : '臨時'}，${o.startAt.slice(5)} 開立）`).join('\n')
+      const ok = await ui.confirm({ title: '已有相同藥品的醫囑', message: `病人目前已有執行中的 ${drug.name}：\n${list}\n\n再開一筆會同時給藥。確定要再開立嗎？`, okText: '確定再開一筆', danger: true })
+      if (!ok) return
+      input.allowDuplicate = true
+    }
     const warns = await opdApi.allergyWarnings(props.admission.patientId, [drug.id])
     if (warns.length && !(await ui.confirm({ title: '過敏警示', message: `病人對 ${warns.map((w) => w.allergen).join('、')} 過敏，${drug.name} 可能引起過敏反應。\n確認已評估風險，仍要開立？`, okText: '確認開立', danger: true }))) return
     if (drug.highAlert && !(await ui.confirm({ title: '高警訊藥品', message: `${drug.name} 為高警訊藥品。\n請再次確認：每次 ${input.dose} ${doseUnitOf(drug)}、${input.freq}、${input.route}`, okText: '劑量正確，開立' }))) return

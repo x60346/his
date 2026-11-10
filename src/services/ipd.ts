@@ -58,7 +58,20 @@ export function listOrders(admissionId: string): Promise<OrderView[]> {
   )
 }
 
-export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route'>
+export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route'> & {
+  /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
+  allowDuplicate?: boolean
+}
+
+/** 這位病人執行中的同藥醫囑（重複開立前要先讓醫師看到） */
+export function activeSameDrug(admissionId: string, drugId: string): IpdOrder[] {
+  return db.ipdOrders.filter((o) => o.admissionId === admissionId && o.drugId === drugId && o.status === 'active')
+}
+
+/** 頁面送出前查詢：已有哪些執行中的同藥醫囑 */
+export function listActiveSameDrug(admissionId: string, drugId: string): Promise<OrderView[]> {
+  return query(() => activeSameDrug(admissionId, drugId).map(orderView))
+}
 
 export function addOrder(input: OrderInput): Promise<OrderView> {
   return mutate(() => {
@@ -72,6 +85,12 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
       if (!input.dose || input.dose <= 0) fail('請輸入劑量')
       if (!input.freq || !find.freq(input.freq)) fail('請選擇頻率')
       if (input.type === 'long' && input.freq === 'STAT') fail('STAT 請改用臨時醫囑')
+      // 重複開立同一種藥：可能是忘了已開過（病人會被給兩倍劑量），也可能是刻意加開。
+      // 不直接禁止，但必須由醫師明確確認——頁面會先列出既有醫囑讓醫師判斷
+      const dup = activeSameDrug(a.id, drug.id)
+      if (dup.length && !input.allowDuplicate) {
+        fail(`病人已有執行中的 ${drug.name}（${dup.map((o) => `每次 ${o.dose} ${doseUnitOf(drug)} ${o.freq}`).join('、')}），如確定要再開一筆請確認`, 'CONFLICT')
+      }
       content = content || drug.name
     } else if (input.category === 'procedure') {
       const proc = usable.procedure(input.procId ?? '')
@@ -80,8 +99,10 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
       fail('請輸入醫囑內容')
     }
 
+    // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
+    const { allowDuplicate: _confirmed, ...fields } = input
     const o: IpdOrder = {
-      ...input,
+      ...fields,
       content,
       id: newId('IO'),
       startAt: t,
