@@ -8,7 +8,7 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
-import { chargeApi } from '@/services'
+import { chargeApi, checkCash } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
 import { periodLabel, today } from '@/utils/date'
@@ -49,7 +49,9 @@ const quickAmounts = computed(() => {
   return [...new Set([t, Math.ceil(t / 100) * 100, 500, 1000, 2000])].filter((n) => n >= t).sort((a, b) => a - b).slice(0, 5)
 })
 const change = computed(() => (payMethod.value === 'cash' ? (received.value ?? 0) - total.value : 0))
-const canPay = computed(() => !!preview.value && (payMethod.value !== 'cash' || change.value >= 0))
+// 與服務層同一條規則：不足、非整數、找零異常（多打了 0）都不能收款
+const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value) : null))
+const canPay = computed(() => !!preview.value && !cashProblem.value)
 
 const pay = useAction(chargeApi.pay, { success: (c) => `結帳完成：收據 ${c.receiptNo}` })
 async function onPay() {
@@ -143,11 +145,19 @@ async function onVoid() {
               </div>
 
               <template v-if="payMethod === 'cash'">
-                <UInput v-model="received" label="實收" type="number" min="0" class="tabular text-right text-lg" />
+                <UInput
+                  v-model="received"
+                  label="實收"
+                  type="number"
+                  min="0"
+                  class="tabular text-right text-lg"
+                  :error="cashProblem && change >= 0 ? cashProblem : pay.fieldErrors.value.received"
+                />
                 <div class="flex flex-wrap gap-1.5">
                   <UButton v-for="a in quickAmounts" :key="a" size="sm" variant="secondary" @click="received = a">{{ a === total ? '剛好' : a }}</UButton>
                 </div>
-                <div :class="['flex justify-between rounded-md px-3 py-2 text-sm', change < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800']">
+                <!-- 綠色只代表「可以收款」：不足是紅色、金額異常是黃色，不要讓錯誤的找零看起來像沒問題 -->
+                <div :class="['flex justify-between rounded-md px-3 py-2 text-sm', change < 0 ? 'bg-red-50 text-red-700' : cashProblem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800']">
                   <span>{{ change < 0 ? '尚差' : '找零' }}</span>
                   <span class="tabular text-lg font-bold">$ {{ Math.abs(change).toLocaleString() }}</span>
                 </div>

@@ -78,6 +78,18 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
   return lines
 }
 
+/** 找零達到這個金額就視為輸入錯誤（門診部分負擔不可能需要找零上萬元，多半是多打了 0） */
+export const MAX_CASH_CHANGE = 10000
+
+/** 現金收款檢查（純函式，頁面即時提示與服務層共用）：有問題回傳訊息，沒問題回傳 null */
+export function checkCash(total: number, received: number | undefined): string | null {
+  if (received === undefined || received === null || Number.isNaN(received)) return '請輸入實收金額'
+  if (!Number.isInteger(received)) return '實收金額需為整數'
+  if (received < total) return `實收金額不足，應收 ${total} 元`
+  if (received - total >= MAX_CASH_CHANGE) return `找零 ${(received - total).toLocaleString()} 元，金額異常，請確認實收金額`
+  return null
+}
+
 export function summarize(lines: ChargeLine[]): { nhiPoints: number; patientTotal: number } {
   const nhi = lines.filter((l) => !l.patientPay).reduce((s, l) => s + l.amount, 0)
   const pt = lines.filter((l) => l.patientPay).reduce((s, l) => s + l.amount, 0)

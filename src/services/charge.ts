@@ -3,8 +3,8 @@
 import type { Charge, ChargeLine, PayMethod } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now } from '@/utils/date'
-import { calcChargeLines, summarize } from './billing'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { calcChargeLines, checkCash, summarize } from './billing'
+import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 
 export interface ChargeListItem extends VisitView {
@@ -55,7 +55,10 @@ export function pay(visitId: string, input: { payMethod: PayMethod; received: nu
     const pv = buildPreview(visitId)
     // 刷卡、行動支付金額必定等於應收
     const received = input.payMethod === 'cash' ? input.received : pv.patientTotal
-    if (received < pv.patientTotal) fail(`實收金額不足，應收 ${pv.patientTotal} 元`)
+    if (input.payMethod === 'cash') {
+      const problem = checkCash(pv.patientTotal, received)
+      if (problem) failField('received', problem)
+    }
 
     const ymd = v.date.replace(/-/g, '')
     const charge: Charge = {
