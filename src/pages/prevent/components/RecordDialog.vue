@@ -46,7 +46,7 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" :title="`登錄：${item?.name ?? ''}`">
+  <UDialog v-model="open" @submit="submit" :title="`登錄：${item?.name ?? ''}`">
     <div v-if="item && patient" class="space-y-3">
       <div class="rounded-md bg-slate-50 px-3 py-2 text-sm">
         <span class="font-medium text-slate-800">{{ patient.patientName }}</span>
@@ -73,7 +73,7 @@ async function submit() {
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
-      <UButton :loading="save.pending.value" @click="submit">登錄</UButton>
+      <UButton :loading="save.pending.value" type="submit">登錄</UButton>
     </template>
   </UDialog>
 </template>

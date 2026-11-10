@@ -25,7 +25,7 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" :title="`盤點：${drugName ?? ''}`" size="sm">
+  <UDialog v-model="open" @submit="submit" :title="`盤點：${drugName ?? ''}`" size="sm">
     <div v-if="lot" class="space-y-3 text-sm">
       <div class="rounded-md bg-slate-50 px-3 py-2">批號 <b class="tabular">{{ lot.lotNo }}</b>・效期 <span class="tabular">{{ lot.expiry }}</span></div>
       <UInput v-model="form.actual" label="實際清點數量" type="number" min="0" required :hint="unit" :error="save.fieldErrors.value.actual" />
@@ -45,7 +45,7 @@ async function submit() {
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
-      <UButton :loading="save.pending.value" :disabled="diff === null" @click="submit">確認盤點</UButton>
+      <UButton :loading="save.pending.value" :disabled="diff === null" type="submit">確認盤點</UButton>
     </template>
   </UDialog>
 </template>

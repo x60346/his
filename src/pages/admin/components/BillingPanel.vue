@@ -109,7 +109,7 @@ async function submitId() {
       <p class="mt-1 text-xs text-slate-500">身分代碼對應健保規定，只能調整，不能新增或更改代碼。</p>
     </section>
 
-    <UDialog v-model="idOpen" :title="`編輯就醫身分：${idForm.code}`" size="sm">
+    <UDialog v-model="idOpen" @submit="submitId" :title="`編輯就醫身分：${idForm.code}`" size="sm">
       <div class="space-y-3">
         <UInput v-model="idForm.name" label="名稱" required :error="saveId.fieldErrors.value.name" />
         <UInput v-model="idForm.regFee" label="掛號費" type="number" min="0" hint="元" :error="saveId.fieldErrors.value.regFee" />
@@ -118,7 +118,7 @@ async function submitId() {
       </div>
       <template #footer>
         <UButton variant="secondary" @click="idOpen = false">取消</UButton>
-        <UButton :loading="saveId.pending.value" @click="submitId">儲存</UButton>
+        <UButton :loading="saveId.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
   </div>

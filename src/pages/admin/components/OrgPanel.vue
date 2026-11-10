@@ -107,7 +107,7 @@ const columns: Column<DoctorRow>[] = [
       </UTable>
     </section>
 
-    <UDialog v-model="deptOpen" :title="deptForm.id ? `編輯科別：${deptForm.name}` : '新增科別'" size="sm">
+    <UDialog v-model="deptOpen" @submit="submitDept" :title="deptForm.id ? `編輯科別：${deptForm.name}` : '新增科別'" size="sm">
       <div class="space-y-3">
         <UInput v-model="deptForm.code" label="科別代碼" required hint="2–4 個英數字，例：RHE" :error="saveDept.fieldErrors.value.code" />
         <UInput v-model="deptForm.name" label="科別名稱" required :error="saveDept.fieldErrors.value.name" />
@@ -116,11 +116,11 @@ const columns: Column<DoctorRow>[] = [
       </div>
       <template #footer>
         <UButton variant="secondary" @click="deptOpen = false">取消</UButton>
-        <UButton :loading="saveDept.pending.value" @click="submitDept">儲存</UButton>
+        <UButton :loading="saveDept.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
 
-    <UDialog v-model="docOpen" :title="docForm.id ? `編輯醫師：${docForm.name}` : '新增醫師'">
+    <UDialog v-model="docOpen" @submit="submitDoc" :title="docForm.id ? `編輯醫師：${docForm.name}` : '新增醫師'">
       <div class="grid grid-cols-2 gap-3">
         <UInput v-model="docForm.name" label="姓名" required :error="saveDoc.fieldErrors.value.name" />
         <USelect v-model="docForm.deptId" label="科別" required placeholder="請選擇" :options="(depts ?? []).filter((d) => d.active || d.id === docForm.deptId).map((d) => ({ label: d.name, value: d.id }))" :error="saveDoc.fieldErrors.value.deptId" />
@@ -136,7 +136,7 @@ const columns: Column<DoctorRow>[] = [
       </div>
       <template #footer>
         <UButton variant="secondary" @click="docOpen = false">取消</UButton>
-        <UButton :loading="saveDoc.pending.value" @click="submitDoc">儲存</UButton>
+        <UButton :loading="saveDoc.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
   </div>

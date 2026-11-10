@@ -96,7 +96,7 @@ async function submitPw() {
       </template>
     </UTable>
 
-    <UDialog v-model="editOpen" :title="form.id ? `編輯帳號：${form.username}` : '新增帳號'">
+    <UDialog v-model="editOpen" @submit="submit" :title="form.id ? `編輯帳號：${form.username}` : '新增帳號'">
       <div class="grid grid-cols-2 gap-3">
         <UInput v-model="form.username" label="帳號" required :disabled="!!form.id" :hint="`${adminApi.USERNAME_RULE}，建立後不可修改`" :error="save.fieldErrors.value.username" />
         <USelect v-model="form.role" label="角色" required :options="roles" :disabled="isSelf" :hint="isSelf ? '不能變更自己的角色' : ''" :error="save.fieldErrors.value.role" />
@@ -121,15 +121,15 @@ async function submitPw() {
       </div>
       <template #footer>
         <UButton variant="secondary" @click="editOpen = false">取消</UButton>
-        <UButton :loading="save.pending.value" @click="submit">儲存</UButton>
+        <UButton :loading="save.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
 
-    <UDialog v-model="pwOpen" :title="`重設密碼：${pwUser?.username ?? ''}`" size="sm">
+    <UDialog v-model="pwOpen" @submit="submitPw" :title="`重設密碼：${pwUser?.username ?? ''}`" size="sm">
       <UInput v-model="newPw" label="新密碼" type="password" required hint="至少 4 碼；請以安全的方式告知本人" :error="resetPw.fieldErrors.value.password" />
       <template #footer>
         <UButton variant="secondary" @click="pwOpen = false">取消</UButton>
-        <UButton :loading="resetPw.pending.value" @click="submitPw">重設</UButton>
+        <UButton :loading="resetPw.pending.value" type="submit">重設</UButton>
       </template>
     </UDialog>
   </div>

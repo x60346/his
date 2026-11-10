@@ -92,7 +92,7 @@ async function remove() {
     </div>
     </UQueryState>
 
-    <UDialog v-model="open" :title="form.id ? '編輯每週門診' : '新增每週門診'">
+    <UDialog v-model="open" @submit="submit" :title="form.id ? '編輯每週門診' : '新增每週門診'">
       <div class="grid grid-cols-2 gap-3">
         <USelect v-model="form.doctorId" label="醫師" required placeholder="請選擇" :options="doctorOptions" class="col-span-2" :error="save.fieldErrors.value.doctorId" />
         <USelect v-model="form.weekday" label="星期" required :options="weekdays.map((wd) => ({ label: wdLabel(wd), value: wd }))" :error="save.fieldErrors.value.weekday" />
@@ -104,7 +104,7 @@ async function remove() {
       <template #footer>
         <UButton v-if="form.id" class="mr-auto" variant="ghost" :icon="Trash2" :loading="del.pending.value" @click="remove">移除</UButton>
         <UButton variant="secondary" @click="open = false">取消</UButton>
-        <UButton :loading="save.pending.value" @click="submit">儲存</UButton>
+        <UButton :loading="save.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
   </div>

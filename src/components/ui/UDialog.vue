@@ -8,7 +8,21 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 
 const open = defineModel<boolean>({ default: false })
-const props = withDefaults(defineProps<{ title?: string; size?: 'sm' | 'md' | 'lg' | 'xl'; persistent?: boolean }>(), { size: 'md' })
+const props = withDefaults(
+  defineProps<{
+    title?: string
+    size?: 'sm' | 'md' | 'lg' | 'xl'
+    persistent?: boolean
+    /**
+     * 有綁 @submit 時，對話框以 <form> 呈現：單行欄位按 Enter 就送出（主要按鈕要設 type="submit"），
+     * 多行文字框按 Enter 是換行（瀏覽器原生行為）。
+     * 只給「送出後還能修改」的資料維護表單用；開立醫囑、出院、停診這類不可逆或臨床動作刻意不綁，
+     * 避免手還在輸入時誤按 Enter 就送出。
+     */
+    onSubmit?: () => void
+  }>(),
+  { size: 'md' },
+)
 
 const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }
 
@@ -68,20 +82,25 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-100">
       <div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-[8vh]" @mousedown.self="close">
-        <div
+        <!-- novalidate：必填等檢查交給服務層一次標出所有欄位，不用瀏覽器一次只跳一個的原生提示 -->
+        <component
+          :is="onSubmit ? 'form' : 'div'"
           ref="panel"
           :class="['w-full rounded-lg bg-white shadow-xl outline-none', widths[size]]"
           role="dialog"
           aria-modal="true"
           tabindex="-1"
+          :novalidate="onSubmit ? true : undefined"
           @input="touched = true"
           @change="touched = true"
+          @submit.prevent="onSubmit?.()"
         >
           <header v-if="title || $slots.header" class="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <slot name="header">
               <h2 class="text-base font-semibold text-slate-800">{{ title }}</h2>
             </slot>
-            <button class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="關閉" @click="open = false">
+            <!-- type="button"：在 <form> 裡沒寫 type 的按鈕預設是送出，按 × 會變成送出表單 -->
+            <button type="button" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="關閉" @click="open = false">
               <X class="h-4 w-4" />
             </button>
           </header>
@@ -92,7 +111,7 @@ onBeforeUnmount(() => {
           <footer v-if="$slots.footer" class="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
             <slot name="footer" />
           </footer>
-        </div>
+        </component>
       </div>
     </Transition>
   </Teleport>

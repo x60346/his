@@ -30,7 +30,7 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" :title="`變更主治醫師：${admission?.patientName ?? ''}`" size="sm">
+  <UDialog v-model="open" @submit="submit" :title="`變更主治醫師：${admission?.patientName ?? ''}`" size="sm">
     <div v-if="admission" class="space-y-3 text-sm">
       <p class="rounded-md bg-slate-50 px-3 py-2 text-slate-700">
         目前：{{ admission.deptName }}・<b>{{ admission.doctorName }}</b>
@@ -53,7 +53,7 @@ async function submit() {
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
-      <UButton :loading="save.pending.value" @click="submit">確認變更</UButton>
+      <UButton :loading="save.pending.value" type="submit">確認變更</UButton>
     </template>
   </UDialog>
 </template>

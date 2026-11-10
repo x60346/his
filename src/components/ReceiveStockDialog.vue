@@ -33,7 +33,7 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" :title="`進貨：${drugName ?? ''}`" size="sm">
+  <UDialog v-model="open" @submit="submit" :title="`進貨：${drugName ?? ''}`" size="sm">
     <div class="space-y-3 text-sm">
       <p v-if="usable !== undefined" class="text-slate-600">目前可用庫存 <b class="tabular text-slate-800">{{ usable }}</b> {{ unit }}</p>
       <UInput v-model="form.qty" label="進貨數量" type="number" min="1" required :hint="unit" :error="save.fieldErrors.value.qty" />
@@ -45,7 +45,7 @@ async function submit() {
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
-      <UButton :loading="save.pending.value" @click="submit">確認進貨</UButton>
+      <UButton :loading="save.pending.value" type="submit">確認進貨</UButton>
     </template>
   </UDialog>
 </template>

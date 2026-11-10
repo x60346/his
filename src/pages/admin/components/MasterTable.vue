@@ -79,7 +79,7 @@ async function submit() {
       <template #cell-__act="{ row }"><UButton size="sm" variant="ghost" :icon="Pencil" class="whitespace-nowrap" @click="edit(row)">編輯</UButton></template>
     </UTable>
 
-    <UDialog v-model="open" :title="`${isNew ? '新增' : '編輯'}${title}`" size="lg">
+    <UDialog v-model="open" @submit="submit" :title="`${isNew ? '新增' : '編輯'}${title}`" size="lg">
       <div class="grid grid-cols-2 gap-3">
         <template v-for="f in fields" :key="f.key">
           <div v-if="f.type === 'checkbox'" :class="f.wide && 'col-span-2'">
@@ -113,7 +113,7 @@ async function submit() {
       </div>
       <template #footer>
         <UButton variant="secondary" @click="open = false">取消</UButton>
-        <UButton :loading="action.pending.value" @click="submit">儲存</UButton>
+        <UButton :loading="action.pending.value" type="submit">儲存</UButton>
       </template>
     </UDialog>
   </div>

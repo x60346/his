@@ -14,6 +14,7 @@ defineProps<{ tabs: TabItem[] }>()
     <button
       v-for="t in tabs"
       :key="t.key"
+      type="button"
       role="tab"
       :aria-selected="model === t.key"
       :class="[
