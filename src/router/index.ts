@@ -19,6 +19,9 @@ router.beforeEach((to) => {
   return true
 })
 
-router.afterEach((to) => {
+// 只有真的抵達頁面才改標題：導航被取消（例如病歷未儲存時按「取消」離開）或被轉址（未登入被導到登入頁）時，
+// afterEach 一樣會執行，若不檢查 failure，標題會變成「沒去成的那一頁」
+router.afterEach((to, _from, failure) => {
+  if (failure) return
   document.title = to.meta.title ? `${to.meta.title}｜HIS 展示系統` : 'HIS 展示系統'
 })
