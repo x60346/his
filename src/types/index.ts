@@ -365,6 +365,11 @@ export interface Admission {
   dischargeSummary?: string
   /** 出院轉歸：治癒出院、轉院、自動出院… */
   dischargeType?: string
+  /**
+   * 主治醫師變更紀錄（只增不改）：醫師離職、休假交班時由住院中心變更。
+   * 選用欄位：舊資料沒有它表示從未變更。已開立的醫囑不受影響——醫囑記的是「當時誰開的」。
+   */
+  attendingHistory?: { from: string; to: string; at: string; by: string; reason: string }[]
 }
 
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'

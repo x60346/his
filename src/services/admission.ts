@@ -4,7 +4,7 @@
 import type { Admission, AdmissionStatus, Bed, BedStatus } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { admissionView, find, patientBrief, type AdmissionView, type PatientBrief } from './views'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
@@ -115,6 +115,41 @@ export function transferBed(admissionId: string, bedId: string): Promise<Admissi
     const bed = takeBed(bedId, a.id)
     a.bedId = bed.id
     audit('轉床', `${a.admitNo} ${from} → ${bed.bedNo}`)
+    return admissionView(a)
+  })
+}
+
+/** 可以接手的主治醫師：同一科、在職、不是目前的主治（跨科是「轉科」，牽涉科別與床位，不在此處理） */
+function attendingCandidates(a: Admission) {
+  return db.doctors.filter((d) => d.active && d.deptId === a.deptId && d.id !== a.doctorId)
+}
+
+export function listAttendingCandidates(admissionId: string): Promise<{ id: string; name: string; title: string }[]> {
+  return query(() => attendingCandidates(must(find.admission(admissionId), '住院紀錄')).map((d) => ({ id: d.id, name: d.name, title: d.title })))
+}
+
+/**
+ * 變更主治醫師：住院中或預約住院的病人改由同科另一位醫師負責（醫師離職、休假、交班）。
+ * 由住院中心（掛號批價、護理師）或醫師執行；管理員不執行臨床操作——停用醫師前，請住院中心先變更。
+ * 變更紀錄只增不改（attendingHistory）；已開立的醫囑、病程紀錄不改，它們記的是當時的開立者。
+ */
+export function changeAttending(admissionId: string, doctorId: string, reason: string): Promise<AdmissionView> {
+  return mutate(() => {
+    const u = requireUser('clerk', 'nurse', 'doctor')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    if (a.status !== 'admitted' && a.status !== 'reserved') fail('只有住院中或預約住院的病人可以變更主治醫師', 'CONFLICT')
+    const to = find.doctor(doctorId)
+    const v = fieldErrors()
+    if (!to) v.add('doctorId', '請選擇新的主治醫師')
+    if (!reason?.trim()) v.add('reason', '請填寫變更原因')
+    v.done()
+    if (to!.id === a.doctorId) failField('doctorId', '與目前的主治醫師相同')
+    if (!to!.active) failField('doctorId', `${to!.name} 已停用`)
+    if (to!.deptId !== a.deptId) failField('doctorId', `${to!.name} 不是${find.dept(a.deptId)?.name ?? '同一科'}的醫師（跨科請辦理轉科）`)
+    const from = a.doctorId
+    a.attendingHistory = [...(a.attendingHistory ?? []), { from, to: to!.id, at: now(), by: u.id, reason: reason.trim() }]
+    a.doctorId = to!.id
+    audit('變更主治醫師', `${a.admitNo || '（預約）'} ${find.patient(a.patientId)?.name}：${find.doctor(from)?.name} → ${to!.name}（${reason.trim()}）`)
     return admissionView(a)
   })
 }

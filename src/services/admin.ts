@@ -184,7 +184,7 @@ export function saveDoctor(input: Omit<Doctor, 'id'> & { id?: string }): Promise
       const im = impactOf(old.id)
       const todo = [
         im.futureVisits && `${im.futureVisits} 筆未看診的掛號（請先通知病人改掛或退掛）`,
-        im.admittedPatients && `${im.admittedPatients} 位住院或預約住院病人（請先轉給其他主治醫師）`,
+        im.admittedPatients && `${im.admittedPatients} 位住院或預約住院病人（請住院中心「變更主治醫師」）`,
         im.weeklySlots && `${im.weeklySlots} 個每週診次（請先調整排班）`,
         im.activeAccount && `帳號 ${im.activeAccount} 仍為啟用（請先停用）`,
       ].filter(Boolean)

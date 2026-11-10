@@ -5,11 +5,12 @@
 //   checkin  報到：先選病人，再點一張可用的空床
 //   transfer 轉床：從住院資訊進入，再點一張可用的空床
 import { computed, ref } from 'vue'
-import { ArrowRightLeft, CalendarPlus, DoorOpen, LogOut, Sparkles, X } from 'lucide-vue-next'
+import { ArrowRightLeft, CalendarPlus, DoorOpen, LogOut, Sparkles, UserCog, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UQueryState, UTabs } from '@/components/ui'
 import BedCard from './components/BedCard.vue'
 import ReserveDialog from './components/ReserveDialog.vue'
 import DischargeDialog from './components/DischargeDialog.vue'
+import ChangeAttendingDialog from './components/ChangeAttendingDialog.vue'
 import { admissionApi, masterApi, type AdmissionView } from '@/services'
 import type { BedView } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
@@ -109,6 +110,10 @@ const dischargeOpen = ref(false)
 
 // ---------- 病床狀態、預約 ----------
 const setStatus = useAction(admissionApi.setBedStatus, { success: (b) => `${b.bedNo} 已改為${bedStatus[b.status].label}` })
+// 變更主治醫師：住院中（床位資訊）與預約住院（待報到清單）都可以
+const attendingTarget = ref<AdmissionView>()
+const attendingOpen = computed({ get: () => !!attendingTarget.value, set: (v) => !v && (attendingTarget.value = undefined) })
+
 const cancelReserve = useAction(admissionApi.cancelReservation, { success: '已取消住院預約' })
 async function onCancelReserve(a: AdmissionView) {
   if (await ui.confirm({ title: '取消住院預約', message: `確定取消 ${a.patientName} 的住院預約？`, okText: '取消預約', cancelText: '保留預約', danger: true })) cancelReserve.run(a.id)
@@ -181,6 +186,7 @@ const reserveOpen = ref(false)
             </dl>
             <div class="mt-4 flex gap-2">
               <UButton size="sm" variant="secondary" :icon="ArrowRightLeft" @click="startTransfer">轉床</UButton>
+              <UButton size="sm" variant="secondary" :icon="UserCog" @click="attendingTarget = occupied">變更主治醫師</UButton>
               <UButton size="sm" variant="danger" :icon="LogOut" @click="dischargeOpen = true">辦理出院</UButton>
             </div>
           </UQueryState>
@@ -213,6 +219,7 @@ const reserveOpen = ref(false)
               <div class="text-xs text-slate-500">{{ a.deptName }}・{{ a.doctorName }}・希望 {{ a.preferBedClass }}</div>
               <div class="mt-2 flex gap-2">
                 <UButton size="sm" :icon="DoorOpen" :disabled="mode === 'checkin' && target?.id === a.id" @click="startCheckIn(a)">報到配床</UButton>
+                <UButton size="sm" variant="ghost" @click="attendingTarget = a">變更主治</UButton>
                 <UButton size="sm" variant="ghost" @click="onCancelReserve(a)">取消預約</UButton>
               </div>
             </li>
@@ -237,5 +244,6 @@ const reserveOpen = ref(false)
 
     <ReserveDialog v-model="reserveOpen" />
     <DischargeDialog v-model="dischargeOpen" :admission="occupied" />
+    <ChangeAttendingDialog v-model="attendingOpen" :admission="attendingTarget" />
   </div>
 </template>
