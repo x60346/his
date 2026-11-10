@@ -18,7 +18,8 @@ const timing = (freq: string, route: string) => {
 
 <template>
   <div class="print-area grid grid-cols-1 gap-3 sm:grid-cols-2">
-    <article v-for="it in d.items" :key="it.drugId" class="break-inside-avoid rounded-md border-2 border-slate-800 p-3 text-sm text-slate-900">
+    <!-- 列印時每張固定 1/4 A4（2×2）：藥袋要裁切，大小不能隨張數改變；break-inside-avoid 讓一張不會被切到兩頁 -->
+    <article v-for="it in d.items" :key="it.drugId" class="break-inside-avoid rounded-md border-2 border-slate-800 p-3 text-sm text-slate-900 print:h-[134mm]">
       <header class="mb-2 flex items-baseline justify-between border-b border-slate-300 pb-1">
         <span class="font-bold">HIS 展示醫院 藥袋</span>
         <span class="tabular text-xs">領藥號 {{ d.pickupNo }}</span>

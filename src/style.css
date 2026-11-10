@@ -28,18 +28,41 @@
   }
 }
 
-/* 列印：只印 .print-area 的內容（收據、藥袋） */
+/*
+ * 列印：只印 .print-area 的內容（收據、藥袋、日結報表）。
+ *
+ * 以前的做法是「全部 visibility: hidden，只顯示列印區塊，再用 absolute + inset: 0 貼滿頁面」：
+ * 隱藏的元素仍佔版面，列印區塊又被鎖成一頁高，放在對話框（fixed）裡的藥袋超過一頁就被截掉，
+ * 收據外框也被拉到頁尾。現在改成：
+ *   1. 與列印區塊無關的元素 display: none——不佔空間；
+ *   2. 列印區塊的上層（版面、捲動區、對話框遮罩）改回一般排版——fixed、overflow、限高都會把內容截在一頁內；
+ *   3. 列印區塊回到正常文件流，內容多就自然分頁。
+ * :has() 讓 CSS 能選到「含有列印區塊的上層元素」，主流瀏覽器 2023 年起都支援。
+ */
 @media print {
-  body * {
-    visibility: hidden;
+  @page {
+    size: A4;
+    margin: 10mm;
   }
-  .print-area,
-  .print-area * {
-    visibility: visible;
+  body *:not(:has(.print-area)):not(.print-area):not(.print-area *) {
+    display: none !important;
+  }
+  *:has(.print-area) {
+    display: block !important;
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: none !important;
   }
   .print-area {
-    position: absolute;
-    inset: 0;
+    position: relative; /* 收據的「作廢」浮水印以它為定位基準 */
   }
   .no-print {
     display: none !important;
