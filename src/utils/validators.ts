@@ -31,3 +31,25 @@ export function isValidIdNo(idNo: string): boolean {
 export function isValidPhone(phone: string): boolean {
   return /^0\d{1,3}-?\d{3,4}-?\d{3,4}$/.test(phone.trim())
 }
+
+// ---------- 病人基本資料（建檔表單即時提示與服務層共用） ----------
+export const NAME_MAX = 30
+/** 出生日期下限：早於此日期幾乎一定是輸入錯誤（例：1800 年） */
+export const BIRTH_MIN = '1900-01-01'
+
+/** 姓名檢查：有問題回傳訊息，沒問題回傳 null */
+export function checkName(name: string): string | null {
+  const n = name.trim()
+  if (!n) return '姓名為必填'
+  if (n.length > NAME_MAX) return `姓名最多 ${NAME_MAX} 個字（目前 ${n.length} 字）`
+  return null
+}
+
+/** 出生日期檢查：today 由呼叫端傳入（純函式不自己讀時間） */
+export function checkBirthDate(date: string, today: string): string | null {
+  if (!date) return '出生日期為必填'
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '出生日期格式錯誤'
+  if (date < BIRTH_MIN) return `出生日期不可早於 ${BIRTH_MIN}`
+  if (date > today) return '出生日期不可晚於今天'
+  return null
+}

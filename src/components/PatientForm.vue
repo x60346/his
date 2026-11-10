@@ -8,7 +8,7 @@ import { UCheckbox, UInput, USelect, UTextarea } from '@/components/ui'
 import { masterApi } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import { useQuery } from '@/composables/useService'
-import { isValidIdNo, isValidPhone } from '@/utils/validators'
+import { checkBirthDate, checkName, isValidIdNo, isValidPhone } from '@/utils/validators'
 import { today } from '@/utils/date'
 
 const form = defineModel<PatientInput>({ required: true })
@@ -27,10 +27,12 @@ const { familyHistoryOptions, allergyOptions } = masterApi.staticCodes
 const localErrors = computed(() => {
   const f = form.value
   const e: Record<string, string> = {}
-  if (props.submitted && !f.name.trim()) e.name = '姓名為必填'
+  // 必填等送出後才提示；超過長度一打就提示（與服務層共用 checkName / checkBirthDate）
+  const nameProblem = checkName(f.name)
+  if (nameProblem && (props.submitted || f.name.trim())) e.name = nameProblem
   if (f.idNo ? !isValidIdNo(f.idNo) : props.submitted) e.idNo = f.idNo ? '格式或檢查碼錯誤（例：A123456789）' : '身分證字號為必填'
-  if (props.submitted && !f.birthDate) e.birthDate = '出生日期為必填'
-  if (f.birthDate && f.birthDate > today()) e.birthDate = '不可晚於今天'
+  const birthProblem = checkBirthDate(f.birthDate, today())
+  if (birthProblem && (props.submitted || f.birthDate)) e.birthDate = birthProblem
   if (f.phone && !isValidPhone(f.phone)) e.phone = '格式錯誤（例：0912-345-678）'
   if (f.emergencyPhone && !isValidPhone(f.emergencyPhone)) e.emergencyPhone = '格式錯誤'
   return e

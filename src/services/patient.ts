@@ -2,7 +2,7 @@
 import type { Patient } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, toDateStr } from '@/utils/date'
-import { isValidIdNo, isValidPhone, makeIdNo } from '@/utils/validators'
+import { checkBirthDate, checkName, isValidIdNo, isValidPhone, makeIdNo } from '@/utils/validators'
 import { audit, failField, must, mutate, query, requireUser } from './http'
 import { contains, find } from './views'
 
@@ -21,9 +21,11 @@ export const getPatient = (id: string): Promise<Patient> => query(() => must(fin
 export type PatientInput = Omit<Patient, 'id' | 'chartNo' | 'createdAt'>
 
 function validate(p: PatientInput, selfId?: string): void {
-  if (!p.name.trim()) failField('name', '姓名為必填')
-  if (!p.birthDate) failField('birthDate', '出生日期為必填')
-  if (p.birthDate > toDateStr(new Date())) failField('birthDate', '出生日期不可晚於今天')
+  // 與建檔表單的即時提示共用同一套檢查（validators.ts）
+  const nameProblem = checkName(p.name)
+  if (nameProblem) failField('name', nameProblem)
+  const birthProblem = checkBirthDate(p.birthDate, toDateStr(new Date()))
+  if (birthProblem) failField('birthDate', birthProblem)
   if (!isValidIdNo(p.idNo)) failField('idNo', '身分證字號格式或檢查碼錯誤')
   if (p.phone && !isValidPhone(p.phone)) failField('phone', '電話格式錯誤')
   if (p.emergencyPhone && !isValidPhone(p.emergencyPhone)) failField('emergencyPhone', '電話格式錯誤')
@@ -39,6 +41,7 @@ export function createPatient(input: PatientInput): Promise<Patient> {
     validate(input)
     const p: Patient = {
       ...input,
+      name: input.name.trim(),
       idNo: input.idNo.toUpperCase(),
       id: newId('PT'),
       chartNo: String(nextCounter('chartNo', 100001)),
@@ -55,7 +58,7 @@ export function updatePatient(id: string, input: PatientInput): Promise<Patient>
     requireUser('clerk', 'doctor', 'nurse')
     const p = must(find.patient(id), '病患')
     validate(input, id)
-    Object.assign(p, input, { idNo: input.idNo.toUpperCase() })
+    Object.assign(p, input, { name: input.name.trim(), idNo: input.idNo.toUpperCase() })
     audit('修改病患資料', `${p.chartNo} ${p.name}`)
     return p
   })
