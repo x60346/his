@@ -1,0 +1,16 @@
+# 換行符號由 repo 決定，不依各人電腦的 core.autocrlf（此檔優先於 autocrlf）
+* text=auto eol=lf
+
+# Windows 專用腳本必須是 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二進位檔不做任何轉換（目前沒有，先標好，免得日後加入的圖片被當成文字轉換而損毀）
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
