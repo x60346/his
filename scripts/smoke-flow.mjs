@@ -514,6 +514,31 @@ try {
     await expectError(() => M.saveDrug({ ...usedDrug, active: false }), `停用住院醫囑使用中的 ${usedDrug.name}`)
     const freeDrug = dbm.db.drugs.find((d) => d.active && d.id !== 'M001' && !dbm.db.ipdOrders.some((o) => o.drugId === d.id && o.status === 'active'))
     await M.saveDrug({ ...freeDrug, active: false })
+
+    // I1：同名藥要確認、價格必須大於 0
+    {
+      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, active: true }
+      const m001 = dbm.db.drugs.find((d) => d.id === 'M001')
+      await expectError(() => M.saveDrug({ ...base, name: '  acetaminophen   500MG ' }), '新增與 M001 同名的藥（大小寫、空白不同）未確認')
+      await expectError(() => M.saveDrug({ ...base, name: freeDrug.name }), `新增與停用中的 ${freeDrug.id} 同名的藥未確認`)
+      const dup = await M.saveDrug({ ...base, name: m001.name, allowSameName: true })
+      ok(dup.id !== 'M001' && !('allowSameName' in dup), `確認後可新增同名藥 ${dup.id}（確認旗標不會存進主檔）`)
+      await M.saveDrug({ ...m001, spec: '500 mg/tab（改規格）' })
+      ok(true, 'M001 已有同名的 M041，改 M001 的規格（沒改藥名）不需確認')
+      const other = dbm.db.drugs.find((d) => d.id === 'M002')
+      await expectError(() => M.saveDrug({ ...other, name: m001.name }), '把 M002 改名成與 M001 同名未確認')
+      await M.saveDrug({ ...other, safetyStock: other.safetyStock + 1 })
+      ok(dbm.db.drugs.find((d) => d.id === 'M002').safetyStock === other.safetyStock + 1, '修改其他欄位、保留自己原本的藥名，不需確認')
+      const spaced = await M.saveDrug({ ...base, name: '  Losartan   50mg  Tabs ' })
+      ok(spaced.name === 'Losartan 50mg Tabs', `藥名去頭尾空白、連續空白存成一個，其他字元不變（「${spaced.name}」）`)
+      await M.saveDrug({ ...spaced, active: false })
+      await expectError(() => M.saveDrug({ ...base, name: '新藥 A', nhiPrice: 0 }), '健保價 0')
+      await expectError(() => M.saveDrug({ ...base, name: '新藥 A', selfPrice: 0 }), '自費價 0')
+      await expectError(() => M.saveDrug({ ...base, name: '新藥 A', nhiPrice: undefined }), '健保價空白')
+      await M.saveDrug({ ...dup, active: false }) // 停用測試用的同名藥：沒改藥名，不需再確認
+      ok(dbm.db.drugs.find((d) => d.id === dup.id).active === false, '已確認過的同名藥，之後停用不必再確認')
+      await M.saveDrug({ ...dbm.db.drugs.find((d) => d.id === 'M001'), spec: m001.spec })
+    }
     await expectError(() => M.saveProcedure({ ...dbm.db.procedures.find((p) => p.id === 'P001'), active: false }), '停用一般門診診察費')
     const xray = dbm.db.procedures.find((p) => p.id === 'P013')
     await M.saveProcedure({ ...xray, active: false })

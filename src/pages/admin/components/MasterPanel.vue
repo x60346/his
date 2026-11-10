@@ -4,8 +4,9 @@
 import { computed, ref } from 'vue'
 import { UTabs, type Column } from '@/components/ui'
 import MasterTable, { type FieldDef } from './MasterTable.vue'
-import { masterApi, preventApi } from '@/services'
-import { useQuery } from '@/composables/useService'
+import { masterApi, preventApi, ServiceError } from '@/services'
+import { useUi } from '@/stores/ui'
+import { Cancelled, useQuery } from '@/composables/useService'
 import type { Drug, IcdCode, PreventItem, Procedure } from '@/types'
 
 const tab = ref('drugs')
@@ -16,6 +17,29 @@ const { data: items, loading: l4 } = useQuery(() => preventApi.listPreventItems(
 const { data: freqs } = useQuery(() => masterApi.listFrequencies())
 
 // ---------- 藥品 ----------
+const ui = useUi()
+/**
+ * 儲存藥品：先照常送出；服務層若只因「已有同名藥品」擋下（其他欄位都已通過），才問使用者，確認後帶旗標重送。
+ * 這樣確認框只在最後出現一次——若先問，使用者確認完才看到價格沒填，改好再送又被問一次。
+ */
+async function saveDrug(f: Record<string, any>) {
+  try {
+    return await masterApi.saveDrug(f as never)
+  } catch (e) {
+    if (!(e instanceof ServiceError && e.code === 'CONFLICT' && e.field === 'name')) throw e
+    const ok = await ui.confirm({
+      title: '已有同名藥品',
+      message: `${e.message}
+
+醫師開藥時只看得到藥名，同名的藥會分不出來。確定仍要儲存？`,
+      okText: '確定儲存',
+      danger: true,
+    })
+    if (!ok) throw new Cancelled()
+    return masterApi.saveDrug({ ...f, allowSameName: true } as never)
+  }
+}
+
 const drugColumns: Column<Drug>[] = [
   { key: 'id', label: '代碼', width: '5rem' },
   { key: 'name', label: '藥名' },
@@ -32,8 +56,8 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'category', label: '劑型', type: 'select', required: true, options: ['口服', '外用', '注射', '吸入', '眼用'] },
   { key: 'unit', label: '調劑單位', required: true, hint: '藥局發多少：TAB、BTL、PEN…' },
   { key: 'doseUnit', label: '給藥單位（不同時才填）', hint: '例：Insulin 每次 10 U，但調劑 1 PEN' },
-  { key: 'nhiPrice', label: '健保價（點）', type: 'number' },
-  { key: 'selfPrice', label: '自費價（元）', type: 'number' },
+  { key: 'nhiPrice', label: '健保價（點）', type: 'number', required: true },
+  { key: 'selfPrice', label: '自費價（元）', type: 'number', required: true },
   { key: 'safetyStock', label: '安全庫存', type: 'number', hint: '庫存請由「藥品庫存」進貨或盤點調整' },
   { key: 'defaultDose', label: '預設劑量', type: 'number' },
   { key: 'defaultFreq', label: '預設頻率', type: 'select', options: (freqs.value ?? []).map((f) => ({ label: `${f.code} ${f.label}`, value: f.code })) },
@@ -41,7 +65,8 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
-const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 0, selfPrice: 0, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, active: true })
+// 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
+const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, active: true })
 
 // ---------- 醫令 ----------
 const procColumns: Column<Procedure>[] = [
@@ -111,7 +136,7 @@ const tabs = computed(() => [
       :row-key="(d) => d.id"
       :search-keys="['id', 'name', 'generic', 'nhiCode']"
       :blank="blankDrug"
-      :save="(f) => masterApi.saveDrug(f as never)"
+      :save="saveDrug"
       note="庫存不在這裡修改：請到「藥品庫存」以進貨、盤點的方式調整，每一筆增減才會留下紀錄。"
     >
       <template #cell-name="{ row }">

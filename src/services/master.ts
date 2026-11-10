@@ -5,6 +5,7 @@ import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
+import { describeDrugs, needsSameNameCheck, sameNameDrugs } from './drug-rules'
 
 // ---------- 唯讀代碼（不會在系統中修改） ----------
 export const staticCodes = {
@@ -81,25 +82,34 @@ function nextCode(prefix: string, existing: string[], width: number): string {
  *   - 停用前檢查「還在用它的」：例如仍有執行中的住院醫囑，就不能停用該藥
  *   - 停用後不能再開立（服務層 usable.* 把關），但歷史紀錄照常顯示
  */
-export type DrugInput = Omit<Drug, 'id' | 'stock'> & { id?: string; stock?: number }
+export type DrugInput = Omit<Drug, 'id' | 'stock'> & {
+  id?: string
+  stock?: number
+  /** 已有同名藥品時，使用者已確認仍要儲存（見 drug-rules.ts） */
+  allowSameName?: boolean
+}
 
 export function saveDrug(input: DrugInput): Promise<Drug> {
   return mutate(() => {
     requireUser('admin', 'pharmacist')
     const old = input.id ? db.drugs.find((x) => x.id === input.id) : undefined
     if (input.id && !old) fail('找不到藥品', 'NOT_FOUND')
-    const name = input.name.trim()
+    const name = input.name.trim().replace(/\s+/g, ' ') // 連續空白存成一個，避免「看起來一樣」的兩種寫法
     const nhiCode = input.nhiCode.trim().toUpperCase()
     if (!name) failField('name', '請輸入藥名')
     if (!input.unit.trim()) failField('unit', '請輸入調劑單位')
     if (!['口服', '外用', '注射', '吸入', '眼用'].includes(input.category)) failField('category', '請選擇劑型')
     if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
-    if (!(input.nhiPrice >= 0)) failField('nhiPrice', '健保價不可為負數')
-    if (!(input.selfPrice >= 0)) failField('selfPrice', '自費價不可為負數')
+    // 價格必須大於 0：批價會把 0 元的健保藥照 0 元申報、病人也付 0 元（醫令有「0 點改收自費」，藥品沒有）
+    if (!(input.nhiPrice > 0)) failField('nhiPrice', '健保價需大於 0')
+    if (!(input.selfPrice > 0)) failField('selfPrice', '自費價需大於 0')
     if (!Number.isInteger(input.safetyStock) || input.safetyStock < 0) failField('safetyStock', '安全庫存需為 0 以上的整數')
     if (!(input.defaultDose > 0)) failField('defaultDose', '預設劑量需大於 0')
     if (!db.frequencies.some((f) => f.code === input.defaultFreq)) failField('defaultFreq', '請選擇預設頻率')
     if (!codes.routes.some((r) => r.code === input.defaultRoute)) failField('defaultRoute', '請選擇預設途徑')
+    // 同名：不直接擋（真實醫院同成分不同廠牌是常態），但要使用者明確確認——這裡醫師開藥只看得到藥名
+    const same = needsSameNameCheck(old?.name, name) ? sameNameDrugs(db.drugs, name, old?.id) : []
+    if (same.length && !input.allowSameName) failField('name', `已有同名藥品：${describeDrugs(same)}。若是停用中的同一種藥，請直接啟用那一筆`, 'CONFLICT')
     if (old?.active && !input.active) {
       const n = db.ipdOrders.filter((o) => o.drugId === old.id && o.status === 'active').length
       if (n) failField('active', `仍有 ${n} 筆執行中的住院醫囑使用此藥，請先請醫師停止或改藥`, 'CONFLICT')

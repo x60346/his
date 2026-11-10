@@ -64,6 +64,17 @@ export function useQuery<T>(fn: () => Promise<T>, deps: WatchSource[] = [], opts
   return { data: data as Ref<T | undefined>, loading, error, reload }
 }
 
+/**
+ * 使用者在確認框按了「取消」：動作中止，不顯示錯誤、也不顯示成功。
+ * 用在「先送出、服務層回報需要確認、問過使用者再重送」的流程（例：藥品同名）。
+ */
+export class Cancelled extends Error {
+  constructor() {
+    super('已取消')
+    this.name = 'Cancelled'
+  }
+}
+
 export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>, opts: { success?: string | ((r: R) => string) } = {}) {
   const ui = useUi()
   const pending = ref(false)
@@ -80,6 +91,7 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
       if (opts.success) ui.toast.success(typeof opts.success === 'function' ? opts.success(r) : opts.success)
       return r
     } catch (e) {
+      if (e instanceof Cancelled) return undefined
       if (isUnauthorized(e) && (await handleUnauthorized())) return undefined
       if (e instanceof ServiceError && e.field) {
         // 欄位錯誤顯示在欄位下方；仍給一個簡短提示，避免欄位在畫面外時使用者沒注意到
