@@ -123,6 +123,9 @@ try {
   const before10 = dbm.db.drugs.find((d) => d.id === recvDrug).stock
   await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: '', expiry: '2030-01-01' }), '進貨未填批號')
   await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '2020-01-01' }), '進貨效期已過')
+  // G3：效期不再預填，留白送出要擋；今天到期也不能進貨
+  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '' }), '進貨效期空白')
+  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: T }), '進貨效期是今天')
   await api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 't1', expiry: '2030-01-01' })
   await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 5, lotNo: 'T1', expiry: '2031-01-01' }), '同批號不同效期')
   const lotT1 = dbm.db.drugLots.find((l) => l.drugId === recvDrug && l.lotNo === 'T1')
