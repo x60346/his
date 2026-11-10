@@ -101,9 +101,15 @@ export function checkPreventResult(
   opts: { allowPending: boolean },
 ): Record<string, string> {
   const allowed: string[] = opts.allowPending ? [...FINAL_RESULTS, '待報告'] : FINAL_RESULTS
-  if (!result || !allowed.includes(result)) return { result: '請選擇結果' }
-  if (result === '待報告') return {}
   const errors: Record<string, string> = {}
+  if (!result || !allowed.includes(result)) {
+    // 可選「待報告」時（新登錄），要不要填欄位取決於選哪個結果，先只標結果；
+    // 補登時每個結果都要填欄位，一次把結果和欄位都標出來（不用按兩次才看到第二個錯）
+    if (opts.allowPending) return { result: '請選擇結果' }
+    errors.result = '請選擇結果'
+  }
+  // 只有允許「待報告」時才免填欄位（補登時選待報告上面已標錯，不能在這裡把錯誤丟掉）
+  if (result === '待報告' && opts.allowPending) return {}
   for (const f of item.fields) {
     const v = String(data?.[f] ?? '').trim()
     const msg = v ? checkFieldFormat(f, v) : `請填寫${f}`

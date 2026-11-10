@@ -253,6 +253,20 @@ try {
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '正常', {}), '補登報告未填內容')
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '', { 報告: 'NILM' }), '補登報告沒選結果')
   await expectError(() => api.preventApi.fillReport(pendingRec.id, '待報告', { 報告: 'NILM' }), '補登報告選「待報告」')
+  // H4：補登時結果與欄位都空白 → 一次標出兩者；新登錄（可選待報告）結果空白時只標結果
+  try {
+    await api.preventApi.fillReport(pendingRec.id, '', {})
+    ok(false, '補登全空白應被擋下')
+  } catch (e) {
+    const keys = Object.keys(e.fields ?? {})
+    ok(keys.includes('result') && keys.includes('data:報告'), `補登全空白：一次標出 ${keys.join('、')}`)
+  }
+  {
+    const pi = dbm.db.preventItems.find((i) => i.code === pendingRec.itemCode)
+    const k = Object.keys(pr.checkPreventResult(pi, '', {}, { allowPending: true }))
+    ok(k.length === 1 && k[0] === 'result', '新登錄結果空白：只標結果（欄位要不要填取決於選哪個結果）')
+    ok(Object.keys(pr.checkPreventResult(pi, '待報告', {}, { allowPending: false })).join() === 'result,data:報告', '補登選「待報告」：結果與欄位都標出（錯誤不會被丟掉）')
+  }
   await api.preventApi.fillReport(pendingRec.id, '正常', { 報告: 'NILM' })
   {
     const log = dbm.db.auditLogs[0]
