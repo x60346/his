@@ -111,7 +111,7 @@ const dischargeOpen = ref(false)
 const setStatus = useAction(admissionApi.setBedStatus, { success: (b) => `${b.bedNo} 已改為${bedStatus[b.status].label}` })
 const cancelReserve = useAction(admissionApi.cancelReservation, { success: '已取消住院預約' })
 async function onCancelReserve(a: AdmissionView) {
-  if (await ui.confirm({ title: '取消住院預約', message: `確定取消 ${a.patientName} 的住院預約？`, okText: '取消預約', danger: true })) cancelReserve.run(a.id)
+  if (await ui.confirm({ title: '取消住院預約', message: `確定取消 ${a.patientName} 的住院預約？`, okText: '取消預約', cancelText: '保留預約', danger: true })) cancelReserve.run(a.id)
 }
 const reserveOpen = ref(false)
 </script>
@@ -139,7 +139,7 @@ const reserveOpen = ref(false)
           <template v-else>・目前 {{ target.bed?.bedNo }}</template>
           ，請點選一張空床
         </span>
-        <UButton class="ml-auto" size="sm" variant="ghost" :icon="X" @click="cancelMode">取消</UButton>
+        <UButton class="ml-auto" size="sm" variant="ghost" :icon="X" @click="cancelMode">結束選床</UButton>
       </div>
 
       <UQueryState :loading="bedsLoading" :ready="rooms.length > 0" empty-title="此病房沒有病床">
@@ -213,7 +213,7 @@ const reserveOpen = ref(false)
               <div class="text-xs text-slate-500">{{ a.deptName }}・{{ a.doctorName }}・希望 {{ a.preferBedClass }}</div>
               <div class="mt-2 flex gap-2">
                 <UButton size="sm" :icon="DoorOpen" :disabled="mode === 'checkin' && target?.id === a.id" @click="startCheckIn(a)">報到配床</UButton>
-                <UButton size="sm" variant="ghost" @click="onCancelReserve(a)">取消</UButton>
+                <UButton size="sm" variant="ghost" @click="onCancelReserve(a)">取消預約</UButton>
               </div>
             </li>
           </ul>
