@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { AlertTriangle, Eye, Hospital, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
 import { UButton } from '@/components/ui'
 import { appRoutes, menuGroups } from '@/router/routes'
-import { dbVersion, masterApi, storageMode } from '@/services'
+import { dbVersion, masterApi, storageIssue, storageMode } from '@/services'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
 import { roleLabel } from '@/utils/labels'
@@ -112,10 +112,11 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
         </div>
       </header>
 
-      <!-- 瀏覽器不允許儲存：一直顯示，不能讓人以為資料有存下來 -->
+      <!-- 存不進去：一直顯示，不能讓人以為資料有存下來。原因要說對——空間滿和瀏覽器不允許的處理方式完全不同 -->
       <div v-if="storageMode === 'memory'" class="no-print flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <AlertTriangle class="h-4 w-4 shrink-0" />
-        <span><b>資料不會被保存。</b>這個瀏覽器不允許網站儲存資料（例如隱私設定或部分無痕模式），目前以暫存模式運作，重新整理或關閉分頁後所有操作都會消失。</span>
+        <span v-if="storageIssue === 'full'"><b>資料不會被保存。</b>瀏覽器儲存空間已滿，目前以暫存模式運作：從現在起的操作，在重新整理或關閉分頁後都會消失。請管理員到「系統管理 → 展示資料」匯出備份後重置，或清除本網站的資料。</span>
+        <span v-else><b>資料不會被保存。</b>這個瀏覽器不允許網站儲存資料（例如隱私設定或部分無痕模式），目前以暫存模式運作，重新整理或關閉分頁後所有操作都會消失。</span>
       </div>
       <div v-if="seed.stale" class="no-print flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
         展示資料建立於 {{ seed.seededAt }}，今日的候診、住院給藥等情境可能已不連貫。

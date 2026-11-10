@@ -104,23 +104,42 @@ export let db: Database = load()
 export const dbVersion = ref(0)
 
 /**
+ * 寫入失敗的原因：
+ *   full    儲存空間已滿（QuotaExceededError）——清出空間或匯出後重置就能恢復
+ *   blocked 瀏覽器不允許網站儲存（隱私設定、部分無痕模式，通常是 SecurityError）
+ * 兩者處理方式完全不同，提示要說對原因：以前一律說「瀏覽器不允許儲存」，空間滿的使用者照著去改隱私設定也沒用。
+ */
+export type StorageIssue = 'full' | 'blocked'
+export function classifyStorageError(e: unknown): StorageIssue {
+  const err = e as { name?: string; code?: number } | null
+  // 各瀏覽器的名稱與代碼：Chrome／Safari 為 QuotaExceededError（code 22），舊版 Firefox 為 NS_ERROR_DOM_QUOTA_REACHED（code 1014）
+  return err && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED' || err.code === 22 || err.code === 1014) ? 'full' : 'blocked'
+}
+
+/**
  * 儲存模式：
  *   persistent 正常，資料存在瀏覽器
- *   memory     瀏覽器不允許儲存（隱私設定等），只能暫存在記憶體，重新整理就會消失——畫面會一直顯示警告
+ *   memory     存不進去，只能暫存在記憶體，重新整理就會消失——畫面會一直顯示警告（原因見 storageIssue）
  */
+export const storageIssue = ref<StorageIssue | null>(null)
 function probeStorage(): 'persistent' | 'memory' {
   try {
     localStorage.setItem('his-demo-probe', '1')
     localStorage.removeItem('his-demo-probe')
     return 'persistent'
-  } catch {
+  } catch (e) {
+    storageIssue.value = classifyStorageError(e)
     return 'memory'
   }
 }
 export const storageMode = ref(probeStorage())
 
-/** 可以儲存、但這次寫入失敗（通常是儲存空間已滿） */
-export class StorageWriteError extends Error {}
+/** 可以儲存、但這次寫入失敗（reason：空間已滿或瀏覽器不允許） */
+export class StorageWriteError extends Error {
+  constructor(public reason: StorageIssue) {
+    super(reason === 'full' ? '瀏覽器儲存空間已滿，資料無法儲存' : '瀏覽器不允許儲存資料')
+  }
+}
 
 /**
  * 存檔。寫入失敗時丟出 StorageWriteError，由交易（mutate）回滾並告訴使用者「這次沒有完成」。
@@ -130,8 +149,8 @@ export function commit(): void {
   if (storageMode.value === 'persistent') {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(db))
-    } catch {
-      throw new StorageWriteError('瀏覽器儲存空間已滿，資料無法儲存')
+    } catch (e) {
+      throw new StorageWriteError(classifyStorageError(e))
     }
   }
   dbVersion.value++
@@ -168,8 +187,9 @@ export function newId(prefix: string): string {
 // 第一次載入（含重建）時立即寫入，確保重新整理後資料一致；這時寫不進去就改用暫存模式（畫面會顯示警告）
 try {
   commit()
-} catch {
+} catch (e) {
   storageMode.value = 'memory'
+  storageIssue.value = e instanceof StorageWriteError ? e.reason : classifyStorageError(e)
   dbVersion.value++
 }
 

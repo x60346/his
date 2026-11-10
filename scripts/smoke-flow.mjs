@@ -656,12 +656,22 @@ try {
     await as('clerk01')
     const savedMode = dbm.storageMode.value
     const savedLS = globalThis.localStorage
-    globalThis.localStorage = { setItem() { throw new Error('QuotaExceededError') }, getItem() { return null }, removeItem() {} }
+    // 瀏覽器丟的是 DOMException，原因在 name（不是 message）——模擬要和真實一致，否則判斷原因的程式測不到
+    const failWith = (name) => ({ setItem() { throw new DOMException('模擬寫入失敗', name) }, getItem() { return null }, removeItem() {} })
+    globalThis.localStorage = failWith('QuotaExceededError')
     dbm.storageMode.value = 'persistent'
     const target = dbm.db.patients[2]
     const before = target.phone
     await expectError(() => api.patientApi.updatePatient(target.id, { ...target, phone: '0900-000-000' }), '儲存空間已滿時修改病人資料')
     ok(dbm.db.patients.find((p) => p.id === target.id).phone === before, '存檔失敗時交易回滾，記憶體中的資料也沒有被改')
+    // K1：原因要說對
+    const msgFor = async (name) => {
+      globalThis.localStorage = failWith(name)
+      try { await api.patientApi.updatePatient(target.id, { ...target, phone: '0900-000-001' }) } catch (e) { return e.message }
+    }
+    ok(/空間已滿/.test(await msgFor('QuotaExceededError')), '空間已滿（QuotaExceededError）→ 提示「儲存空間已滿」')
+    ok(/不允許/.test(await msgFor('SecurityError')) && !/空間已滿/.test(await msgFor('SecurityError')), '瀏覽器不允許（SecurityError）→ 提示「不允許儲存」，不會說成空間已滿')
+    ok(dbm.classifyStorageError(new DOMException('', 'NS_ERROR_DOM_QUOTA_REACHED')) === 'full' && dbm.classifyStorageError({ name: 'X', code: 22 }) === 'full', '舊版 Firefox 的名稱、代碼 22 也判斷為空間已滿')
     globalThis.localStorage = savedLS
     dbm.storageMode.value = savedMode
   }

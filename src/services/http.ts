@@ -113,7 +113,12 @@ export async function mutate<T>(fn: () => T): Promise<T> {
     replaceDatabase(snapshot)
     // 存檔失敗＝交易失敗：資料沒存下來，就不能讓使用者以為完成了
     if (e instanceof StorageWriteError) {
-      throw new ServiceError('瀏覽器儲存空間已滿，這次操作沒有完成。請通知系統管理員（系統管理 → 展示資料：匯出備份後重置）。', 'CONFLICT')
+      throw new ServiceError(
+        e.reason === 'full'
+          ? '瀏覽器儲存空間已滿，這次操作沒有完成。請通知系統管理員（系統管理 → 展示資料：匯出備份後重置）。'
+          : '瀏覽器不允許儲存資料，這次操作沒有完成。請改用一般視窗，或允許本網站儲存資料。',
+        'CONFLICT',
+      )
     }
     throw e
   }
