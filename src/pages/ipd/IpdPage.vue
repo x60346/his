@@ -51,7 +51,10 @@ const orderOpen = ref(false)
 const stop = useAction(ipdApi.stopOrder, { success: (o) => `已停止：${o.content}` })
 async function onStop(o: OrderView) {
   const extra = o.category === 'medication' && o.type === 'long' ? '\n尚未執行的給藥排程會一併刪除。' : ''
-  if (await ui.confirm({ title: '停止醫囑', message: `確定停止「${o.content}」？${extra}`, okText: '停止', danger: true })) stop.run(o.id)
+  // 同一種藥可能有兩筆醫囑：帶上劑量、頻率、途徑與開立時間，才分得出要停的是哪一筆
+  const detail = o.category === 'medication' ? `\n每次 ${o.dose} ${o.unit}・${o.freq}・${o.route}` : ''
+  const message = `確定停止「${o.content}」？${detail}\n（${o.startAt.slice(5)} 開立，${o.doctorName}）${extra}`
+  if (await ui.confirm({ title: '停止醫囑', message, okText: '停止', danger: true })) stop.run(o.id)
 }
 
 // ---------- 最新生命徵象（護理站記錄，醫師參考） ----------
