@@ -11,6 +11,8 @@ export class ServiceError extends Error {
     public code: 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'FORBIDDEN' | 'UNAUTHORIZED' = 'BAD_REQUEST',
     /** 出錯的欄位名稱；有值時頁面會把訊息顯示在該欄位下方 */
     public field?: string,
+    /** 同時有多個欄位出錯時的完整清單（欄位 → 訊息），頁面一次全部標出，不必改一個送一次 */
+    public fields?: Record<string, string>,
   ) {
     super(message)
     this.name = 'ServiceError'
@@ -24,6 +26,16 @@ export function fail(message: string, code?: ServiceError['code'], field?: strin
 /** 欄位驗證失敗的簡寫 */
 export function failField(field: string, message: string, code: ServiceError['code'] = 'BAD_REQUEST'): never {
   throw new ServiceError(message, code, field)
+}
+
+/**
+ * 一次回報多個欄位錯誤：errors 為空就什麼都不做。
+ * 規則函式先把所有問題收集起來再丟出，使用者才不會「改一個、送出、再冒出下一個」。
+ */
+export function failFields(errors: Record<string, string>): void {
+  const keys = Object.keys(errors)
+  if (!keys.length) return
+  throw new ServiceError(errors[keys[0]], 'BAD_REQUEST', keys[0], errors)
 }
 
 /** 找不到就丟 NOT_FOUND，省去每個服務重複寫判斷 */

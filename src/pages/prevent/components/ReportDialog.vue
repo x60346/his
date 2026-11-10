@@ -10,10 +10,10 @@ import type { PreventItem } from '@/types'
 const open = defineModel<boolean>({ default: false })
 const props = defineProps<{ record?: PreventRecordView; item?: PreventItem }>()
 
-const form = reactive({ result: '正常' as string | number | undefined, data: {} as Record<string, string> })
+const form = reactive({ result: '' as string | number | undefined, data: {} as Record<string, string> })
 watch(open, (v) => {
   if (!v || !props.item) return
-  form.result = '正常'
+  form.result = '' // 補登後即定案，不替使用者先選「正常」
   form.data = Object.fromEntries(props.item.fields.map((f) => [f, '']))
 })
 
@@ -31,9 +31,9 @@ async function submit() {
         <span class="font-medium text-slate-800">{{ record.patientName }}</span>
         <span class="ml-2 text-slate-500">病歷號 {{ record.chartNo }}・{{ toRoc(record.date) }} 執行</span>
       </div>
-      <USelect v-model="form.result" label="報告結果" required :options="['正常', '異常需追蹤']" :error="save.fieldErrors.value.result" />
+      <USelect v-model="form.result" label="報告結果" required placeholder="請選擇" :options="['正常', '異常需追蹤']" :error="save.fieldErrors.value.result" />
       <div class="grid grid-cols-2 gap-3">
-        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" />
+        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" required :error="save.fieldErrors.value[`data:${f}`]" />
       </div>
       <p class="text-xs text-slate-500">報告補登後即定案，不可再修改。</p>
     </div>

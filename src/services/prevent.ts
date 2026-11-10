@@ -2,8 +2,8 @@
 import type { PreventItem, PreventRecord } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
-import { checkEligibility, type Eligibility } from './prevent-rules'
+import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
+import { checkEligibility, checkPreventResult, type Eligibility } from './prevent-rules'
 import { find, nameOf, patientBrief, visitView, type PatientBrief, type VisitView } from './views'
 
 /** 提供中的項目（停用的項目不再判斷資格、不能登錄；歷史紀錄照常顯示） */
@@ -107,9 +107,11 @@ export function addPreventRecord(input: PreventRecordInput): Promise<PreventReco
 
     // 執行醫師：醫師登錄就是自己；護理師登錄必須指定。不可以默默補一個預設醫師——那是捏造紀錄
     const doctorId = user.role === 'doctor' ? user.doctorId : input.doctorId
-    if (!doctorId || !find.doctor(doctorId)) failField('doctorId', '請選擇執行醫師')
-
-    if (!['正常', '異常需追蹤', '待報告'].includes(input.result)) failField('result', '請選擇結果')
+    // 執行醫師、結果、檢查內容一起檢查，所有問題一次標出
+    failFields({
+      ...(!doctorId || !find.doctor(doctorId) ? { doctorId: '請選擇執行醫師' } : {}),
+      ...checkPreventResult(item, input.result, input.data, { allowPending: true }),
+    })
     if (input.visitId) {
       const v = must(find.visit(input.visitId), '掛號紀錄')
       if (v.patientId !== p.id || v.date !== t) fail('掛號紀錄與病人或日期不符')
@@ -130,9 +132,10 @@ export function fillReport(recordId: string, result: PreventRecord['result'], da
     requireUser('doctor', 'nurse')
     const r = must(db.preventRecords.find((x) => x.id === recordId), '預防保健紀錄')
     if (r.result !== '待報告') fail('此紀錄已有結果，不可修改', 'CONFLICT')
-    if (result !== '正常' && result !== '異常需追蹤') failField('result', '請選擇報告結果')
+    // 和登錄同一條規則：定案的結果，欄位都要填（補登時不能再選「待報告」）
+    const item = must(db.preventItems.find((i) => i.code === r.itemCode), '預防保健項目')
+    failFields(checkPreventResult(item, result, data, { allowPending: false }))
     const filled = Object.fromEntries(Object.entries(data ?? {}).map(([k, v]) => [k, String(v).trim()]).filter(([, v]) => v))
-    if (!Object.keys(filled).length) fail('請填寫報告內容')
     r.result = result
     r.data = { ...r.data, ...filled }
     r.reportedAt = now()

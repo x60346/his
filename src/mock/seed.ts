@@ -461,14 +461,14 @@ export function buildSeed(): Database {
 
   // 近半年的服務紀錄（統計用）：每一筆都先經過 checkEligibility，展示資料不能出現「不符資格卻做了」的紀錄
   const sampleData: Record<string, () => [PreventRecord['result'], Record<string, string>]> = {
-    ADULT: () => (rand() < 0.3 ? ['異常需追蹤', { 血壓: `${int(140, 160)}/${int(88, 98)}`, 空腹血糖: String(int(100, 130)), BMI: '27.2' }] : ['正常', { 血壓: `${int(110, 135)}/${int(70, 85)}`, 空腹血糖: String(int(80, 99)), BMI: '22.8' }]),
+    ADULT: () => (rand() < 0.3 ? ['異常需追蹤', { 血壓: `${int(140, 160)}/${int(88, 98)}`, 空腹血糖: String(int(100, 130)), 總膽固醇: String(int(210, 260)), BMI: '27.2' }] : ['正常', { 血壓: `${int(110, 135)}/${int(70, 85)}`, 空腹血糖: String(int(80, 99)), 總膽固醇: String(int(150, 199)), BMI: '22.8' }]),
     CERVIX: () => ['正常', { 報告: 'NILM' }],
     BREAST: () => (rand() < 0.15 ? ['異常需追蹤', { 報告: 'BI-RADS 0，需進一步檢查' }] : ['正常', { 報告: 'BI-RADS 1' }]),
     COLON: () => (rand() < 0.1 ? ['異常需追蹤', { 糞便潛血: '陽性，轉介大腸鏡' }] : ['正常', { 糞便潛血: '陰性' }]),
     ORAL: () => ['正常', { 檢查結果: '未見異常' }],
     LUNG: () => (rand() < 0.2 ? ['異常需追蹤', { 報告: 'Lung-RADS 3' }] : ['正常', { 報告: 'Lung-RADS 1' }]),
     BCLIVER: () => ['正常', { HBsAg: '陰性', 'Anti-HCV': '陰性' }],
-    CHILD: () => ['正常', { 發展評估: '正常' }],
+    CHILD: () => ['正常', { 身高: `${int(85, 120)} cm`, 體重: `${int(12, 24)} kg`, 發展評估: '正常' }],
   }
   // 依時間先後產生：資格判斷只看「當時以前」的紀錄，若先產生較晚的紀錄，較早那筆就看不到它，間隔規則會被破壞
   const historyDays = Array.from({ length: 60 }, () => int(1, 180)).sort((a, b) => b - a)

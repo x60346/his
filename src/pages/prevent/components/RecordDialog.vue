@@ -17,11 +17,12 @@ const isDoctor = computed(() => auth.user?.role === 'doctor')
 const { data: doctors } = useQuery(async () => (isDoctor.value ? [] : masterApi.listDoctors()))
 
 const results: PreventRecord['result'][] = ['正常', '異常需追蹤', '待報告']
-const form = reactive({ result: '正常' as string | number | undefined, doctorId: undefined as string | number | undefined, data: {} as Record<string, string> })
+const form = reactive({ result: '' as string | number | undefined, doctorId: undefined as string | number | undefined, data: {} as Record<string, string> })
 watch(open, (v) => {
   if (!v || !props.item) return
-  // 檢體要送驗的項目，當下還沒有結果
-  form.result = props.item.needsReport ? '待報告' : '正常'
+  // 檢體要送驗的項目，當下還沒有結果，預設「待報告」是事實；其他項目不替使用者先選「正常」——
+  // 預設正常的話，什麼都不填按登錄就產生一筆「正常」紀錄（佔資格、計入統計）
+  form.result = props.item.needsReport ? '待報告' : ''
   form.doctorId = props.defaultDoctorId
   form.data = Object.fromEntries(props.item.fields.map((f) => [f, '']))
 })
@@ -49,7 +50,7 @@ async function submit() {
         <span class="ml-2 text-slate-500">病歷號 {{ patient.chartNo }}・案件代碼 {{ item.caseCode }}</span>
       </div>
       <div class="grid grid-cols-2 gap-3">
-        <USelect v-model="form.result" label="結果" required :options="results" :error="save.fieldErrors.value.result" />
+        <USelect v-model="form.result" label="結果" required placeholder="請選擇" :options="results" :error="save.fieldErrors.value.result" />
         <USelect
           v-if="!isDoctor"
           v-model="form.doctorId"
@@ -63,7 +64,7 @@ async function submit() {
       <!-- 待報告：結果還沒出來，不填數值；報告回來後由「待補登報告」補上 -->
       <p v-if="form.result === '待報告'" class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">檢體送驗中，報告回來後請至「今日工作 → 待補登報告」補上結果。</p>
       <div v-else class="grid grid-cols-2 gap-3">
-        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" />
+        <UInput v-for="f in item.fields" :key="f" v-model="form.data[f]" :label="f" :required="!!form.result" :error="save.fieldErrors.value[`data:${f}`]" />
       </div>
     </div>
     <template #footer>

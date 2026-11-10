@@ -83,7 +83,7 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
       if (isUnauthorized(e) && (await handleUnauthorized())) return undefined
       if (e instanceof ServiceError && e.field) {
         // 欄位錯誤顯示在欄位下方；仍給一個簡短提示，避免欄位在畫面外時使用者沒注意到
-        fieldErrors.value = { [e.field]: e.message }
+        fieldErrors.value = e.fields ?? { [e.field]: e.message }
         ui.toast.warning('請修正標示的欄位')
       } else {
         ui.toast.error(errorMessage(e))

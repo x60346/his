@@ -79,3 +79,29 @@ export function checkEligibility(p: Patient, item: PreventItem, records: Prevent
   if (nextDate > at) return { ...base, eligible: false, reason: `距上次（${toRoc(last)}）未滿 ${years} 年，${toRoc(nextDate)} 起可再做`, lastDate: last, nextDate }
   return { ...base, eligible: true, reason: `符合資格（上次 ${toRoc(last)}）`, lastDate: last }
 }
+
+/**
+ * 結果與檢查內容是否完整（純函式）：登錄、補登報告、種子資料、測試共用。
+ * 回傳「欄位 → 錯誤訊息」，一次列出所有問題；沒有問題回傳空物件。
+ *
+ *   正常／異常需追蹤：這是定案的結果，項目設定的欄位（item.fields）全部要填——
+ *     「正常」卻沒有任何數據，等於沒有做檢查，卻佔掉了資格、計入統計。
+ *   待報告：檢體送驗中，結果還沒出來，可以不填（補登報告時再填）。
+ *
+ * 欄位錯誤的鍵：結果是 'result'，檢查內容是 'data:欄位名'（例：'data:血壓'）。
+ */
+export const FINAL_RESULTS: PreventRecord['result'][] = ['正常', '異常需追蹤']
+
+export function checkPreventResult(
+  item: Pick<PreventItem, 'fields'>,
+  result: string | undefined,
+  data: Record<string, string> | undefined,
+  opts: { allowPending: boolean },
+): Record<string, string> {
+  const allowed: string[] = opts.allowPending ? [...FINAL_RESULTS, '待報告'] : FINAL_RESULTS
+  if (!result || !allowed.includes(result)) return { result: '請選擇結果' }
+  if (result === '待報告') return {}
+  const errors: Record<string, string> = {}
+  for (const f of item.fields) if (!String(data?.[f] ?? '').trim()) errors[`data:${f}`] = `請填寫${f}`
+  return errors
+}
