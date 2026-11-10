@@ -4,7 +4,7 @@
 // 防止誤關：使用者在對話框裡輸入或選擇過任何內容後，點背景、按 Esc 都不會關閉，
 // 只能按「取消」或 ×。以前點到灰色背景就關掉，重開時內容已清空——醫囑、出院摘要寫到一半就沒了。
 // 沒有輸入過的（例如單純的確認框）照舊可以點背景關閉。
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 
 const open = defineModel<boolean>({ default: false })
@@ -31,6 +31,16 @@ function close() {
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') close()
 }
+// 鍵盤使用者：打開時游標移進對話框（第一個輸入欄位；沒有就停在對話框本身），
+// 關閉時回到打開前的位置（例如按下的「修改」按鈕），不必按一堆 Tab 才找得到
+const panel = ref<HTMLElement>()
+let returnFocus: HTMLElement | null = null
+async function focusInside() {
+  await nextTick()
+  const first = panel.value?.querySelector<HTMLElement>('input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])')
+  ;(first ?? panel.value)?.focus()
+}
+
 watch(
   open,
   (v) => {
@@ -38,7 +48,13 @@ watch(
       touched.value = false
       blockedHint.value = false
       window.addEventListener('keydown', onKey)
-    } else window.removeEventListener('keydown', onKey)
+      returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      focusInside()
+    } else {
+      window.removeEventListener('keydown', onKey)
+      returnFocus?.focus()
+      returnFocus = null
+    }
   },
   { immediate: true },
 )
@@ -52,7 +68,15 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-100">
       <div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-[8vh]" @mousedown.self="close">
-        <div :class="['w-full rounded-lg bg-white shadow-xl', widths[size]]" role="dialog" aria-modal="true" @input="touched = true" @change="touched = true">
+        <div
+          ref="panel"
+          :class="['w-full rounded-lg bg-white shadow-xl outline-none', widths[size]]"
+          role="dialog"
+          aria-modal="true"
+          tabindex="-1"
+          @input="touched = true"
+          @change="touched = true"
+        >
           <header v-if="title || $slots.header" class="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <slot name="header">
               <h2 class="text-base font-semibold text-slate-800">{{ title }}</h2>
