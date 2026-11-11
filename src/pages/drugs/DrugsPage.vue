@@ -61,7 +61,7 @@ const shown = computed(() => rows.value?.length ?? 0)
 
 <template>
   <div class="space-y-4">
-    <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
       <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />
       <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
       <UStatCard label="低於安全庫存" :value="summary?.low ?? '—'" :icon="AlertTriangle" tone="amber" :active="cardFilter === 'low'" :on-click="() => toggleCard('low')" />
