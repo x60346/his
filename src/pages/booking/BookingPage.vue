@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { CreditCard, List as ListIcon, PhoneCall, Ticket, UserPlus, X } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
@@ -87,11 +87,17 @@ const selectedSession = computed(() => sessions.value?.find((s) => s.id === sess
 function pickSession(s: SessionView) {
   if (!s.bookable) return
   sessionId.value = s.id
-  listSession.value = s.id
+  // 選的診次和清單同一天才順便篩選清單；掛別天的預約時，清單留在原本的日期（通常是今天）
+  if (s.date === listDate.value) listSession.value = s.id
 }
 // 「名單」：看這一診有誰、誰退掛——不能掛的診（已截止、額滿、停診）也要能看
 const listEl = ref<HTMLElement>()
-function showList(s: SessionView) {
+async function showList(s: SessionView) {
+  // 「名單」看的是這一診：清單換到這一診的日期。先換日期、等「換日期就清掉篩選」的 watch 跑完，再設篩選
+  if (listDate.value !== s.date) {
+    listDate.value = s.date
+    await nextTick()
+  }
   listSession.value = s.id
   statusTab.value = 'all'
   listEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -181,10 +187,15 @@ async function submit() {
 }
 
 // ---------- 當日掛號清單 ----------
+// 清單有自己的日期（預設今天），不跟著上面選診次的日期走：
+// 以前幫病人掛下週的預約後，下方清單也變成下週，要看今天現場狀況得把日期改回來（而改回來又清掉已選的診次）
 const statusTab = ref('all')
+const listDate = ref(today())
+const listToday = followToday(listDate) // 看今天的，跨過午夜自動換到新的一天
 const listSession = ref<string | number>('')
-const { data: visits, loading: visitsLoading } = useQuery(() => bookingApi.listVisits({ date: date.value }), [date])
-watch(date, () => (listSession.value = '')) // 換日期後，原本篩選的診次已不存在
+const { data: visits, loading: visitsLoading } = useQuery(() => bookingApi.listVisits({ date: listDate.value }), [listDate])
+const { data: listSessions } = useQuery(() => scheduleApi.listSessions({ date: listDate.value }), [listDate])
+watch(listDate, () => (listSession.value = '')) // 換日期後，原本篩選的診次已不存在
 
 const tabDefs: { key: string; label: string; match: VisitStatus[] }[] = [
   { key: 'all', label: '全部', match: [] },
@@ -200,7 +211,7 @@ const filtered = computed(() => {
   const match = tabDefs.find((t) => t.key === statusTab.value)!.match
   return sessionFiltered.value.filter((v) => !match.length || match.includes(v.status))
 })
-const listSessionOptions = computed(() => (sessions.value ?? []).map((s) => ({ label: `${periodLabel[s.period]} ${s.roomNo} ${s.deptName} ${s.doctorName}`, value: s.id })))
+const listSessionOptions = computed(() => (listSessions.value ?? []).map((s) => ({ label: `${periodLabel[s.period]} ${s.roomNo} ${s.deptName} ${s.doctorName}`, value: s.id })))
 
 const columns: Column<VisitView>[] = [
   { key: 'seqNo', label: '號', align: 'center', width: '50px' },
@@ -317,6 +328,12 @@ function openIdentity(v: VisitView) {
                     <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
                     <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
                   </div>
+                  <!-- 目前看到幾號：病人問「現在看到幾號」時，看卡片就答得出來 -->
+                  <div v-if="s.current || s.skipped" class="tabular mt-0.5 flex gap-2 text-xs">
+                    <span v-if="s.current?.inConsult" class="font-medium text-blue-700">看診中 {{ s.current.seqNo }} 號</span>
+                    <span v-else-if="s.current" class="text-slate-500">已看到 {{ s.current.seqNo }} 號</span>
+                    <span v-if="s.skipped" class="text-amber-700">過號 {{ s.skipped }}</span>
+                  </div>
                 </button>
                 <button
                   type="button"
@@ -395,8 +412,9 @@ function openIdentity(v: VisitView) {
 
     <!-- 當日掛號清單 -->
     <div ref="listEl" class="scroll-mt-4">
-    <UCard :title="`${date} 掛號清單`" :padded="false">
+    <UCard :title="`${listDate === listToday ? '今日' : listDate} 掛號清單`" :padded="false">
       <template #actions>
+        <div class="w-40"><UInput v-model="listDate" type="date" aria-label="掛號清單日期" /></div>
         <div class="w-64"><USelect v-model="listSession" :options="listSessionOptions" placeholder="全部診次" /></div>
       </template>
       <div class="px-4"><UTabs v-model="statusTab" :tabs="tabs" /></div>

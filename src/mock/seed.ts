@@ -291,6 +291,12 @@ export function buildSeed(): Database {
     })
     const procs: ProcedureOrder[] = (sc.procs ?? []).map((procId) => ({ procId, qty: 1, selfPay: false }))
     const adult = pt.birthDate < addDays(T, -365 * 12)
+    const completedAt = completed ? notFuture(addMinutes(v.createdAt, int(10, 40)), 60) : undefined
+    // 有病歷就是叫過號：叫號時間在掛號之後、完成看診之前（以前沒填，掛號頁的「目前看到幾號」算不出來）
+    const calledAfterReg = addMinutes(v.createdAt, 5)
+    v.calledAt = completedAt
+      ? [addMinutes(completedAt, -8), v.createdAt].sort().pop()!
+      : calledAfterReg > nowStr ? nowStr : calledAfterReg
     const e: Encounter = {
       id: id('E'), visitId: v.id, patientId: v.patientId, doctorId: v.doctorId, deptId: v.deptId, date: v.date,
       subjective: sc.s, objective: sc.o, assessment: sc.a, plan: sc.p,
@@ -301,7 +307,7 @@ export function buildSeed(): Database {
       medications: meds, procedures: procs,
       refillTimes: sc.caseType === '04' ? 2 : 0, admissionRequested: false,
       status: completed ? 'completed' : 'draft',
-      completedAt: completed ? notFuture(addMinutes(v.createdAt, int(10, 40)), 60) : undefined,
+      completedAt,
     }
     encounters.push(e)
     return e

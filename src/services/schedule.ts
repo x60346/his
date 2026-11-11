@@ -10,6 +10,7 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
+import { currentNumber } from './queue-rules'
 
 const sessionId = (date: string, slotId: string) => `S${date.replace(/-/g, '')}${slotId}`
 /** 診次是否由此範本產生：用完整 id 比對。不可用 endsWith——WS2 會誤中 WS12 */
@@ -44,8 +45,12 @@ export interface SessionView extends ClinicSession {
   deptName: string
   /** 有效掛號數（不含退掛） */
   booked: number
-  /** 尚在候診 */
+  /** 尚在候診（不含看診中：和首頁、門診頁的「候診」同一個定義；以前把看診中那位也算進去） */
   waiting: number
+  /** 目前看到幾號：看診中的號，或最後看完的號（inConsult=false 時顯示「已看到」）；還沒叫號則沒有 */
+  current?: { seqNo: number; inConsult: boolean }
+  /** 過號、還在候診的人數 */
+  skipped: number
   /** 已看完（含已批價、已領藥） */
   done: number
   full: boolean
@@ -65,7 +70,9 @@ function sessionView(s: ClinicSession): SessionView {
     doctorName: nameOf.doctor(s.doctorId),
     deptName: nameOf.dept(s.deptId),
     booked,
-    waiting: vs.filter((v) => v.status === 'registered' || v.status === 'in-consult').length,
+    waiting: vs.filter((v) => v.status === 'registered').length,
+    current: currentNumber(vs),
+    skipped: vs.filter((v) => v.status === 'registered' && v.skippedAt).length,
     done: vs.filter((v) => ['consulted', 'charged', 'dispensed'].includes(v.status)).length,
     full: booked >= s.limit,
     closed: isSessionClosed(s),
