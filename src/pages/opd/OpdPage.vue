@@ -3,7 +3,7 @@
 // 草稿在頁面裡編輯；「暫存」才寫入，「完成看診」才做完整驗證並推進狀態。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
 import {
@@ -97,7 +97,28 @@ watch(encounter, (e) => {
 })
 
 const editable = computed(() => visit.value?.status === 'in-consult' && encounter.value?.status === 'draft')
-const tab = ref('soap')
+// 「看診」一頁照 SOAP 順序排（生命徵象 → S/O → A＋診斷 → P＋醫令），「歷史病歷」另一頁。
+// 以前拆成 SOAP／診斷／醫令／歷史四個分頁：寫主訴看不到上次處方、開藥看不到剛寫的評估，檢查出錯還會自動跳分頁。
+const tab = ref<'visit' | 'history'>('visit')
+type Section = 'so' | 'dx' | 'orders'
+const sectionEls: Partial<Record<Section, HTMLElement>> = {}
+const setSection = (k: Section) => (el: unknown) => {
+  if (el) sectionEls[k] = el as HTMLElement
+}
+// 候診中（還沒叫號）只有「歷史病歷」可看：直接顯示歷史，免得畫面上只有一個沒選中的分頁、內容一片空白；叫號後切回看診
+watch(
+  () => [visitId.value, visit.value?.status] as const,
+  ([, s]) => {
+    if (s === 'registered') tab.value = 'history'
+    else if (s === 'in-consult' && tab.value === 'history') tab.value = 'visit'
+  },
+)
+/** 捲到某一段（以前是切換分頁）：檢查出錯、套用組套、複製處方之後，帶到該段，正在寫的內容不會從眼前消失 */
+async function goSection(k: Section) {
+  tab.value = 'visit'
+  await nextTick()
+  sectionEls[k]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 async function confirmDiscard() {
   return !dirty.value || ui.confirm({ title: '尚未儲存', message: '目前病歷有未儲存的修改，確定要離開？', okText: '放棄修改', danger: true })
@@ -106,7 +127,7 @@ async function selectVisit(v: QueueItem) {
   if (v.id === visitId.value) return
   if (!(await confirmDiscard())) return
   visitId.value = v.id
-  tab.value = 'soap'
+  tab.value = 'visit'
 }
 onBeforeRouteLeave(confirmDiscard)
 
@@ -146,7 +167,7 @@ const complete = useAction(async (opts: { confirmHighDose?: boolean } = {}) => {
 async function onComplete(): Promise<boolean> {
   // 本地先檢查，省一次往返；服務層仍會再驗證
   if (!draft.value.diagnoses.length) {
-    tab.value = 'dx'
+    goSection('dx')
     ui.toast.warning('請至少輸入一個診斷')
     return false
   }
@@ -167,7 +188,7 @@ async function onComplete(): Promise<boolean> {
     .map((x) => ({ ...x, level: doseLevel(x.d, x.m.dose) }))
   const absurd = doses.filter((x) => x.level === 'absurd')
   if (absurd.length) {
-    tab.value = 'orders'
+    goSection('orders')
     ui.toast.warning(`${absurd.map((x) => `${x.d.name}：${doseNote(x.d, x.m.dose)}`).join('；')}，請確認是否打錯`)
     return false
   }
@@ -229,7 +250,7 @@ function copyFrom(h: HistoryItem) {
   }
   if (!draft.value.diagnoses.length) draft.value.diagnoses = clonePlain(h.diagnoses)
   ui.toast.success(added ? `已複製 ${added} 項藥品（重複的略過）` : '處方中已有相同藥品，未新增')
-  tab.value = 'orders'
+  goSection('orders')
 }
 
 // ---------- 套用組套：合併進目前處方，不覆蓋 ----------
@@ -256,7 +277,7 @@ function applySet(x: ExpandedOrderSet) {
   const parts = [meds && `${meds} 種藥`, procsAdded && `${procsAdded} 項處置`].filter(Boolean).join('、') || '沒有新的項目（重複的略過）'
   const skipped = x.skipped.length ? `；${x.skipped.join('、')} 已停用，未帶入` : ''
   ;(x.skipped.length ? ui.toast.warning : ui.toast.success)(`已套用「${x.name}」：${parts}${skipped}`)
-  tab.value = 'orders'
+  goSection('orders')
 }
 
 const defaultDays = computed(() => (visit.value && ['04', '08'].includes(visit.value.caseType) ? 28 : 3))
@@ -306,11 +327,18 @@ const bmi = computed(() => {
   return height && weight ? (weight / (height / 100) ** 2).toFixed(1) : '—'
 })
 const tabs = computed(() => [
-  { key: 'soap', label: 'SOAP・生命徵象' },
-  { key: 'dx', label: '診斷', count: draft.value.diagnoses.length },
-  { key: 'orders', label: '醫令', count: draft.value.medications.length + draft.value.procedures.length },
+  { key: 'visit', label: '看診' },
   { key: 'history', label: '歷史病歷', count: history.value?.length },
 ])
+// 段落捷徑（固定在看診頁上方）：頁面變長了，點一下就捲到該段，並看得到診斷、醫令的數量
+const sectionLinks = computed(() => [
+  { key: 'so' as Section, label: 'S／O' },
+  { key: 'dx' as Section, label: '診斷', count: draft.value.diagnoses.length },
+  { key: 'orders' as Section, label: '醫令', count: draft.value.medications.length + draft.value.procedures.length },
+])
+// 前次就診摘要：寫主訴時就看得到上次的診斷與處方（以前要切到歷史分頁）
+const lastVisit = computed(() => history.value?.[0])
+const lastOpen = ref(true)
 </script>
 
 <template>
@@ -401,9 +429,32 @@ const tabs = computed(() => [
 
       <UCard v-if="visit.status !== 'registered' || history?.length" :padded="false">
         <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="visit.status === 'registered' ? tabs.filter((t) => t.key === 'history') : tabs" /></div>
+        <!-- 段落捷徑：固定在上方，點一下捲到該段 -->
+        <div v-if="tab === 'visit' && visit.status !== 'registered'" class="sticky top-0 z-[5] flex gap-1.5 border-b border-slate-100 bg-white/95 px-4 py-1.5 backdrop-blur">
+          <button v-for="s in sectionLinks" :key="s.key" type="button" class="rounded-full border border-slate-200 px-2.5 py-0.5 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-700" @click="goSection(s.key)">
+            {{ s.label }}<span v-if="s.count !== undefined" class="tabular ml-1 font-medium text-slate-800">{{ s.count }}</span>
+          </button>
+        </div>
         <div class="p-4">
-          <!-- SOAP 與生命徵象 -->
-          <div v-show="tab === 'soap' && visit.status !== 'registered'" class="space-y-4">
+          <!-- 看診：照 SOAP 的順序一頁寫完（以前拆成四個分頁） -->
+          <div v-show="tab === 'visit' && visit.status !== 'registered'" class="space-y-5">
+            <!-- 前次就診摘要：寫主訴時就看得到上次的診斷與處方 -->
+            <div v-if="lastVisit" class="rounded-md border border-slate-200 bg-slate-50 text-sm">
+              <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left" @click="lastOpen = !lastOpen">
+                <span class="font-medium text-slate-700">前次就診</span>
+                <span class="tabular text-xs text-slate-500">{{ lastVisit.date }}・{{ lastVisit.deptName }} {{ lastVisit.doctorName }}</span>
+                <span class="ml-auto text-xs text-slate-400">{{ lastOpen ? '收合' : '展開' }}</span>
+              </button>
+              <div v-if="lastOpen" class="space-y-1 border-t border-slate-200 px-3 py-2">
+                <div><span class="text-xs text-slate-500">診斷</span> {{ lastVisit.diagnoses.map((d) => `${d.icd} ${d.name}`).join('、') || '—' }}</div>
+                <div class="flex items-start gap-2">
+                  <span class="text-xs text-slate-500">處方</span>
+                  <span class="min-w-0 flex-1">{{ lastVisit.medicationNames.join('、') || '無' }}</span>
+                  <UButton v-if="editable && lastVisit.medications.length" size="sm" variant="secondary" @click="copyFrom(lastVisit)">複製處方</UButton>
+                </div>
+              </div>
+            </div>
+
             <!-- 欄數依區塊實際寬度（auto-fill）：看診區在候診清單旁邊，視窗寬不代表這裡寬（以前 md:grid-cols-8 在 1024 寬只剩 43px 一格） -->
             <div class="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-3">
               <UInput v-model="draft.vitals.height" label="身高 cm" type="number" :disabled="!editable" />
@@ -418,17 +469,22 @@ const tabs = computed(() => [
                 <div class="tabular py-1.5 text-sm text-slate-800">{{ bmi }}</div>
               </div>
             </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <!-- S／O：欄數依區塊實際寬度（不用 md: 看視窗） -->
+            <section :ref="setSection('so')" class="scroll-mt-12 grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-3">
               <UTextarea v-model="draft.subjective" label="S 主訴（病人主觀描述）" :rows="4" :disabled="!editable" />
               <UTextarea v-model="draft.objective" label="O 客觀檢查" :rows="4" :disabled="!editable" />
-              <UTextarea v-model="draft.assessment" label="A 評估" :rows="3" :disabled="!editable" />
-              <UTextarea v-model="draft.plan" label="P 計畫" :rows="3" :disabled="!editable" />
-            </div>
-          </div>
+            </section>
 
-          <DiagnosisEditor v-if="tab === 'dx'" v-model="draft.diagnoses" :readonly="!editable" />
+            <!-- A：評估與診斷放在一起 -->
+            <section :ref="setSection('dx')" class="scroll-mt-12 space-y-2 border-t border-slate-100 pt-4">
+              <UTextarea v-model="draft.assessment" label="A 評估" :rows="2" :disabled="!editable" />
+              <h3 class="text-sm font-semibold text-slate-700">診斷</h3>
+              <DiagnosisEditor v-model="draft.diagnoses" :readonly="!editable" />
+            </section>
 
-          <div v-if="tab === 'orders'" class="space-y-5">
+            <!-- P：計畫與醫令放在一起 -->
+            <section :ref="setSection('orders')" class="scroll-mt-12 space-y-5 border-t border-slate-100 pt-4">
+            <UTextarea v-model="draft.plan" label="P 計畫" :rows="2" :disabled="!editable" />
             <OrderSetBar v-if="editable" :draft="draft" @apply="applySet" />
             <section>
               <h3 class="mb-2 text-sm font-semibold text-slate-700">藥品</h3>
@@ -443,6 +499,7 @@ const tabs = computed(() => [
                 <USelect v-model="draft.refillTimes" label="慢性病連續處方箋" :options="[{ label: '非連續處方', value: 0 }, { label: '可調劑 2 次', value: 2 }, { label: '可調劑 3 次', value: 3 }]" :disabled="!editable" />
               </div>
               <UCheckbox v-model="draft.admissionRequested" label="建議住院（完成看診後自動建立住院預約）" :disabled="!editable" class="pb-2" />
+            </section>
             </section>
           </div>
 

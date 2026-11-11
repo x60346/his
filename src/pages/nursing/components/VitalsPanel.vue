@@ -40,7 +40,7 @@ const hintOf = (k: VitalKey) => {
   return n ? `${unit}・正常 ${n[0]}–${n[1]}` : unit
 }
 
-// ---------- 趨勢圖：最近 3 天 ----------
+// ---------- 趨勢圖：最近 9 筆（一天量三次約三天；畫面標題「最近 N 筆」） ----------
 const charts: { key: VitalKey; domain?: [number, number] }[] = [
   { key: 'temp', domain: [35, 41] },
   { key: 'pulse' },
