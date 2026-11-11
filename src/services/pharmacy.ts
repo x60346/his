@@ -29,6 +29,8 @@ export interface DispenseItem {
   stock: number
   highAlert: boolean
   shortage: boolean
+  /** 這種藥有待到貨的補貨申請：申請量、尚欠、何時申請、這張單是否已在等待名單上 */
+  restock?: { qty: number; outstanding: number; requestedAt: string; includesThis: boolean }
 }
 
 export interface DispenseView extends Dispense, PatientBrief {
@@ -48,6 +50,7 @@ function dispenseView(d: Dispense): DispenseView {
   const items: DispenseItem[] = e.medications.map((m) => {
     const drug = find.drug(m.drugId)
     const usable = usableQty(db.drugLots.filter((l) => l.drugId === m.drugId), today())
+    const req = db.restockRequests.find((x) => x.drugId === m.drugId && x.status === 'open')
     return {
       drugId: m.drugId,
       drugName: drug?.name ?? m.drugId,
@@ -63,6 +66,7 @@ function dispenseView(d: Dispense): DispenseView {
       stock: usable,
       highAlert: drug?.highAlert ?? false,
       shortage: d.status !== 'dispensed' && usable < m.qty,
+      ...(req ? { restock: { qty: req.qty, outstanding: Math.max(0, req.qty - req.receivedQty), requestedAt: req.requestedAt, includesThis: req.dispenseIds.includes(d.id) } } : {}),
     }
   })
   const drugs = e.medications.map((m) => find.drug(m.drugId)).filter((x): x is Drug => !!x)

@@ -3,7 +3,8 @@
 // 清單上「可用庫存」「可用天數」「效期」都是服務層依帳本算好的；頁面只負責呈現與篩選條件。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
-import { AlertTriangle, CalendarClock, PackageX, Pill, X } from 'lucide-vue-next'
+import { useRoute } from 'vue-router'
+import { AlertTriangle, CalendarClock, PackageX, Pill, Truck, X } from 'lucide-vue-next'
 import type { StockFlag } from '@/services/stock-rules'
 import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, type Column } from '@/components/ui'
 import DrugDetail from './components/DrugDetail.vue'
@@ -16,14 +17,29 @@ const category = ref<string | number | undefined>('')
 const attentionOnly = ref(false)
 
 // 摘要卡片點了直接篩選（再點一次、或點「使用中品項」取消）
-const cardFilters = { out: { label: '缺貨', flags: ['out'] }, low: { label: '低於安全庫存', flags: ['low'] }, expiry: { label: '效期提醒', flags: ['expiring', 'expired'] } } as const satisfies Record<string, { label: string; flags: StockFlag[] }>
+// 「待到貨」不是庫存標籤（是已經在處理的事），另走 restockOnly；有病人在等的排前面
+const cardFilters = {
+  out: { label: '缺貨', flags: ['out'] },
+  low: { label: '低於安全庫存', flags: ['low'] },
+  expiry: { label: '效期提醒', flags: ['expiring', 'expired'] },
+  restock: { label: '補貨待到貨', flags: [] },
+} as const satisfies Record<string, { label: string; flags: StockFlag[] }>
 type CardKey = keyof typeof cardFilters
-const cardFilter = ref<CardKey | null>(null)
+// 首頁待辦「補貨申請待到貨」帶 ?filter=restock 進來，直接篩好
+const route = useRoute()
+const cardFilter = ref<CardKey | null>(route.query.filter === 'restock' ? 'restock' : null)
 const toggleCard = (k: CardKey | null) => (cardFilter.value = cardFilter.value === k ? null : k)
 
 const { data: summary } = useQuery(() => inventoryApi.inventorySummary())
 const { data: rows, loading } = useQuery(
-  () => inventoryApi.listInventory({ keyword: kw.value, category: String(category.value ?? ''), attentionOnly: attentionOnly.value, flags: cardFilter.value ? [...cardFilters[cardFilter.value].flags] : undefined }),
+  () =>
+    inventoryApi.listInventory({
+      keyword: kw.value,
+      category: String(category.value ?? ''),
+      attentionOnly: attentionOnly.value,
+      flags: cardFilter.value ? [...cardFilters[cardFilter.value].flags] : undefined,
+      restockOnly: cardFilter.value === 'restock',
+    }),
   [kw, category, attentionOnly, cardFilter],
 )
 
@@ -45,11 +61,12 @@ const shown = computed(() => rows.value?.length ?? 0)
 
 <template>
   <div class="space-y-4">
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
       <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />
       <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
       <UStatCard label="低於安全庫存" :value="summary?.low ?? '—'" :icon="AlertTriangle" tone="amber" :active="cardFilter === 'low'" :on-click="() => toggleCard('low')" />
       <UStatCard label="效期提醒" :value="summary ? `${summary.expiring} / ${summary.expired}` : '—'" :icon="CalendarClock" tone="amber" hint="60 天內到期 / 已過期待報廢" :active="cardFilter === 'expiry'" :on-click="() => toggleCard('expiry')" />
+      <UStatCard label="補貨待到貨" :value="summary?.restockOpen ?? '—'" :icon="Truck" tone="brand" hint="已申請、還沒到貨入庫" :active="cardFilter === 'restock'" :on-click="() => toggleCard('restock')" />
     </div>
 
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_32rem]">
@@ -95,7 +112,8 @@ const shown = computed(() => rows.value?.length ?? 0)
           <template #cell-status="{ row }">
             <div class="flex flex-wrap gap-1">
               <UBadge v-for="f in row.flags" :key="f" :tone="flagView[f].tone">{{ flagView[f].label }}</UBadge>
-              <UBadge v-if="!row.flags.length" tone="green">正常</UBadge>
+              <UBadge v-if="!row.flags.length && !row.restock" tone="green">正常</UBadge>
+              <UBadge v-if="row.restock" tone="blue" :title="`補貨申請尚欠 ${row.restock.outstanding}`">待到貨{{ row.restock.waiting ? `・${row.restock.waiting} 人等` : '' }}</UBadge>
             </div>
           </template>
         </UTable>

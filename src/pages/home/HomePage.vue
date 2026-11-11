@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, Package, PhoneCall, Pill, Receipt, Stethoscope, Users,
+  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, Package, PhoneCall, Pill, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
 import { dashboardApi, opdApi } from '@/services'
@@ -33,6 +33,7 @@ interface Todo {
   count: number
   hint: string
   route: string
+  query?: Record<string, string>
   icon: typeof Users
   urgent?: boolean
 }
@@ -49,6 +50,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
     { roles: ['pharmacist'], label: '低於安全庫存', count: s.value.lowStockDrugs, hint: '需要補貨的藥品', route: 'drugs', icon: Package, urgent: true },
+    { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
   ]
   // 管理員不做第一線作業，下方指標卡已涵蓋全部數字，不再重複列待辦
   return list.filter((t) => t.roles.includes(role ?? ''))
@@ -73,7 +75,7 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
             'group flex items-center gap-3 rounded-lg border bg-white p-4 text-left shadow-sm transition hover:shadow',
             t.urgent && t.count > 0 ? 'border-red-200 hover:border-red-300' : 'border-slate-200 hover:border-brand-300',
           ]"
-          @click="router.push({ name: t.route })"
+          @click="router.push({ name: t.route, query: t.query })"
         >
           <div :class="['rounded-md p-2', t.urgent && t.count > 0 ? 'bg-red-50 text-red-600' : 'bg-brand-50 text-brand-600']">
             <component :is="t.icon" class="h-5 w-5" />

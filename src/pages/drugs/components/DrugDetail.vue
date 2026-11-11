@@ -2,9 +2,10 @@
 // 藥品庫存明細：批號（含盤點）、近 30 天用量、異動紀錄。
 // 異動紀錄就是「庫存為什麼是這個數字」的答案：每一筆增減都查得到時間、人、單據、原因。
 import { computed, ref } from 'vue'
-import { PackagePlus, Trash2 } from 'lucide-vue-next'
-import { UBadge, UBarChart, UButton, UQueryState, type BarDatum } from '@/components/ui'
+import { ClipboardList, PackageCheck, PackagePlus, Trash2 } from 'lucide-vue-next'
+import { UBadge, UBarChart, UButton, UDialog, UInput, UQueryState, type BarDatum } from '@/components/ui'
 import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
+import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
 import StocktakeDialog from './StocktakeDialog.vue'
 import { inventoryApi, isExpiringSoon } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
@@ -43,6 +44,24 @@ function startTake(l: DrugLot) {
   takeOpen.value = true
 }
 
+// ---------- 補貨申請（U25） ----------
+const restock = computed(() => ledger.value?.restock)
+const requestOpen = ref(false)
+/** 到貨入庫：同一個進貨對話框，數量先帶「尚欠」——批號、效期照實物填 */
+const arriveOpen = ref(false)
+const cancelOpen = ref(false)
+const cancelReason = ref('')
+const cancel = useAction(inventoryApi.cancelRestock, { success: (r) => `已取消 ${r.drugName} 的補貨申請` })
+function startCancel() {
+  cancelReason.value = ''
+  cancel.fieldErrors.value = {}
+  cancelOpen.value = true
+}
+async function confirmCancel() {
+  if (restock.value && (await cancel.run(restock.value.id, cancelReason.value))) cancelOpen.value = false
+}
+const md = (t: string) => t.slice(5, 16).replace('-', '/')
+
 const scrap = useAction(inventoryApi.scrapExpired, { success: (t) => `已報廢 ${t.length} 個過期批號` })
 async function onScrap() {
   if (!row.value) return
@@ -61,8 +80,26 @@ async function onScrap() {
           </h2>
           <p class="text-xs text-slate-500">{{ row.id }}・{{ row.generic }}・{{ row.spec }}・{{ row.category }}</p>
         </div>
+        <UButton size="sm" variant="secondary" :icon="ClipboardList" @click="requestOpen = true">{{ restock ? '追加申請' : '申請補貨' }}</UButton>
         <UButton size="sm" :icon="PackagePlus" @click="receiveOpen = true">進貨</UButton>
       </header>
+
+      <!-- 待到貨的補貨申請：貨到了按「到貨入庫」（批號、效期照實物填），到齊自動結案 -->
+      <section v-if="restock" class="rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+        <div class="flex flex-wrap items-center gap-2">
+          <UBadge tone="blue">補貨待到貨</UBadge>
+          <span>申請 <b class="tabular">{{ restock.qty }}</b><template v-if="restock.receivedQty">・已到 {{ restock.receivedQty }}・尚欠 <b class="tabular">{{ restock.outstanding }}</b></template> {{ row.unit }}</span>
+          <span class="text-xs text-sky-700">{{ restock.requestedByName }} {{ md(restock.requestedAt) }} 申請</span>
+        </div>
+        <p v-if="restock.note" class="mt-1 text-xs text-sky-800">備註：{{ restock.note }}</p>
+        <p v-if="restock.waiting.length" class="mt-1 text-xs">
+          等候領藥：<span v-for="(w, i) in restock.waiting" :key="w.dispenseId">{{ i ? '、' : '' }}{{ w.date !== today() ? w.date.slice(5).replace('-', '/') + ' ' : '' }}領藥號 {{ w.pickupNo }}（{{ w.patientName }} {{ w.qty }}）</span>
+        </p>
+        <div class="mt-2 flex gap-2">
+          <UButton size="sm" :icon="PackageCheck" @click="arriveOpen = true">到貨入庫</UButton>
+          <UButton size="sm" variant="ghost" @click="startCancel">取消申請</UButton>
+        </div>
+      </section>
 
       <dl class="grid grid-cols-3 gap-2 text-center">
         <div class="rounded-md bg-slate-50 p-2">
@@ -129,7 +166,19 @@ async function onScrap() {
         </div>
       </section>
 
-      <ReceiveStockDialog v-model="receiveOpen" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" />
+      <ReceiveStockDialog v-model="receiveOpen" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :restock-outstanding="restock?.outstanding" />
+      <ReceiveStockDialog v-model="arriveOpen" title="到貨入庫" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :suggested-qty="restock?.outstanding" :restock-outstanding="restock?.outstanding" />
+      <RestockRequestDialog v-model="requestOpen" :drug-id="row.id" />
+      <UDialog v-model="cancelOpen" title="取消補貨申請" size="sm" @submit="confirmCancel">
+        <div class="space-y-3 text-sm">
+          <p class="text-slate-600">{{ row.name }} 的補貨申請（尚欠 {{ restock?.outstanding }} {{ row.unit }}）取消後，等候中的病人需改開替代藥或另行調貨。</p>
+          <UInput v-model="cancelReason" label="取消原因" required placeholder="例：醫師改開替代藥、廠商缺貨" :error="cancel.fieldErrors.value.reason" />
+        </div>
+        <template #footer>
+          <UButton variant="secondary" @click="cancelOpen = false">返回</UButton>
+          <UButton type="submit" variant="danger" :loading="cancel.pending.value">取消申請</UButton>
+        </template>
+      </UDialog>
       <StocktakeDialog v-model="takeOpen" :lot="takeLot" :drug-name="row.name" :unit="row.unit" />
     </div>
   </UQueryState>

@@ -626,6 +626,33 @@ export interface DrugLot {
 
 export type StockTxnType = 'opening' | 'receive' | 'dispense' | 'adjust'
 
+export type RestockStatus = 'open' | 'fulfilled' | 'cancelled'
+
+/**
+ * 補貨申請（U25）：調劑窗口缺藥時，藥師提出申請；貨到了在藥品庫存頁「到貨入庫」（要有批號、效期）。
+ * 以前窗口的「補貨」直接開進貨單——病人在窗口等，藥師卻要憑空打一個批號和效期。
+ * 同一種藥同時只有一張「待到貨」的申請：再缺貨就把數量、等待的領藥單加上去，不另開一張。
+ */
+export interface RestockRequest {
+  id: string
+  drugId: string
+  /** 申請數量（追加時累加） */
+  qty: number
+  /** 已到貨數量（可分批到貨） */
+  receivedQty: number
+  /** 為了哪些調劑單（等著領藥的病人） */
+  dispenseIds: string[]
+  note?: string
+  requestedBy: string
+  requestedAt: string
+  status: RestockStatus
+  /** 到貨入庫的庫存異動 id */
+  txnIds: string[]
+  closedAt?: string
+  closedBy?: string
+  cancelReason?: string
+}
+
 /**
  * 庫存異動（帳本）：庫存只能透過異動改變，每一筆增減都留下紀錄，像記帳一樣只增不改。
  * 目前庫存 = 所有異動的總和；drug.stock 只是方便查詢的快取。

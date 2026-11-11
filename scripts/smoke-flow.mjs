@@ -1767,6 +1767,105 @@ try {
   leak.name = '被頁面改掉'
   ok(dbm.db.patients.find((p) => p.id === patient.id).name === patient.name, '頁面修改回傳物件不會影響資料庫（回傳的是複本）')
 
+  // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案
+  console.log('\n[補貨申請（U25）]')
+  {
+    const g = sr.suggestRestockQty
+    const a = g({ usable: 18, need: 30, safetyStock: 50, used30: 90 })
+    ok(a.qty === 110 && a.formula.startsWith('缺 12＋安全庫存 50＋14 天用量 42＝104 → 110'), `建議量：缺 12＋安全庫存 50＋14 天用量（日均 3）42＝104 → 進位 110（「${a.formula}」）`)
+    const b = g({ usable: 30, need: 0, safetyStock: 50, used30: 0 })
+    ok(b.qty === 20 && b.formula.includes('－現有 30'), `沒有病人在等、近期無用量：補回安全庫存即可（${b.qty}，「${b.formula}」）`)
+    ok(g({ usable: 500, need: 0, safetyStock: 50, used30: 30 }).qty === 0, '庫存充足：建議 0（不需補貨）')
+    const c = g({ usable: 0, need: 30, safetyStock: 50, used30: 90, onOrder: 200 })
+    ok(c.qty === 0 && c.formula.includes('已扣除申請中 200'), `已申請未到貨的量算進來：第二位病人缺同一種藥不會重複叫一整批（「${c.formula}」）`)
+    ok(g({ usable: 0, need: 1, safetyStock: 0, used30: 0 }).qty === 10, '缺 1 也進位到 10')
+
+    await as('ph01')
+    const medsOf = (d) => dbm.db.encounters.find((e) => e.id === d.encounterId).medications
+    const pend = dbm.db.dispenses.find((d) => d.status === 'pending' && d.createdAt.startsWith(T) && medsOf(d).length)
+    ok(!!pend, '今天有待調劑的單（14:30 的種子）')
+    const drugId = medsOf(pend)[0].drugId
+    // 先清掉這種藥原本的待到貨申請（若有），確保從頭開始
+    for (const r0 of dbm.db.restockRequests.filter((x) => x.drugId === drugId && x.status === 'open')) await api.inventoryApi.cancelRestock(r0.id, '測試前清除')
+    // 用盤點把可用庫存清成 0（照服務層的路走，帳本不變式仍成立）
+    for (const l of dbm.db.drugLots.filter((x) => x.drugId === drugId && x.qty > 0 && x.expiry >= T)) await api.inventoryApi.stocktake({ lotId: l.id, actual: 0, reason: '測試：模擬缺藥' })
+    const itemOf = async () => (await api.pharmacyApi.getDispense(pend.id)).items.find((i) => i.drugId === drugId)
+    let it = await itemOf()
+    ok(it.shortage && !it.restock, `${it.drugName} 清空後：調劑單顯示缺藥、還沒有補貨申請`)
+    await expectError(() => api.pharmacyApi.verifyDispense(pend.id), '缺藥時核對')
+
+    const plan = await api.inventoryApi.getRestockPlan(drugId)
+    const expect = g({ usable: 0, need: plan.need, safetyStock: plan.safetyStock, used30: plan.used30 })
+    ok(plan.usable === 0 && plan.need >= it.qty && plan.suggestion.qty === expect.qty && plan.suggestion.qty > 0,
+      `申請對話框：可用 0、等待中的處方需 ${plan.need}（${plan.waitingCount} 張）、建議 ${plan.suggestion.qty}（${plan.suggestion.formula}）`)
+    try {
+      await api.inventoryApi.requestRestock({ drugId, qty: 0, dispenseId: pend.id })
+      ok(false, '新申請數量 0 應被擋下')
+    } catch (e) {
+      ok(e.field === 'qty', `新申請數量 0 → 「${e.message}」（標在數量欄）`)
+    }
+    await as('clerk01')
+    await expectError(() => api.inventoryApi.requestRestock({ drugId, qty: 10 }), '櫃台申請補貨')
+    await as('ph01')
+    const done = dbm.db.dispenses.find((d) => d.status === 'dispensed')
+    await expectError(() => api.inventoryApi.requestRestock({ drugId: medsOf(done)[0].drugId, qty: 10, dispenseId: done.id }), '為已發藥的單申請補貨')
+    const notIn = dbm.db.drugs.find((d) => d.active && !medsOf(pend).some((m) => m.drugId === d.id))
+    await expectError(() => api.inventoryApi.requestRestock({ drugId: notIn.id, qty: 10, dispenseId: pend.id }), '處方沒有這種藥卻掛在這張單上')
+
+    const req = await api.inventoryApi.requestRestock({ drugId, qty: plan.suggestion.qty, dispenseId: pend.id, note: '請藥商下午送' })
+    ok(req.status === 'open' && req.qty === plan.suggestion.qty && req.waiting.some((w) => w.dispenseId === pend.id && w.pickupNo === pend.pickupNo),
+      `送出申請：${req.qty} ${req.unit}，等待名單有領藥號 ${pend.pickupNo}`)
+    it = await itemOf()
+    ok(it.shortage && it.restock?.includesThis && it.restock.outstanding === req.qty, '調劑單：仍缺藥、標示「已申請補貨」與尚欠數量')
+    await expectError(() => api.pharmacyApi.verifyDispense(pend.id), '已申請但還沒到貨就核對')
+
+    const req2 = await api.inventoryApi.requestRestock({ drugId, qty: 20 })
+    ok(req2.id === req.id && req2.qty === req.qty + 20 && dbm.db.restockRequests.filter((x) => x.drugId === drugId && x.status === 'open').length === 1,
+      `同一種藥再申請：加到原申請（${req.qty} → ${req2.qty}），不另開一張`)
+    try {
+      await api.inventoryApi.requestRestock({ drugId, qty: 0, dispenseId: pend.id })
+      ok(false, '已在等待名單上又追加 0 應被擋下')
+    } catch (e) {
+      ok(e.field === 'qty', `已在等待名單上、追加 0 → 「${e.message}」`)
+    }
+    const plan2 = await api.inventoryApi.getRestockPlan(drugId)
+    ok(plan2.open?.id === req.id && plan2.suggestion.formula.includes(`已扣除申請中 ${req2.qty}`), `再開對話框：顯示既有申請，建議量扣掉申請中的 ${req2.qty}（${plan2.suggestion.formula}）`)
+
+    const sum = await api.inventoryApi.inventorySummary()
+    const list = await api.inventoryApi.listInventory({ restockOnly: true })
+    const dash = await api.dashboardApi.getDashboard()
+    const row = list.find((r) => r.id === drugId)
+    ok(sum.restockOpen === list.length && dash.restockOpen === sum.restockOpen && row?.restock?.waiting === 1 && list[0].restock.waiting >= list[list.length - 1].restock.waiting,
+      `待到貨：首頁 ${dash.restockOpen} = 庫存卡片 ${sum.restockOpen} = 篩選清單 ${list.length} 項；有病人在等的排前面`)
+
+    const total = req2.qty
+    const t1 = await api.inventoryApi.receiveStock({ drugId, qty: 10, lotNo: 'RS-A', expiry: '2030-01-01' })
+    ok(t1.restock?.status === 'open' && t1.restock.outstanding === total - 10, `分批到貨 10：申請留著，尚欠 ${t1.restock?.outstanding}`)
+    ok((await api.inventoryApi.getDrugLedger(drugId)).restock?.receivedQty === 10, '庫存明細顯示已到 10')
+    const t2 = await api.inventoryApi.receiveStock({ drugId, qty: total - 10, lotNo: 'RS-B', expiry: '2030-01-01' })
+    const closed = dbm.db.restockRequests.find((x) => x.id === req.id)
+    ok(t2.restock?.status === 'fulfilled' && closed.status === 'fulfilled' && closed.txnIds.length === 2 && closed.closedBy === 'U301' && !(await api.inventoryApi.getDrugLedger(drugId)).restock,
+      '到齊：自動結案，記下兩筆入庫異動與結案人；明細不再顯示待到貨')
+    it = await itemOf()
+    ok(!it.shortage && !it.restock, '到貨後：調劑單不再缺藥')
+    ok((await api.pharmacyApi.verifyDispense(pend.id)).status === 'verified', '到貨後可以核對了')
+    const logs = dbm.db.auditLogs.slice(0, 40)
+    ok(logs.some((l) => l.action === '補貨申請' && l.detail.includes(`領藥號 ${pend.pickupNo}`)) && logs.some((l) => l.action === '追加補貨申請') && logs.some((l) => l.action === '藥品進貨' && l.detail.includes('補貨申請已到齊')),
+      '稽核：補貨申請（含領藥號）、追加、進貨到齊都有紀錄')
+
+    const r3 = await api.inventoryApi.requestRestock({ drugId, qty: 30 })
+    try {
+      await api.inventoryApi.cancelRestock(r3.id, '  ')
+      ok(false, '取消沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', `取消補貨申請沒寫原因 → 「${e.message}」`)
+    }
+    const c3 = await api.inventoryApi.cancelRestock(r3.id, '改開替代藥')
+    ok(c3.status === 'cancelled' && c3.cancelReason === '改開替代藥', '取消申請：記下原因')
+    await expectError(() => api.inventoryApi.cancelRestock(r3.id, '再取消'), '已取消的申請再取消')
+    ok(!(await api.inventoryApi.receiveStock({ drugId, qty: 5, lotNo: 'RS-C', expiry: '2030-01-01' })).restock, '取消後進貨：不會去抵已取消的申請')
+  }
+
   // B11：在一天中不同時刻重建種子——時間軸要合理、號碼依時間先後（放在最後：改時鐘會影響前面的流程）
   console.log('\n[種子時間軸（B11）]')
   {

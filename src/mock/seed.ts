@@ -21,6 +21,7 @@ import type {
   ProcedureOrder,
   ProgressNote,
   StockTxn,
+  RestockRequest,
   User,
   Visit,
   VitalRecord,
@@ -30,7 +31,7 @@ import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
-import { allocateFefo } from '@/services/stock-rules'
+import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rules'
 import { makeIdNo } from '@/utils/validators'
 import * as codes from './codes'
 import type { Database } from './db'
@@ -873,6 +874,22 @@ export function buildSeed(): Database {
     drugLots.push(...lots)
   })
 
+  // 展示用（U25）：一張昨天提出、還沒到貨的補貨申請（第一種「偏低」的藥）——
+  // 藥品庫存頁「待到貨」卡片與首頁待辦打開就有東西可看。數量用和畫面相同的建議公式；不抽亂數（不影響後面的種子資料）
+  const restockRequests: RestockRequest[] = []
+  const lowDrug = drugs[4]
+  if (lowDrug) {
+    const usable = usableQty(drugLots.filter((l) => l.drugId === lowDrug.id && l.qty > 0), T)
+    const used30 = -stockTxns.filter((x) => x.drugId === lowDrug.id && x.type === 'dispense' && x.at >= addDays(T, -30)).reduce((n, x) => n + x.qty, 0)
+    const { qty } = suggestRestockQty({ usable, need: 0, safetyStock: lowDrug.safetyStock, used30 })
+    if (qty > 0) {
+      restockRequests.push({
+        id: 'RS-SEED-1', drugId: lowDrug.id, qty, receivedQty: 0, dispenseIds: [], note: '低於安全庫存，已向藥商叫貨',
+        requestedBy: 'U301', requestedAt: `${addDays(T, -1)} 16:40`, status: 'open', txnIds: [],
+      })
+    }
+  }
+
   // 醫師個人組套：每位門診醫師兩三組常用處方，展示時打開就有東西可套用
   const setMed = (drugId: string, dose: number, freq: string, days: number) => {
     const d = drugMap.get(drugId)!
@@ -945,6 +962,7 @@ export function buildSeed(): Database {
     drugs,
     drugLots,
     stockTxns,
+    restockRequests,
     orderSets,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),

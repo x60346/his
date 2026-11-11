@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 門診藥局：調劑清單（依領藥號）→ 調劑單 → 核對 → 發藥；可補貨、列印藥袋。
+// 門診藥局：調劑清單（依領藥號）→ 調劑單 → 核對 → 發藥；缺藥可申請補貨、列印藥袋。
 // 兩段式（核對、發藥）是用藥安全的標準流程；扣庫存只在發藥時發生，且整筆交易（任一藥不足就全部不扣）。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
@@ -7,7 +7,7 @@ import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer } from 
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
-import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
+import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
 import { pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
@@ -92,7 +92,8 @@ async function confirmPickup() {
   }
 }
 
-// ---------- 補貨 ----------
+// ---------- 補貨申請（U25） ----------
+// 窗口只提出申請（數量）；批號、效期等貨到了在藥品庫存頁「到貨入庫」時才填
 const restockOpen = ref(false)
 const restockItem = ref<DispenseItem>()
 function openRestock(it: DispenseItem) {
@@ -129,7 +130,7 @@ const print = () => window.print()
             </span>
             <span class="flex flex-col items-end gap-1">
               <AlertTriangle v-if="x.allergyWarnings.length" class="h-4 w-4 text-red-500" aria-label="過敏警示" />
-              <UBadge v-if="x.items.some((i) => i.shortage)" tone="red">缺藥</UBadge>
+              <UBadge v-if="x.items.some((i) => i.shortage)" :tone="x.items.every((i) => !i.shortage || i.restock?.includesThis) ? 'blue' : 'red'">{{ x.items.every((i) => !i.shortage || i.restock?.includesThis) ? '待補貨' : '缺藥' }}</UBadge>
             </span>
           </button>
         </li>
@@ -168,11 +169,11 @@ const print = () => window.print()
               <th class="px-3 py-2 text-right">天數</th>
               <th class="px-3 py-2 text-right">總量</th>
               <th class="px-3 py-2 text-right">庫存</th>
-              <th class="w-24 px-3 py-2" />
             </tr>
           </thead>
           <tbody>
-            <tr v-for="it in d.items" :key="it.drugId" :class="['border-t border-slate-100', it.shortage && 'bg-red-50']">
+            <template v-for="it in d.items" :key="it.drugId">
+            <tr :class="['border-t border-slate-100', it.shortage && 'bg-red-50']">
               <td class="px-4 py-2">
                 <div class="font-medium text-slate-800">{{ it.drugName }}</div>
                 <div class="flex items-center gap-1 text-xs text-slate-500">{{ it.spec }}<UBadge v-if="it.highAlert" tone="purple">高警訊</UBadge></div>
@@ -183,17 +184,30 @@ const print = () => window.print()
               <td :class="['px-3 py-2 text-right', it.shortage ? 'font-semibold text-red-600' : 'text-slate-500']">
                 {{ it.stock }}<div v-if="it.shortage" class="text-xs">缺 {{ it.qty - it.stock }}</div>
               </td>
-              <td class="px-3 py-2 text-right">
-                <UButton v-if="it.shortage" size="sm" variant="secondary" :icon="PackagePlus" @click="openRestock(it)">補貨</UButton>
+            </tr>
+            <!-- 缺藥的處理放在下一列、跨整列：窄螢幕時明細只有 400px 寬，擠在最後一欄會撐出橫向捲軸 -->
+            <tr v-if="it.shortage && d.status !== 'dispensed'" class="bg-red-50">
+              <td colspan="5" class="px-4 pb-2">
+                <div v-if="it.restock?.includesThis" class="flex flex-wrap items-center gap-2 text-xs text-sky-800">
+                  <UBadge tone="blue">已申請補貨</UBadge>
+                  <span>{{ it.restock.requestedAt.slice(5, 16).replace('-', '/') }} 申請，尚欠 {{ it.restock.outstanding }} {{ it.unit }}；到貨入庫後即可{{ d.status === 'pending' ? '核對' : '發藥' }}</span>
+                </div>
+                <div v-else class="flex flex-wrap items-center gap-2 text-xs text-red-700">
+                  <UButton size="sm" variant="secondary" :icon="PackagePlus" @click="openRestock(it)">{{ it.restock ? '加入補貨申請' : '申請補貨' }}</UButton>
+                  <span v-if="it.restock">這種藥已申請 {{ it.restock.qty }} {{ it.unit }}（{{ it.restock.requestedAt.slice(5, 16).replace('-', '/') }}），把這位病人加入等候名單</span>
+                </div>
               </td>
             </tr>
+            </template>
           </tbody>
         </table>
       </UCard>
 
       <!-- 錯誤訊息不只說「錯了」，也告訴使用者下一步 -->
       <div v-if="shortages.length && d.status !== 'dispensed'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-        {{ shortages.map((s) => s.drugName).join('、') }} 庫存不足，無法{{ d.status === 'pending' ? '核對' : '發藥' }}。請先按該列的「補貨」，或聯絡醫師更換藥品。
+{{ shortages.map((s) => s.drugName).join('、') }} 庫存不足，無法{{ d.status === 'pending' ? '核對' : '發藥' }}。
+        <template v-if="shortages.every((s) => s.restock?.includesThis)">已申請補貨，到貨入庫後即可{{ d.status === 'pending' ? '核對' : '發藥' }}；也可以請醫師改開替代藥。</template>
+        <template v-else>請按該列的「申請補貨」，或聯絡醫師更換藥品。</template>
       </div>
 
       <div class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3">
@@ -209,15 +223,8 @@ const print = () => window.print()
       </div>
     </div>
 
-    <!-- 補貨＝進貨，與藥品庫存頁共用同一個對話框（要有批號、效期）；預設補到「本次需求 + 500」 -->
-    <ReceiveStockDialog
-      v-model="restockOpen"
-      :drug-id="restockItem?.drugId"
-      :drug-name="restockItem?.drugName"
-      :unit="restockItem?.unit"
-      :usable="restockItem?.stock"
-      :suggested-qty="restockItem ? restockItem.qty - restockItem.stock + 500 : undefined"
-    />
+    <!-- 補貨申請：與藥品庫存頁共用；建議量依用量算（stock-rules 的 suggestRestockQty），不再固定「缺量＋500」 -->
+    <RestockRequestDialog v-model="restockOpen" :drug-id="restockItem?.drugId" :dispense-id="d?.id" :pickup-no="d?.pickupNo" />
 
     <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
       <div v-if="d" class="space-y-3 text-sm">

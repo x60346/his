@@ -74,3 +74,32 @@ export function checkStocktakeActual(v: unknown): string | null {
   if (v === undefined || v === null || v === '') return '請輸入實際清點數量'
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? null : '實際數量需為 0 以上的整數'
 }
+
+/** 補貨建議涵蓋的天數：補完要撐得到下一次進貨 */
+export const RESTOCK_COVER_DAYS = 14
+
+export interface RestockSuggestion {
+  /** 建議數量（取整到 10；不需要補為 0） */
+  qty: number
+  /** 未取整的需要量 */
+  raw: number
+  /** 給使用者看的算式，例：「缺 12＋安全庫存 50＋14 天用量 42＝104 → 110」 */
+  formula: string
+}
+
+/**
+ * 建議補貨量 ＝（等著領的需求 − 現有可用 − 已申請未到貨）＋ 安全庫存 ＋ 14 天用量（近 30 天日均推算），無條件進位到 10。
+ * 以前固定「缺量＋500」：一天用 2 顆的藥也補 500，一天用 80 顆的藥補完兩週又缺。
+ * 「已申請未到貨」算進現有：第二位病人缺同一種藥時，只建議追加不夠的部分，不會重複叫一整批。
+ */
+export function suggestRestockQty(i: { usable: number; need: number; safetyStock: number; used30: number; onOrder?: number }): RestockSuggestion {
+  const cover = Math.ceil((Math.max(0, i.used30) / 30) * RESTOCK_COVER_DAYS)
+  const have = i.usable + (i.onOrder ?? 0)
+  const left = have - i.need // 這些病人領完後還剩多少（負的就是缺多少）
+  const raw = i.safetyStock + cover - left
+  const qty = raw > 0 ? Math.ceil(raw / 10) * 10 : 0
+  const head = left < 0 ? `缺 ${-left}＋` : ''
+  const tail = left > 0 ? `－現有 ${left}` : ''
+  const onOrder = i.onOrder ? `（已扣除申請中 ${i.onOrder}）` : ''
+  return { qty, raw, formula: `${head}安全庫存 ${i.safetyStock}＋${RESTOCK_COVER_DAYS} 天用量 ${cover}${tail}${raw > 0 ? `＝${raw} → ${qty}` : '，已足夠、不需追加'}${onOrder}` }
+}

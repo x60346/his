@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 藥品進貨：藥局頁（缺藥時就地補貨）與藥品庫存頁共用。
+// 藥品進貨：藥品庫存頁的「進貨」與補貨申請的「到貨入庫」共用（調劑窗口只申請補貨，不在這裡進貨）。
+// 這種藥有待到貨的補貨申請時，進貨量由服務層自動抵掉申請。
 // 進貨一定要有批號與效期——沒有批號，日後回收、過期報廢都追不到是哪一批。
 import { reactive, watch } from 'vue'
 import { UButton, UDialog, UInput } from '@/components/ui'
@@ -8,7 +9,7 @@ import { useAction } from '@/composables/useService'
 import { addDays, today } from '@/utils/date'
 
 const open = defineModel<boolean>({ default: false })
-const props = defineProps<{ drugId?: string; drugName?: string; unit?: string; usable?: number; suggestedQty?: number }>()
+const props = defineProps<{ drugId?: string; drugName?: string; unit?: string; usable?: number; suggestedQty?: number; title?: string; restockOutstanding?: number }>()
 const emit = defineEmits<{ done: [] }>()
 
 const form = reactive({ qty: undefined as number | undefined, lotNo: '', expiry: '', ref: '' })
@@ -21,7 +22,9 @@ watch(open, (v) => {
 // 日期選擇器最早只能選明天（今天或以前到期的不能進貨）；鍵盤仍可直接輸入，服務層會再擋
 const minExpiry = () => addDays(today(), 1)
 
-const save = useAction(inventoryApi.receiveStock, { success: (t) => `${props.drugName} 進貨 ${t.qty}，結存 ${t.balance}` })
+const save = useAction(inventoryApi.receiveStock, {
+  success: (t) => `${props.drugName} 進貨 ${t.qty}，結存 ${t.balance}${!t.restock ? '' : t.restock.outstanding ? `；補貨申請尚欠 ${t.restock.outstanding}` : '；補貨申請已到齊結案'}`,
+})
 async function submit() {
   if (!props.drugId) return
   const ok = await save.run({ drugId: props.drugId, qty: form.qty ?? 0, lotNo: form.lotNo, expiry: form.expiry, ref: form.ref })
@@ -33,9 +36,10 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" @submit="submit" :title="`進貨：${drugName ?? ''}`" size="sm">
+  <UDialog v-model="open" @submit="submit" :title="`${title ?? '進貨'}：${drugName ?? ''}`" size="sm">
     <div class="space-y-3 text-sm">
       <p v-if="usable !== undefined" class="text-slate-600">目前可用庫存 <b class="tabular text-slate-800">{{ usable }}</b> {{ unit }}</p>
+      <p v-if="restockOutstanding" class="rounded-md bg-sky-50 px-3 py-2 text-sky-900">補貨申請尚欠 <b class="tabular">{{ restockOutstanding }}</b> {{ unit }}：這次進貨會抵掉申請，到齊就自動結案；不足（分批到貨）申請會留著。</p>
       <UInput v-model="form.qty" label="進貨數量" type="number" min="1" required :hint="unit" :error="save.fieldErrors.value.qty" />
       <div class="grid grid-cols-2 gap-3">
         <UInput v-model="form.lotNo" label="批號" required placeholder="例：A24051" :error="save.fieldErrors.value.lotNo" />

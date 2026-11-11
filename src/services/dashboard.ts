@@ -15,6 +15,8 @@ export interface DashboardStats {
   /** 停診退掛、還沒電話通知的病人數（櫃台待辦） */
   suspendNoticesPending: number
   lowStockDrugs: number
+  /** 補貨申請待到貨（和藥品庫存頁「待到貨」卡片同一個來源） */
+  restockOpen: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
 }
@@ -60,6 +62,7 @@ export function getDashboard(): Promise<DashboardStats> {
       },
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       lowStockDrugs: db.drugs.filter((d) => d.active && d.stock <= d.safetyStock).length,
+      restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {
         const date = addDays(t, i - 6)

@@ -27,7 +27,7 @@ import type {
   PreventRecord,
   Procedure,
   ProgressNote,
-  StockTxn,
+  StockTxn, RestockRequest,
   User,
   Visit,
   VitalRecord,
@@ -65,6 +65,8 @@ export interface Database {
   drugLots: DrugLot[]
   /** 庫存異動帳 */
   stockTxns: StockTxn[]
+  /** 補貨申請 */
+  restockRequests: RestockRequest[]
   procedures: Procedure[]
   icdCodes: IcdCode[]
   frequencies: Frequency[]
@@ -86,7 +88,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 32
+export const SCHEMA_VERSION = 33
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(): Database {
