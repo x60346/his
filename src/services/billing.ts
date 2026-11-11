@@ -26,20 +26,39 @@ export interface BillingLookup {
 
 const round = (n: number) => Math.round(n * 10) / 10
 
+// ---------- 掛號當下就確定的項目 ----------
+// 掛號費、診察費、基本部分負擔只看「身分＋案件分類」，掛號時就算得出來；藥品部分負擔、自費項目要看診後才知道。
+// 掛號頁的預估（fixedCharges）與批價（calcChargeLines）呼叫同一組函式，兩邊的數字不會各算各的。
+
+function regLine(identity: Identity): ChargeLine {
+  return { kind: 'reg', name: `掛號費（${identity.name}）`, qty: 1, unitPrice: identity.regFee, amount: identity.regFee, patientPay: true }
+}
+
+function consultLine(identity: Identity, consult: Procedure | undefined): ChargeLine | undefined {
+  if (!consult) return undefined
+  return identity.selfPay
+    ? { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.selfPrice, amount: consult.selfPrice, patientPay: true }
+    : { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.points, amount: consult.points, patientPay: false }
+}
+
+/** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收 */
+function basicCopayLine(identity: Identity, caseType: string, s: BillingSettings): ChargeLine | undefined {
+  if (identity.selfPay || identity.copayExempt || caseType === 'A3') return undefined
+  return { kind: 'copay-basic', name: '門診基本部分負擔', qty: 1, unitPrice: s.basicCopay, amount: s.basicCopay, patientPay: true }
+}
+
+/** 掛號時就確定的收費項目（掛號頁預估用）；批價時這幾行與它完全相同，再加上看診內容的項目 */
+export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>): ChargeLine[] {
+  return [regLine(identity), consultLine(identity, lk.procedure(CONSULT_PROC_ID)), basicCopayLine(identity, caseType, lk.settings)].filter((l): l is ChargeLine => !!l)
+}
+
 export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup): ChargeLine[] {
   const selfPayVisit = lk.identity.selfPay
   const lines: ChargeLine[] = []
 
-  lines.push({ kind: 'reg', name: `掛號費（${lk.identity.name}）`, qty: 1, unitPrice: lk.identity.regFee, amount: lk.identity.regFee, patientPay: true })
-
-  const consult = lk.procedure(CONSULT_PROC_ID)
-  if (consult) {
-    lines.push(
-      selfPayVisit
-        ? { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.selfPrice, amount: consult.selfPrice, patientPay: true }
-        : { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.points, amount: consult.points, patientPay: false },
-    )
-  }
+  lines.push(regLine(lk.identity))
+  const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID))
+  if (consult) lines.push(consult)
 
   let nhiDrugTotal = 0
   for (const m of enc.medications) {
@@ -65,10 +84,9 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     }
   }
 
+  const basic = basicCopayLine(lk.identity, visit.caseType, lk.settings)
+  if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
-    if (visit.caseType !== 'A3') {
-      lines.push({ kind: 'copay-basic', name: '門診基本部分負擔', qty: 1, unitPrice: lk.settings.basicCopay, amount: lk.settings.basicCopay, patientPay: true })
-    }
     const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, lk.settings)
     if (dc > 0) {
       lines.push({ kind: 'copay-drug', name: '藥品部分負擔', qty: 1, unitPrice: dc, amount: dc, patientPay: true })

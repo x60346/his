@@ -114,8 +114,19 @@ function togglePrevent(code: string, on: boolean) {
   preventItems.value = on ? [...preventItems.value, code] : preventItems.value.filter((c) => c !== code)
 }
 
+// ---------- 預估應收（掛號不收費；讓櫃台答得出「今天要多少錢」）----------
+// 只含掛號當下就確定的項目；計算與批價共用 billing.fixedCharges，所以和批價時的數字一致
+const { data: estimate } = useQuery(
+  () => bookingApi.estimateFee(String(identityCode.value), String(caseType.value), preventItems.value.length > 0),
+  [identityCode, caseType, () => preventItems.value.length],
+)
+const feeText = (e: { lines: { kind: string; amount: number }[] }) =>
+  e.lines.map((l) => `${{ reg: '掛號費', consult: '診察費', 'copay-basic': '基本部分負擔' }[l.kind] ?? l.kind} ${l.amount}`).join('＋')
+
 // ---------- 掛號 ----------
 const lastResult = ref<VisitView>()
+// 掛號完成卡片上的預估：用實際掛進去的身分與案件分類（可能已轉成 A3）
+const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType) : undefined), [lastResult])
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
 const canRegister = computed(() => !!patient.value && !!selectedSession.value)
 
@@ -302,6 +313,15 @@ function openIdentity(v: VisitView) {
               </div>
               <p v-if="preventItems.length && caseType === '01'" class="mt-1 text-xs text-slate-500">僅做預防保健時，系統會以 A3 案件申報（免基本部分負擔）。</p>
             </div>
+            <div v-if="estimate" class="rounded-md border border-slate-200 px-3 py-2 text-sm">
+              <div class="flex items-baseline justify-between gap-2">
+                <span class="text-slate-600">預估應收</span>
+                <span class="tabular text-lg font-semibold text-slate-800">{{ estimate.total }} 元</span>
+              </div>
+              <div class="tabular text-xs text-slate-500">{{ feeText(estimate) }}<template v-if="estimate.copayNote">（{{ estimate.copayNote }}）</template></div>
+              <!-- 自費身分沒有「部分負擔」，藥費全額自付 -->
+              <div class="mt-0.5 text-xs text-slate-400">{{ estimate.copayNote === '自費身分' ? '藥費等項目' : '藥品部分負擔、自費項目' }}看診後才確定；看診後至批價櫃台結帳</div>
+            </div>
             <UButton block :icon="Ticket" :disabled="!canRegister" :loading="register.pending.value" @click="submit">掛號</UButton>
           </div>
         </UCard>
@@ -315,6 +335,7 @@ function openIdentity(v: VisitView) {
             <div class="font-semibold">{{ lastResult.patientName }}（{{ lastResult.chartNo }}）</div>
             <div>{{ lastResult.date }} {{ periodLabel[lastResult.period] }}</div>
             <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診</div>
+            <div v-if="lastEstimate" class="mt-1 text-xs text-slate-600">預估應收 <b class="tabular">{{ lastEstimate.total }}</b> 元起（看診後批價結帳）</div>
           </div>
         </div>
     </div>

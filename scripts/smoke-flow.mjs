@@ -220,6 +220,34 @@ try {
     ok(!nobody || (await api.bookingApi.lastCaseType(nobody.id)) === null, '沒有看過診的病人：沒有上次案件分類')
   }
 
+  // U2：掛號時的預估應收 = 批價時「掛號當下就確定」的那幾項（兩邊共用 fixedCharges）
+  {
+    const billing = await load('/src/services/billing.ts')
+    const views = await load('/src/services/views.ts')
+    const fixedKinds = ['reg', 'consult', 'copay-basic']
+    let mismatch = []
+    for (const idt of dbm.db.identities) {
+      for (const ct of ['01', '04', '08', 'A3']) {
+        for (const withPrevent of [false, true]) {
+          const est = await api.bookingApi.estimateFee(idt.code, ct, withPrevent)
+          const effective = api.bookingApi.effectiveCaseType(ct, withPrevent)
+          const bill = billing.calcChargeLines({ caseType: effective }, { medications: [], procedures: [] }, views.billingLookup(idt.code))
+          const billFixed = bill.filter((l) => l.patientPay && fixedKinds.includes(l.kind)).reduce((s, l) => s + l.amount, 0)
+          if (est.total !== billFixed) mismatch.push(`${idt.name}/${ct}${withPrevent ? '+預防' : ''}：預估 ${est.total}、批價 ${billFixed}`)
+        }
+      }
+    }
+    ok(mismatch.length === 0, `預估應收與批價一致（${dbm.db.identities.length} 種身分 × 4 種案件 × 有無預防保健）${mismatch.length ? '：' + mismatch.join('；') : ''}`)
+    const basic = dbm.db.billingSettings.basicCopay
+    const e01 = await api.bookingApi.estimateFee('01', '01')
+    const eA3 = await api.bookingApi.estimateFee('01', '01', true)
+    const eVet = await api.bookingApi.estimateFee('02', '01')
+    const eSelf = await api.bookingApi.estimateFee('09', '01')
+    const consultSelf = dbm.db.procedures.find((p) => p.id === billing.CONSULT_PROC_ID).selfPrice
+    ok(e01.total === 150 + basic && eA3.total === 150 && eA3.copayNote === '預防保健免部分負擔' && eVet.total === 50 && eVet.copayNote === '榮民免部分負擔' && eSelf.total === 200 + consultSelf,
+      `預估金額：健保一般 ${e01.total}、只做預防保健 ${eA3.total}、榮民 ${eVet.total}（免部分負擔）、自費 ${eSelf.total}（含診察費）`)
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')

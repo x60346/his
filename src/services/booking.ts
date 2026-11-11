@@ -1,11 +1,12 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { Visit, VisitStatus } from '@/types'
+import type { ChargeLine, Visit, VisitStatus } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
-import { find, visitView, type VisitView } from './views'
+import { billingLookup, find, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
+import { fixedCharges } from './billing'
 
 export interface VisitQuery {
   date?: string
@@ -82,7 +83,7 @@ export function register(input: RegisterInput): Promise<VisitView> {
       seqNo: nextCounter(`seq:${session.id}`),
       identityCode: input.identityCode,
       // 只做預防保健時以 A3 申報（免基本部分負擔）
-      caseType: preventItems.length && input.caseType === '01' ? 'A3' : input.caseType,
+      caseType: effectiveCaseType(input.caseType, preventItems.length > 0),
       cardSeq: String(nextCounter(`cardseq:${patient.id}`)).padStart(4, '0'),
       status: 'registered',
       firstVisit: !db.visits.some((x) => x.patientId === patient.id && x.status !== 'cancelled'),
@@ -92,6 +93,33 @@ export function register(input: RegisterInput): Promise<VisitView> {
     db.visits.push(v)
     audit('掛號', `${patient.chartNo} ${patient.name} → ${session.date} ${session.period} ${session.roomNo} 診 #${v.seqNo}`)
     return visitView(v)
+  })
+}
+
+/** 實際申報的案件分類：一般案件（01）且有預防保健時，以 A3 申報（免基本部分負擔）。掛號與預估共用 */
+export function effectiveCaseType(caseType: string, withPrevent: boolean): string {
+  return withPrevent && caseType === '01' ? 'A3' : caseType
+}
+
+export interface FeeEstimate {
+  /** 掛號當下就確定、病人要付的項目（掛號費、基本部分負擔；自費身分含診察費） */
+  lines: ChargeLine[]
+  total: number
+  /** 為什麼沒有基本部分負擔（免部分負擔身分、預防保健案件、自費身分），讓櫃台說得出原因 */
+  copayNote?: string
+}
+
+/**
+ * 掛號時預估應收：只含掛號當下就確定的項目，藥品部分負擔、自費項目要看診後才知道。
+ * 計算與批價共用 billing.fixedCharges，兩邊數字一致。收錢仍在批價（掛號不收費）。
+ */
+export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false): Promise<FeeEstimate> {
+  return query(() => {
+    const caseType = effectiveCaseType(inputCaseType, withPrevent)
+    const lk = billingLookup(identityCode)
+    const lines = fixedCharges(lk.identity, caseType, lk).filter((l) => l.patientPay)
+    const copayNote = lk.identity.selfPay ? '自費身分' : lk.identity.copayExempt ? `${lk.identity.name}免部分負擔` : caseType === 'A3' ? '預防保健免部分負擔' : undefined
+    return { lines, total: lines.reduce((s, l) => s + l.amount, 0), copayNote }
   })
 }
 
