@@ -2,6 +2,31 @@
 // 執行：npm run smoke
 import { createServer } from 'vite'
 
+// ---------- 固定的模擬時鐘 ----------
+// 種子資料依「現在幾點」決定今天走到哪一步（清晨重建時還沒有人看過診）。測試若用真實時間，
+// 清晨跑（GitHub Actions 是 UTC，台灣早上推送就是 UTC 凌晨）今天就沒有待批價、待領藥的病人，大半流程測試會失敗、擋住部署。
+// 所以測試一律從「今天 14:30」開始，時間照真實流逝往前走（交易、稽核的先後仍然正確）。setClock 可改到別的時刻測種子
+const RealDate = Date
+let clockBase = 0
+let realBase = 0
+function setClock(hh, mm) {
+  const d = new RealDate()
+  d.setHours(hh, mm, 0, 0)
+  clockBase = d.getTime()
+  realBase = RealDate.now()
+}
+setClock(14, 30)
+const fakeNow = () => clockBase + (RealDate.now() - realBase)
+globalThis.Date = class extends RealDate {
+  constructor(...a) {
+    if (a.length) super(...a)
+    else super(fakeNow())
+  }
+  static now() {
+    return fakeNow()
+  }
+}
+
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' })
 const load = (p) => server.ssrLoadModule(p)
 
@@ -1741,6 +1766,72 @@ try {
   const leak = await api.patientApi.getPatient(patient.id)
   leak.name = '被頁面改掉'
   ok(dbm.db.patients.find((p) => p.id === patient.id).name === patient.name, '頁面修改回傳物件不會影響資料庫（回傳的是複本）')
+
+  // B11：在一天中不同時刻重建種子——時間軸要合理、號碼依時間先後（放在最後：改時鐘會影響前面的流程）
+  console.log('\n[種子時間軸（B11）]')
+  {
+    const { buildSeed } = await load('/src/mock/seed.ts')
+    const D = await load('/src/utils/date.ts')
+    const ordered = (list, time, num) => {
+      const bad = []
+      for (let i = 1; i < list.length; i++) if (time(list[i]) < time(list[i - 1]) && num(list[i]) > num(list[i - 1])) bad.push(`${num(list[i - 1])}@${time(list[i - 1])} → ${num(list[i])}@${time(list[i])}`)
+      return bad
+    }
+    const groupBy = (list, key) => {
+      const m = new Map()
+      for (const x of list) m.set(key(x), [...(m.get(key(x)) ?? []), x])
+      return [...m.values()]
+    }
+    for (const [hh, mm] of [[5, 38], [9, 0], [14, 30], [22, 0]]) {
+      setClock(hh, mm)
+      const label = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+      const now = D.now()
+      const Td = D.today()
+      const db = buildSeed()
+      const vById = new Map(db.visits.map((v) => [v.id, v]))
+      // 1. 沒有未來的事（就醫、病歷、收費、調劑相關的時間）
+      const times = [
+        ...db.visits.flatMap((v) => [v.createdAt, v.calledAt]),
+        ...db.encounters.map((e) => e.completedAt),
+        ...db.charges.map((c) => c.paidAt),
+        ...db.dispenses.flatMap((d) => [d.createdAt, d.verifiedAt, d.dispensedAt]),
+      ].filter(Boolean)
+      const future = times.filter((t) => t > now)
+      // 2. 流程先後：掛號 ≤ 叫號 ≤ 完成 ≤ 批價 ≤ 發藥
+      const flowBad = db.visits.filter((v) => {
+        const e = db.encounters.find((x) => x.visitId === v.id)
+        const c = db.charges.find((x) => x.visitId === v.id)
+        const d = db.dispenses.find((x) => x.visitId === v.id)
+        const seq = [v.createdAt, v.calledAt, e?.completedAt, c?.paidAt, d?.createdAt, d?.dispensedAt].filter(Boolean)
+        return seq.some((t, i) => i && t < seq[i - 1])
+      })
+      // 3. 號碼依時間：看診號（同診次）、收據號、領藥號（同一天）、就醫序號（同一位病人）
+      const seqBad = groupBy(db.visits, (v) => v.sessionId).flatMap((l) => ordered(l.sort((a, b) => a.seqNo - b.seqNo), (v) => v.createdAt, (v) => v.seqNo))
+      const rcBad = groupBy(db.charges, (c) => vById.get(c.visitId).date).flatMap((l) => ordered(l.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo)), (c) => c.paidAt, (c) => c.receiptNo))
+      const pkBad = groupBy(db.dispenses, (d) => vById.get(d.visitId).date).flatMap((l) => ordered(l.sort((a, b) => a.pickupNo - b.pickupNo), (d) => d.createdAt, (d) => d.pickupNo))
+      const csBad = groupBy(db.visits, (v) => v.patientId).flatMap((l) => ordered(l.sort((a, b) => a.cardSeq.localeCompare(b.cardSeq)), (v) => v.createdAt, (v) => v.cardSeq))
+      ok(!future.length && !flowBad.length, `${label} 重建：沒有未來的時間（${future.length}）、掛號≤叫號≤完成≤批價≤發藥（違規 ${flowBad.length}）`)
+      ok(!seqBad.length && !rcBad.length && !pkBad.length && !csBad.length,
+        `${label} 重建：看診號、收據號、領藥號、就醫序號都依時間先後${[...seqBad, ...rcBad, ...pkBad, ...csBad].slice(0, 2).join('；')}`)
+      // 4. 今天：看過診的人數、下午診的掛號
+      const todayV = db.visits.filter((v) => v.date === Td && !v.refillOf)
+      const seen = todayV.filter((v) => ['consulted', 'charged', 'dispensed'].includes(v.status))
+      const pmSessionIds = new Set(db.sessions.filter((x) => x.date === Td && x.period === 'PM').map((x) => x.id))
+      const pmRegs = todayV.filter((v) => pmSessionIds.has(v.sessionId))
+      const sameTime = groupBy(todayV, (v) => v.createdAt).some((l) => l.length >= 4)
+      if (hh === 5) {
+        ok(seen.length === 0 && pmRegs.every((v) => v.createdAt < Td) && todayV.every((v) => v.createdAt < Td),
+          `清晨 05:38：今天沒有人看過診；今天的 ${todayV.length} 筆掛號都是前幾天預約的（不再全部擠在同一個時間）`)
+      }
+      if (hh === 9) ok(seen.length >= 1 && seen.length < 6 && !todayV.some((v) => ['charged', 'dispensed'].includes(v.status) && db.charges.find((c) => c.visitId === v.id).paidAt > now), `09:00：前幾位看完（${seen.length} 位），其餘還在候診`)
+      if (hh === 14) {
+        const st = (s) => todayV.filter((v) => v.status === s).length
+        ok(st('dispensed') === 2 && st('charged') === 2 && st('consulted') === 2 && pmRegs.every((v) => v.createdAt >= `${Td} 13:00`), `14:30：完整的今日情境（已領藥 2、已批價 2、待批價 2），下午診 13:00 起掛號`)
+      }
+      ok(!sameTime, `${label} 重建：今天沒有一大群人擠在同一個掛號時間`)
+    }
+    setClock(14, 30)
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

@@ -169,6 +169,21 @@ export function buildSeed(): Database {
    * 超過現在的時間，往回推到「現在 − back 分鐘」；back 依流程先後遞減，保持 掛號 < 看診 < 批價 < 發藥 的順序。
    */
   const notFuture = (at: string, back: number) => (at > nowStr ? addMinutes(nowStr, -back) : at)
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  /**
+   * 一次就醫的流程時間：掛號 → 叫號 → 完成看診 → 批價 → 發藥，依序往後排（間隔是門診常見的分鐘數）。
+   * 以前批價固定寫「掛號那個小時＋1 的 10 分」，看診完成卻可能在掛號後 40 分鐘——會出現「還沒看完就先付錢」
+   */
+  const flowFrom = (reg: string, wait: number) => {
+    const call = addMinutes(reg, wait)
+    const done = addMinutes(call, int(8, 15))
+    const paid = addMinutes(done, int(3, 10))
+    const disp = addMinutes(paid, int(5, 15))
+    return { reg, call, done, paid, disp }
+  }
+  type Flow = ReturnType<typeof flowFrom>
+  /** 預約掛號的建立時間：前幾天的白天（不是今天、更不是未來） */
+  const pastBooking = () => `${addDays(T, -int(1, 6))} ${pad2(int(9, 17))}:${pad2(int(0, 59))}`
   const counters: Record<string, number> = {}
   const next = (key: string) => (counters[key] = (counters[key] ?? 0) + 1)
   let idn = 0
@@ -277,19 +292,20 @@ export function buildSeed(): Database {
   const identityMap = new Map(codes.identities.map((x) => [x.code, x]))
   const freqTimes = (f: string) => codes.frequencies.find((x) => x.code === f)?.timesPerDay ?? 1
 
-  const makeVisit = (patient: Patient, session: ClinicSession, status: Visit['status'], hour: number, caseType = '01'): Visit => {
+  const makeVisit = (patient: Patient, session: ClinicSession, status: Visit['status'], createdAt: string, caseType = '01'): Visit => {
     const seqKey = `seq:${session.id}`
     const v: Visit = {
       id: id('V'), date: session.date, sessionId: session.id, deptId: session.deptId, doctorId: session.doctorId,
       patientId: patient.id, seqNo: next(seqKey), identityCode: patient.defaultIdentity, caseType,
       cardSeq: String(next(`cardseq:${patient.id}`)).padStart(4, '0'), status, firstVisit: false, preventItems: [],
-      createdAt: notFuture(`${session.date} ${String(hour).padStart(2, '0')}:${String(int(0, 59)).padStart(2, '0')}`, 120),
+      createdAt,
     }
     visits.push(v)
     return v
   }
 
-  const makeEncounter = (v: Visit, sc: Scenario, completed: boolean): Encounter => {
+  const makeEncounter = (v: Visit, sc: Scenario, flow?: Pick<Flow, 'call' | 'done'>): Encounter => {
+    const completed = !!flow
     const pt = patients.find((p) => p.id === v.patientId)!
     // 展示資料也要遵守用藥安全：避開病人過敏的藥（與看診畫面使用同一個 checkAllergies 規則）
     const conflicts = new Set(checkAllergies(pt.allergies, sc.meds.map(([id]) => drugMap.get(id)!)).map((w) => w.drugId))
@@ -301,12 +317,10 @@ export function buildSeed(): Database {
     })
     const procs: ProcedureOrder[] = (sc.procs ?? []).map((procId) => ({ procId, qty: 1, selfPay: false }))
     const adult = pt.birthDate < addDays(T, -365 * 12)
-    const completedAt = completed ? notFuture(addMinutes(v.createdAt, int(10, 40)), 60) : undefined
+    const completedAt = flow?.done
     // 有病歷就是叫過號：叫號時間在掛號之後、完成看診之前（以前沒填，掛號頁的「目前看到幾號」算不出來）
     const calledAfterReg = addMinutes(v.createdAt, 5)
-    v.calledAt = completedAt
-      ? [addMinutes(completedAt, -8), v.createdAt].sort().pop()!
-      : calledAfterReg > nowStr ? nowStr : calledAfterReg
+    v.calledAt = flow ? flow.call : calledAfterReg > nowStr ? nowStr : calledAfterReg
     const e: Encounter = {
       id: id('E'), visitId: v.id, patientId: v.patientId, doctorId: v.doctorId, deptId: v.deptId, date: v.date,
       subjective: sc.s, objective: sc.o, assessment: sc.a, plan: sc.p,
@@ -342,12 +356,13 @@ export function buildSeed(): Database {
     return c
   }
 
-  const makeDispense = (v: Visit, e: Encounter, status: Dispense['status'], at: string) => {
+  /** 調劑單在批價時建立（createdAt＝批價時間），核對、發藥在之後（doneAt） */
+  const makeDispense = (v: Visit, e: Encounter, status: Dispense['status'], createdAt: string, doneAt = createdAt) => {
     const d: Dispense = {
       id: id('DP'), visitId: v.id, encounterId: e.id, patientId: v.patientId,
-      pickupNo: next(`pickup:${v.date}`), status, createdAt: at,
-      ...(status !== 'pending' ? { verifiedBy: 'U301', verifiedAt: at } : {}),
-      ...(status === 'dispensed' ? { dispensedBy: 'U301', dispensedAt: at } : {}),
+      pickupNo: next(`pickup:${v.date}`), status, createdAt,
+      ...(status !== 'pending' ? { verifiedBy: 'U301', verifiedAt: doneAt } : {}),
+      ...(status === 'dispensed' ? { dispensedBy: 'U301', dispensedAt: doneAt } : {}),
     }
     dispenses.push(d)
   }
@@ -388,11 +403,11 @@ export function buildSeed(): Database {
       const session = sessionFor(pt, daySessions, pick(['D01', 'D02', 'D02', 'D06', 'D07', 'D03']))
       if (!session) continue
       const sc = scenarioFor(session.deptId)
-      const v = makeVisit(pt, session, 'dispensed', session.period === 'AM' ? int(8, 11) : int(13, 16), sc.caseType)
-      const e = makeEncounter(v, sc, true)
-      const at = `${date} ${String(Number(v.createdAt.slice(11, 13)) + 1).padStart(2, '0')}:10`
-      makeCharge(v, e, at)
-      makeDispense(v, e, 'dispensed', at)
+      const flow = flowFrom(`${date} ${pad2(session.period === 'AM' ? int(8, 11) : int(13, 16))}:${pad2(int(0, 59))}`, int(5, 40))
+      const v = makeVisit(pt, session, 'dispensed', flow.reg, sc.caseType)
+      const e = makeEncounter(v, sc, flow)
+      makeCharge(v, e, flow.paid)
+      makeDispense(v, e, 'dispensed', flow.paid, flow.disp)
     }
   })
 
@@ -406,11 +421,11 @@ export function buildSeed(): Database {
       const session = sessionFor(pt, daySessions)
       if (!session) continue
       const sc = scenarioFor(session.deptId)
-      const v = makeVisit(pt, session, 'dispensed', session.period === 'AM' ? int(8, 11) : int(13, 16), sc.caseType)
-      const e = makeEncounter(v, sc, true)
-      const at = `${date} ${String(Number(v.createdAt.slice(11, 13)) + 1).padStart(2, '0')}:10`
-      makeCharge(v, e, at)
-      makeDispense(v, e, 'dispensed', at)
+      const flow = flowFrom(`${date} ${pad2(session.period === 'AM' ? int(8, 11) : int(13, 16))}:${pad2(int(0, 59))}`, int(5, 40))
+      const v = makeVisit(pt, session, 'dispensed', flow.reg, sc.caseType)
+      const e = makeEncounter(v, sc, flow)
+      makeCharge(v, e, flow.paid)
+      makeDispense(v, e, 'dispensed', flow.paid, flow.disp)
     }
   }
 
@@ -439,17 +454,35 @@ export function buildSeed(): Database {
     [15, 'PM', 'D01', 'registered'],
     [16, 'AM', 'D01', 'cancelled'],
   ]
-  for (const [pi, period, dept, status] of todayPlan) {
+  /**
+   * 時間軸（B11）：每個診次依序排——上午 07:30 起掛號、08:30 起叫號，下午 13:00 起掛號、13:30 起叫號，每位約 12 分鐘。
+   * 時間還沒到的步驟就還沒發生：清晨重建時沒有人看過診；九點時前幾位看完了但還沒批價。
+   * 掛號時間還沒到的，是「之前就預約好的」（建立時間在前幾天）——以前一律拉回「現在−120 分」，整排同一個時間、下午診也在清晨掛號。
+   */
+  const opening = { AM: { reg: '07:30', call: '08:30' }, PM: { reg: '13:00', call: '13:30' } } as const
+  const slotIndex = new Map<string, number>()
+  const reached = (t: string) => t <= nowStr
+  for (const [pi, period, dept, planned] of todayPlan) {
     const pt = opdPatients[pi]
     const session = period === 'AM' ? amFirst(dept) : pmFirst(dept)
     if (!session) continue
     const sc = scenarioFor(session.deptId)
-    const v = makeVisit(pt, session, status, period === 'AM' ? 8 : 13, sc.caseType ?? '01')
+    const j = slotIndex.get(session.id) ?? 0
+    slotIndex.set(session.id, j + 1)
+    const open = opening[session.period === 'PM' ? 'PM' : 'AM']
+    const reg = addMinutes(`${T} ${open.reg}`, j * 6 + int(0, 4))
+    const call = addMinutes(`${T} ${open.call}`, j * 12)
+    const flow: Flow = { reg, call, done: addMinutes(call, 10), paid: addMinutes(call, 15), disp: addMinutes(call, 25) }
+    let status = planned
+    if (status === 'dispensed' && !reached(flow.disp)) status = 'charged'
+    if (status === 'charged' && !reached(flow.paid)) status = 'consulted'
+    if (status === 'consulted' && !reached(flow.done)) status = 'registered'
+    const v = makeVisit(pt, session, status, reached(reg) ? reg : pastBooking(), sc.caseType ?? '01')
     if (status === 'consulted' || status === 'charged' || status === 'dispensed') {
-      const e = makeEncounter(v, sc, true)
+      const e = makeEncounter(v, sc, flow)
       if (status !== 'consulted') {
-        makeCharge(v, e, notFuture(`${T} 10:${String(int(10, 59)).padStart(2, '0')}`, 30))
-        makeDispense(v, e, status === 'dispensed' ? 'dispensed' : 'pending', notFuture(`${T} 10:30`, 10))
+        makeCharge(v, e, flow.paid)
+        makeDispense(v, e, status === 'dispensed' ? 'dispensed' : 'pending', flow.paid, status === 'dispensed' ? flow.disp : undefined)
       }
     }
   }
@@ -465,12 +498,12 @@ export function buildSeed(): Database {
       let session: ClinicSession | undefined
       for (let k = ago; k < ago + 7 && !session; k++) session = sessionsOn(addDays(T, -k)).find((x) => x.deptId === 'D02' && x.period === 'AM' && deptFits(pt, 'D02', x.date))
       if (!session) continue
-      const v = makeVisit(pt, session, 'dispensed', 9, '04')
-      const e = makeEncounter(v, sc, true)
+      const flow = flowFrom(`${session.date} 09:${pad2(int(0, 30))}`, int(5, 30))
+      const v = makeVisit(pt, session, 'dispensed', flow.reg, '04')
+      const e = makeEncounter(v, sc, flow)
       e.refillTimes = times
-      const at = `${session.date} 10:10`
-      makeCharge(v, e, at)
-      makeDispense(v, e, 'dispensed', at)
+      makeCharge(v, e, flow.paid)
+      makeDispense(v, e, 'dispensed', flow.paid, flow.disp)
     }
   }
 
@@ -491,7 +524,7 @@ export function buildSeed(): Database {
     const session = sessionFor(pt, sessionsOn(date))
     // 同一位病人同一診次不重複掛號
     if (!session || visits.some((v) => v.sessionId === session.id && v.patientId === pt.id)) continue
-    makeVisit(pt, session, 'registered', 9)
+    makeVisit(pt, session, 'registered', pastBooking())
   }
 
   // 預防保健紀錄
@@ -869,6 +902,29 @@ export function buildSeed(): Database {
       o.stopAckBy = 'U202'
     }
   }
+
+  // ---------- 號碼依時間先後重編（B11） ----------
+  // 資料是分段產生的（歷史、近幾天、今天、預約各一段），產生順序≠時間順序：以前會出現「R0002 10:37、R0003 10:07」、
+  // 第 2 號比第 1 號早掛號。最後統一依時間重編一次；每組的筆數不變，所以計數器（下一個號碼）不用改
+  const renumber = <X>(items: X[], groupOf: (x: X) => string, timeOf: (x: X) => string, idOf: (x: X) => string, set: (x: X, n: number) => void) => {
+    const groups = new Map<string, X[]>()
+    for (const x of items) groups.set(groupOf(x), [...(groups.get(groupOf(x)) ?? []), x])
+    for (const list of groups.values()) {
+      list.sort((a, b) => timeOf(a).localeCompare(timeOf(b)) || idOf(a).localeCompare(idOf(b)))
+      list.forEach((x, i) => set(x, i + 1))
+    }
+  }
+  const visitById = new Map(visits.map((v) => [v.id, v]))
+  // 看診號：同一診次依掛號時間
+  renumber(visits, (v) => v.sessionId, (v) => v.createdAt, (v) => v.id, (v, n) => (v.seqNo = n))
+  // 就醫序號：同一位病人依就醫時間（健保卡每次就醫加一）
+  renumber(visits, (v) => v.patientId, (v) => v.createdAt, (v) => v.id, (v, n) => (v.cardSeq = String(n).padStart(4, '0')))
+  // 收據號碼：同一天依收費時間
+  renumber(charges, (c) => visitById.get(c.visitId)!.date, (c) => c.paidAt, (c) => c.id, (c, n) => {
+    c.receiptNo = `R${visitById.get(c.visitId)!.date.replace(/-/g, '')}${String(n).padStart(4, '0')}`
+  })
+  // 領藥號：同一天依開單（批價）時間
+  renumber(dispenses, (d) => visitById.get(d.visitId)!.date, (d) => d.createdAt, (d) => d.id, (d, n) => (d.pickupNo = n))
 
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
