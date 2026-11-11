@@ -5,11 +5,12 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, SkipForward } from 'lucide-vue-next'
+import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
 } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import PreventRecordDialog from '@/components/PreventRecordDialog.vue'
 import DiagnosisEditor from './components/DiagnosisEditor.vue'
 import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue'
 import ProcedureEditor from './components/ProcedureEditor.vue'
@@ -23,7 +24,7 @@ import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
 import { ageText, periodLabel } from '@/utils/date'
 import { visitStatus } from '@/utils/labels'
-import type { Encounter } from '@/types'
+import type { Encounter, PreventItem } from '@/types'
 
 const auth = useAuth()
 const ui = useUi()
@@ -260,6 +261,27 @@ function applySet(x: ExpandedOrderSet) {
 
 const defaultDays = computed(() => (visit.value && ['04', '08'].includes(visit.value.caseType) ? 28 : 3))
 const { data: preventItems } = useQuery(() => preventApi.listPreventItems())
+
+// ---------- 預防保健：在看診頁直接登錄（以前要換到預防保健頁重找病人，血壓身高體重還要再打一次）----------
+// 登錄框與預防保健頁共用（PreventRecordDialog），規則只有一份；本次已量的生命徵象預先帶入，仍可修改
+const { data: preventStatus } = useQuery(
+  async () => (visit.value?.preventItems.length ? preventApi.visitPreventStatus(visit.value.id) : []),
+  [() => visit.value?.id],
+)
+const preventOpen = ref(false)
+const preventItem = ref<PreventItem>()
+const preventPrefill = computed<Record<string, string>>(() => {
+  const v = draft.value.vitals
+  const out: Record<string, string> = {}
+  if (v.sbp && v.dbp) out['血壓'] = `${v.sbp}/${v.dbp}`
+  if (v.height) out['身高'] = String(v.height)
+  if (v.weight) out['體重'] = String(v.weight)
+  return out
+})
+function openPrevent(item: PreventItem) {
+  preventItem.value = item
+  preventOpen.value = true
+}
 const preventNames = computed(() => (visit.value?.preventItems ?? []).map((c) => preventItems.value?.find((i) => i.code === c)?.name ?? c).join('、'))
 const caseTypeName = (code: string) => masterApi.staticCodes.caseTypes.find((c) => c.code === code)?.name ?? code
 const bmi = computed(() => {
@@ -313,8 +335,18 @@ const tabs = computed(() => [
         <UBadge tone="blue">{{ visit.identityName }}</UBadge>
         <UBadge>{{ visit.caseType }} {{ caseTypeName(visit.caseType) }}</UBadge>
         <UBadge v-if="visit.firstVisit" tone="purple">初診</UBadge>
-        <UBadge v-if="visit.preventItems.length" tone="green">預防保健：{{ preventNames }}</UBadge>
+        <!-- 預防保健：每一項一顆按鈕，點了就在這裡登錄；登錄過的顯示結果 -->
+        <template v-if="preventStatus?.length">
+          <template v-for="s in preventStatus" :key="s.item.code">
+            <UBadge v-if="s.done" tone="green">✓ {{ s.item.name }}（{{ s.result }}）</UBadge>
+            <button v-else type="button" class="inline-flex items-center gap-1 rounded bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-700" @click="openPrevent(s.item)">
+              <ShieldCheck class="h-3.5 w-3.5" />{{ s.item.name }}・登錄
+            </button>
+          </template>
+        </template>
+        <UBadge v-else-if="visit.preventItems.length" tone="green">預防保健：{{ preventNames }}</UBadge>
       </PatientBanner>
+      <PreventRecordDialog v-model="preventOpen" :item="preventItem" :patient="visit" :visit-id="visit.id" :prefill="preventPrefill" />
 
       <!-- 尚未叫號 -->
       <UCard v-if="visit.status === 'registered'">

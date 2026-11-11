@@ -1,5 +1,5 @@
 // 預防保健：資格查詢（規則在 prevent-rules.ts 的純函式）、今日待執行、服務紀錄、月統計。
-import type { PreventItem, PreventRecord } from '@/types'
+import type { PreventItem, PreventRecord, Visit } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
@@ -42,21 +42,36 @@ export interface WorklistRow {
   items: { code: string; name: string; done: boolean }[]
 }
 
+/** 這次就醫掛的預防保健項目，各自是否已登錄（同一病人、同一項目、就醫當天、未作廢）——工作清單與看診頁共用 */
+function visitItems(v: Visit) {
+  return v.preventItems.map((code) => {
+    const rec = db.preventRecords.find((r) => !r.voided && r.patientId === v.patientId && r.itemCode === code && r.date === v.date)
+    return { code, name: db.preventItems.find((i) => i.code === code)?.name ?? code, done: !!rec, result: rec?.result }
+  })
+}
+
 /** 今天掛號時勾了預防保健的病人（掛號 → 預防保健的連動）。已登錄的項目標記為完成 */
 export function todayWorklist(): Promise<WorklistRow[]> {
   return query(() => {
     const t = today()
     return db.visits
       .filter((v) => v.date === t && v.status !== 'cancelled' && v.preventItems.length)
-      .map((v) => ({
-        visit: visitView(v),
-        items: v.preventItems.map((code) => ({
-          code,
-          name: db.preventItems.find((i) => i.code === code)?.name ?? code,
-          done: db.preventRecords.some((r) => !r.voided && r.patientId === v.patientId && r.itemCode === code && r.date === t),
-        })),
-      }))
+      .map((v) => ({ visit: visitView(v), items: visitItems(v) }))
       .sort((a, b) => Number(a.items.every((i) => i.done)) - Number(b.items.every((i) => i.done)) || a.visit.createdAt.localeCompare(b.visit.createdAt))
+  })
+}
+
+/**
+ * 看診頁用：這次就醫的預防保健項目與登錄狀態，連同項目主檔（登錄框要依項目欄位顯示）。
+ * 醫師在看診頁直接登錄，不必換到預防保健頁重找病人。
+ */
+export function visitPreventStatus(visitId: string): Promise<{ item: PreventItem; done: boolean; result?: PreventRecord['result'] }[]> {
+  return query(() => {
+    const v = must(find.visit(visitId), '掛號紀錄')
+    return visitItems(v)
+      .map((x) => ({ x, item: db.preventItems.find((i) => i.code === x.code) }))
+      .filter((y): y is { x: typeof y.x; item: PreventItem } => !!y.item)
+      .map(({ x, item }) => ({ item, done: x.done, result: x.result }))
   })
 }
 
