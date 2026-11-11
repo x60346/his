@@ -476,6 +476,63 @@ try {
     ok((await B.lastCaseType(pt.id))?.date !== T || (await B.lastCaseType(pt.id))?.caseType !== '08', '「上次案件分類」提示不把慢箋領藥算成上次看診')
   }
 
+  // 閒置鎖定：鎖定中什麼都不能做；同一人密碼解鎖；連錯 5 次登出；管理員設定時間
+  {
+    const I = await load('/src/services/idle-rules.ts')
+    const t0 = 1_000_000_000_000
+    const at = (sec, min = 15) => I.idlePhase(t0, t0 + sec * 1000, min).phase
+    ok(at(0) === 'active' && at(839) === 'active' && at(840) === 'warning' && at(899) === 'warning' && at(900) === 'lock', '規則：15 分鐘 → 前 14 分鐘照常、最後 60 秒倒數、滿 15 分鐘鎖定')
+    ok(at(29, 1) === 'active' && at(30, 1) === 'warning' && at(60, 1) === 'lock' && I.idlePhase(t0, t0 + 45_000, 1).secondsLeft === 15, '規則：設 1 分鐘 → 倒數最多一半時間（30 秒），剩餘秒數正確')
+    ok(at(3600 * 5) === 'lock', '規則：電腦睡眠醒來（隔了很久）一算就是鎖定，不靠計時器數')
+    ok(I.checkIdleMinutes(0) && I.checkIdleMinutes(61) && I.checkIdleMinutes(1.5) && I.checkIdleMinutes(undefined) && !I.checkIdleMinutes(1) && !I.checkIdleMinutes(60), '規則：設定限 1–60 的整數')
+
+    const A = api.authApi
+    await as('nurse01')
+    ok((await A.idleLockMinutes()) === I.IDLE_LOCK_DEFAULT_MIN, `預設閒置 ${I.IDLE_LOCK_DEFAULT_MIN} 分鐘鎖定`)
+    await A.lockSession()
+    ok(A.currentLock() && dbm.db.auditLogs[0].action === '閒置鎖定', '鎖定：寫入稽核，重新整理也還原得到（currentLock）')
+    try {
+      await api.patientApi.searchPatients('王')
+      ok(false, '鎖定中查詢應被擋下')
+    } catch (e) {
+      ok(e.code === 'LOCKED', `鎖定中連查詢都不行 → 「${e.message}」（LOCKED，頁面不提示）`)
+    }
+    try {
+      await api.nursingApi.addVitals({ admissionId: dbm.db.admissions.find((a) => a.status === 'admitted').id, temp: 36.8 })
+      ok(false, '鎖定中寫入應被擋下')
+    } catch (e) {
+      ok(e.code === 'LOCKED', '鎖定中寫入也擋（直接呼叫 API 一樣）')
+    }
+    const auditBefore = dbm.db.auditLogs.length
+    const r1 = await A.unlockSession('9999')
+    ok(!r1.ok && r1.remaining === I.UNLOCK_MAX_FAILS - 1 && dbm.db.auditLogs.length === auditBefore + 1 && dbm.db.auditLogs[0].action === '解鎖失敗' && A.currentLock(),
+      `密碼錯：仍鎖定、剩 ${r1.remaining} 次，「解鎖失敗」留在稽核（沒有被交易回滾）`)
+    const r2 = await A.unlockSession('1234')
+    ok(r2.ok && !A.currentLock() && dbm.db.auditLogs[0].action === '解鎖' && (await api.patientApi.searchPatients('王')).length >= 0, '同一人密碼正確 → 解鎖，可以繼續操作')
+    // 連錯 5 次 → 登出
+    await A.lockSession()
+    let last
+    for (let k = 0; k < I.UNLOCK_MAX_FAILS; k++) last = await A.unlockSession('0000')
+    ok(last.loggedOut && !A.currentUser() && !A.currentLock() && dbm.db.auditLogs[0].detail.includes('強制登出'), `連續錯 ${I.UNLOCK_MAX_FAILS} 次：強制登出，寫入稽核`)
+    // 鎖定後換人登入：鎖定狀態不會留給下一個人
+    await as('nurse01')
+    await A.lockSession()
+    await as('clerk01')
+    ok(!A.currentLock() && A.currentUser().username === 'clerk01', '切換使用者（登入別人）：不帶著上一個人的鎖定')
+    await expectError(() => A.saveIdleLockMinutes(5), '非管理員修改閒置時間')
+    await as('admin')
+    try {
+      await A.saveIdleLockMinutes(0)
+      ok(false, '0 分鐘應被擋下')
+    } catch (e) {
+      ok(e.field === 'idleLockMin', '設定 0 分鐘 → 標在欄位上')
+    }
+    await A.saveIdleLockMinutes(1)
+    ok((await A.idleLockMinutes()) === 1 && dbm.db.auditLogs[0].action === '修改安全設定', '管理員設為 1 分鐘，寫入稽核')
+    await A.saveIdleLockMinutes(I.IDLE_LOCK_DEFAULT_MIN)
+    await as('clerk01')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')

@@ -9,6 +9,8 @@ export const useAuth = defineStore('auth', () => {
   // 重新整理頁面時，從服務層的 session 還原
   const user = ref<SafeUser | null>(authApi.currentUser())
   const isLoggedIn = computed(() => !!user.value)
+  /** 閒置鎖定中（鎖定時間）；重新整理後從服務層還原，不能用 F5 繞過 */
+  const lockedAt = ref<string | null>(authApi.currentLock()?.at ?? null)
 
   async function login(username: string, password: string) {
     user.value = await authApi.login(username, password)
@@ -18,6 +20,22 @@ export const useAuth = defineStore('auth', () => {
   async function logout() {
     await authApi.logout()
     user.value = null
+    lockedAt.value = null
+  }
+
+  async function lock() {
+    lockedAt.value = (await authApi.lockSession()).at
+  }
+
+  /** 解鎖；連續錯太多次會被登出（回傳結果讓鎖定畫面顯示剩幾次） */
+  async function unlock(password: string) {
+    const r = await authApi.unlockSession(password)
+    if (r.ok) lockedAt.value = null
+    else if (r.loggedOut) {
+      user.value = null
+      lockedAt.value = null
+    }
+    return r
   }
 
   /** 未指定角色＝登入即可；admin 可進入所有頁面 */
@@ -27,6 +45,7 @@ export const useAuth = defineStore('auth', () => {
    */
   async function expire() {
     user.value = null
+    lockedAt.value = null
     await authApi.logout().catch(() => undefined)
   }
 
@@ -36,5 +55,5 @@ export const useAuth = defineStore('auth', () => {
     return roles.includes(user.value.role)
   }
 
-  return { user, isLoggedIn, login, logout, expire, canAccess }
+  return { user, isLoggedIn, lockedAt, login, logout, lock, unlock, expire, canAccess }
 })

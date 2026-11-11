@@ -2,7 +2,7 @@
 // 主版面：側邊選單（依角色過濾）、頂端列、展示資料過期提示。
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AlertTriangle, Eye, Hospital, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
+import { AlertTriangle, Eye, Hospital, Lock, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
 import { UButton } from '@/components/ui'
 import { appRoutes, menuGroups } from '@/router/routes'
 import { dbVersion, masterApi, storageIssue, storageMode } from '@/services'
@@ -11,6 +11,8 @@ import { useUi } from '@/stores/ui'
 import { roleLabel } from '@/utils/labels'
 import { toRoc, weekdayLabel } from '@/utils/date'
 import { useToday } from '@/composables/useClock'
+import { useIdleLock } from '@/composables/useIdleLock'
+import LockScreen from '@/components/LockScreen.vue'
 
 const auth = useAuth()
 const ui = useUi()
@@ -56,6 +58,9 @@ async function logout() {
   await auth.logout()
   router.push({ name: 'login' })
 }
+
+// 閒置鎖定：倒數提醒、鎖定畫面
+const idle = useIdleLock()
 
 // 頂端日期跟著時鐘走，跨過午夜會自動換日
 const todayStr = useToday()
@@ -131,5 +136,13 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
         <RouterView />
       </main>
     </div>
+
+    <!-- 鎖定前倒數：只有點擊或按鍵算「還在用」，滑鼠滑過不算 -->
+    <div v-if="idle.warning.value" class="no-print fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-lg" role="alert">
+      <Lock class="h-4 w-4 shrink-0" />
+      <span>閒置過久，<b class="tabular">{{ idle.secondsLeft.value }}</b> 秒後鎖定畫面</span>
+      <UButton size="sm" @click="idle.stayActive">繼續使用</UButton>
+    </div>
+    <LockScreen v-if="auth.lockedAt" />
   </div>
 </template>

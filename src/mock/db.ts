@@ -47,6 +47,8 @@ export interface Database {
   identities: Identity[]
   /** 收費參數 */
   billingSettings: BillingSettings
+  /** 安全設定（選用：沒有就用預設值） */
+  securitySettings?: { idleLockMin: number }
   weeklySlots: WeeklySlot[]
   /** 已展開的每日診次；新日期由 schedule 服務依 weeklySlots 自動產生 */
   sessions: ClinicSession[]

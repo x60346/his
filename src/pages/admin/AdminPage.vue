@@ -3,7 +3,7 @@
 // 目前分頁記在網址（?tab=users），重新整理或把網址傳給同事，都會停在同一個分頁。
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOpen, Building2, CalendarDays, Database, KeyRound, Receipt, ScrollText, Users } from 'lucide-vue-next'
+import { BookOpen, Building2, CalendarDays, Database, KeyRound, Receipt, ScrollText, ShieldCheck, Users } from 'lucide-vue-next'
 import { UCard } from '@/components/ui'
 import UsersPanel from './components/UsersPanel.vue'
 import PermissionsPanel from './components/PermissionsPanel.vue'
@@ -13,6 +13,7 @@ import SchedulePanel from './components/SchedulePanel.vue'
 import BillingPanel from './components/BillingPanel.vue'
 import MasterPanel from './components/MasterPanel.vue'
 import DataPanel from './components/DataPanel.vue'
+import SecurityPanel from './components/SecurityPanel.vue'
 
 const sections = [
   { key: 'users', label: '帳號', icon: Users, comp: UsersPanel },
@@ -21,6 +22,7 @@ const sections = [
   { key: 'schedule', label: '排班', icon: CalendarDays, comp: SchedulePanel },
   { key: 'billing', label: '收費設定', icon: Receipt, comp: BillingPanel },
   { key: 'master', label: '主檔', icon: BookOpen, comp: MasterPanel },
+  { key: 'security', label: '安全設定', icon: ShieldCheck, comp: SecurityPanel },
   { key: 'audit', label: '稽核紀錄', icon: ScrollText, comp: AuditPanel },
   { key: 'data', label: '展示資料', icon: Database, comp: DataPanel },
 ]

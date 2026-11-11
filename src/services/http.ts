@@ -8,7 +8,8 @@ import { now } from '@/utils/date'
 export class ServiceError extends Error {
   constructor(
     message: string,
-    public code: 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'FORBIDDEN' | 'UNAUTHORIZED' = 'BAD_REQUEST',
+    /** LOCKED：畫面閒置鎖定中（還是登入狀態，解鎖後繼續；頁面不必提示，鎖定畫面已經蓋住） */
+    public code: 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'LOCKED' = 'BAD_REQUEST',
     /** 出錯的欄位名稱；有值時頁面會把訊息顯示在該欄位下方 */
     public field?: string,
     /** 同時有多個欄位出錯時的完整清單（欄位 → 訊息），頁面一次全部標出，不必改一個送一次 */
@@ -153,9 +154,42 @@ let sessionUserId: string | null = (() => {
 
 export function setSessionUser(userId: string | null): void {
   sessionUserId = userId
+  setSessionLock(null) // 登入、登出、換人都從「未鎖定」開始
   try {
     if (userId) sessionStorage.setItem(SESSION_KEY, userId)
     else sessionStorage.removeItem(SESSION_KEY)
+  } catch {
+    // 無 sessionStorage 時僅保留在記憶體
+  }
+}
+
+// ---------- 閒置鎖定 ----------
+// 和登入身分一樣存在 sessionStorage（只屬於這個分頁）：鎖定中按 F5 重新整理，仍然是鎖定的，不能用重新整理繞過
+export interface SessionLock {
+  /** 鎖定時間 */
+  at: string
+  /** 解鎖密碼連續錯誤次數 */
+  failures: number
+}
+const LOCK_KEY = 'his-demo-lock'
+let sessionLockState: SessionLock | null = (() => {
+  try {
+    const raw = sessionStorage.getItem(LOCK_KEY)
+    return raw ? (JSON.parse(raw) as SessionLock) : null
+  } catch {
+    return null
+  }
+})()
+
+export function sessionLock(): SessionLock | null {
+  return sessionLockState
+}
+
+export function setSessionLock(lock: SessionLock | null): void {
+  sessionLockState = lock
+  try {
+    if (lock) sessionStorage.setItem(LOCK_KEY, JSON.stringify(lock))
+    else sessionStorage.removeItem(LOCK_KEY)
   } catch {
     // 無 sessionStorage 時僅保留在記憶體
   }
@@ -176,6 +210,8 @@ const roleName: Record<User['role'], string> = { admin: '系統管理員', docto
 export function requireUser(...roles: User['role'][]): User {
   const u = sessionUser()
   if (!u) fail('請先登入', 'UNAUTHORIZED')
+  // 鎖定中什麼都不能做（查詢也不行）：畫面蓋住只是體驗，直接呼叫 API 也要擋
+  if (sessionLockState) fail('畫面已鎖定，請先解鎖', 'LOCKED')
   if (roles.length && !roles.includes(u.role)) {
     const need = roles.map((r) => roleName[r]).join('、')
     fail(u.role === 'admin' ? `系統管理員不能執行臨床操作，請以${need}帳號登入` : `您沒有執行此操作的權限（限${need}）`, 'FORBIDDEN')

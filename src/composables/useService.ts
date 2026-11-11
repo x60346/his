@@ -7,6 +7,8 @@ import { useUi } from '@/stores/ui'
 import { useAuth } from '@/stores/auth'
 
 const isUnauthorized = (e: unknown) => e instanceof ServiceError && e.code === 'UNAUTHORIZED'
+/** 畫面鎖定中：鎖定畫面已經蓋住，背景的查詢失敗不必提示；解鎖時資料庫有寫入，所有查詢會自動重新執行 */
+const isLocked = (e: unknown) => e instanceof ServiceError && e.code === 'LOCKED'
 
 /**
  * 登入失效（UNAUTHORIZED）的統一處理：
@@ -53,7 +55,7 @@ export function useQuery<T>(fn: () => Promise<T>, deps: WatchSource[] = [], opts
         error.value = errorMessage(e)
         // 「沒登入所以讀不到」不需要錯誤提示：第一個失敗的查詢負責轉回登入頁，其餘（含跳轉後才回來的）一律靜默
         if (isUnauthorized(e)) await handleUnauthorized()
-        else ui.toast.error(error.value)
+        else if (!isLocked(e)) ui.toast.error(error.value)
       }
     } finally {
       if (my === ticket) loading.value = false
