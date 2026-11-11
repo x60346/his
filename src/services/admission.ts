@@ -6,6 +6,7 @@ import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { admissionView, find, nameOf, patientBrief, type AdmissionView, type PatientBrief } from './views'
+import { needsAck } from './nursing-rules'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -182,26 +183,76 @@ export function changeAttending(admissionId: string, doctorId: string, reason: s
 }
 
 /** 出院：停止所有醫囑、刪除未執行的給藥排程、病床改為清潔中 */
-export function discharge(admissionId: string, input: { dischargeType: string; dischargeSummary: string }): Promise<AdmissionView> {
+/**
+ * 出院前檢查：還有哪些沒做完。出院對話框先列出來，辦理的人知道自己在結束什麼。
+ * 以前只有一句「醫囑停止、排程刪除」，逾時沒給的藥也一起刪掉，紀錄上就像從來沒排過。
+ */
+export interface DischargeCheck {
+  /** 已過預定時間、還沒給的藥（出院時標為「暫停：出院時未給藥」，不刪除） */
+  overdueMar: { scheduledAt: string; content: string }[]
+  /** 還沒執行的臨時醫囑（檢驗、處置） */
+  pendingStat: { content: string; startAt: string }[]
+  /** 醫囑異動還沒有護理師核對 */
+  unacked: number
+  /** 執行中的長期醫囑（出院時停止） */
+  activeLong: number
+  /** 還沒到時間的給藥排程（出院時取消） */
+  laterMar: number
+}
+
+function dischargeCheckOf(a: Admission, t: string): DischargeCheck {
+  const orders = db.ipdOrders.filter((o) => o.admissionId === a.id)
+  const pending = db.mar.filter((m) => m.admissionId === a.id && m.status === 'pending')
+  const content = (orderId: string) => orders.find((o) => o.id === orderId)?.content ?? ''
+  return {
+    overdueMar: pending.filter((m) => m.scheduledAt < t).sort((x, y) => x.scheduledAt.localeCompare(y.scheduledAt)).map((m) => ({ scheduledAt: m.scheduledAt, content: content(m.orderId) })),
+    pendingStat: orders.filter((o) => o.type === 'stat' && o.status === 'active' && o.category !== 'medication').map((o) => ({ content: o.content, startAt: o.startAt })),
+    unacked: orders.filter(needsAck).length,
+    activeLong: orders.filter((o) => o.type === 'long' && o.status === 'active').length,
+    laterMar: pending.filter((m) => m.scheduledAt >= t).length,
+  }
+}
+
+export function dischargeCheck(admissionId: string): Promise<DischargeCheck> {
+  return query(() => {
+    const a = must(find.admission(admissionId), '住院紀錄')
+    return dischargeCheckOf(a, now())
+  })
+}
+
+/**
+ * 辦理出院。有逾時沒給的藥、沒執行的臨時醫囑時，必須確認（confirmUnfinished）才能出院——直接呼叫 API 也一樣。
+ * 逾時沒給的藥改為「暫停：出院時未給藥」保留在紀錄上；還沒到時間的排程才刪除（那只是排程，不是紀錄）。
+ */
+export function discharge(admissionId: string, input: { dischargeType: string; dischargeSummary: string; confirmUnfinished?: boolean }): Promise<AdmissionView> {
   return mutate(() => {
-    requireUser('doctor', 'nurse', 'clerk')
+    const u = requireUser('doctor', 'nurse', 'clerk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以辦理出院', 'CONFLICT')
     if (!input.dischargeType) fail('請選擇出院轉歸')
     const t = now()
+    const check = dischargeCheckOf(a, t)
+    const unfinished = check.overdueMar.length + check.pendingStat.length
+    if (unfinished && !input.confirmUnfinished) {
+      fail(`還有 ${check.overdueMar.length} 筆逾時未給藥、${check.pendingStat.length} 筆未執行的臨時醫囑，請確認後再辦理出院`, 'CONFLICT', 'confirmUnfinished')
+    }
     for (const o of db.ipdOrders.filter((o) => o.admissionId === a.id && o.status === 'active')) {
       o.status = 'stopped'
       o.stopAt = t
     }
+    // 逾時沒給的：保留紀錄，標為暫停並寫明原因；還沒到時間的：只是排程，取消即可
+    for (const m of db.mar.filter((m) => m.admissionId === a.id && m.status === 'pending' && m.scheduledAt < t)) {
+      Object.assign(m, { status: 'held', note: '出院時未給藥', executedAt: t, nurseId: u.id })
+    }
     db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
     releaseBed(a.bedId)
-    Object.assign(a, { status: 'discharged', dischargedAt: t, ...input })
-    audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${input.dischargeType}）`)
+    const { confirmUnfinished: _c, ...rest } = input
+    Object.assign(a, { status: 'discharged', dischargedAt: t, ...rest })
+    audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${input.dischargeType}）${unfinished ? `；未執行：逾時給藥 ${check.overdueMar.length}、臨時醫囑 ${check.pendingStat.length}` : ''}`)
     return admissionView(a)
   })
 }
 
-/** 病床狀態維護：清潔完成、保留／取消保留 */
 /**
  * 變更病床狀態（清潔完成、保留、取消保留）。
  * 保留一定要指定給哪一筆住院預約（reservedFor）——沒指定對象的保留沒有意義，報到時也不知道該給誰用。

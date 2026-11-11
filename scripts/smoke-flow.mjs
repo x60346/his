@@ -317,6 +317,22 @@ try {
       `批價清單的預估應收 = 試算金額（${pend.length} 位待批價）${diffs.length ? '：' + diffs.join('；') : ''}`)
   }
 
+  // U15：看診中新增過敏（只能新增、限清單、寫稽核）；新增後過敏比對立刻生效
+  {
+    const who = dbm.db.patients.find((p) => !p.allergies.includes('Penicillin'))
+    await as('ph01')
+    await expectError(() => api.patientApi.addAllergy(who.id, 'Penicillin'), '藥師新增過敏')
+    await as('dr01')
+    await expectError(() => api.patientApi.addAllergy(who.id, '花粉'), '新增清單以外的過敏原')
+    const before = (await api.opdApi.allergyWarnings(who.id, ['M003'])).length
+    await api.patientApi.addAllergy(who.id, 'Penicillin')
+    const after = await api.opdApi.allergyWarnings(who.id, ['M003'])
+    ok(before === 0 && after.some((w) => w.allergen === 'Penicillin') && dbm.db.auditLogs[0].action === '新增過敏', '看診中新增 Penicillin 過敏 → Amoxicillin 立刻標示過敏警示，寫入稽核')
+    await expectError(() => api.patientApi.addAllergy(who.id, 'Penicillin'), '重複新增同一過敏')
+    dbm.db.patients.find((p) => p.id === who.id).allergies = dbm.db.patients.find((p) => p.id === who.id).allergies.filter((a) => a !== 'Penicillin')
+    await as('clerk01')
+  }
+
   // U13：醫師個人組套
   {
     const billing = await load('/src/services/billing.ts')
@@ -780,10 +796,32 @@ try {
   ok(ward.some((w) => w.id === adm.id && w.latestVitals?.temp === 37.8), `護理站 ${bed.ward} 看得到新病人與最新生命徵象`)
 
   await as('dr02')
-  await api.admissionApi.discharge(adm.id, { dischargeType: '改善出院', dischargeSummary: '症狀改善' })
+  // U19：出院前先列出還沒做完的事；逾時沒給的藥標「暫停：出院時未給藥」保留，不刪
+  {
+    const { addMinutes } = await load('/src/utils/date.ts')
+    const t0 = nowStr()
+    const lab = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+    // 確保有一筆逾時、一筆未來的給藥排程（依執行時間，種子不一定剛好有）
+    const pend = dbm.db.mar.filter((m) => m.admissionId === adm.id && m.status === 'pending')
+    if (pend[0]) pend[0].scheduledAt = addMinutes(t0, -90)
+    if (pend[1]) pend[1].scheduledAt = addMinutes(t0, 120)
+    const overdueId = pend[0]?.id
+    const chk = await api.admissionApi.dischargeCheck(adm.id)
+    ok(chk.overdueMar.length >= 1 && chk.pendingStat.some((o) => o.content.includes('CBC')) && chk.laterMar >= 1, `出院前檢查：逾時未給藥 ${chk.overdueMar.length}、未執行臨時醫囑 ${chk.pendingStat.length}、之後的排程 ${chk.laterMar}`)
+    try {
+      await api.admissionApi.discharge(adm.id, { dischargeType: '改善出院', dischargeSummary: '症狀改善' })
+      ok(false, '有未執行項目卻沒確認，應被擋下')
+    } catch (e) {
+      ok(e.field === 'confirmUnfinished' && dbm.db.admissions.find((a) => a.id === adm.id).status === 'admitted', `有未執行項目、沒確認就出院 → 「${e.message}」`)
+    }
+    await api.admissionApi.discharge(adm.id, { dischargeType: '改善出院', dischargeSummary: '症狀改善', confirmUnfinished: true })
+    const kept = dbm.db.mar.find((m) => m.id === overdueId)
+    ok(kept?.status === 'held' && kept.note === '出院時未給藥', '逾時沒給的藥保留在紀錄上，標為「暫停：出院時未給藥」（不刪除）')
+    ok(dbm.db.ipdOrders.find((o) => o.id === lab.id).status === 'stopped' && !('confirmUnfinished' in dbm.db.admissions.find((a) => a.id === adm.id)) && dbm.db.auditLogs[0].detail.includes('未執行'), '未執行的臨時醫囑停止；確認旗標不寫進住院紀錄；稽核記下未執行數量')
+  }
   ok(dbm.db.beds.find((b) => b.id === bed.id).status === 'cleaning', '出院 → 病床清潔中')
   ok(dbm.db.ipdOrders.filter((o) => o.admissionId === adm.id).every((o) => o.status !== 'active'), '出院 → 所有醫囑停止')
-  ok(!dbm.db.mar.some((m) => m.admissionId === adm.id && m.status === 'pending'), '出院 → 未執行的給藥排程清除')
+  ok(!dbm.db.mar.some((m) => m.admissionId === adm.id && m.status === 'pending'), '出院 → 還沒到時間的給藥排程清除')
 
   // 不變式：資料庫裡不可以有「未來發生的事」（排程類欄位除外）
   const nowS = (await load('/src/utils/date.ts')).now()

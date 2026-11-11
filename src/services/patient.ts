@@ -5,6 +5,7 @@ import { now, toDateStr } from '@/utils/date'
 import { checkBirthDate, checkName, isValidIdNo, isValidPhone, makeIdNo } from '@/utils/validators'
 import { audit, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains, find } from './views'
+import { allergyOptions } from '@/mock/codes'
 
 export function searchPatients(keyword: string, limit = 50): Promise<Patient[]> {
   return query(() => {
@@ -51,6 +52,22 @@ export function createPatient(input: PatientInput): Promise<Patient> {
     }
     db.patients.push(p)
     audit('病患建檔', `${p.chartNo} ${p.name}`)
+    return p
+  })
+}
+
+/**
+ * 看診中新增過敏：病人當場說「我對盤尼西林過敏」，醫師不必離開看診頁去改病人資料。
+ * 只能「新增」——移除過敏風險高，仍要到病患資料頁修改。過敏原限選項清單（過敏比對依這些類別），寫入稽核。
+ */
+export function addAllergy(patientId: string, allergen: string): Promise<Patient> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse')
+    const p = must(find.patient(patientId), '病患')
+    if (!allergyOptions.includes(allergen)) failField('allergen', '請從清單選擇過敏原')
+    if (p.allergies.includes(allergen)) failField('allergen', `已記錄對 ${allergen} 過敏`, 'CONFLICT')
+    p.allergies.push(allergen)
+    audit('新增過敏', `${p.name}：${allergen}（${u.role === 'doctor' ? '醫師' : '護理師'}登錄）`)
     return p
   })
 }

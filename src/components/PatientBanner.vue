@@ -25,6 +25,8 @@ defineProps<{ patient: PatientBrief }>()
     >
       <AlertTriangle v-if="patient.allergies.length" class="h-4 w-4" />
       過敏：{{ patient.allergies.length ? patient.allergies.join('、') : '無已知過敏' }}
+      <!-- 看診頁在這裡放「＋過敏」（當場新增）；其他頁面不放，只顯示 -->
+      <slot name="allergy-actions" />
     </div>
   </div>
 </template>

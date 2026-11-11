@@ -7,7 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
 import {
-  UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
+  UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
 } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import PreventRecordDialog from '@/components/PreventRecordDialog.vue'
@@ -16,7 +16,7 @@ import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, preventApi, type ExpandedOrderSet } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -264,6 +264,23 @@ const { data: preventItems } = useQuery(() => preventApi.listPreventItems())
 
 // ---------- 預防保健：在看診頁直接登錄（以前要換到預防保健頁重找病人，血壓身高體重還要再打一次）----------
 // 登錄框與預防保健頁共用（PreventRecordDialog），規則只有一份；本次已量的生命徵象預先帶入，仍可修改
+// ---------- 看診中新增過敏：病人當場說「我對盤尼西林過敏」，不必離開看診頁 ----------
+// 只能新增（服務層 addAllergy）；新增後過敏警示查詢會隨資料版本重查，處方中相關的藥立即標紅
+const allergyOpen = ref(false)
+const allergen = ref<string | number>('')
+const addAllergy = useAction(patientApi.addAllergy, { success: (p) => `已記錄：${p.name} 對 ${p.allergies.at(-1)} 過敏` })
+// 已記錄的不再列出（選了也只會被擋）
+const allergyChoices = computed(() => masterApi.staticCodes.allergyOptions.filter((a) => !visit.value?.allergies.includes(a)))
+function openAllergy() {
+  allergen.value = ''
+  addAllergy.fieldErrors.value = {}
+  allergyOpen.value = true
+}
+async function submitAllergy() {
+  if (!visit.value || !allergen.value) return
+  if (await addAllergy.run(visit.value.patientId, String(allergen.value))) allergyOpen.value = false
+}
+
 const { data: preventStatus } = useQuery(
   async () => (visit.value?.preventItems.length ? preventApi.visitPreventStatus(visit.value.id) : []),
   [() => visit.value?.id],
@@ -345,7 +362,21 @@ const tabs = computed(() => [
           </template>
         </template>
         <UBadge v-else-if="visit.preventItems.length" tone="green">預防保健：{{ preventNames }}</UBadge>
+        <template #allergy-actions>
+          <button type="button" class="ml-1 rounded border border-current px-1 text-xs font-medium opacity-80 hover:opacity-100" title="病人當場告知的過敏，直接記錄（只能新增；移除請到病患資料）" @click="openAllergy">＋過敏</button>
+        </template>
       </PatientBanner>
+      <UDialog v-model="allergyOpen" title="新增過敏" size="sm" @submit="submitAllergy">
+        <div class="space-y-3 text-sm">
+          <p class="text-slate-600">{{ visit.patientName }} 目前記錄：{{ visit.allergies.length ? visit.allergies.join('、') : '無已知過敏' }}</p>
+          <USelect v-model="allergen" label="過敏原" required placeholder="請選擇" :options="allergyChoices" :error="addAllergy.fieldErrors.value.allergen" />
+          <p class="text-xs text-slate-500">新增後，本次處方中相關的藥會立即標示過敏警示。移除過敏請到「病患資料」。</p>
+        </div>
+        <template #footer>
+          <UButton variant="secondary" @click="allergyOpen = false">取消</UButton>
+          <UButton type="submit" variant="danger" :disabled="!allergen" :loading="addAllergy.pending.value">新增過敏</UButton>
+        </template>
+      </UDialog>
       <PreventRecordDialog v-model="preventOpen" :item="preventItem" :patient="visit" :visit-id="visit.id" :prefill="preventPrefill" />
 
       <!-- 尚未叫號 -->
