@@ -24,7 +24,7 @@ const tab = ref('a')
 const dialog = ref(false)
 const picked = ref<IcdCode[]>([])
 
-const patient: PatientBrief = { patientId: 'X', chartNo: '100002', patientName: '李美玲', gender: 'F', birthDate: '1979-04-12', age: 47, allergies: ['Penicillin'] }
+const patient: PatientBrief = { patientId: 'X', chartNo: '100002', patientName: '李美玲', gender: 'F', birthDate: '1979-04-12', age: 47, allergies: ['Penicillin'], debt: 0 }
 
 interface Row { id: string; seq: number; name: string; status: VisitStatus }
 const rows: Row[] = [

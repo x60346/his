@@ -266,6 +266,22 @@ export interface Charge {
   cashierId: string
   paidAt: string
   voided: boolean
+  /** 結帳時記下的欠款（實收不足、櫃台同意）；之後收回不改這個數，看 repayments */
+  owed?: number
+  /** 記欠款的原因（例：忘了帶錢） */
+  oweReason?: string
+  /** 收回欠款紀錄：可分次，每次一張收據號，日結算在收回那天 */
+  repayments?: Repayment[]
+}
+
+/** 收回欠款（一次） */
+export interface Repayment {
+  id: string
+  amount: number
+  payMethod: PayMethod
+  receiptNo: string
+  cashierId: string
+  at: string
 }
 
 export type DispenseStatus = 'pending' | 'verified' | 'dispensed'

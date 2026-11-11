@@ -3,7 +3,7 @@
 import type { Admission, Bed, ClinicSession, Patient, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
-import type { BillingLookup } from './billing'
+import { outstandingOf, type BillingLookup } from './billing'
 import { fail, must } from './http'
 
 export const find = {
@@ -71,7 +71,13 @@ export interface PatientBrief {
   birthDate: string
   age: number
   allergies: string[]
+  /** 尚欠金額（所有未作廢收據的欠款 − 已收回）；0 = 沒欠。掛號、批價時提醒櫃台收回 */
+  debt: number
 }
+
+/** 病人目前尚欠多少（跨所有就醫） */
+export const debtOf = (patientId: string) =>
+  db.charges.filter((c) => c.patientId === patientId).reduce((s, c) => s + outstandingOf(c), 0)
 
 export function patientBrief(patientId: string): PatientBrief {
   const p = find.patient(patientId)
@@ -83,6 +89,7 @@ export function patientBrief(patientId: string): PatientBrief {
     birthDate: p?.birthDate ?? '',
     age: p ? ageOf(p.birthDate) : 0,
     allergies: p?.allergies ?? [],
+    debt: debtOf(patientId),
   }
 }
 

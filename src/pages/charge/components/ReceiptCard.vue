@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // 收據：畫面顯示與列印共用。外層加上 print-area，列印時只印這一塊（見 style.css 的 @media print）。
+import { computed } from 'vue'
 import type { ReceiptView } from '@/services/charge'
 import { toRoc } from '@/utils/date'
 import { payMethodLabel } from '@/utils/labels'
 import ChargeLinesTable from './ChargeLinesTable.vue'
 
-defineProps<{ receipt: ReceiptView }>()
+const props = defineProps<{ receipt: ReceiptView }>()
+const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x) => s + x.amount, 0))
 </script>
 
 <template>
@@ -33,6 +35,12 @@ defineProps<{ receipt: ReceiptView }>()
       <div><div class="text-xs text-slate-500">付款方式</div><div class="font-medium">{{ payMethodLabel[receipt.payMethod] }}</div></div>
       <div><div class="text-xs text-slate-500">實收</div><div class="tabular font-medium">{{ receipt.received.toLocaleString() }}</div></div>
       <div><div class="text-xs text-slate-500">找零</div><div class="tabular font-medium">{{ receipt.change.toLocaleString() }}</div></div>
+    </div>
+
+    <!-- 記欠款的收據：印出欠多少，病人帶回去也知道下次要補多少 -->
+    <div v-if="receipt.owed" class="mt-2 flex justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <span>欠款（{{ receipt.oweReason }}）</span>
+      <span class="tabular font-semibold">{{ receipt.owed.toLocaleString() }}<template v-if="repaidTotal">・已收回 {{ repaidTotal.toLocaleString() }}</template></span>
     </div>
 
     <div v-if="receipt.pickupNo" class="mt-4 rounded border-2 border-brand-500 p-3 text-center">

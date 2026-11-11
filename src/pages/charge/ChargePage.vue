@@ -4,13 +4,14 @@
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { Ban, CreditCard, Printer, Smartphone, Wallet } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
+import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
-import { chargeApi, checkCash } from '@/services'
+import { chargeApi, checkCash, checkRepay } from '@/services'
+import type { DebtItem } from '@/services/charge'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
 import { periodLabel, today } from '@/utils/date'
@@ -52,8 +53,18 @@ const receipt = computed(() => (item.value ? detail.value?.receipt : undefined))
 const payMethod = ref<PayMethod>('cash')
 const received = ref<number | undefined>()
 const total = computed(() => preview.value?.patientTotal ?? 0)
-// 換病人時預設實收＝應收
-watch(total, (t) => (received.value = t))
+// 實收不足時可勾「差額記為欠款」（只限現金）
+const owe = ref(false)
+const oweReason = ref('')
+// 換病人時預設實收＝應收，欠款選項清掉
+watch(total, (t) => {
+  received.value = t
+  owe.value = false
+  oweReason.value = ''
+})
+watch(payMethod, (m) => {
+  if (m !== 'cash') owe.value = false
+})
 
 /** 現金快速鍵：剛好、湊整百、500、1000、2000（只列出 ≥ 應收的） */
 const quickAmounts = computed(() => {
@@ -61,14 +72,19 @@ const quickAmounts = computed(() => {
   return [...new Set([t, Math.ceil(t / 100) * 100, 500, 1000, 2000])].filter((n) => n >= t).sort((a, b) => a - b).slice(0, 5)
 })
 const change = computed(() => (payMethod.value === 'cash' ? (received.value ?? 0) - total.value : 0))
-// 與服務層同一條規則：不足、非整數、找零異常（多打了 0）都不能收款
-const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value) : null))
-const canPay = computed(() => !!preview.value && !cashProblem.value)
+// 與服務層同一條規則：不足（沒勾欠款）、非整數、找零異常（多打了 0）都不能收款
+const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value, owe.value) : null))
+const owedAmount = computed(() => (owe.value ? Math.max(0, total.value - (received.value ?? 0)) : 0))
+const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()))
 
 const pay = useAction(chargeApi.pay, { success: (c) => `結帳完成：收據 ${c.receiptNo}` })
 async function onPay() {
   if (!item.value || !canPay.value) return
-  await pay.run(item.value.id, { payMethod: payMethod.value, received: payMethod.value === 'cash' ? received.value ?? 0 : total.value })
+  await pay.run(item.value.id, {
+    payMethod: payMethod.value,
+    received: payMethod.value === 'cash' ? received.value ?? 0 : total.value,
+    owe: owe.value ? { reason: oweReason.value } : undefined,
+  })
   // 結帳後清單經 dbVersion 自動刷新，右側會切換成收據
 }
 
@@ -79,6 +95,26 @@ const methods: { key: PayMethod; label: string; icon: typeof Wallet }[] = [
 ]
 
 const print = () => window.print()
+
+// ---------- 之前的欠款：選到病人就列出，逐筆收回（可只收一部分） ----------
+const debts = computed(() => (item.value ? detail.value?.debts ?? [] : []))
+const repayTarget = ref<DebtItem>()
+const repayAmount = ref<number | undefined>()
+const repayMethod = ref<PayMethod>('cash')
+const repayProblem = computed(() => (repayTarget.value ? checkRepay(repayTarget.value.outstanding, repayAmount.value) : null))
+const repay = useAction(chargeApi.repayDebt, { success: (x) => `已收回欠款 ${x.amount} 元：收據 ${x.receiptNo}` })
+function openRepay(d: DebtItem) {
+  repayTarget.value = d
+  repayAmount.value = d.outstanding
+  repayMethod.value = 'cash'
+}
+async function onRepay() {
+  if (!repayTarget.value || repayProblem.value) return
+  if (await repay.run(repayTarget.value.chargeId, { payMethod: repayMethod.value, amount: repayAmount.value! })) repayTarget.value = undefined
+}
+const closeRepay = (open: boolean) => {
+  if (!open) repayTarget.value = undefined
+}
 
 // ---------- 作廢 ----------
 const voidOpen = ref(false)
@@ -132,11 +168,25 @@ const identityOpen = ref(false)
       <UCard v-if="!visitId" data-detail class="no-print"><UEmpty title="請從清單選擇病人" description="待批價的病人排在最上方" /></UCard>
       <UCard v-else-if="!item" data-detail class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這筆就醫紀錄" /></UCard>
       <div v-else data-detail class="min-w-0 space-y-4">
-        <PatientBanner :patient="item" class="no-print">
+        <PatientBanner :patient="item" show-debt class="no-print">
           <UBadge tone="blue">{{ item.identityName }}</UBadge>
           <button v-if="item.status === 'consulted'" type="button" class="text-xs text-brand-600 underline-offset-2 hover:underline" @click="identityOpen = true">更正身分</button>
           <UBadge>案件 {{ item.caseType }}</UBadge>
         </PatientBanner>
+        <!-- 之前的欠款：病人來批價（或專程來還錢）時，櫃台一眼看到、當場收回 -->
+        <UCard v-if="debts.length" :padded="false" class="no-print border-amber-300">
+          <template #title><span class="text-sm font-semibold text-amber-800">尚未還清的欠款 {{ debts.length }} 筆</span></template>
+          <ul class="divide-y divide-slate-100 text-sm">
+            <li v-for="d in debts" :key="d.chargeId" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
+              <span class="tabular text-slate-500">{{ d.date.slice(5).replace('-', '/') }}</span>
+              <span class="text-slate-700">{{ d.deptName }}</span>
+              <span class="tabular text-xs text-slate-400">{{ d.receiptNo }}</span>
+              <span class="min-w-0 flex-1 truncate text-xs text-slate-500">{{ d.oweReason }}<template v-if="d.repayments.length">・已收回 {{ d.repayments.length }} 次</template></span>
+              <span class="tabular font-semibold text-amber-900">尚欠 ${{ d.outstanding.toLocaleString() }}</span>
+              <UButton size="sm" variant="secondary" @click="openRepay(d)">收回</UButton>
+            </li>
+          </ul>
+        </UCard>
         <IdentityCorrectDialog v-model="identityOpen" :visit-id="item.id" :identity-code="item.identityCode" :subject="`${item.patientName}・目前身分 ${item.identityName}`" />
 
         <!-- 待批價：試算 + 結帳 -->
@@ -176,10 +226,19 @@ const identityOpen = ref(false)
                   <UButton v-for="a in quickAmounts" :key="a" size="sm" variant="secondary" @click="received = a">{{ a === total ? '剛好' : a }}</UButton>
                 </div>
                 <!-- 綠色只代表「可以收款」：不足是紅色、金額異常是黃色，不要讓錯誤的找零看起來像沒問題 -->
-                <div :class="['flex justify-between rounded-md px-3 py-2 text-sm', change < 0 ? 'bg-red-50 text-red-700' : cashProblem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800']">
+                <div v-if="owe" class="flex justify-between rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <span>記為欠款</span>
+                  <span class="tabular text-lg font-bold">$ {{ owedAmount.toLocaleString() }}</span>
+                </div>
+                <div v-else :class="['flex justify-between rounded-md px-3 py-2 text-sm', change < 0 ? 'bg-red-50 text-red-700' : cashProblem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800']">
                   <span>{{ change < 0 ? '尚差' : '找零' }}</span>
                   <span class="tabular text-lg font-bold">$ {{ Math.abs(change).toLocaleString() }}</span>
                 </div>
+                <!-- 錢不夠：差額記為欠款，下次來再收（要寫原因，日結看得到）。足額時不出現 -->
+                <template v-if="change < 0 || owe">
+                  <UCheckbox v-model="owe" label="差額記為欠款" />
+                  <UInput v-if="owe" v-model="oweReason" label="欠款原因" placeholder="例：忘了帶錢、只帶部分現金" :error="pay.fieldErrors.value.oweReason" />
+                </template>
               </template>
               <p v-else class="text-xs text-slate-500">刷卡與行動支付以應收金額扣款，無需找零。</p>
 
@@ -201,6 +260,31 @@ const identityOpen = ref(false)
         </template>
       </div>
     </div>
+
+    <UDialog :model-value="!!repayTarget" title="收回欠款" size="sm" @update:model-value="closeRepay">
+      <div v-if="repayTarget" class="space-y-3 text-sm">
+        <p class="text-slate-600">
+          {{ repayTarget.date }} {{ repayTarget.deptName }}（收據 <span class="tabular">{{ repayTarget.receiptNo }}</span>）
+          應收 {{ repayTarget.patientTotal }} 元，尚欠 <span class="tabular font-semibold text-amber-900">{{ repayTarget.outstanding }}</span> 元。
+        </p>
+        <div class="grid grid-cols-3 gap-2">
+          <button
+            v-for="m in methods"
+            :key="m.key"
+            type="button"
+            :class="['flex flex-col items-center gap-1 rounded-md border py-2 text-xs', repayMethod === m.key ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50']"
+            @click="repayMethod = m.key"
+          >
+            <component :is="m.icon" class="h-4 w-4" />{{ m.label }}
+          </button>
+        </div>
+        <UInput v-model="repayAmount" label="收回金額" type="number" min="1" class="tabular text-right" :error="repayProblem ?? repay.fieldErrors.value.amount" hint="可只收一部分，其餘下次再收" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="repayTarget = undefined">取消</UButton>
+        <UButton :disabled="!!repayProblem" :loading="repay.pending.value" @click="onRepay">確認收回</UButton>
+      </template>
+    </UDialog>
 
     <UDialog v-model="voidOpen" title="作廢收據" size="sm">
       <div class="space-y-3 text-sm">

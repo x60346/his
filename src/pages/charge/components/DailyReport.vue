@@ -25,6 +25,7 @@ const columns: Column<Row>[] = [
   { key: 'deptName', label: '科別' },
   { key: 'payMethod', label: '付款', format: (c) => payMethodLabel[c.payMethod] },
   { key: 'patientTotal', label: '金額', align: 'right', format: (c) => c.patientTotal.toLocaleString() },
+  { key: 'owed', label: '欠款', align: 'right', format: (c) => (c.owed ? c.owed.toLocaleString() : '') },
   { key: 'nhiPoints', label: '申報點數', align: 'right', format: (c) => c.nhiPoints.toLocaleString() },
 ]
 const methods: PayMethod[] = ['cash', 'card', 'mobile']
@@ -34,6 +35,23 @@ const feeTypes = [
   { key: 'drugCopay', label: '藥品部分負擔' },
   { key: 'selfPay', label: '自費項目（含自費診察費）' },
 ] as const
+type RepayRow = DailyReport['repayments'][number]
+const repayColumns: Column<RepayRow>[] = [
+  { key: 'receiptNo', label: '收據號碼' },
+  { key: 'at', label: '時間', format: (x) => x.at.slice(11) },
+  { key: 'chartNo', label: '病歷號' },
+  { key: 'patientName', label: '姓名' },
+  { key: 'originalReceiptNo', label: '原收據' },
+  { key: 'payMethod', label: '付款', format: (x) => payMethodLabel[x.payMethod] },
+  { key: 'cashierName', label: '收費人員' },
+  { key: 'amount', label: '金額', align: 'right', format: (x) => x.amount.toLocaleString() },
+]
+// 有欠款或收回時，「實收」和「應收」不同，提示怎麼算出來的
+const collectedHint = computed(() => {
+  const x = r.value
+  if (!x || (!x.newDebt && !x.repaid)) return ''
+  return `應收 ${money(x.patientTotal)}${x.newDebt ? ` − 新欠 ${money(x.newDebt)}` : ''}${x.repaid ? ` ＋ 收回 ${money(x.repaid)}` : ''}`
+})
 const unpaidTotal = computed(() => (r.value?.unpaid ?? []).reduce((s, u) => s + u.estimate, 0))
 
 // 列印表頭：報表名稱、日期、列印時間與列印人——日後對帳時才知道這張紙是誰、何時印的
@@ -65,7 +83,8 @@ const print = async () => {
 
     <template v-if="r">
       <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <UStatCard label="收入合計" :value="money(r.patientTotal)" :icon="Coins" tone="emerald" />
+        <!-- 實收＝錢箱和刷卡機實際收到的；有記欠款或收回欠款時才和應收不同 -->
+        <UStatCard label="實收合計" :value="money(r.collected)" :hint="collectedHint" :icon="Coins" tone="emerald" />
         <UStatCard label="有效收據" :value="r.count" hint="張" :icon="FileText" />
         <UStatCard label="作廢收據" :value="r.voidedCount" :hint="r.voidedCount ? `張・${money(r.voidedTotal)}` : '張'" :icon="Ban" :tone="r.voidedCount ? 'amber' : 'slate'" />
         <UStatCard label="健保申報" :value="r.nhiPoints.toLocaleString()" hint="點" :icon="Stethoscope" />
@@ -93,29 +112,29 @@ const print = async () => {
               <span class="text-slate-600">{{ f.label }}</span>
               <span class="font-medium text-slate-800">{{ money(r.byFeeType[f.key]) }}</span>
             </li>
-            <li class="flex justify-between font-semibold"><span>合計</span><span>{{ money(r.patientTotal) }}</span></li>
+            <li class="flex justify-between font-semibold"><span>應收合計</span><span>{{ money(r.patientTotal) }}</span></li>
           </ul>
         </UCard>
-        <UCard title="依收費人員" subtitle="交班時各自核對錢箱">
+        <UCard title="依收費人員" subtitle="交班時各自核對錢箱（實際收到的錢）">
           <ul class="tabular space-y-2 text-sm">
             <li v-for="c in r.byCashier" :key="c.cashierName" class="flex justify-between border-b border-slate-100 pb-1.5">
-              <span class="text-slate-600">{{ c.cashierName }}<span class="ml-1 text-xs text-slate-400">{{ c.count }} 張</span></span>
-              <span class="font-medium text-slate-800">{{ money(c.patientTotal) }}</span>
+              <span class="text-slate-600">{{ c.cashierName }}<span class="ml-1 text-xs text-slate-400">{{ c.count }} 張{{ c.repayCount ? `・收回 ${c.repayCount} 筆` : '' }}</span></span>
+              <span class="font-medium text-slate-800">{{ money(c.collected) }}</span>
             </li>
             <li v-if="!r.byCashier.length" class="py-2 text-center text-slate-400">當日沒有收費</li>
-            <li class="flex justify-between font-semibold"><span>合計</span><span>{{ money(r.patientTotal) }}</span></li>
+            <li class="flex justify-between font-semibold"><span>實收合計</span><span>{{ money(r.collected) }}</span></li>
           </ul>
         </UCard>
       </div>
 
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <UCard title="依付款方式">
+        <UCard title="依付款方式" subtitle="實際收到的錢">
           <ul class="tabular space-y-2 text-sm">
             <li v-for="m in methods" :key="m" class="flex justify-between border-b border-slate-100 pb-1.5">
               <span class="text-slate-600">{{ payMethodLabel[m] }}</span>
               <span class="font-medium text-slate-800">{{ money(r.byPayMethod[m]) }}</span>
             </li>
-            <li class="flex justify-between font-semibold"><span>合計</span><span>{{ money(r.patientTotal) }}</span></li>
+            <li class="flex justify-between font-semibold"><span>實收合計</span><span>{{ money(r.collected) }}</span></li>
           </ul>
         </UCard>
         <UCard title="依科別" :padded="false">
@@ -138,6 +157,10 @@ const print = async () => {
 
       <UCard title="收據明細" subtitle="作廢的收據以刪除線標示，不計入合計" :padded="false">
         <UTable :columns="columns" :rows="r.charges" :row-key="(c) => c.id" :loading="loading" dense empty-text="當日沒有收據" :row-class="(c) => (c.voided ? 'text-slate-400 line-through' : '')" />
+      </UCard>
+
+      <UCard v-if="r.repayments.length" title="收回欠款" :subtitle="`${r.repayments.length} 筆・${money(r.repaid)}（原本欠在之前的收據，錢算在今天）`" :padded="false">
+        <UTable :columns="repayColumns" :rows="r.repayments" :row-key="(x) => x.receiptNo" dense />
       </UCard>
     </template>
   </div>

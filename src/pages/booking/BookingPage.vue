@@ -8,7 +8,7 @@ import {
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
-import { admissionApi, bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
+import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
 import { useAction, useQuery } from '@/composables/useService'
@@ -116,6 +116,9 @@ watch(patient, (p) => {
   caseType.value = '01'
   preventItems.value = []
 })
+// 之前的欠款：只提醒，不擋掛號（病人生病來看診，不能因為欠錢就不給掛）；批價時一併收回
+const { data: debts } = useQuery(async () => (patient.value ? chargeApi.listDebts(patient.value.id) : []), [patient])
+const debtTotal = computed(() => (debts.value ?? []).reduce((s, d) => s + d.outstanding, 0))
 // 上次是慢性病（04／08）時提示，不自動帶入（由櫃台確認這次是不是回診拿慢性病藥）
 const { data: lastCase } = useQuery(async () => (patient.value ? bookingApi.lastCaseType(patient.value.id) : null), [patient])
 const lastCaseHint = computed(() => {
@@ -281,6 +284,9 @@ function openIdentity(v: VisitView) {
             </div>
             <div class="mt-1 text-slate-600">病歷號 {{ patient.chartNo }}・{{ maskId(patient.idNo) }}</div>
             <div v-if="patient.allergies.length" class="mt-1 font-medium text-red-600">過敏：{{ patient.allergies.join('、') }}</div>
+            <div v-if="debtTotal" class="tabular mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" role="status">
+              尚欠 {{ debtTotal.toLocaleString() }} 元（{{ debts!.length }} 筆，最早 {{ debts![0].date.slice(5).replace('-', '/') }}）。可照常掛號，批價時一併收回。
+            </div>
             <div v-if="admittedNow && admittedNow.patientId === patient.id" class="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" role="status">
               目前住院中：{{ admittedNow.bed?.ward }} {{ admittedNow.bed?.bedNo }}（第 {{ admittedNow.days }} 天，{{ admittedNow.doctorName }}）。如需掛門診請確認。
             </div>

@@ -389,9 +389,9 @@ try {
       `日結「未收款」= 當天看完診還沒批價的 ${rep.unpaid.length} 位（含剛作廢回到待批價的），預估合計 ${estSum}`)
     const voidedSum = dbm.db.charges.filter((c) => c.voided && c.paidAt.startsWith(T)).reduce((s, c) => s + c.patientTotal, 0)
     ok(rep.voidedTotal === voidedSum && voidedSum >= toVoid.patientTotal, `作廢金額合計 ${rep.voidedTotal}（${rep.voidedCount} 張）`)
-    const cashierSum = rep.byCashier.reduce((s, c) => s + c.patientTotal, 0)
+    const cashierSum = rep.byCashier.reduce((s, c) => s + c.collected, 0)
     const f = rep.byFeeType
-    ok(cashierSum === rep.patientTotal && rep.byCashier.reduce((s, c) => s + c.count, 0) === rep.count, `依收費人員加總 = 收入合計 ${rep.patientTotal}`)
+    ok(cashierSum === rep.collected && rep.byCashier.reduce((s, c) => s + c.count, 0) === rep.count, `依收費人員加總 = 實收合計 ${rep.collected}`)
     ok(f.reg + f.basicCopay + f.drugCopay + f.selfPay === rep.patientTotal && f.reg > 0, `依費用類別加總 = 收入合計（掛號費 ${f.reg}、基本部分負擔 ${f.basicCopay}、藥品部分負擔 ${f.drugCopay}、自費 ${f.selfPay}）`)
     // 補收回來：未收款少一位、收入增加
     const pv = await api.chargeApi.previewCharge(toVoid.visitId)
@@ -424,6 +424,65 @@ try {
   }
 
   console.log('\n[規則] 過敏與預防保健')
+  // U10：錢不夠可以記欠款，之後分次收回；日結的實收對得上錢箱
+  {
+    const C = api.chargeApi
+    const B = await load('/src/services/billing.ts')
+    ok(B.checkCash(500, 200) !== null && B.checkCash(500, 200, true) === null && B.checkCash(500, 0, true) === null, '規則：沒勾欠款時不足要擋；勾了欠款，少收（含 0 元）可以')
+    ok(B.checkCash(500, 500, true) === '實收已足額，不需記欠款' && B.checkCash(500, -1, true) !== null, '規則：勾了欠款卻足額、或負數，擋下')
+    ok(B.checkRepay(300, 300) === null && B.checkRepay(300, 301) !== null && B.checkRepay(300, 0) !== null && B.checkRepay(300, 1.5) !== null, '規則：收回金額需 1～尚欠的整數')
+
+    // 找一位應收夠多的（免部分負擔的病人應收可能是 0，「少收 100」就成了負數）
+    let v, pv
+    for (const x of dbm.db.visits.filter((x) => x.status === 'consulted' && x.date === T)) {
+      const t = await C.previewCharge(x.id)
+      if (t.patientTotal >= 200) { v = x; pv = t; break }
+    }
+    ok(!!v, '找到應收 ≥ 200 的待批價病人')
+    const before = await C.dailyReport(T)
+    const debtBefore = (await C.getChargeDetail(v.id)).visit.debt
+    await expectError(() => C.pay(v.id, { payMethod: 'cash', received: pv.patientTotal - 100 }), '實收不足、沒勾欠款')
+    try {
+      await C.pay(v.id, { payMethod: 'cash', received: 0, owe: { reason: ' ' } })
+      ok(false, '欠款沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'oweReason', '欠款沒寫原因 → 標在「欠款原因」欄')
+    }
+    await expectError(() => C.pay(v.id, { payMethod: 'card', received: 0, owe: { reason: '測試' } }), '刷卡不能記欠款')
+    const paidNow = pv.patientTotal - 100
+    const c = await C.pay(v.id, { payMethod: 'cash', received: paidNow, owe: { reason: '忘了帶錢' } })
+    ok(c.owed === 100 && c.change === 0 && dbm.db.visits.find((x) => x.id === v.id).status === 'charged', '記欠款 100 元：照常結帳（狀態 charged、不找零）')
+    const after = await C.getChargeDetail(v.id)
+    ok(after.visit.debt === debtBefore + 100 && after.debts.some((d) => d.chargeId === c.id && d.outstanding === 100), `病人尚欠 ${after.visit.debt} 元，欠款清單列出這張收據`)
+    const rep = await C.dailyReport(T)
+    ok(rep.newDebt === before.newDebt + 100 && rep.collected === rep.patientTotal - rep.newDebt + rep.repaid && rep.collected === before.collected + paidNow,
+      `日結：新欠款 +100，實收只增加實際收到的 ${paidNow} 元`)
+    const sumMethods = rep.byPayMethod.cash + rep.byPayMethod.card + rep.byPayMethod.mobile
+    ok(sumMethods === rep.collected && rep.byCashier.reduce((s, x) => s + x.collected, 0) === rep.collected, '依付款方式、依收費人員加總都 = 實收')
+
+    await expectError(() => C.repayDebt(c.id, { payMethod: 'cash', amount: 101 }), '收回超過尚欠')
+    const r1 = await C.repayDebt(c.id, { payMethod: 'cash', amount: 40 })
+    ok(r1.receiptNo.startsWith('R' + T.replace(/-/g, '')) && r1.receiptNo !== c.receiptNo && dbm.db.auditLogs[0].action === '收回欠款', `分次收回 40 元：新收據號 ${r1.receiptNo}，寫入稽核`)
+    ok((await C.listDebts(v.patientId)).find((d) => d.chargeId === c.id)?.outstanding === 60, '收回一部分後尚欠 60')
+    await expectError(() => C.voidCharge(c.id, '測試'), '已收回過欠款的收據不能作廢')
+    await C.repayDebt(c.id, { payMethod: 'mobile', amount: 60 })
+    ok(!(await C.listDebts(v.patientId)).some((d) => d.chargeId === c.id), '還清後不再列在欠款')
+    const rep2 = await C.dailyReport(T)
+    ok(rep2.repaid === rep.repaid + 100 && rep2.collected === rep.collected + 100 && rep2.byPayMethod.mobile === rep.byPayMethod.mobile + 60 && rep2.repayments.length === rep.repayments.length + 2,
+      '日結：收回的 100 元算進實收，行動支付 +60，收回明細多兩筆')
+
+    // 沒收回過的欠款收據可以作廢，欠款跟著消失
+    const v2 = dbm.db.visits.find((x) => x.status === 'consulted' && x.date === T)
+    if (v2) {
+      const d0 = (await C.getChargeDetail(v2.id)).visit.debt
+      const pv2 = await C.previewCharge(v2.id)
+      const c2 = await C.pay(v2.id, { payMethod: 'cash', received: 0, owe: { reason: '測試' } })
+      ok((await C.getChargeDetail(v2.id)).visit.debt === d0 + pv2.patientTotal, `全額欠款 ${pv2.patientTotal} 元`)
+      await C.voidCharge(c2.id, '測試作廢欠款')
+      ok((await C.getChargeDetail(v2.id)).visit.debt === d0, '作廢後欠款一併取消')
+    }
+  }
+
   // 展示資料本身不可違反用藥安全
   const { checkAllergies } = await load('/src/services/allergy.ts')
   const unsafe = dbm.db.encounters.filter((e) => {

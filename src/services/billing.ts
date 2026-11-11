@@ -7,7 +7,7 @@
 //      （免部分負擔身分、慢性病連續處方調劑免收）
 //   4. 診察費、健保藥費、健保醫令列為健保申報點數；自費項目由病患全額自付
 //   5. 自費身分：所有項目以自費價計算，不申報健保
-import type { BillingSettings, ChargeLine, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
+import type { BillingSettings, Charge, ChargeLine, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
 
 export const CONSULT_PROC_ID = 'P001'
 
@@ -99,12 +99,31 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
 /** 找零達到這個金額就視為輸入錯誤（門診部分負擔不可能需要找零上萬元，多半是多打了 0） */
 export const MAX_CASH_CHANGE = 10000
 
-/** 現金收款檢查（純函式，頁面即時提示與服務層共用）：有問題回傳訊息，沒問題回傳 null */
-export function checkCash(total: number, received: number | undefined): string | null {
+/**
+ * 現金收款檢查（純函式，頁面即時提示與服務層共用）：有問題回傳訊息，沒問題回傳 null。
+ * owe：櫃台勾了「差額記為欠款」——實收可以少於應收（0 元也行），但不能足額（足額就不必記欠款）
+ */
+export function checkCash(total: number, received: number | undefined, owe = false): string | null {
   if (received === undefined || received === null || Number.isNaN(received)) return '請輸入實收金額'
   if (!Number.isInteger(received)) return '實收金額需為整數'
+  if (received < 0) return '實收金額不能是負數'
+  if (owe) return received >= total ? '實收已足額，不需記欠款' : null
   if (received < total) return `實收金額不足，應收 ${total} 元`
   if (received - total >= MAX_CASH_CHANGE) return `找零 ${(received - total).toLocaleString()} 元，金額異常，請確認實收金額`
+  return null
+}
+
+/** 這張收據還欠多少：結帳時的欠款 − 已收回（作廢的收據不算欠） */
+export function outstandingOf(c: Pick<Charge, 'owed' | 'repayments' | 'voided'>): number {
+  if (c.voided) return 0
+  return (c.owed ?? 0) - (c.repayments ?? []).reduce((s, r) => s + r.amount, 0)
+}
+
+/** 收回欠款金額檢查：整數、大於 0、不超過尚欠（多收的錢沒有地方放） */
+export function checkRepay(outstanding: number, amount: number | undefined): string | null {
+  if (amount === undefined || amount === null || Number.isNaN(amount)) return '請輸入收回金額'
+  if (!Number.isInteger(amount) || amount <= 0) return '收回金額需為大於 0 的整數'
+  if (amount > outstanding) return `超過尚欠金額 ${outstanding} 元`
   return null
 }
 

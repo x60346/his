@@ -444,6 +444,16 @@ export function buildSeed(): Database {
     }
   }
 
+  // 一筆舊欠款（U10）：今天看完診、等批價的那位病人，上次來忘了帶錢。批價、掛號頁都會提醒收回
+  {
+    const debtor = opdPatients[todayPlan.find(([, , , st]) => st === 'consulted')![0]]
+    const last = charges.filter((c) => c.patientId === debtor.id && !c.paidAt.startsWith(T)).sort((a, b) => b.paidAt.localeCompare(a.paidAt))[0]
+    if (last && last.patientTotal > 0) {
+      const owed = Math.min(last.patientTotal, 200)
+      Object.assign(last, { received: last.patientTotal - owed, change: 0, owed, oweReason: '忘了帶錢', repayments: [] })
+    }
+  }
+
   // 未來預約掛號
   for (let k = 0; k < 8; k++) {
     const date = addDays(T, int(1, 10))

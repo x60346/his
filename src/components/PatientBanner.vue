@@ -5,7 +5,8 @@ import type { PatientBrief } from '@/services'
 import { ageText } from '@/utils/date'
 import { genderLabel } from '@/utils/labels'
 
-defineProps<{ patient: PatientBrief }>()
+// showDebt：只有櫃台的畫面（批價）顯示欠款；看診、護理畫面與欠款無關，不放
+defineProps<{ patient: PatientBrief; showDebt?: boolean }>()
 </script>
 
 <template>
@@ -17,6 +18,7 @@ defineProps<{ patient: PatientBrief }>()
     <div class="text-sm text-slate-600">病歷號 <span class="tabular font-medium text-slate-800">{{ patient.chartNo }}</span></div>
     <div class="text-sm text-slate-600">生日 <span class="tabular">{{ patient.birthDate }}</span></div>
     <slot />
+    <span v-if="showDebt && patient.debt > 0" class="tabular rounded bg-amber-100 px-2 py-0.5 text-sm font-semibold text-amber-900 ring-1 ring-inset ring-amber-600/30">欠款 ${{ patient.debt.toLocaleString() }}</span>
     <div
       :class="[
         'ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-sm',
