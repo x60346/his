@@ -7,7 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -22,6 +22,13 @@ export interface WardPatient extends AdmissionView {
   pendingStatCount: number
   /** 等著護理師核對的醫囑異動數（新開未簽收＋停止未確認） */
   unackedCount: number
+  /** 這一班量過生命徵象沒有（沒量的在清單上標「本班未量」） */
+  measuredThisShift: boolean
+}
+
+/** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
+function latestVitalOf(admissionId: string): VitalRecord | undefined {
+  return db.vitals.filter((v) => v.admissionId === admissionId).reduce<VitalRecord | undefined>((best, v) => (!best || v.at >= best.at ? v : best), undefined)
 }
 
 function admitted(admissionId: string) {
@@ -38,8 +45,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
       .filter((a) => a.status === 'admitted' && a.bedId && find.bed(a.bedId)?.ward === ward)
       .map((a) => {
         changed = ensureMar(a.id, today()) || changed
-        // 最新一筆：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值）
-        const latest = db.vitals.filter((v) => v.admissionId === a.id).reduce<VitalRecord | undefined>((best, v) => (!best || v.at >= best.at ? v : best), undefined)
+        const latest = latestVitalOf(a.id)
         const pending = db.mar.filter((m) => m.admissionId === a.id && m.status === 'pending').map((m) => marUrgency(m.scheduledAt, t))
         return {
           ...admissionView(a),
@@ -49,6 +55,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           dueCount: pending.filter((u) => u === 'due').length,
           pendingStatCount: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication').length,
           unackedCount: db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length,
+          measuredThisShift: measuredThisShift(latest?.at, t),
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
@@ -80,7 +87,7 @@ const URGENCY_RANK: Record<WardTaskUrgency, number> = { overdue: 0, due: 1, todo
 export function listWardTasks(ward: string): Promise<WardTask[]> {
   return query(() => {
     const t = now()
-    const { start, end } = shiftRange(t)
+    const { end } = shiftRange(t)
     const tasks: WardTask[] = []
     let changed = false
     for (const a of db.admissions.filter((x) => x.status === 'admitted' && x.bedId && find.bed(x.bedId)?.ward === ward)) {
@@ -101,8 +108,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       }
       const unacked = db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length
       if (unacked) tasks.push({ ...base, id: `ack-${a.id}`, kind: 'ack', urgency: 'todo', text: `${unacked} 項醫囑異動待核對` })
-      // 這一班還沒量過生命徵象（入院時間在這一班開始之後的，從入院算起）
-      if (!db.vitals.some((v) => v.admissionId === a.id && v.at >= start)) {
+      // 這一班還沒量過生命徵象：和病人清單的「本班未量」同一條規則（measuredThisShift）
+      if (!measuredThisShift(latestVitalOf(a.id)?.at, t)) {
         tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象' })
       }
     }

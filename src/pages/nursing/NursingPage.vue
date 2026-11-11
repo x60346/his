@@ -126,9 +126,12 @@ const wardTotals = computed(() => ({
                 </div>
                 <div class="mt-0.5 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天</div>
                 <div v-if="p.latestVitals" class="tabular mt-0.5 text-xs text-slate-500">
-                  {{ p.latestVitals.at.slice(11) }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
+                  <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
+                  {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
                   <span v-if="p.abnormal.length" class="font-medium text-red-600">（{{ p.abnormal.join('、') }}異常）</span>
+                  <span v-if="!p.measuredThisShift" class="ml-1 rounded bg-amber-50 px-1 font-medium text-amber-700">本班未量</span>
                 </div>
+                <div v-else class="mt-0.5 text-xs font-medium text-amber-700">尚無生命徵象紀錄</div>
               </button>
             </li>
           </ul>

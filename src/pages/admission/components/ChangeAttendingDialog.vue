@@ -5,6 +5,7 @@
 import { reactive, watch } from 'vue'
 import { UButton, UDialog, USelect, UTextarea } from '@/components/ui'
 import { admissionApi, type AdmissionView } from '@/services'
+import { NO_TRANSFER_NOTE } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
 
 const open = defineModel<boolean>({ default: false })
@@ -42,7 +43,7 @@ async function submit() {
         required
         placeholder="請選擇"
         :options="(candidates ?? []).map((d) => ({ label: `${d.name} ${d.title}`, value: d.id }))"
-        :hint="candidates && !candidates.length ? `${admission.deptName}沒有其他在職醫師可以接手（跨科請辦理轉科）` : '只列出同科、在職的醫師'"
+        :hint="candidates && !candidates.length ? `${admission.deptName}沒有其他在職醫師可以接手；${NO_TRANSFER_NOTE}` : '只列出同科、在職的醫師'"
         :error="save.fieldErrors.value.doctorId"
       />
       <div class="flex flex-wrap gap-1.5">

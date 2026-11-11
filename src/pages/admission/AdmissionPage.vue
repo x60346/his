@@ -15,7 +15,8 @@ import { admissionApi, masterApi, type AdmissionView } from '@/services'
 import type { BedView } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
-import { today } from '@/utils/date'
+import { diffDays } from '@/utils/date'
+import { useToday } from '@/composables/useClock'
 import { bedStatus } from '@/utils/labels'
 import type { BedStatus } from '@/types'
 
@@ -42,6 +43,13 @@ const rooms = computed(() => {
   return [...map.entries()].map(([roomNo, list]) => ({ roomNo, beds: list.sort((a, b) => a.bedNo.localeCompare(b.bedNo)) }))
 })
 const legend: BedStatus[] = ['empty', 'occupied', 'cleaning', 'reserved']
+// 預計入院日：今天「今日」、已過「逾期 N 天」（以前都顯示「今日」，昨天沒來報到的看不出來）、未來顯示日期。
+// 用共用時鐘的今天，跨過午夜會自己更新
+const todayStr = useToday()
+const dueBadge = (d: string): { tone: 'red' | 'gray'; text: string } => {
+  const late = diffDays(d, todayStr.value)
+  return late > 0 ? { tone: 'red', text: `逾期 ${late} 天` } : late === 0 ? { tone: 'red', text: '今日' } : { tone: 'gray', text: d.slice(5).replace('-', '/') }
+}
 const sortedReservations = computed(() => [...(reservations.value ?? [])].sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)))
 
 // ---------- 模式 ----------
@@ -213,7 +221,7 @@ const reserveOpen = ref(false)
                 <span class="font-semibold text-slate-800">{{ a.patientName }}</span>
                 <span class="tabular text-xs text-slate-500">{{ a.chartNo }}</span>
                 <UBadge v-if="a.fromVisitId" tone="purple">門診轉入</UBadge>
-                <UBadge :tone="a.expectedDate <= today() ? 'red' : 'gray'" class="ml-auto">{{ a.expectedDate <= today() ? '今日' : a.expectedDate.slice(5) }}</UBadge>
+                <UBadge :tone="dueBadge(a.expectedDate).tone" class="ml-auto">{{ dueBadge(a.expectedDate).text }}</UBadge>
               </div>
               <div class="mt-0.5 text-xs text-slate-600">{{ a.diagnosis }}</div>
               <div class="text-xs text-slate-500">{{ a.deptName }}・{{ a.doctorName }}・希望 {{ a.preferBedClass }}</div>

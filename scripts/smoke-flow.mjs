@@ -673,6 +673,11 @@ try {
       const wardNow = await api.nursingApi.listWardPatients(bed.ward)
       const mism = wardNow.filter((p) => tasks.filter((t) => t.admissionId === p.id && t.kind === 'mar' && t.urgency === 'overdue').length !== p.overdueCount || tasks.filter((t) => t.admissionId === p.id && t.kind === 'mar' && t.urgency === 'due').length !== p.dueCount)
       ok(mism.length === 0, `每位病人的逾時／可給筆數，與病人清單的徽章一致${mism.length ? '：' + mism.map((p) => p.patientName).join('、') : ''}`)
+      // B8：「本班未量」的判斷，病人清單與本班待辦同一條（measuredThisShift）
+      ok(nr.measuredThisShift('2024-05-02 08:00', '2024-05-02 10:30') && !nr.measuredThisShift('2024-05-02 07:59', '2024-05-02 10:30') && !nr.measuredThisShift('2024-05-01 20:00', '2024-05-02 01:00') && !nr.measuredThisShift(undefined, '2024-05-02 10:30'),
+        '本班量過：白班 08:00 起算；昨天 20:00 的不算大夜量過；沒量過的不算')
+      const vsMismatch = wardNow.filter((p) => p.measuredThisShift === tasks.some((t) => t.kind === 'vitals' && t.admissionId === p.id))
+      ok(vsMismatch.length === 0, `病人清單的「本班未量」與本班待辦一致${vsMismatch.length ? '：' + vsMismatch.map((p) => p.patientName).join('、') : ''}`)
       const noVs = tasks.find((t) => t.kind === 'vitals')
       if (noVs) {
         await api.nursingApi.addVitals({ admissionId: noVs.admissionId, temp: 36.8, pulse: 80, resp: 16, sbp: 120, dbp: 75, spo2: 98 })
@@ -1065,6 +1070,12 @@ try {
     }
     await expectError(() => api.admissionApi.changeAttending(adm.id, fromId, '測試'), '改成目前的主治醫師')
     await expectError(() => api.admissionApi.changeAttending(adm.id, otherDept.id, '測試'), '改成其他科的醫師')
+    // B7：訊息不能指向不存在的功能——系統沒有轉科，要說「未提供」，不能叫人「請辦理轉科」
+    try {
+      await api.admissionApi.changeAttending(adm.id, otherDept.id, '測試')
+    } catch (e) {
+      ok(e.message.includes('未提供') && !e.message.includes('請辦理轉科'), `跨科變更主治的訊息明說沒有轉科功能（「${e.message}」）`)
+    }
     const r = await api.admissionApi.changeAttending(adm.id, to.id, '醫師休假')
     const saved = dbm.db.admissions.find((a) => a.id === adm.id)
     ok(r.doctorName === to.name && saved.doctorId === to.id, `主治醫師改為 ${to.name}`)

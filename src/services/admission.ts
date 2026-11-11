@@ -119,6 +119,12 @@ export function transferBed(admissionId: string, bedId: string): Promise<Admissi
   })
 }
 
+/**
+ * 訊息不能指向不存在的功能：本系統沒有轉科，要明說
+ * （以前寫「跨科請辦理轉科」，使用者會到處找轉科按鈕）。對話框提示與服務層錯誤共用這一句。
+ */
+export const NO_TRANSFER_NOTE = '跨科轉科（換科別、主治與病房）本展示系統未提供'
+
 /** 可以接手的主治醫師：同一科、在職、不是目前的主治（跨科是「轉科」，牽涉科別與床位，不在此處理） */
 function attendingCandidates(a: Admission) {
   return db.doctors.filter((d) => d.active && d.deptId === a.deptId && d.id !== a.doctorId)
@@ -145,7 +151,7 @@ export function changeAttending(admissionId: string, doctorId: string, reason: s
     v.done()
     if (to!.id === a.doctorId) failField('doctorId', '與目前的主治醫師相同')
     if (!to!.active) failField('doctorId', `${to!.name} 已停用`)
-    if (to!.deptId !== a.deptId) failField('doctorId', `${to!.name} 不是${find.dept(a.deptId)?.name ?? '同一科'}的醫師（跨科請辦理轉科）`)
+    if (to!.deptId !== a.deptId) failField('doctorId', `${to!.name} 不是${find.dept(a.deptId)?.name ?? '同一科'}的醫師；${NO_TRANSFER_NOTE}`)
     const from = a.doctorId
     a.attendingHistory = [...(a.attendingHistory ?? []), { from, to: to!.id, at: now(), by: u.id, reason: reason.trim() }]
     a.doctorId = to!.id

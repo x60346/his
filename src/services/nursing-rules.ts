@@ -83,6 +83,11 @@ export function shiftRange(dateTime: string): { start: string; end: string } {
   return { start, end: addMinutes(start, 8 * 60) }
 }
 
+/** 這一班量過生命徵象沒有：最新一筆在本班開始之後。病人清單的「本班未量」與本班待辦共用 */
+export function measuredThisShift(latestAt: string | undefined, nowStr: string): boolean {
+  return !!latestAt && latestAt >= shiftRange(nowStr).start
+}
+
 /** 從 dateTime 所在的班往回數 n 班（含目前這班），最新的在前：00:15 → 11/11 大夜、11/10 小夜、11/10 白班 */
 export function recentShifts(dateTime: string, n: number): ShiftInstance[] {
   const out: ShiftInstance[] = []
