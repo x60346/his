@@ -82,9 +82,18 @@ const preventItems = ref<string[]>([])
 const { data: identities } = useQuery(() => masterApi.listIdentities())
 const caseTypeOptions = masterApi.staticCodes.caseTypes.map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
 
+// 換病人時，身分、案件分類、預防保健都回到預設——以前案件分類沒重設，上一位選 04 慢性病，下一位就沿用
 watch(patient, (p) => {
   identityCode.value = p?.defaultIdentity ?? '01'
+  caseType.value = '01'
   preventItems.value = []
+})
+// 上次是慢性病（04／08）時提示，不自動帶入（由櫃台確認這次是不是回診拿慢性病藥）
+const { data: lastCase } = useQuery(async () => (patient.value ? bookingApi.lastCaseType(patient.value.id) : null), [patient])
+const lastCaseHint = computed(() => {
+  const l = lastCase.value
+  if (!l || !['04', '08'].includes(l.caseType) || caseType.value === l.caseType) return ''
+  return `上次（${l.date.slice(5).replace('-', '/')}）為 ${l.caseType} ${masterApi.staticCodes.caseTypes.find((c) => c.code === l.caseType)?.name ?? ''}`
 })
 
 // 資格由服務層判斷，頁面只負責顯示與勾選
@@ -255,6 +264,10 @@ function openIdentity(v: VisitView) {
               <USelect v-model="identityCode" label="就醫身分" :options="(identities ?? []).map((i) => ({ label: i.name, value: i.code }))" />
               <USelect v-model="caseType" label="案件分類" :options="caseTypeOptions" />
             </div>
+            <p v-if="lastCaseHint" class="-mt-1 flex items-center gap-2 text-xs text-amber-700">
+              {{ lastCaseHint }}
+              <button type="button" class="text-brand-600 underline-offset-2 hover:underline" @click="caseType = lastCase!.caseType">改用 {{ lastCase!.caseType }}</button>
+            </p>
             <div v-if="eligibleItems.length">
               <div class="mb-1 text-xs font-medium text-slate-600">可加做預防保健（資格由系統判斷）</div>
               <div class="space-y-1 rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2">

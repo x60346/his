@@ -210,6 +210,16 @@ try {
   await as('clerk01')
   await expectError(() => api.chargeApi.voidCharge(charge.id, '測試'), '已發藥後作廢收據')
 
+  // B6：上次案件分類（掛號頁提示慢性病回診用）：今天以前、看過診的最近一次，不含退掛與還沒看的掛號
+  {
+    const seen = (p) => dbm.db.visits.filter((v) => v.patientId === p.id && v.date <= T && !['cancelled', 'registered'].includes(v.status)).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
+    const chronic = dbm.db.patients.find((p) => seen(p)[0]?.caseType === '04')
+    const r = await api.bookingApi.lastCaseType(chronic.id)
+    ok(r?.caseType === '04' && r.date === seen(chronic)[0].date, `上次案件分類：${chronic.name} 上次（${r?.date}）為 04 慢性病`)
+    const nobody = dbm.db.patients.find((p) => !seen(p).length)
+    ok(!nobody || (await api.bookingApi.lastCaseType(nobody.id)) === null, '沒有看過診的病人：沒有上次案件分類')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')

@@ -96,6 +96,20 @@ export function register(input: RegisterInput): Promise<VisitView> {
 }
 
 /**
+ * 病人上一次就醫（今天以前、未退掛）的案件分類。掛號頁只用來「提示」，不自動帶入：
+ * 慢性病人回診多半還是 04，提示省得櫃台去查；自動帶入則可能把一般就醫掛成慢性病。
+ */
+export function lastCaseType(patientId: string): Promise<{ caseType: string; date: string } | null> {
+  return query(() => {
+    const t = today()
+    const last = db.visits
+      .filter((v) => v.patientId === patientId && v.date <= t && v.status !== 'cancelled' && v.status !== 'registered')
+      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))[0]
+    return last ? { caseType: last.caseType, date: last.date } : null
+  })
+}
+
+/**
  * 更正就醫身分：掛號時選錯（例：病人後來出示榮民證、低收入戶證明）。
  * 只能更正「還沒收費」的掛號——已開收據的要先作廢，收據保存的是當時算好的金額，不能事後改。
  * 案件分類不在這裡改：它跟醫師的處方綁在一起（04/08 慢性處方、A3 預防保健），櫃台改了可能讓處方不成立。
