@@ -6,7 +6,7 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, vitalInputProblem, vitalSpecs, type Shift, type VitalKey } from './nursing-rules'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, recentShifts, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -211,17 +211,31 @@ export function addNoteResponse(noteId: string, response: string): Promise<Nursi
 // ---------- 交班 ----------
 export type HandoverView = HandoverNote & { nurseName: string; patientName: string; bedNo: string }
 
-export function listHandovers(ward: string, date: string): Promise<HandoverView[]> {
-  return query(() =>
-    db.handovers
-      .filter((h) => h.ward === ward && h.date === date)
-      .map((h) => {
-        const a = find.admission(h.admissionId)
-        return { ...h, nurseName: nameOf.user(h.nurseId), patientName: a ? nameOf.patient(a.patientId) : '', bedNo: a?.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '' }
-      })
-      // 交班是沿著病房一床一床走：依床號排，同一床再依時間
-      .sort((a, b) => a.bedNo.localeCompare(b.bedNo) || a.createdAt.localeCompare(b.createdAt)),
-  )
+/** 最近幾班的交班：預設 3 班（一整天），接班的人一定看得到上一班——不論中間是否跨過午夜 */
+export const HANDOVER_SHIFTS = 3
+
+export interface HandoverGroup extends ShiftInstance {
+  items: HandoverView[]
+}
+
+/** 依「班」分組，最新的班在前（接班的人先看到上一班）；只回傳有紀錄的班 */
+export function listHandovers(ward: string): Promise<HandoverGroup[]> {
+  return query(() => {
+    const shifts = recentShifts(now(), HANDOVER_SHIFTS)
+    return shifts
+      .map((s) => ({
+        ...s,
+        items: db.handovers
+          .filter((h) => h.ward === ward && h.date === s.date && h.shift === s.shift)
+          .map((h) => {
+            const a = find.admission(h.admissionId)
+            return { ...h, nurseName: nameOf.user(h.nurseId), patientName: a ? nameOf.patient(a.patientId) : '', bedNo: a?.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '' }
+          })
+          // 交班是沿著病房一床一床走：依床號排，同一床再依時間
+          .sort((a, b) => a.bedNo.localeCompare(b.bedNo) || a.createdAt.localeCompare(b.createdAt)),
+      }))
+      .filter((g) => g.items.length)
+  })
 }
 
 export function addHandover(input: { ward: string; shift: Shift; admissionId: string; content: string }): Promise<HandoverNote> {
@@ -231,7 +245,8 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
     if (find.bed(a.bedId ?? '')?.ward !== input.ward) fail('病人不在此病房')
     if (!input.content.trim()) failField('content', '交班內容不可空白')
     const t = now()
-    const h: HandoverNote = { ward: input.ward, shift: input.shift, admissionId: a.id, content: input.content.trim(), id: newId('HO'), date: t.slice(0, 10), nurseId: nurse.id, createdAt: t }
+    // date 是「這一班開始的日期」：午夜後才寫的小夜交班，歸在前一天的小夜
+    const h: HandoverNote = { ward: input.ward, shift: input.shift, admissionId: a.id, content: input.content.trim(), id: newId('HO'), date: shiftInstanceOf(input.shift, t).date, nurseId: nurse.id, createdAt: t }
     db.handovers.push(h)
     audit('交班', `${input.ward} ${input.shift}`)
     return h

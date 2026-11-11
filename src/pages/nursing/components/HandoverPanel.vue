@@ -1,27 +1,25 @@
 <script setup lang="ts">
-// 交班：以「病房 + 日期」為單位，接班的人要看的是整個病房，不是一個病人。
+// 交班：以「病房」為單位，接班的人要看的是整個病房，不是一個病人。
+// 顯示最近三班（一整天），依「班」分組、最新的班在前——以前依「今天」查，小夜 23:45 寫的交班，大夜 00:15 就看不到。
 // 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為清單上選取的那一位。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { handoverShiftOf, nursingApi, type Shift, type WardPatient } from '@/services'
+import { handoverShiftOf, nursingApi, shiftOf, SHIFT_ORDER, type Shift, type WardPatient } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
-import { useToday } from '@/composables/useClock'
 
 const props = defineProps<{ ward: string; patients: WardPatient[]; selectedId?: string; clock: string }>()
-// 交班以「今天」為單位，跨日時自動換成新一天的交班
-const todayStr = useToday()
+// 換班時（例：00:00 小夜 → 大夜）重新查詢，清單跟著往前推一班
+const currentShift = computed(() => `${props.clock.slice(0, 10)} ${shiftOf(props.clock)}`)
 
 const { data, loading } = useQuery(
   async () => {
     const ward = props.ward
-    return { ward, list: await nursingApi.listHandovers(ward, todayStr.value) }
+    return { ward, groups: await nursingApi.listHandovers(ward) }
   },
-  [() => props.ward, todayStr],
+  [() => props.ward, currentShift],
 )
-const list = computed(() => (data.value?.ward === props.ward ? data.value.list : undefined))
-
-const shifts: Shift[] = ['大夜', '白班', '小夜']
-const grouped = computed(() => shifts.map((s) => ({ shift: s, items: (list.value ?? []).filter((h) => h.shift === s) })).filter((g) => g.items.length))
+const grouped = computed(() => (data.value?.ward === props.ward ? data.value.groups : undefined))
+const shifts: Shift[] = SHIFT_ORDER
 
 const form = reactive({ shift: handoverShiftOf(props.clock) as string | number | undefined, admissionId: props.selectedId as string | number | undefined, content: '' })
 watch(() => props.selectedId, (id) => id && (form.admissionId = id))
@@ -47,9 +45,9 @@ async function submit() {
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>
 
-    <UQueryState :loading="loading && !list" :ready="!!list?.length" :empty-title="`${ward} 今天尚無交班紀錄`">
-      <section v-for="g in grouped" :key="g.shift" class="mb-4 last:mb-0">
-        <h3 class="mb-2 text-sm font-semibold text-slate-700">{{ g.shift }}</h3>
+    <UQueryState :loading="loading && !grouped" :ready="!!grouped?.length" :empty-title="`${ward} 最近一天沒有交班紀錄`">
+      <section v-for="g in grouped" :key="g.date + g.shift" class="mb-4 last:mb-0">
+        <h3 class="mb-2 text-sm font-semibold text-slate-700"><span class="tabular">{{ g.date.slice(5).replace('-', '/') }}</span> {{ g.shift }}</h3>
         <ul class="divide-y divide-slate-100 rounded-md border border-slate-200">
           <li v-for="h in g.items" :key="h.id" :class="['flex gap-3 px-3 py-2 text-sm', h.admissionId === selectedId && 'bg-brand-50/50']">
             <span class="tabular w-14 shrink-0 font-medium text-slate-700">{{ h.bedNo }}</span>
@@ -57,7 +55,7 @@ async function submit() {
               <div class="font-medium text-slate-800">{{ h.patientName }}</div>
               <div class="text-slate-600">{{ h.content }}</div>
             </div>
-            <div class="tabular shrink-0 text-right text-xs text-slate-500">{{ h.createdAt.slice(11) }}<br />{{ h.nurseName }}</div>
+            <div class="tabular shrink-0 text-right text-xs text-slate-500">{{ h.createdAt.slice(5).replace('-', '/') }}<br />{{ h.nurseName }}</div>
           </li>
         </ul>
       </section>

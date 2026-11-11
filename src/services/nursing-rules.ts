@@ -30,6 +30,44 @@ export function handoverShiftOf(dateTime: string): Shift {
   return shiftOf(addMinutes(dateTime, -30))
 }
 
+/**
+ * 「哪一班」＝班別＋這一班開始的日期。交班屬於班，不屬於日曆上的某一天：
+ * 11/10 的小夜（16–24 點）常在 11/11 00:10 才寫完交班，它仍是「11/10 小夜」。
+ * 以前用寫的那一天當日期，小夜 23:45 寫的交班，大夜 00:15 打開就看不到（查的是新的一天）。
+ */
+export interface ShiftInstance {
+  date: string
+  shift: Shift
+}
+
+/** 一天之內的班別順序 */
+export const SHIFT_ORDER: Shift[] = ['大夜', '白班', '小夜']
+
+/**
+ * 在 dateTime 寫的、屬於 shift 班別的交班，是哪一班。
+ * 只有一種情況會跨日：小夜（16–24）在午夜後才寫（例：00:10），屬於前一天的小夜。
+ */
+export function shiftInstanceOf(shift: Shift, dateTime: string): ShiftInstance {
+  const d = dateTime.slice(0, 10)
+  const h = Number(dateTime.slice(11, 13))
+  return { date: shift === '小夜' && h < 16 ? addMinutes(`${d} 00:00`, -1).slice(0, 10) : d, shift }
+}
+
+/** 從 dateTime 所在的班往回數 n 班（含目前這班），最新的在前：00:15 → 11/11 大夜、11/10 小夜、11/10 白班 */
+export function recentShifts(dateTime: string, n: number): ShiftInstance[] {
+  const out: ShiftInstance[] = []
+  let date = dateTime.slice(0, 10)
+  let i = SHIFT_ORDER.indexOf(shiftOf(dateTime))
+  while (out.length < n) {
+    out.push({ date, shift: SHIFT_ORDER[i] })
+    if (--i < 0) {
+      i = SHIFT_ORDER.length - 1
+      date = addMinutes(`${date} 00:00`, -1).slice(0, 10)
+    }
+  }
+  return out
+}
+
 export type VitalKey = 'temp' | 'pulse' | 'resp' | 'sbp' | 'dbp' | 'spo2' | 'pain' | 'intake' | 'output'
 
 export interface VitalSpec {
