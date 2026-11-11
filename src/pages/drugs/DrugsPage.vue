@@ -3,7 +3,8 @@
 // 清單上「可用庫存」「可用天數」「效期」都是服務層依帳本算好的；頁面只負責呈現與篩選條件。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
-import { AlertTriangle, CalendarClock, PackageX, Pill } from 'lucide-vue-next'
+import { AlertTriangle, CalendarClock, PackageX, Pill, X } from 'lucide-vue-next'
+import type { StockFlag } from '@/services/stock-rules'
 import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, type Column } from '@/components/ui'
 import DrugDetail from './components/DrugDetail.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
@@ -14,10 +15,16 @@ const kw = useDebounced(keyword)
 const category = ref<string | number | undefined>('')
 const attentionOnly = ref(false)
 
+// 摘要卡片點了直接篩選（再點一次、或點「使用中品項」取消）
+const cardFilters = { out: { label: '缺貨', flags: ['out'] }, low: { label: '低於安全庫存', flags: ['low'] }, expiry: { label: '效期提醒', flags: ['expiring', 'expired'] } } as const satisfies Record<string, { label: string; flags: StockFlag[] }>
+type CardKey = keyof typeof cardFilters
+const cardFilter = ref<CardKey | null>(null)
+const toggleCard = (k: CardKey | null) => (cardFilter.value = cardFilter.value === k ? null : k)
+
 const { data: summary } = useQuery(() => inventoryApi.inventorySummary())
 const { data: rows, loading } = useQuery(
-  () => inventoryApi.listInventory({ keyword: kw.value, category: String(category.value ?? ''), attentionOnly: attentionOnly.value }),
-  [kw, category, attentionOnly],
+  () => inventoryApi.listInventory({ keyword: kw.value, category: String(category.value ?? ''), attentionOnly: attentionOnly.value, flags: cardFilter.value ? [...cardFilters[cardFilter.value].flags] : undefined }),
+  [kw, category, attentionOnly, cardFilter],
 )
 
 const selectedId = ref<string>()
@@ -39,10 +46,10 @@ const shown = computed(() => rows.value?.length ?? 0)
 <template>
   <div class="space-y-4">
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" />
-      <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" />
-      <UStatCard label="低於安全庫存" :value="summary?.low ?? '—'" :icon="AlertTriangle" tone="amber" />
-      <UStatCard label="效期提醒" :value="summary ? `${summary.expiring} / ${summary.expired}` : '—'" :icon="CalendarClock" tone="amber" hint="60 天內到期 / 已過期待報廢" />
+      <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />
+      <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
+      <UStatCard label="低於安全庫存" :value="summary?.low ?? '—'" :icon="AlertTriangle" tone="amber" :active="cardFilter === 'low'" :on-click="() => toggleCard('low')" />
+      <UStatCard label="效期提醒" :value="summary ? `${summary.expiring} / ${summary.expired}` : '—'" :icon="CalendarClock" tone="amber" hint="60 天內到期 / 已過期待報廢" :active="cardFilter === 'expiry'" :on-click="() => toggleCard('expiry')" />
     </div>
 
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_32rem]">
@@ -51,7 +58,12 @@ const shown = computed(() => rows.value?.length ?? 0)
           <UInput v-model="keyword" placeholder="藥名、學名、代碼" class="w-56" />
           <USelect v-model="category" :options="[{ label: '全部劑型', value: '' }, ...categories]" class="w-32" />
           <UCheckbox v-model="attentionOnly" label="只看需處理（缺貨、偏低、效期）" class="pb-2" />
-          <span class="ml-auto pb-2 text-xs text-slate-500">共 {{ shown }} 項</span>
+          <span class="ml-auto flex items-center gap-2 pb-2 text-xs text-slate-500">
+            <button v-if="cardFilter" type="button" class="flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-brand-700 hover:bg-brand-100" :aria-label="`取消篩選：${cardFilters[cardFilter].label}`" @click="cardFilter = null">
+              篩選：{{ cardFilters[cardFilter].label }}<X class="h-3 w-3" />
+            </button>
+            共 {{ shown }} 項
+          </span>
         </div>
         <UTable
           :columns="columns"

@@ -97,6 +97,8 @@ export interface InventoryQuery {
   category?: string
   /** 只看需要處理的：缺貨、偏低、效期將到、有過期品 */
   attentionOnly?: boolean
+  /** 只看有其中任一標籤的（摘要卡片點擊用；和卡片數字同一個來源 flags） */
+  flags?: StockFlag[]
 }
 
 export function listInventory(q: InventoryQuery = {}): Promise<InventoryRow[]> {
@@ -108,6 +110,7 @@ export function listInventory(q: InventoryQuery = {}): Promise<InventoryRow[]> {
       .filter((d) => !kw || [d.id, d.name, d.generic, d.nhiCode].some((x) => x.toLowerCase().includes(kw)))
       .map((d) => inventoryRow(d, t))
       .filter((r) => !q.attentionOnly || r.flags.length > 0)
+      .filter((r) => !q.flags?.length || r.flags.some((f) => q.flags!.includes(f)))
       .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   })
 }

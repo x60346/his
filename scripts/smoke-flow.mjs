@@ -161,6 +161,11 @@ try {
     const count = (k) => all.filter((r) => r.flags.includes(k)).length
     ok(sum.out === count('out') && sum.low === count('low') && sum.expiring === count('expiring') && sum.expired === count('expired'), `摘要卡片數字 = 有對應標籤的藥品數（缺貨 ${sum.out}、偏低 ${sum.low}、近效期 ${sum.expiring}、待報廢 ${sum.expired}）`)
     ok(all.some((r) => r.flags.includes('expiring') && r.status === 'ok'), '種子資料中有「庫存足夠但近效期」的藥（G1 的情境）')
+    // G7：點摘要卡片篩選，筆數要等於卡片上的數字
+    const byFlags = async (flags) => (await api.inventoryApi.listInventory({ flags })).length
+    const expiryCount = all.filter((r) => r.flags.includes('expiring') || r.flags.includes('expired')).length
+    ok((await byFlags(['out'])) === sum.out && (await byFlags(['low'])) === sum.low && (await byFlags(['expiring', 'expired'])) === expiryCount && (await byFlags([])) === all.length,
+      `點卡片篩選：缺貨 ${sum.out}、偏低 ${sum.low}、效期提醒 ${expiryCount} 項，與卡片數字一致；空條件 = 全部`)
   }
   const expiredDrug = dbm.db.drugLots.find((l) => l.qty > 0 && l.expiry < new Date().toISOString().slice(0, 10))
   if (expiredDrug) {
