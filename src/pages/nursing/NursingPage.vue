@@ -45,7 +45,7 @@ watch(patients, (list) => {
 const tab = ref('mar')
 const tabs = computed(() => [
   { key: 'mar', label: '給藥紀錄', count: adm.value ? adm.value.overdueCount + adm.value.dueCount || undefined : undefined },
-  { key: 'orders', label: '醫囑' },
+  { key: 'orders', label: '醫囑', count: adm.value?.unackedCount || undefined },
   { key: 'vitals', label: '生命徵象' },
   { key: 'notes', label: '護理紀錄' },
   { key: 'handover', label: '交班' },
@@ -54,6 +54,7 @@ const tabs = computed(() => [
 const wardTotals = computed(() => ({
   overdue: (patients.value ?? []).reduce((s, p) => s + p.overdueCount, 0),
   stat: (patients.value ?? []).reduce((s, p) => s + p.pendingStatCount, 0),
+  unacked: (patients.value ?? []).reduce((s, p) => s + p.unackedCount, 0),
 }))
 </script>
 
@@ -71,6 +72,7 @@ const wardTotals = computed(() => ({
       </div>
       <UBadge v-if="wardTotals.overdue" tone="red">全病房逾時給藥 {{ wardTotals.overdue }}</UBadge>
       <UBadge v-if="wardTotals.stat" tone="yellow">待執行臨時醫囑 {{ wardTotals.stat }}</UBadge>
+      <UBadge v-if="wardTotals.unacked" tone="cyan">待核對醫囑 {{ wardTotals.unacked }}</UBadge>
       <span class="tabular ml-auto text-sm text-slate-500">現在 {{ clock.slice(11) }}</span>
     </div>
 
@@ -93,6 +95,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.overdueCount" tone="red">逾時 {{ p.overdueCount }}</UBadge>
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
+                    <UBadge v-if="p.unackedCount" tone="cyan">新醫囑 {{ p.unackedCount }}</UBadge>
                   </span>
                 </div>
                 <div class="mt-0.5 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天</div>

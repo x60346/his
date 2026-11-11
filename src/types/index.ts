@@ -397,6 +397,12 @@ export interface IpdOrder {
   status: 'active' | 'stopped' | 'done'
   doctorId: string
   createdAt: string
+  /** 護理師核對（簽收）新醫囑的時間與人：沒核對前，病人清單會一直標「新醫囑」 */
+  ackAt?: string
+  ackBy?: string
+  /** 護理師確認「已停止」的時間與人：醫囑停了也要讓執行的人知道 */
+  stopAckAt?: string
+  stopAckBy?: string
 }
 
 /** 給藥紀錄（MAR） */

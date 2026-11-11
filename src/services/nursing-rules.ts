@@ -43,6 +43,14 @@ export function orderChange(o: { status: 'active' | 'stopped' | 'done'; startAt:
 }
 
 /**
+ * 這筆醫囑是否還等著護理師核對：新開的沒簽收、停止的沒確認。沒有時間限制——沒人核對就一直標著。
+ * 已完成（done）的不用：那是護理師自己執行完的，執行本身就代表看過了。
+ */
+export function needsAck(o: { status: 'active' | 'stopped' | 'done'; ackAt?: string; stopAckAt?: string }): boolean {
+  return (o.status === 'active' && !o.ackAt) || (o.status === 'stopped' && !o.stopAckAt)
+}
+
+/**
  * 「哪一班」＝班別＋這一班開始的日期。交班屬於班，不屬於日曆上的某一天：
  * 11/10 的小夜（16–24 點）常在 11/11 00:10 才寫完交班，它仍是「11/10 小夜」。
  * 以前用寫的那一天當日期，小夜 23:45 寫的交班，大夜 00:15 打開就看不到（查的是新的一天）。

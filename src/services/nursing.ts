@@ -6,7 +6,7 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, orderChange, recentShifts, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, needsAck, orderChange, recentShifts, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -19,6 +19,8 @@ export interface WardPatient extends AdmissionView {
   dueCount: number
   /** 尚未執行的臨時醫囑數（檢驗、處置） */
   pendingStatCount: number
+  /** 等著護理師核對的醫囑異動數（新開未簽收＋停止未確認） */
+  unackedCount: number
 }
 
 function admitted(admissionId: string) {
@@ -44,6 +46,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           overdueCount: pending.filter((u) => u === 'overdue').length,
           dueCount: pending.filter((u) => u === 'due').length,
           pendingStatCount: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication').length,
+          unackedCount: db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length,
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
@@ -85,7 +88,7 @@ export function getMarBoard(admissionId: string, date: string): Promise<MarBoard
 // 以前護理站只看得到給藥排程、PRN、臨時非給藥醫囑；長期的護理醫囑（翻身 Q2H）、飲食（禁食）、處置，
 // 護理師在任何頁面都看不到——醫師開了，執行的人卻不知道。
 
-export type NursingOrderView = OrderView & { change: OrderChange | null }
+export type NursingOrderView = OrderView & { change: OrderChange | null; needsAck: boolean }
 export interface NursingOrderGroup {
   category: IpdOrder['category']
   label: string
@@ -104,11 +107,33 @@ export function listNursingOrders(admissionId: string): Promise<NursingOrderGrou
     const t = now()
     const shown = db.ipdOrders
       .filter((o) => o.admissionId === admissionId)
-      .map((o) => ({ ...orderView(o), change: orderChange(o, t) }))
-      .filter((o) => o.status === 'active' || o.change)
+      .map((o) => ({ ...orderView(o), change: orderChange(o, t), needsAck: needsAck(o) }))
+      // 還沒核對的停止醫囑即使超過 24 小時也要列出——沒人確認過，就還不能從清單上消失
+      .filter((o) => o.status === 'active' || o.change || o.needsAck)
       // 執行中的在前；同一類裡新開的在前
       .sort((a, b) => Number(a.status !== 'active') - Number(b.status !== 'active') || b.startAt.localeCompare(a.startAt))
     return ORDER_GROUPS.map((g) => ({ ...g, orders: shown.filter((o) => o.category === g.category) })).filter((g) => g.orders.length)
+  })
+}
+
+/**
+ * 核對醫囑：把這位病人所有「新開未簽收、停止未確認」的醫囑一次核對。
+ * 只核對按下當時看得到的那幾筆（orderIds）：若醫師剛好又開了一筆，畫面還沒顯示，就不能一起被簽掉。
+ * 稽核記下核對了哪幾筆。
+ */
+export function ackOrders(admissionId: string, orderIds: string[]): Promise<{ count: number }> {
+  return mutate(() => {
+    const nurse = requireUser('nurse')
+    admitted(admissionId)
+    const t = now()
+    const targets = db.ipdOrders.filter((o) => o.admissionId === admissionId && orderIds.includes(o.id) && needsAck(o))
+    if (!targets.length) fail('沒有需要核對的醫囑', 'CONFLICT')
+    for (const o of targets) {
+      if (o.status === 'active') Object.assign(o, { ackAt: t, ackBy: nurse.id })
+      else Object.assign(o, { stopAckAt: t, stopAckBy: nurse.id })
+    }
+    audit('核對醫囑', targets.map((o) => `${o.status === 'active' ? '新' : '停'}：${o.content}`).join('、'))
+    return { count: targets.length }
   })
 }
 

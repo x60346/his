@@ -765,6 +765,20 @@ export function buildSeed(): Database {
     drugLots.push(...lots)
   })
 
+  // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
+  // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒
+  // 核對時間＝事件後 30 分鐘，但不晚於現在（也就不會早於事件本身：事件時間一定 ≤ 現在）
+  const ackTime = (at: string) => (addMinutes(at, 30) > nowStr ? nowStr : addMinutes(at, 30))
+  for (const o of ipdOrders) {
+    if (o.status === 'done') continue
+    o.ackAt = ackTime(o.startAt)
+    o.ackBy = 'U202'
+    if (o.status === 'stopped' && o.stopAt) {
+      o.stopAckAt = ackTime(o.stopAt)
+      o.stopAckBy = 'U202'
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,

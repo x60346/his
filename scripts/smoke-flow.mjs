@@ -548,6 +548,27 @@ try {
     ok(by((o) => o.content === '普通飲食')?.change === 'stopped' && by((o) => o.id === dupOrder.id)?.change === 'stopped' && by((o) => o.id === statMed.id)?.change === 'done',
       `被取代的飲食、剛停止的醫囑標「已停」，執行完的臨時醫囑標「已完成」（24 小時內仍列出）［普通飲食 ${by((o) => o.content === '普通飲食')?.change}、重複醫囑 ${by((o) => o.id === dupOrder.id)?.change}、臨時給藥 ${by((o) => o.id === statMed.id)?.change}］`)
     ok(all.every((o) => o.status === 'active' || o.change) && groups.some((g) => g.category === 'medication'), '只列執行中與 24 小時內異動的醫囑；用藥也列出供參考')
+    // U18：新醫囑／停止要護理師核對；沒核對就一直標著
+    ok(nr.needsAck({ status: 'active' }) && !nr.needsAck({ status: 'active', ackAt: 'x' }) && nr.needsAck({ status: 'stopped', ackAt: 'x' }) && !nr.needsAck({ status: 'stopped', stopAckAt: 'x' }) && !nr.needsAck({ status: 'done' }),
+      '待核對：新開未簽收、停止未確認；執行完成的不用')
+    const seedUnacked = dbm.db.ipdOrders.filter((o) => o.admissionId !== adm.id && nr.needsAck(o))
+    ok(seedUnacked.length === 0, `展示資料的醫囑都已核對（打開護理站不會每位都掛「新醫囑」）${seedUnacked.length ? '：' + seedUnacked.length + ' 筆未核對' : ''}`)
+    const wardList = await api.nursingApi.listWardPatients(bed.ward)
+    const me = wardList.find((p) => p.id === adm.id)
+    const expected = dbm.db.ipdOrders.filter((o) => o.admissionId === adm.id && nr.needsAck(o)).length
+    ok(me.unackedCount === expected && expected > 0 && all.filter((o) => o.needsAck).length === expected, `病人清單「新醫囑 ${me.unackedCount}」= 醫囑分頁的待核對筆數`)
+    const shownIds = all.filter((o) => o.needsAck).map((o) => o.id)
+    // 按下核對之前，醫師剛好又開了一筆：畫面上沒看到的那筆不能被一起簽掉
+    await as('dr02')
+    const lateOrder = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'long', category: 'nursing', content: '測試：剛開的護理醫囑' })
+    await expectError(() => api.nursingApi.ackOrders(adm.id, shownIds), '醫師核對醫囑')
+    await as('nurse01')
+    const r = await api.nursingApi.ackOrders(adm.id, shownIds)
+    const after = (await api.nursingApi.listWardPatients(bed.ward)).find((p) => p.id === adm.id)
+    ok(r.count === expected && after.unackedCount === 1 && nr.needsAck(dbm.db.ipdOrders.find((o) => o.id === lateOrder.id)) && dbm.db.auditLogs[0].action === '核對醫囑',
+      `核對 ${r.count} 項後只剩剛開、還沒顯示的那 1 筆待核對；寫入稽核`)
+    await api.nursingApi.ackOrders(adm.id, [lateOrder.id])
+    await expectError(() => api.nursingApi.ackOrders(adm.id, [lateOrder.id]), '重複核對')
     const noStop = dbm.db.ipdOrders.filter((o) => o.status !== 'active' && !o.stopAt)
     ok(noStop.length === 0, `已停止／已完成的醫囑都有停止時間 stopAt（含種子資料、臨時給藥）${noStop.length ? '：缺 ' + noStop.length + ' 筆' : ''}`)
   }
