@@ -673,6 +673,26 @@ try {
     await as('clerk01')
   }
 
+  // 掛號單條碼（U7）：Code 39
+  {
+    const C = await load('/src/utils/code39.ts')
+    const pats = Object.entries(C.CODE39)
+    ok(pats.every(([, x]) => x.length === 9 && [...x].filter((c) => c === 'w').length === 3) && new Set(pats.map(([, x]) => x)).size === pats.length,
+      `Code 39：${pats.length} 個字元，每個 9 條中正好 3 條寬、彼此不重複`)
+    // 對照標準表（ISO/IEC 16388）：起訖符號 *、數字 0、1
+    ok(C.CODE39['*'] === 'nwnnwnwnn' && C.CODE39['0'] === 'nnnwwnwnn' && C.CODE39['1'] === 'wnnwnnnnw', 'Code 39：起訖符號與數字對照標準表')
+    const b = C.code39Bars('100005')
+    // 8 個字（含前後 *）× (6 窄 + 3 寬×3 = 15) + 7 個字間空白 = 127
+    ok(b.bars.length === 8 * 5 && b.width === 8 * 15 + 7, `病歷號 100005 → ${b.bars.length} 條黑條、總寬 ${b.width} 個窄條寬`)
+    let threw = false
+    try {
+      C.code39Bars('王')
+    } catch {
+      threw = true
+    }
+    ok(threw, '不支援的字元直接報錯（印出掃不出來的條碼比印不出來更糟）')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')
@@ -1401,6 +1421,49 @@ try {
     // 今天已開始看診的診次不能停
     const started = dbm.db.sessions.find((s) => s.date === T && dbm.db.visits.some((v) => v.sessionId === s.id && v.status === 'dispensed'))
     if (started) await expectError(() => S.suspendSession(started.id, '測試'), '停診已開始看診的診次')
+
+    // 診間主檔（U30）：門診表只能選有的、啟用中的診間
+    ok(dbm.db.rooms.length > 0 && dbm.db.weeklySlots.every((w) => dbm.db.rooms.some((x) => x.roomNo === w.roomNo && x.active)) && dbm.db.sessions.every((x) => dbm.db.rooms.some((y) => y.roomNo === x.roomNo)),
+      `種子：${dbm.db.rooms.length} 間診間，每個門診表與診次的診間都在主檔裡`)
+    ok(dbm.db.rooms.every((x) => x.location.startsWith(x.roomNo[0] + ' 樓')), '種子：診間位置的樓層 = 診間號第一碼（201 在 2 樓）')
+    try {
+      await S.saveRoom({ roomNo: '', location: '', active: true }, true)
+      ok(false, '空白診間應被擋下')
+    } catch (e) {
+      ok(Object.keys(e.fields ?? {}).sort().join() === 'location,roomNo', '新增診間空白：診間號與位置一次標出')
+    }
+    await expectError(() => S.saveRoom({ roomNo: '2 01', location: 'x', active: true }, true), '診間號含空白')
+    const nr = await S.saveRoom({ roomNo: 'n01', location: '1 樓 夜間門診區', active: true }, true)
+    await S.saveRoom({ roomNo: 'Z99', location: '9 樓 測試', active: true }, true)
+    ok(nr.roomNo === 'N01' && dbm.db.auditLogs[1].action === '新增診間', '新增診間：診間號轉大寫，寫入稽核')
+    await expectError(() => S.saveRoom({ roomNo: 'N01', location: '重複', active: true }, true), '新增已存在的診間')
+    await expectError(() => S.saveRoom({ roomNo: 'X77', location: '不存在', active: true }, false), '修改不存在的診間')
+    const usedRoom = dbm.db.weeklySlots[0].roomNo
+    try {
+      await S.saveRoom({ ...dbm.db.rooms.find((x) => x.roomNo === usedRoom), active: false }, false)
+      ok(false, '還有門診表在用的診間不能停用')
+    } catch (e) {
+      ok(e.field === 'active' && e.message.includes('請先改到其他診間'), `停用還有門診表在用的 ${usedRoom} 診 → 「${e.message.slice(0, 40)}…」`)
+    }
+    const anyDoc = dbm.db.doctors.find((d) => d.active)
+    const freeAny = [0, 1, 2, 3, 4, 5, 6].find((wd) => !dbm.db.weeklySlots.some((x) => x.doctorId === anyDoc.id && x.weekday === wd && x.period === 'NIGHT'))
+    try {
+      await S.saveWeeklySlot({ doctorId: anyDoc.id, weekday: freeAny, period: 'NIGHT', roomNo: '2O1', limit: 20 })
+      ok(false, '打錯的診間應被擋下')
+    } catch (e) {
+      ok(e.field === 'roomNo' && e.message.includes('沒有 2O1 診'), `門診表用不存在的診間（2O1，字母 O）→ 「${e.message}」`)
+    }
+    await S.saveRoom({ roomNo: 'Z99', location: '9 樓 測試', active: false }, false)
+    try {
+      await S.saveWeeklySlot({ doctorId: anyDoc.id, weekday: freeAny, period: 'NIGHT', roomNo: 'Z99', limit: 20 })
+      ok(false, '停用的診間應被擋下')
+    } catch (e) {
+      ok(e.field === 'roomNo' && e.message.includes('已停用'), '門診表用已停用的診間 → 擋下')
+    }
+    await S.saveRoom({ roomNo: 'Z99', location: '9 樓 測試', active: true }, false)
+    // 掛號單上的位置：診次的診間位置帶到掛號資料
+    const someVisit = (await api.bookingApi.listVisits({ date: T })).find((v) => !v.refillOf)
+    ok(someVisit.roomLocation === dbm.db.rooms.find((x) => x.roomNo === someVisit.roomNo).location, `掛號資料帶診間位置（${someVisit.roomNo} 診：${someVisit.roomLocation}）`)
 
     // 每週範本
     const slot0 = dbm.db.weeklySlots[0]

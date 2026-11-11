@@ -15,6 +15,7 @@ export const find = {
   procedure: (id: string) => db.procedures.find((p) => p.id === id),
   freq: (code: string) => db.frequencies.find((f) => f.code === code),
   session: (id: string) => db.sessions.find((s) => s.id === id),
+  room: (roomNo: string) => db.rooms.find((r) => r.roomNo === roomNo),
   visit: (id: string) => db.visits.find((v) => v.id === id),
   encounterOfVisit: (visitId: string) => db.encounters.find((e) => e.visitId === visitId),
   bed: (id: string) => db.beds.find((b) => b.id === id),
@@ -99,6 +100,8 @@ export interface VisitView extends Visit, PatientBrief {
   identityName: string
   period: ClinicSession['period']
   roomNo: string
+  /** 診間位置（掛號單用） */
+  roomLocation: string
 }
 
 export function visitView(v: Visit): VisitView {
@@ -111,6 +114,7 @@ export function visitView(v: Visit): VisitView {
     identityName: nameOf.identity(v.identityCode),
     period: s?.period ?? 'AM',
     roomNo: s?.roomNo ?? '',
+    roomLocation: s ? (find.room(s.roomNo)?.location ?? '') : '',
   }
 }
 

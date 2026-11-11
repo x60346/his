@@ -14,6 +14,9 @@ const deptId = ref<string | number | undefined>('')
 const { data: depts } = useQuery(() => adminApi.listDepartments())
 const { data: doctors } = useQuery(() => adminApi.listDoctors())
 const { data: slots, loading } = useQuery(() => scheduleApi.listWeeklySlots({ deptId: String(deptId.value ?? '') || undefined }), [deptId])
+// 診間：只能從主檔選。同一時段已被別的門診占用的列出來但不能選，並寫明被誰占用（不分科別篩選，要看全院）
+const { data: rooms } = useQuery(() => scheduleApi.listRooms())
+const { data: allSlots } = useQuery(() => scheduleApi.listWeeklySlots())
 
 // 星期一排最前面（門診表的習慣），週日放最後
 const weekdays = [1, 2, 3, 4, 5, 6, 0]
@@ -28,6 +31,18 @@ const cell = (wd: number, p: Period) => (slots.value ?? []).filter((s) => s.week
 // ---------- 新增 / 編輯 ----------
 const open = ref(false)
 const form = reactive({ id: undefined as string | undefined, doctorId: undefined as string | number | undefined, weekday: 1 as string | number | undefined, period: 'AM' as string | number | undefined, roomNo: '', limit: 50 as number | undefined })
+const roomOptions = computed(() =>
+  (rooms.value ?? [])
+    .filter((x) => x.active || x.roomNo === form.roomNo)
+    .map((x) => {
+      const taken = (allSlots.value ?? []).find((w) => w.roomNo === x.roomNo && w.weekday === Number(form.weekday) && w.period === form.period && w.id !== form.id)
+      return {
+        value: x.roomNo,
+        label: `${x.roomNo} 診・${x.location}${taken ? `（此時段 ${taken.doctorName} 使用中）` : ''}${x.active ? '' : '（已停用）'}`,
+        disabled: !!taken || !x.active,
+      }
+    }),
+)
 const doctorOptions = computed(() =>
   (doctors.value ?? []).filter((d) => d.active && (!deptId.value || d.deptId === deptId.value)).map((d) => ({ label: `${d.name}（${d.deptName}）`, value: d.id })),
 )
@@ -97,7 +112,7 @@ async function remove() {
         <USelect v-model="form.doctorId" label="醫師" required placeholder="請選擇" :options="doctorOptions" class="col-span-2" :error="save.fieldErrors.value.doctorId" />
         <USelect v-model="form.weekday" label="星期" required :options="weekdays.map((wd) => ({ label: wdLabel(wd), value: wd }))" :error="save.fieldErrors.value.weekday" />
         <USelect v-model="form.period" label="時段" required :options="periods.map((p) => ({ label: p.label, value: p.key }))" :error="save.fieldErrors.value.period" />
-        <UInput v-model="form.roomNo" label="診間" required placeholder="例：101" :error="save.fieldErrors.value.roomNo" />
+        <USelect v-model="form.roomNo" label="診間" required placeholder="請選擇" :options="roomOptions" :error="save.fieldErrors.value.roomNo" hint="新診間請先到「診間」新增" />
         <UInput v-model="form.limit" label="人數上限" type="number" min="1" required :error="save.fieldErrors.value.limit" />
       </div>
       <p class="mt-3 text-xs text-slate-500">變更只影響尚無掛號的未來診次；已有掛號的維持原安排。</p>

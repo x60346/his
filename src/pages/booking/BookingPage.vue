@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { computed, nextTick, ref, watch } from 'vue'
-import { CreditCard, List as ListIcon, PhoneCall, Ticket, UserPlus, X } from 'lucide-vue-next'
+import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
+import RegistrationSlip from '@/components/RegistrationSlip.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
 import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
@@ -153,6 +154,13 @@ const feeText = (e: { lines: { kind: string; amount: number }[] }) =>
 
 // ---------- 掛號 ----------
 const lastResult = ref<VisitView>()
+// 掛號單：掛完號直接印；清單上還沒看診的也能補印
+const slipVisit = ref<VisitView>()
+const slipOpen = ref(false)
+function openSlip(v: VisitView) {
+  slipVisit.value = v
+  slipOpen.value = true
+}
 // 掛號完成卡片上的預估：用實際掛進去的身分與案件分類（可能已轉成 A3）
 const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType) : undefined), [lastResult])
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
@@ -230,6 +238,7 @@ const columns: Column<VisitView>[] = [
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
   { key: 'identityName', label: '身分' },
+  { key: 'cardSeq', label: '就醫序號', format: (v) => (v.refillOf ? '—' : v.cardSeq) },
   { key: 'status', label: '狀態' },
   { key: 'createdAt', label: '掛號時間', format: (v) => v.createdAt.slice(11) },
   { key: 'actions', label: '', align: 'right' },
@@ -433,9 +442,11 @@ function openIdentity(v: VisitView) {
           <div class="text-sm text-slate-700">
             <div class="font-semibold">{{ lastResult.patientName }}（{{ lastResult.chartNo }}）</div>
             <div>{{ lastResult.date }} {{ periodLabel[lastResult.period] }}</div>
-            <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診</div>
+            <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診<template v-if="lastResult.roomLocation">（{{ lastResult.roomLocation }}）</template></div>
+            <div class="tabular text-xs text-slate-600">就醫序號 {{ lastResult.cardSeq }}</div>
             <div v-if="lastEstimate" class="mt-1 text-xs text-slate-600">預估應收 <b class="tabular">{{ lastEstimate.total }}</b> 元起（看診後批價結帳）</div>
           </div>
+          <UButton class="ml-auto self-center" size="sm" variant="secondary" :icon="Printer" @click="openSlip(lastResult)">列印掛號單</UButton>
         </div>
     </div>
 
@@ -451,12 +462,14 @@ function openIdentity(v: VisitView) {
         <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
         <template #cell-actions="{ row }">
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
+          <UButton v-if="row.status === 'registered' && !row.refillOf" size="sm" variant="ghost" @click="openSlip(row)">補印</UButton>
           <UButton v-if="row.status === 'registered' || (row.refillOf && row.status === 'consulted')" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
         </template>
       </UTable>
     </UCard>
     </div>
 
+    <RegistrationSlip v-model="slipOpen" :visit="slipVisit" />
     <PatientEditDialog v-model="editOpen" :prefill="prefill" @saved="(p) => (patient = p)" />
     <IdentityCorrectDialog v-model="identityOpen" :visit-id="identityVisit?.id" :identity-code="identityVisit?.identityCode" :subject="identityVisit && `${identityVisit.patientName}（${identityVisit.deptName} 第 ${identityVisit.seqNo} 號）・目前身分 ${identityVisit.identityName}`" />
   </div>

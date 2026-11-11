@@ -31,6 +31,7 @@ import type {
   User,
   Visit,
   VitalRecord,
+  Room,
   WeeklySlot,
 } from '@/types'
 import { today } from '@/utils/date'
@@ -49,6 +50,8 @@ export interface Database {
   billingSettings: BillingSettings
   /** 安全設定（選用：沒有就用預設值） */
   securitySettings?: { idleLockMin: number }
+  /** 門診診間 */
+  rooms: Room[]
   weeklySlots: WeeklySlot[]
   /** 已展開的每日診次；新日期由 schedule 服務依 weeklySlots 自動產生 */
   sessions: ClinicSession[]
@@ -83,7 +86,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 29
+export const SCHEMA_VERSION = 31
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(): Database {

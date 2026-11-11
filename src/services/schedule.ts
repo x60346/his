@@ -5,7 +5,7 @@
 //   每週範本——長期的排班（每週三上午林醫師 101 診）。改範本只影響「還沒有人掛號」的未來診次。
 //   單日診次——某一天的例外：停診（病人退掛並通知）、代診（病人轉給同科另一位醫師）。
 // 原則：已經有病人掛號的診次，任何調整都不能讓掛號默默消失或默默換醫師。
-import type { ClinicSession, Period, Visit, WeeklySlot } from '@/types'
+import type { ClinicSession, Period, Room, Visit, WeeklySlot } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
@@ -150,7 +150,11 @@ export function saveWeeklySlot(input: Omit<WeeklySlot, 'id'> & { id?: string }):
     if (!doc) v.add('doctorId', '請選擇醫師')
     if (!Number.isInteger(input.weekday) || input.weekday < 0 || input.weekday > 6) v.add('weekday', '請選擇星期')
     if (!periodOrder.hasOwnProperty(input.period)) v.add('period', '請選擇時段')
-    if (!roomNo) v.add('roomNo', '請輸入診間')
+    // 診間只能選主檔裡啟用中的：以前自由輸入，「2O1」（字母 O）就多出一間不存在的診間
+    const room = roomNo ? find.room(roomNo) : undefined
+    if (!roomNo) v.add('roomNo', '請選擇診間')
+    else if (!room) v.add('roomNo', `沒有 ${roomNo} 診，請從清單選擇（新診間請先在「診間」新增）`)
+    else if (!room.active) v.add('roomNo', `${roomNo} 診已停用`)
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200) v.add('limit', '人數上限需為 1–200')
     v.done()
     if (!doc!.active) failField('doctorId', `${doc!.name} 已停用，不能排班`)
@@ -339,5 +343,56 @@ export function unmarkNotified(visitId: string): Promise<void> {
     audit('撤銷停診通知', `${find.patient(v.patientId)?.name} ${v.date}（原記錄：${v.notifiedAt.slice(5)} ${by}）`)
     delete v.notifiedAt
     delete v.notifiedBy
+  })
+}
+
+// ---------- 診間主檔 ----------
+export const ROOM_NO_RE = /^[0-9A-Z-]{1,6}$/
+export const ROOM_NO_RULE = '1–6 個數字、大寫英文字母或 -'
+
+export interface RoomRow extends Room {
+  /** 使用這間的每週門診（停用前要先移走） */
+  slots: { doctorName: string; weekday: number; period: Period }[]
+}
+
+export function listRooms(): Promise<RoomRow[]> {
+  return query(() =>
+    [...db.rooms]
+      .sort((a, b) => a.roomNo.localeCompare(b.roomNo))
+      .map((r) => ({
+        ...r,
+        slots: db.weeklySlots
+          .filter((w) => w.roomNo === r.roomNo)
+          .sort((a, b) => a.weekday - b.weekday || periodOrder[a.period] - periodOrder[b.period])
+          .map((w) => ({ doctorName: nameOf.doctor(w.doctorId), weekday: w.weekday, period: w.period })),
+      })),
+  )
+}
+
+/** 新增或修改診間。診間號建立後不能改（門診表、診次都用它）；還有門診表在用的不能停用 */
+export function saveRoom(input: Room, isNew: boolean): Promise<Room> {
+  return mutate(() => {
+    requireUser('admin')
+    const roomNo = input.roomNo.trim().toUpperCase()
+    const location = input.location.trim()
+    const v = fieldErrors()
+    if (!ROOM_NO_RE.test(roomNo)) v.add('roomNo', `診間號需為 ${ROOM_NO_RULE}`)
+    if (!location) v.add('location', '請輸入位置（印在掛號單上，病人才找得到）')
+    v.done()
+    const old = find.room(roomNo)
+    if (isNew && old) failField('roomNo', `已有 ${roomNo} 診`, 'CONFLICT')
+    if (!isNew && !old) fail(`找不到 ${roomNo} 診`, 'NOT_FOUND')
+    if (old?.active && !input.active) {
+      const used = db.weeklySlots.filter((w) => w.roomNo === roomNo)
+      if (used.length) {
+        const list = used.slice(0, 3).map((w) => `${nameOf.doctor(w.doctorId)} 週${'日一二三四五六'[w.weekday]}${periodLabel[w.period]}`).join('、')
+        failField('active', `還有 ${used.length} 個每週門診使用 ${roomNo} 診（${list}${used.length > 3 ? '…' : ''}），請先改到其他診間`, 'CONFLICT')
+      }
+    }
+    const saved: Room = { roomNo, location, active: input.active }
+    if (old) Object.assign(old, saved)
+    else db.rooms.push(saved)
+    audit(isNew ? '新增診間' : '修改診間', `${roomNo} 診（${location}${saved.active ? '' : '，停用'}）`)
+    return saved
   })
 }

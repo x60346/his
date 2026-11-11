@@ -72,6 +72,15 @@ export interface BillingSettings {
 }
 
 /** 醫師每週固定門診表（產生每日診次的範本） */
+/** 門診診間（主檔）：排班只能選這裡有的、啟用中的診間——以前診間號自由輸入，打錯就多出一間不存在的診間 */
+export interface Room {
+  /** 診間號（建立後不可改：門診表、診次都用它對應） */
+  roomNo: string
+  /** 位置，例：2 樓 內科區（印在掛號單上，病人才找得到） */
+  location: string
+  active: boolean
+}
+
 export interface WeeklySlot {
   id: string
   doctorId: string

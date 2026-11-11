@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { UTabs } from '@/components/ui'
 import WeeklyGrid from './WeeklyGrid.vue'
 import DailyAdjust from './DailyAdjust.vue'
+import RoomsPanel from './RoomsPanel.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
 import { scheduleApi } from '@/services'
 import { useQuery } from '@/composables/useService'
@@ -20,10 +21,12 @@ const { data: notices } = useQuery(() => scheduleApi.listSuspendNotices())
         { key: 'weekly', label: '每週門診表' },
         { key: 'daily', label: '單日調整（停診・代診）' },
         { key: 'notices', label: '停診通知', count: notices?.filter((n) => !n.notifiedAt).length || undefined },
+        { key: 'rooms', label: '診間' },
       ]"
     />
     <WeeklyGrid v-if="tab === 'weekly'" />
     <DailyAdjust v-else-if="tab === 'daily'" />
+    <RoomsPanel v-else-if="tab === 'rooms'" />
     <SuspendNotices v-else />
   </div>
 </template>

@@ -1,6 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
+  Room,
   Admission,
   Bed,
   Charge,
@@ -193,6 +194,12 @@ export function buildSeed(): Database {
   // 家醫、內科、小兒科週日也有上午診，確保任何一天都有門診可展示
   const weeklySlots: WeeklySlot[] = []
   const room = (deptIdx: number, k: number) => `${deptIdx + 1}0${k + 1}`
+  // 診間主檔：門診表用到的每一間。診間號第一碼就是樓層（201 在 2 樓），位置照這個寫，病人才不會被號碼和樓層搞混
+  const rooms: Room[] = []
+  const addRoom = (deptIdx: number, k: number) => {
+    const roomNo = room(deptIdx, k)
+    if (!rooms.some((x) => x.roomNo === roomNo)) rooms.push({ roomNo, location: `${roomNo[0]} 樓 ${codes.departments[deptIdx].name}區`, active: true })
+  }
   codes.doctors.forEach((d) => {
     const deptIdx = codes.departments.findIndex((x) => x.id === d.deptId)
     const sameDept = codes.doctors.filter((x) => x.deptId === d.deptId)
@@ -205,6 +212,7 @@ export function buildSeed(): Database {
       for (const p of periods) {
         // 同科多位醫師時錯開時段
         if (sameDept.length > 1 && ((k === 0 && p === 'PM' && wd % 2 === 1) || (k === 1 && p === 'AM' && wd % 2 === 0))) continue
+        addRoom(deptIdx, k)
         weeklySlots.push({ id: id('WS'), doctorId: d.id, weekday: wd, period: p, roomNo: room(deptIdx, k), limit: p === 'NIGHT' ? 30 : 50 })
       }
     }
@@ -870,6 +878,7 @@ export function buildSeed(): Database {
     doctors: structuredClone(codes.doctors),
     identities: structuredClone(codes.identities),
     billingSettings: structuredClone(codes.billingSettings),
+    rooms: rooms.sort((a, b) => a.roomNo.localeCompare(b.roomNo)),
     weeklySlots,
     sessions,
     patients,
