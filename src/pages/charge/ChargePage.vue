@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { Ban, CreditCard, Printer, Smartphone, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
@@ -82,6 +83,9 @@ async function onVoid() {
   if (!receipt.value) return
   if (await voidAction.run(receipt.value.id, voidReason.value)) voidOpen.value = false
 }
+
+// ---------- 更正身分（只限待批價；已開收據的先作廢）。更正後試算經 dbVersion 自動重算 ----------
+const identityOpen = ref(false)
 </script>
 
 <template>
@@ -119,8 +123,10 @@ async function onVoid() {
       <div v-else data-detail class="min-w-0 space-y-4">
         <PatientBanner :patient="item" class="no-print">
           <UBadge tone="blue">{{ item.identityName }}</UBadge>
+          <button v-if="item.status === 'consulted'" type="button" class="text-xs text-brand-600 underline-offset-2 hover:underline" @click="identityOpen = true">更正身分</button>
           <UBadge>案件 {{ item.caseType }}</UBadge>
         </PatientBanner>
+        <IdentityCorrectDialog v-model="identityOpen" :visit-id="item.id" :identity-code="item.identityCode" :subject="`${item.patientName}・目前身分 ${item.identityName}`" />
 
         <!-- 待批價：試算 + 結帳 -->
         <div v-if="item.status === 'consulted'" class="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_20rem]">

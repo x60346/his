@@ -176,6 +176,29 @@ try {
   await as('clerk01')
   await expectError(() => api.chargeApi.voidCharge(charge.id, '測試'), '已發藥後作廢收據')
 
+  // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
+  {
+    const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')
+    const before = await api.chargeApi.previewCharge(pending.id)
+    await expectError(() => api.bookingApi.correctIdentity(pending.id, '01', '測試'), '更正成相同身分')
+    try {
+      await api.bookingApi.correctIdentity(pending.id, '', '')
+      ok(false, '空白更正應被擋下')
+    } catch (e) {
+      ok(Object.keys(e.fields ?? {}).sort().join() === 'identityCode,reason', '更正身分空白送出：身分與原因一次標出')
+    }
+    await expectError(() => api.bookingApi.correctIdentity(charge.visitId, '02', '出示榮民證'), '已開收據的掛號更正身分（要先作廢）')
+    await as('nurse01')
+    await expectError(() => api.bookingApi.correctIdentity(pending.id, '02', '出示榮民證'), '非櫃台人員更正身分')
+    await as('clerk01')
+    await api.bookingApi.correctIdentity(pending.id, '02', '出示榮民證')
+    const after = await api.chargeApi.previewCharge(pending.id)
+    const reg = (p) => p.lines.find((l) => l.kind === 'reg')
+    ok(reg(before).amount === 150 && reg(after).amount === 50 && after.patientTotal < before.patientTotal && dbm.db.auditLogs[0].action === '更正就醫身分' && dbm.db.auditLogs[0].detail.includes('健保一般 → 榮民'),
+      `更正身分後試算依新身分重算（掛號費 150 → 50，應收 ${before.patientTotal} → ${after.patientTotal}），稽核留下前後身分`)
+    await api.bookingApi.correctIdentity(pending.id, '01', '測試還原')
+  }
+
   console.log('\n[規則] 過敏與預防保健')
   // 展示資料本身不可違反用藥安全
   const { checkAllergies } = await load('/src/services/allergy.ts')

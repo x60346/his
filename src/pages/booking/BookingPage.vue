@@ -6,6 +6,7 @@ import {
   UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
+import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import { admissionApi, bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
@@ -153,6 +154,14 @@ async function onCancel(v: VisitView) {
   const ok = await ui.confirm({ title: '退掛', message: `確定將 ${v.patientName}（${v.deptName} 第 ${v.seqNo} 號）退掛？`, okText: '退掛', danger: true })
   if (ok) cancel.run(v.id)
 }
+
+// 更正就醫身分：病人看完卡片才發現選錯，是最常更正的時機；收費前都可以改（規則在服務層）
+const identityVisit = ref<VisitView>()
+const identityOpen = ref(false)
+function openIdentity(v: VisitView) {
+  identityVisit.value = v
+  identityOpen.value = true
+}
 </script>
 
 <template>
@@ -286,11 +295,13 @@ async function onCancel(v: VisitView) {
       <UTable :columns="columns" :rows="filtered" :row-key="(v) => v.id" :loading="visitsLoading" dense empty-text="沒有符合的掛號">
         <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
         <template #cell-actions="{ row }">
+          <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
           <UButton v-if="row.status === 'registered'" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
         </template>
       </UTable>
     </UCard>
 
     <PatientEditDialog v-model="editOpen" :prefill="prefill" @saved="(p) => (patient = p)" />
+    <IdentityCorrectDialog v-model="identityOpen" :visit-id="identityVisit?.id" :identity-code="identityVisit?.identityCode" :subject="identityVisit && `${identityVisit.patientName}（${identityVisit.deptName} 第 ${identityVisit.seqNo} 號）・目前身分 ${identityVisit.identityName}`" />
   </div>
 </template>
