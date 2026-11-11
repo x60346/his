@@ -14,7 +14,7 @@ import DiagnosisEditor from './components/DiagnosisEditor.vue'
 import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue'
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, opdApi, preventApi } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, preventApi } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -130,7 +130,8 @@ const saveDraft = useAction(async () => {
 const skip = useAction(opdApi.skipPatient, { success: (v) => `${v.patientName} 過號，退回候診` })
 async function onSkip() {
   if (!visit.value || !(await confirmDiscard())) return
-  await skip.run(visit.value.id)
+  // 過號後醫師要做的就是看下一位：直接選好下一位（不自動叫號——叫號仍由醫師按）
+  if (await skip.run(visit.value.id)) goNext()
 }
 
 const complete = useAction(async (opts: { confirmHighDose?: boolean } = {}) => {
@@ -178,7 +179,8 @@ async function onComplete() {
   await complete.run({ confirmHighDose: high.length > 0 })
 }
 
-const nextWaiting = computed(() => (queue.value ?? []).find((v) => v.status === 'registered' && v.id !== visitId.value))
+// 下一位：先叫沒過號的；過號的人回來時直接在清單上點他（規則在 nextInQueue）
+const nextWaiting = computed(() => nextInQueue(queue.value ?? [], visitId.value))
 function goNext() {
   if (nextWaiting.value) selectVisit(nextWaiting.value)
 }
@@ -238,7 +240,8 @@ const tabs = computed(() => [
               <span class="block truncate font-medium text-slate-800">{{ v.patientName }}</span>
               <span class="block text-xs text-slate-500">{{ periodLabel[v.period] }}・{{ v.gender === 'M' ? '男' : '女' }} {{ ageText(v.birthDate) }}<template v-if="v.firstVisit">・初診</template></span>
             </span>
-            <UStatusBadge :map="visitStatus" :value="v.status" />
+            <UBadge v-if="v.status === 'registered' && v.skippedAt" tone="yellow">過號</UBadge>
+            <UStatusBadge v-else :map="visitStatus" :value="v.status" />
           </button>
         </li>
       </ul>
@@ -257,7 +260,7 @@ const tabs = computed(() => [
 
       <!-- 尚未叫號 -->
       <UCard v-if="visit.status === 'registered'">
-        <UEmpty :icon="Megaphone" :title="`第 ${visit.seqNo} 號 ${visit.patientName} 候診中`" description="叫號後開始記錄病歷">
+        <UEmpty :icon="Megaphone" :title="`第 ${visit.seqNo} 號 ${visit.patientName} ${visit.skippedAt ? '已過號' : '候診中'}`" description="叫號後開始記錄病歷">
           <div class="flex gap-2">
             <UButton :icon="Megaphone" :loading="start.pending.value" @click="callPatient">叫號・開始看診</UButton>
           </div>

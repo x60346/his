@@ -144,6 +144,8 @@ export interface Visit {
   preventItems: string[]
   createdAt: string
   calledAt?: string
+  /** 過號的時間：醫師叫號時病人不在。「下一位」會先跳過他；再次叫號時清除 */
+  skippedAt?: string
   /** 退掛原因（病人自行退掛時為空；停診時系統填入） */
   cancelReason?: string
   /** 停診退掛後，已電話通知病人的時間 */

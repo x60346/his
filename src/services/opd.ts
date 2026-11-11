@@ -58,6 +58,7 @@ export function startConsult(visitId: string): Promise<Encounter> {
     }
     v.status = 'in-consult'
     v.calledAt ??= now()
+    delete v.skippedAt // 過號的人回來、重新叫號，就不再是過號
     audit('開始看診', `${find.patient(v.patientId)?.name} #${v.seqNo}`)
     return e
   })
@@ -87,6 +88,8 @@ export function skipPatient(visitId: string): Promise<VisitView> {
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status !== 'in-consult') fail('只有看診中的病人可以過號')
     v.status = 'registered'
+    v.skippedAt = now() // 記下過號，「下一位」會先跳過他（nextInQueue）
+    audit('過號', `${find.patient(v.patientId)?.name} #${v.seqNo}`)
     return visitView(v)
   })
 }
