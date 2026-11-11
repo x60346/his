@@ -8,6 +8,7 @@ import type { BillingSettings, Department, Doctor, Identity, Role, User } from '
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
+import { passwordProblem } from './password-rules'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
 
@@ -54,7 +55,10 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     if (!name) v.add('name', '請輸入姓名')
     if (!ROLES.includes(input.role)) v.add('role', '請選擇角色')
     if (input.role === 'doctor' && !db.doctors.some((x) => x.id === input.doctorId)) v.add('doctorId', '醫師帳號需對應醫師')
-    if (!old && (!input.password || input.password.length < 4)) v.add('password', '新帳號需設定至少 4 碼的密碼')
+    if (!old) {
+      const pwProblem = passwordProblem(input.password, { username })
+      if (pwProblem) v.add('password', pwProblem)
+    }
     v.done()
 
     // 規則：欄位都正確後才檢查
@@ -81,7 +85,12 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
 
     const password = old ? old.password : input.password
 
-    const saved: User = { id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, role: input.role, doctorId, active: input.active, password: password! }
+    const saved: User = {
+      ...old,
+      id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, role: input.role, doctorId, active: input.active, password: password!,
+      // 管理員設定的初始密碼：本人第一次登入就要改掉（管理員知道這組密碼）
+      ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now() }),
+    }
     if (old) Object.assign(old, saved)
     else db.users.push(saved)
     audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.role}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}）`)
@@ -90,13 +99,21 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
 }
 
 /** 重設密碼：管理員設定新密碼，稽核紀錄只記「誰重設了誰」，不記密碼本身 */
+/**
+ * 重設密碼（忘記密碼、疑似外洩）：本人下次登入必須改掉；已登入的分頁全部失效（外洩時就是要把別人踢出去）。
+ * 不能重設自己的——那會把自己踢出去，自己的密碼請用右上角「變更密碼」。
+ */
 export function resetPassword(userId: string, password: string): Promise<void> {
   return mutate(() => {
-    requireUser('admin')
+    const me = requireUser('admin')
     const u = must(db.users.find((x) => x.id === userId), '使用者')
-    if (!password || password.length < 4) failField('password', '密碼至少 4 碼')
+    if (u.id === me.id) fail('自己的密碼請用右上角「變更密碼」')
+    const problem = passwordProblem(password, { username: u.username })
+    if (problem) failField('password', problem)
     u.password = password
-    audit('重設密碼', u.username)
+    u.mustChangePassword = true
+    u.passwordChangedAt = Date.now()
+    audit('重設密碼', `${u.username}（下次登入須變更）`)
   })
 }
 

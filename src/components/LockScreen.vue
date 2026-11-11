@@ -71,7 +71,7 @@ async function switchUser() {
           {{ auth.user?.name }}（{{ auth.user ? roleLabel[auth.user.role] : '' }}）・{{ auth.lockedAt?.slice(11) }} 因閒置鎖定
         </p>
       </div>
-      <UInput v-model="password" type="password" label="密碼" autocomplete="current-password" :error="error" hint="展示帳號的密碼皆為 1234" />
+      <UInput v-model="password" type="password" label="密碼" autocomplete="current-password" :error="error" hint="展示帳號預設密碼為 1234" />
       <UButton type="submit" block class="mt-4" :loading="pending">解鎖</UButton>
       <button type="button" class="mt-3 w-full text-center text-sm text-slate-500 hover:text-slate-700 hover:underline" @click="switchUser">
         不是 {{ auth.user?.name }}？切換使用者（未儲存的內容會遺失）

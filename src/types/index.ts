@@ -14,6 +14,13 @@ export interface User {
   /** 角色為醫師時對應的醫師 id */
   doctorId?: string
   active: boolean
+  /** 管理員設定的密碼（新帳號、重設）：登入後必須先改成自己的密碼，才能做其他事 */
+  mustChangePassword?: boolean
+  /**
+   * 密碼最後變更的時間（毫秒）。比這個時間早登入的分頁一律失效——密碼外洩時改密碼，就能把別人踢出去。
+   * 用毫秒不用「YYYY-MM-DD HH:mm」：同一分鐘內先登入、後改密碼的分頁也要能分出先後
+   */
+  passwordChangedAt?: number
 }
 
 export interface Department {

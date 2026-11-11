@@ -9,7 +9,8 @@ export class ServiceError extends Error {
   constructor(
     message: string,
     /** LOCKED：畫面閒置鎖定中（還是登入狀態，解鎖後繼續；頁面不必提示，鎖定畫面已經蓋住） */
-    public code: 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'LOCKED' = 'BAD_REQUEST',
+    /** PASSWORD_CHANGE：管理員設定的密碼還沒改（版面已顯示強制變更畫面，頁面不必提示） */
+    public code: 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'LOCKED' | 'PASSWORD_CHANGE' = 'BAD_REQUEST',
     /** 出錯的欄位名稱；有值時頁面會把訊息顯示在該欄位下方 */
     public field?: string,
     /** 同時有多個欄位出錯時的完整清單（欄位 → 訊息），頁面一次全部標出，不必改一個送一次 */
@@ -143,21 +144,30 @@ export function overNetwork<T extends object>(mod: T): T {
 
 // ---------- 登入身分 ----------
 // 由 auth 服務設定；其他服務用 requireUser() 取得「誰在操作」，例如批價人員、給藥護理師。
+// 存「誰」和「什麼時候登入」（毫秒）：密碼變更後，比變更時間早登入的分頁失效
 const SESSION_KEY = 'his-demo-session'
-let sessionUserId: string | null = (() => {
-  try {
-    return sessionStorage.getItem(SESSION_KEY)
-  } catch {
-    return null
-  }
-})()
+const LOGIN_AT_KEY = 'his-demo-login-at'
+let sessionUserId: string | null = null
+let sessionLoginAt = 0
+try {
+  sessionUserId = sessionStorage.getItem(SESSION_KEY)
+  sessionLoginAt = Number(sessionStorage.getItem(LOGIN_AT_KEY)) || 0
+} catch {
+  // 無 sessionStorage
+}
 
-export function setSessionUser(userId: string | null): void {
+export function setSessionUser(userId: string | null, loginAt = Date.now()): void {
   sessionUserId = userId
+  sessionLoginAt = userId ? loginAt : 0
   setSessionLock(null) // 登入、登出、換人都從「未鎖定」開始
   try {
-    if (userId) sessionStorage.setItem(SESSION_KEY, userId)
-    else sessionStorage.removeItem(SESSION_KEY)
+    if (userId) {
+      sessionStorage.setItem(SESSION_KEY, userId)
+      sessionStorage.setItem(LOGIN_AT_KEY, String(sessionLoginAt))
+    } else {
+      sessionStorage.removeItem(SESSION_KEY)
+      sessionStorage.removeItem(LOGIN_AT_KEY)
+    }
   } catch {
     // 無 sessionStorage 時僅保留在記憶體
   }
@@ -195,8 +205,15 @@ export function setSessionLock(lock: SessionLock | null): void {
   }
 }
 
+/** 這個分頁的登入時間（毫秒）；測試用來模擬「另一個比較早登入的分頁」 */
+export const sessionLoginTime = () => sessionLoginAt
+
+/** 目前登入者：帳號停用、或密碼在這個分頁登入之後被改過，都視為沒登入 */
 export function sessionUser(): User | null {
-  return db.users.find((u) => u.id === sessionUserId && u.active) ?? null
+  const u = db.users.find((x) => x.id === sessionUserId && x.active)
+  if (!u) return null
+  if (u.passwordChangedAt && sessionLoginAt < u.passwordChangedAt) return null
+  return u
 }
 
 const roleName: Record<User['role'], string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
@@ -212,6 +229,8 @@ export function requireUser(...roles: User['role'][]): User {
   if (!u) fail('請先登入', 'UNAUTHORIZED')
   // 鎖定中什麼都不能做（查詢也不行）：畫面蓋住只是體驗，直接呼叫 API 也要擋
   if (sessionLockState) fail('畫面已鎖定，請先解鎖', 'LOCKED')
+  // 管理員給的密碼還沒改：除了改密碼、登出，什麼都不能做（直接呼叫 API 也一樣）
+  if (u!.mustChangePassword) fail('請先變更密碼', 'PASSWORD_CHANGE')
   if (roles.length && !roles.includes(u.role)) {
     const need = roles.map((r) => roleName[r]).join('、')
     fail(u.role === 'admin' ? `系統管理員不能執行臨床操作，請以${need}帳號登入` : `您沒有執行此操作的權限（限${need}）`, 'FORBIDDEN')

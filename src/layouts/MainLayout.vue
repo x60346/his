@@ -2,8 +2,8 @@
 // 主版面：側邊選單（依角色過濾）、頂端列、展示資料過期提示。
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AlertTriangle, Eye, Hospital, Lock, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
-import { UButton } from '@/components/ui'
+import { AlertTriangle, Eye, Hospital, KeyRound, Lock, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
+import { UButton, UDialog } from '@/components/ui'
 import { appRoutes, menuGroups } from '@/router/routes'
 import { dbVersion, masterApi, storageIssue, storageMode } from '@/services'
 import { useAuth } from '@/stores/auth'
@@ -13,6 +13,8 @@ import { toRoc, weekdayLabel } from '@/utils/date'
 import { useToday } from '@/composables/useClock'
 import { useIdleLock } from '@/composables/useIdleLock'
 import LockScreen from '@/components/LockScreen.vue'
+import ForcePasswordScreen from '@/components/ForcePasswordScreen.vue'
+import PasswordChangeForm from '@/components/PasswordChangeForm.vue'
 
 const auth = useAuth()
 const ui = useUi()
@@ -58,6 +60,9 @@ async function logout() {
   await auth.logout()
   router.push({ name: 'login' })
 }
+
+// 變更自己的密碼（右上角）
+const pwOpen = ref(false)
 
 // 閒置鎖定：倒數提醒、鎖定畫面
 const idle = useIdleLock()
@@ -113,6 +118,7 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
             <div class="text-sm font-medium text-slate-800">{{ auth.user?.name }}</div>
             <div class="text-xs text-slate-500">{{ auth.user ? roleLabel[auth.user.role] : '' }}</div>
           </div>
+          <UButton variant="ghost" size="sm" :icon="KeyRound" title="變更密碼" @click="pwOpen = true"><span class="hidden sm:inline">變更密碼</span></UButton>
           <UButton variant="ghost" size="sm" :icon="LogOut" @click="logout">登出</UButton>
         </div>
       </header>
@@ -143,6 +149,11 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
       <span>閒置過久，<b class="tabular">{{ idle.secondsLeft.value }}</b> 秒後鎖定畫面</span>
       <UButton size="sm" @click="idle.stayActive">繼續使用</UButton>
     </div>
+    <UDialog v-model="pwOpen" title="變更密碼" size="sm">
+      <p class="mb-3 text-xs text-slate-500">變更後，其他已登入你帳號的分頁會被登出（密碼外洩時，改密碼就能把別人踢出去）。</p>
+      <PasswordChangeForm v-if="pwOpen" @done="pwOpen = false" />
+    </UDialog>
     <LockScreen v-if="auth.lockedAt" />
+    <ForcePasswordScreen v-else-if="auth.user?.mustChangePassword" />
   </div>
 </template>

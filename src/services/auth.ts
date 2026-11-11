@@ -1,7 +1,8 @@
 // 登入與身分。回傳給前端的使用者資料一律移除密碼欄位。
 import type { User } from '@/types'
 import { db } from '@/mock/db'
-import { fail, failField, mutate, query, requireUser, sessionLock, sessionUser, setSessionLock, setSessionUser, audit } from './http'
+import { fail, failField, fieldErrors, mutate, query, requireUser, sessionLock, sessionUser, setSessionLock, setSessionUser, audit } from './http'
+import { passwordProblem } from './password-rules'
 import { checkIdleMinutes, IDLE_LOCK_DEFAULT_MIN, UNLOCK_MAX_FAILS } from './idle-rules'
 import { now } from '@/utils/date'
 
@@ -38,9 +39,36 @@ export function currentUser(): SafeUser | null {
 }
 
 /** 登入頁的展示帳號快速選擇 */
-export function demoAccounts(): Promise<{ username: string; name: string; role: User['role'] }[]> {
-  // 公開：登入頁需要。這只是展示系統的便利功能——真實系統絕不能在登入前列出帳號
-  return query(() => db.users.filter((u) => u.active).map((u) => ({ username: u.username, name: u.name, role: u.role })), { public: true })
+export function demoAccounts(): Promise<{ username: string; name: string; role: User['role']; passwordChanged: boolean }[]> {
+  // 公開：登入頁需要。這只是展示系統的便利功能——真實系統絕不能在登入前列出帳號（更不能透露密碼改過沒有）
+  // passwordChanged：密碼已不是展示用的 1234，快速登入按鈕只帶入帳號、由使用者自己輸入密碼
+  return query(() => db.users.filter((u) => u.active).map((u) => ({ username: u.username, name: u.name, role: u.role, passwordChanged: u.password !== '1234' })), { public: true })
+}
+
+/**
+ * 變更自己的密碼：要輸入目前的密碼（座位上沒登出的電腦，別人不能順手改掉密碼、占用帳號）。
+ * 不用 requireUser：「必須先改密碼」的人也要能呼叫。
+ * 改完後，這個分頁的登入時間同步更新（繼續登入）；其他比較早登入的分頁全部失效。
+ */
+export function changeOwnPassword(input: { current: string; next: string }): Promise<SafeUser> {
+  return mutate(() => {
+    const u = sessionUser()
+    if (!u) fail('請先登入', 'UNAUTHORIZED')
+    const v = fieldErrors()
+    if (!input.current) v.add('current', '請輸入目前的密碼')
+    else if (input.current !== u!.password) v.add('current', '目前的密碼不正確')
+    const problem = passwordProblem(input.next, { username: u!.username, current: u!.password })
+    if (problem) v.add('next', problem)
+    v.done()
+    const forced = !!u!.mustChangePassword
+    const at = Date.now()
+    u!.password = input.next
+    u!.passwordChangedAt = at
+    delete u!.mustChangePassword
+    setSessionUser(u!.id, at)
+    audit(forced ? '首次變更密碼' : '變更密碼', u!.username)
+    return toSafeUser(u!)
+  })
 }
 
 // ---------- 閒置鎖定 ----------

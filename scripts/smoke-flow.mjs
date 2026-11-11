@@ -533,6 +533,72 @@ try {
     await as('clerk01')
   }
 
+  // 變更自己的密碼：規則、要輸入目前密碼、管理員設定的密碼要先改、其他分頁失效
+  {
+    const P = await load('/src/services/password-rules.ts')
+    const pp = (pw, current) => P.passwordProblem(pw, { username: 'nurse01', current })
+    ok(pp('') && pp('abc123') && pp('abcdefgh') && pp('12345678') && !pp('abcd1234') && !pp('Ward5a2026'), '規則：至少 8 碼、要有英文字母與數字')
+    ok(pp('xNurse01x9') === '不可包含帳號名稱' && pp('abcd1234', 'abcd1234') === '不可與目前密碼相同', '規則：不可包含帳號（不分大小寫）、不可與目前相同')
+    ok(dbm.db.users.every((u) => !u.mustChangePassword), '種子的展示帳號都不必先改密碼')
+
+    const A = api.authApi
+    const H = http
+    await as('nurse01')
+    try {
+      await A.changeOwnPassword({ current: '0000', next: 'short' })
+      ok(false, '目前密碼錯、新密碼太短應被擋下')
+    } catch (e) {
+      ok(Object.keys(e.fields ?? {}).sort().join() === 'current,next', '目前密碼錯、新密碼不合規則：兩個欄位一次標出')
+    }
+    await expectError(() => A.changeOwnPassword({ current: '1234', next: '1234' }), '新密碼與目前相同（也太短）')
+    // 模擬「另一個分頁」：比較早登入的那個分頁，改完密碼後就失效
+    const otherTabLoginAt = H.sessionLoginTime() - 1000
+    await A.changeOwnPassword({ current: '1234', next: 'Ward5a2026' })
+    // 每次重新找：交易失敗時資料庫整份換掉，先前拿到的物件就不是現在的那一筆了
+    const meNow = () => dbm.db.users.find((u) => u.username === 'nurse01')
+    const me = meNow()
+    ok(me.password === 'Ward5a2026' && me.passwordChangedAt && dbm.db.auditLogs[0].action === '變更密碼' && !dbm.db.auditLogs[0].detail.includes('Ward5a2026'), '變更成功：寫入稽核（不記密碼內容）')
+    ok(A.currentUser()?.username === 'nurse01' && (await api.patientApi.searchPatients('王')), '改密碼的這個分頁繼續登入、可以操作')
+    H.setSessionUser(me.id, otherTabLoginAt)
+    ok(A.currentUser() === null, '比變更時間早登入的分頁：失效（下次操作就會回登入頁）')
+    try {
+      await api.patientApi.searchPatients('王')
+      ok(false, '舊分頁應該已失效')
+    } catch (e) {
+      ok(e.code === 'UNAUTHORIZED', `舊分頁的查詢 → 「${e.message}」`)
+    }
+    await expectError(() => A.login('nurse01', '1234'), '用舊密碼登入')
+    ok((await A.demoAccounts()).find((a) => a.username === 'nurse01')?.passwordChanged, '登入頁知道這個展示帳號改過密碼（快速登入改為只帶入帳號）')
+    await A.login('nurse01', 'Ward5a2026')
+
+    // 管理員重設 → 下次登入必須先改；改之前什麼都不能做
+    await as('admin')
+    await expectError(() => api.adminApi.resetPassword(dbm.db.users.find((u) => u.username === 'admin').id, 'Admin2026x'), '管理員用重設功能改自己的密碼')
+    try {
+      await api.adminApi.resetPassword(me.id, '1234')
+      ok(false, '重設成 1234 應被擋下')
+    } catch (e) {
+      ok(e.field === 'password', `管理員重設也套用同一套規則 → 「${e.message}」`)
+    }
+    await api.adminApi.resetPassword(me.id, 'Temp2026ab')
+    ok(meNow().mustChangePassword && dbm.db.auditLogs[0].detail.includes('下次登入須變更'), '重設後：下次登入必須變更，寫入稽核')
+    await A.login('nurse01', 'Temp2026ab')
+    ok(A.currentUser()?.mustChangePassword, '用管理員給的密碼登入：登入成功，但標記必須變更')
+    try {
+      await api.patientApi.searchPatients('王')
+      ok(false, '必須先改密碼時查詢應被擋下')
+    } catch (e) {
+      ok(e.code === 'PASSWORD_CHANGE', `改密碼之前什麼都不能做 → 「${e.message}」（直接呼叫 API 也一樣）`)
+    }
+    await A.changeOwnPassword({ current: 'Temp2026ab', next: 'Mine2026cd' })
+    ok(!A.currentUser().mustChangePassword && dbm.db.auditLogs[0].action === '首次變更密碼' && (await api.patientApi.searchPatients('王')), '改成自己的密碼後即可使用，稽核記為「首次變更密碼」')
+    // 還原，後面的測試用 1234 登入
+    Object.assign(meNow(), { password: '1234' })
+    delete meNow().passwordChangedAt
+    delete meNow().mustChangePassword
+    await as('clerk01')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')
@@ -1110,19 +1176,19 @@ try {
   const self = dbm.db.users.find((u) => u.username === 'admin')
   await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'admin', active: false }), '停用自己的帳號')
   await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'clerk', active: true }), '拿掉自己的管理員角色')
-  await expectError(() => A.saveUser({ username: 'Bad Name', name: 'x', role: 'clerk', active: true, password: '1234' }), '帳號格式不符')
-  await expectError(() => A.saveUser({ username: 'clerk01', name: 'x', role: 'clerk', active: true, password: '1234' }), '帳號重複')
-  await expectError(() => A.saveUser({ username: 'dr99', name: 'x', role: 'doctor', doctorId: 'DR01', active: true, password: '1234' }), '同一位醫師建立第二個帳號')
+  await expectError(() => A.saveUser({ username: 'Bad Name', name: 'x', role: 'clerk', active: true, password: 'Welcome123' }), '帳號格式不符')
+  await expectError(() => A.saveUser({ username: 'clerk01', name: 'x', role: 'clerk', active: true, password: 'Welcome123' }), '帳號重複')
+  await expectError(() => A.saveUser({ username: 'dr99', name: 'x', role: 'doctor', doctorId: 'DR01', active: true, password: 'Welcome123' }), '同一位醫師建立第二個帳號')
   await expectError(() => A.saveUser({ username: 'clerk02', name: '新櫃台', role: 'clerk', active: true, password: '12' }), '新帳號密碼太短')
-  const nu = await A.saveUser({ username: 'Clerk02', name: '新櫃台', role: 'clerk', active: true, password: '5678' })
+  const nu = await A.saveUser({ username: 'Clerk02', name: '新櫃台', role: 'clerk', active: true, password: 'Welcome123' })
   ok(nu.username === 'clerk02' && !('password' in nu), '新增帳號：帳號轉小寫、回傳不含密碼')
-  const admin2 = await A.saveUser({ username: 'admin2', name: '副管理員', role: 'admin', active: true, password: '5678' })
+  const admin2 = await A.saveUser({ username: 'admin2', name: '副管理員', role: 'admin', active: true, password: 'Welcome123' })
   await A.saveUser({ id: admin2.id, username: 'admin2', name: '副管理員', role: 'admin', active: false })
   await as('admin')
   await A.saveUser({ id: nu.id, username: 'clerk02', name: '新櫃台', role: 'clerk', active: false })
-  await expectError(() => api.authApi.login('clerk02', '5678'), '停用的帳號登入')
-  await A.resetPassword(nu.id, 'abcd')
-  ok(!dbm.db.auditLogs.slice(0, 3).some((l) => l.detail.includes('abcd')), '重設密碼：稽核紀錄不記錄密碼內容')
+  await expectError(() => api.authApi.login('clerk02', 'Welcome123'), '停用的帳號登入')
+  await A.resetPassword(nu.id, 'Reset2026x')
+  ok(!dbm.db.auditLogs.slice(0, 3).some((l) => l.detail.includes('Reset2026x')), '重設密碼：稽核紀錄不記錄密碼內容')
 
   const busyDept = dbm.db.departments.find((d) => dbm.db.doctors.some((x) => x.deptId === d.id && x.active))
   await expectError(() => A.saveDepartment({ ...busyDept, active: false }), `停用仍有在職醫師的 ${busyDept.name}`)
@@ -1136,7 +1202,7 @@ try {
   await A.saveDoctor({ ...ndoc, active: false })
   await A.saveDepartment({ ...nd, active: false })
   ok(!dbm.db.departments.find((d) => d.id === nd.id).active, '醫師停用後，科別可以停用')
-  await expectError(() => A.saveUser({ username: 'drnew', name: '新醫師', role: 'doctor', doctorId: ndoc.id, active: true, password: '1234' }), '為停用的醫師建立帳號')
+  await expectError(() => A.saveUser({ username: 'drnew', name: '新醫師', role: 'doctor', doctorId: ndoc.id, active: true, password: 'Welcome123' }), '為停用的醫師建立帳號')
 
   // 管理員可以檢視、可以做系統管理，但不能執行臨床操作
   await as('admin')

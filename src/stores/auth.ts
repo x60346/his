@@ -23,6 +23,12 @@ export const useAuth = defineStore('auth', () => {
     lockedAt.value = null
   }
 
+  /** 變更自己的密碼；回傳的使用者已清掉「必須變更」 */
+  async function changePassword(current: string, next: string) {
+    user.value = await authApi.changeOwnPassword({ current, next })
+    return user.value
+  }
+
   async function lock() {
     lockedAt.value = (await authApi.lockSession()).at
   }
@@ -55,5 +61,5 @@ export const useAuth = defineStore('auth', () => {
     return roles.includes(user.value.role)
   }
 
-  return { user, isLoggedIn, lockedAt, login, logout, lock, unlock, expire, canAccess }
+  return { user, isLoggedIn, lockedAt, login, logout, changePassword, lock, unlock, expire, canAccess }
 })

@@ -3,7 +3,7 @@
 import { computed, reactive, ref } from 'vue'
 import { KeyRound, Pencil, Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect, UTable, type Column } from '@/components/ui'
-import { adminApi, masterApi, type UserRow } from '@/services'
+import { adminApi, masterApi, PASSWORD_RULE, type UserRow } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { roleLabel } from '@/utils/labels'
@@ -111,7 +111,7 @@ async function submitPw() {
           @update:model-value="onDoctor"
         />
         <UInput v-model="form.name" label="姓名" required :error="save.fieldErrors.value.name" />
-        <UInput v-if="!form.id" v-model="form.password" label="初始密碼" type="password" required hint="至少 4 碼" :error="save.fieldErrors.value.password" />
+        <UInput v-if="!form.id" v-model="form.password" label="初始密碼" type="password" required :hint="`${PASSWORD_RULE}；本人第一次登入時須改成自己的密碼`" :error="save.fieldErrors.value.password" />
         <div class="col-span-2">
           <UCheckbox v-model="form.active" :disabled="isSelf" label="啟用" />
           <p v-if="isSelf" class="mt-1 text-xs text-slate-500">不能停用自己的帳號。</p>
@@ -126,7 +126,7 @@ async function submitPw() {
     </UDialog>
 
     <UDialog v-model="pwOpen" @submit="submitPw" :title="`重設密碼：${pwUser?.username ?? ''}`" size="sm">
-      <UInput v-model="newPw" label="新密碼" type="password" required hint="至少 4 碼；請以安全的方式告知本人" :error="resetPw.fieldErrors.value.password" />
+      <UInput v-model="newPw" label="新密碼" type="password" required :hint="`${PASSWORD_RULE}；請以安全的方式告知本人，本人下次登入須變更，已登入的分頁會被登出`" :error="resetPw.fieldErrors.value.password" />
       <template #footer>
         <UButton variant="secondary" @click="pwOpen = false">取消</UButton>
         <UButton :loading="resetPw.pending.value" type="submit">重設</UButton>

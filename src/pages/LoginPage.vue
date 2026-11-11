@@ -37,9 +37,18 @@ async function submit(u = username.value, p = password.value) {
   if (user) router.replace(safeRedirect(route.query.redirect))
 }
 
-/** 展示帳號：點一下直接登入（展示資料的密碼皆為 1234） */
-function quick(u: string) {
+/**
+ * 展示帳號：點一下直接登入（預設密碼 1234）。
+ * 密碼改過的帳號只帶入帳號、游標移到密碼欄——用 1234 硬登只會得到「密碼錯誤」，讓人以為系統壞了
+ */
+function quick(u: string, passwordChanged = false) {
   username.value = u
+  if (passwordChanged) {
+    password.value = ''
+    missing.value = { password: '此帳號密碼已變更，請輸入密碼（重置展示資料可還原為 1234）' }
+    nextTick(() => form.value?.querySelector<HTMLInputElement>('input[type=password]')?.focus())
+    return
+  }
   password.value = '1234'
   submit(u, '1234')
 }
@@ -73,10 +82,10 @@ function quick(u: string) {
               type="button"
               :disabled="doLogin.pending.value"
               class="rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
-              @click="quick(a.username)"
+              @click="quick(a.username, a.passwordChanged)"
             >
               <div class="font-medium text-slate-800">{{ a.name }}</div>
-              <div class="text-xs text-slate-500">{{ a.username }}</div>
+              <div class="text-xs text-slate-500">{{ a.username }}<span v-if="a.passwordChanged" class="ml-1 text-amber-700">・已改密碼</span></div>
             </button>
           </div>
         </div>

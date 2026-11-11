@@ -8,7 +8,7 @@ import { useAuth } from '@/stores/auth'
 
 const isUnauthorized = (e: unknown) => e instanceof ServiceError && e.code === 'UNAUTHORIZED'
 /** 畫面鎖定中：鎖定畫面已經蓋住，背景的查詢失敗不必提示；解鎖時資料庫有寫入，所有查詢會自動重新執行 */
-const isLocked = (e: unknown) => e instanceof ServiceError && e.code === 'LOCKED'
+const isLocked = (e: unknown) => e instanceof ServiceError && (e.code === 'LOCKED' || e.code === 'PASSWORD_CHANGE')
 
 /**
  * 登入失效（UNAUTHORIZED）的統一處理：
