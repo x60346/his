@@ -3,12 +3,15 @@ import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { query } from './http'
 import { nameOf } from './views'
+import { suspendNoticeVisits } from './schedule'
 
 export interface DashboardStats {
   date: string
   opd: { total: number; waiting: number; inConsult: number; toCharge: number; toDispense: number; done: number; cancelled: number }
   revenue: { patientTotal: number; nhiPoints: number; receipts: number }
   ipd: { admitted: number; reservedToday: number; emptyBeds: number; totalBeds: number; overdueMar: number }
+  /** 停診退掛、還沒電話通知的病人數（櫃台待辦） */
+  suspendNoticesPending: number
   lowStockDrugs: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
@@ -33,7 +36,8 @@ export function getDashboard(): Promise<DashboardStats> {
         waiting: count('registered'),
         inConsult: count('in-consult'),
         toCharge: count('consulted'),
-        toDispense: db.dispenses.filter((d) => d.createdAt.startsWith(t) && d.status !== 'dispensed').length,
+        // 與藥局清單同一規則：今天以前開立、還沒發藥的都算（前幾日沒領的也還在等）
+        toDispense: db.dispenses.filter((d) => d.status !== 'dispensed' && d.createdAt.slice(0, 10) <= t).length,
         done: count('charged') + count('dispensed'),
         cancelled: count('cancelled'),
       },
@@ -49,6 +53,7 @@ export function getDashboard(): Promise<DashboardStats> {
         totalBeds: db.beds.length,
         overdueMar: db.mar.filter((m) => m.status === 'pending' && m.scheduledAt < n).length,
       },
+      suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       lowStockDrugs: db.drugs.filter((d) => d.active && d.stock <= d.safetyStock).length,
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {

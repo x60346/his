@@ -282,13 +282,16 @@ export interface NoticeRow extends AffectedVisit {
   notifiedByName?: string
 }
 
+/** 停診通知名單的範圍：今天以後、因停診而退掛的掛號（含已通知者）。名單與首頁待辦共用 */
+export function suspendNoticeVisits(t = today()) {
+  return db.visits.filter((v) => v.date >= t && v.status === 'cancelled' && v.cancelReason?.startsWith('停診'))
+}
+
 /** 今天以後因停診而退掛的病人（含已通知者，方便核對） */
 export function listSuspendNotices(): Promise<NoticeRow[]> {
   return query(() => {
-    requireUser('admin')
-    const t = today()
-    return db.visits
-      .filter((v) => v.date >= t && v.status === 'cancelled' && v.cancelReason?.startsWith('停診'))
+    requireUser('admin', 'clerk') // 打電話通知病人多是櫃台的工作；停診、代診本身仍只限管理員
+    return suspendNoticeVisits()
       .map((v) => {
         const s = find.session(v.sessionId)
         const p = find.patient(v.patientId)
@@ -304,7 +307,7 @@ export function listSuspendNotices(): Promise<NoticeRow[]> {
 
 export function markNotified(visitId: string): Promise<void> {
   return mutate(() => {
-    const u = requireUser('admin')
+    const u = requireUser('admin', 'clerk')
     const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (v.notifiedAt) fail('已記錄通知', 'CONFLICT')
@@ -321,7 +324,7 @@ export function markNotified(visitId: string): Promise<void> {
  */
 export function unmarkNotified(visitId: string): Promise<void> {
   return mutate(() => {
-    requireUser('admin')
+    requireUser('admin', 'clerk')
     const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (!v.notifiedAt) fail('這位病人尚未記錄通知', 'CONFLICT')

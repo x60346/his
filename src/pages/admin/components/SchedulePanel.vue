@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import { UTabs } from '@/components/ui'
 import WeeklyGrid from './WeeklyGrid.vue'
 import DailyAdjust from './DailyAdjust.vue'
-import SuspendNotices from './SuspendNotices.vue'
+import SuspendNotices from '@/components/SuspendNotices.vue'
 import { scheduleApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 

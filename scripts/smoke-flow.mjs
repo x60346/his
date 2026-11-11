@@ -692,12 +692,26 @@ try {
     const marked = (await S.listSuspendNotices()).find((n) => n.visitId === notice[0].visitId)
     ok(notices.length >= notice.length && marked.notifiedAt && marked.notifiedByName === dbm.db.users.find((u) => u.username === 'admin').name, '停診通知名單：可逐一記錄已通知，並記下記錄者')
     // I4：按錯可以撤銷，撤銷寫入稽核紀錄
+    // U6：通知名單開給櫃台（打電話是櫃台的工作）；停診、代診本身仍只限管理員；其他角色看不到
+    await as('nurse01')
+    await expectError(() => S.listSuspendNotices(), '護理師查看停診通知名單')
+    await expectError(() => S.unmarkNotified(notice[0].visitId), '護理師撤銷停診通知')
     await as('clerk01')
-    await expectError(() => S.unmarkNotified(notice[0].visitId), '非管理員撤銷停診通知')
+    const clerkView = await S.listSuspendNotices()
+    ok(clerkView.some((n) => n.visitId === notice[0].visitId), '櫃台可以查看停診通知名單')
+    const dash = await api.dashboardApi.getDashboard()
+    ok(dash.suspendNoticesPending === clerkView.filter((n) => !n.notifiedAt).length, `首頁「停診待通知」= 名單上未通知人數（${dash.suspendNoticesPending}）`)
+    const otherSession = dbm.db.sessions.find((s) => s.date > T && !s.suspended)
+    await expectError(() => S.suspendSession(otherSession.id, '櫃台測試'), '櫃台停診（仍只限管理員）')
     await as('admin')
     await S.unmarkNotified(notice[0].visitId)
     const undone = (await S.listSuspendNotices()).find((n) => n.visitId === notice[0].visitId)
     ok(!undone.notifiedAt && !undone.notifiedByName && dbm.db.auditLogs[0].action === '撤銷停診通知' && dbm.db.auditLogs[0].detail.includes('原記錄'), '撤銷停診通知：回到待通知，稽核紀錄留下原記錄時間與記錄者')
+    {
+      const pendingNow = (await S.listSuspendNotices()).filter((n) => !n.notifiedAt).length
+      const d2 = await api.dashboardApi.getDashboard()
+      ok(pendingNow >= 1 && d2.suspendNoticesPending === pendingNow, `撤銷後首頁「停診待通知」跟著變成 ${d2.suspendNoticesPending}`)
+    }
     await expectError(() => S.unmarkNotified(notice[0].visitId), '撤銷尚未通知的病人')
     const normalVisit = dbm.db.visits.find((v) => !v.cancelReason?.startsWith('停診'))
     await expectError(() => S.unmarkNotified(normalVisit.id), '撤銷非停診退掛的掛號')

@@ -1,23 +1,35 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { computed, ref, watch } from 'vue'
-import { CreditCard, List as ListIcon, Ticket, UserPlus, X } from 'lucide-vue-next'
+import { CreditCard, List as ListIcon, PhoneCall, Ticket, UserPlus, X } from 'lucide-vue-next'
 import {
-  UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
+  UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
+import SuspendNotices from '@/components/SuspendNotices.vue'
 import { admissionApi, bookingApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
 import { useUi } from '@/stores/ui'
+import { useAuth } from '@/stores/auth'
 import { ageText, periodLabel, today, weekdayLabel } from '@/utils/date'
 import { genderLabel, visitStatus } from '@/utils/labels'
 import type { Patient, Period, VisitStatus } from '@/types'
 
 const ui = useUi()
+const auth = useAuth()
+
+// ---------- 停診待通知：打電話通知病人是櫃台的工作。名單元件與系統管理共用（SuspendNotices）----------
+// 護理師也會用掛號頁，但看不到通知名單（服務層限櫃台與管理員）——只有櫃台才查，不然會跳出權限錯誤
+const canNotify = computed(() => auth.user?.role === 'clerk')
+const { data: notices } = useQuery(async () => (canNotify.value ? scheduleApi.listSuspendNotices() : []), [canNotify])
+const pendingNotices = computed(() => (notices.value ?? []).filter((n) => !n.notifiedAt))
+const noticesOpen = ref(false)
+/** 哪幾診停診（同一診只列一次）：例「11/14 下午診 黃柏翰」 */
+const noticeSessions = computed(() => [...new Set(pendingNotices.value.map((n) => `${n.date.slice(5).replace('-', '/')} ${periodLabel[n.period]} ${n.doctorName}`))].join('、'))
 
 // ---------- 1. 病人 ----------
 const patient = ref<Patient | null>(null)
@@ -219,6 +231,16 @@ function openIdentity(v: VisitView) {
 
 <template>
   <div class="space-y-4">
+    <!-- 停診待通知：有人還沒通知時才出現；名單與系統管理用同一個元件 -->
+    <div v-if="pendingNotices.length" class="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+      <PhoneCall class="h-4 w-4 shrink-0" />
+      <span class="min-w-0 flex-1">
+        停診待通知 <b class="tabular">{{ pendingNotices.length }}</b> 位
+        <span class="text-xs text-amber-800">（{{ noticeSessions }}）</span>
+      </span>
+      <UButton size="sm" variant="secondary" @click="noticesOpen = true">開啟名單</UButton>
+    </div>
+    <UDialog v-model="noticesOpen" title="停診通知" size="lg"><SuspendNotices /></UDialog>
     <!--
       元素依 1 → 2 → 3 的順序排在同一層：手機依序往下堆疊，步驟就是 1、2、3。
       桌機用 col-start / row-start 排成左右兩欄（左：1、3、看診號；右：2）。

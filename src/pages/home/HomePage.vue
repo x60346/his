@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, Package, Pill, Receipt, Stethoscope, Users,
+  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, Package, PhoneCall, Pill, Receipt, Stethoscope, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
 import { dashboardApi, opdApi } from '@/services'
@@ -44,6 +44,7 @@ const todos = computed<Todo[]>(() => {
   const list: (Todo & { roles: string[] })[] = [
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
+    { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
     { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
