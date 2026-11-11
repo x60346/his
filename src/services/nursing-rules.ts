@@ -15,6 +15,22 @@ export function marUrgency(scheduledAt: string, nowStr: string): MarUrgency {
   return 'upcoming'
 }
 
+/**
+ * 補登給藥時間：忙的時候 09:00 給藥、09:40 才登打，紀錄要寫實際的 09:00（以前固定記「按下的那一刻」）。
+ *   不能晚於現在（還沒給的不能先登）
+ *   不能早於可給藥時間（預定前 60 分鐘）——和「太早不能給」同一條 marUrgency，補登不能繞過
+ *   最多往前 2 小時——更早的請寫在護理紀錄（展示用的上限，真實系統由院方訂）
+ * 頁面即時提示與服務層共用。
+ */
+export const MAR_BACKDATE_MAX_MIN = 120
+export function checkGivenAt(scheduledAt: string, givenAt: string, nowStr: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(givenAt)) return '請輸入實際給藥時間'
+  if (givenAt > nowStr) return '給藥時間不能晚於現在'
+  if (marUrgency(scheduledAt, givenAt) === 'upcoming') return `早於可給藥時間（預定 ${scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`
+  if (givenAt < addMinutes(nowStr, -MAR_BACKDATE_MAX_MIN)) return `補登最多往前 ${MAR_BACKDATE_MAX_MIN / 60} 小時，更早的請寫在護理紀錄`
+  return null
+}
+
 export type Shift = '白班' | '小夜' | '大夜'
 /** 班別：白班 08–16、小夜 16–24、大夜 00–08 */
 export function shiftOf(dateTime: string): Shift {

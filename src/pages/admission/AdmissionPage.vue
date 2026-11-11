@@ -4,9 +4,9 @@
 //   idle     一般瀏覽，點床看資訊（使用中→住院資訊、清潔中→清潔完成、空床→保留）
 //   checkin  報到：先選病人，再點一張可用的空床
 //   transfer 轉床：從住院資訊進入，再點一張可用的空床
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowRightLeft, CalendarPlus, DoorOpen, LogOut, Sparkles, UserCog, X } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UDialog, UQueryState, UTabs } from '@/components/ui'
+import { UBadge, UButton, UCard, UDialog, UQueryState, USelect, UTabs } from '@/components/ui'
 import BedCard from './components/BedCard.vue'
 import ReserveDialog from './components/ReserveDialog.vue'
 import DischargeDialog from './components/DischargeDialog.vue'
@@ -60,15 +60,18 @@ const selectedBedId = ref<string>()
 const selectedBed = computed(() => beds.value?.find((b) => b.id === selectedBedId.value))
 
 const picking = computed(() => mode.value !== 'idle')
-const isPickable = (b: BedView) => picking.value && b.status === 'empty'
-const isPreferred = (b: BedView) => mode.value === 'checkin' && b.bedClass === target.value?.preferBedClass
+// 可選的床：空床；報到時還有「保留給這位病人」的床（保留就是為了這一刻——以前保留床不能選，要先取消保留才能報到）
+const reservedForTarget = (b: BedView) => mode.value === 'checkin' && b.status === 'reserved' && b.reservedFor === target.value?.id
+const isPickable = (b: BedView) => picking.value && (b.status === 'empty' || reservedForTarget(b))
+const isPreferred = (b: BedView) => mode.value === 'checkin' && (reservedForTarget(b) || b.bedClass === target.value?.preferBedClass)
 
 function startCheckIn(a: AdmissionView) {
   mode.value = 'checkin'
   target.value = a
   selectedBedId.value = undefined
-  // 自動切到第一個有「符合床等空床」的病房，省去逐一翻找
-  const w = wards.find((x) => beds.value?.some((b) => b.ward === x && b.status === 'empty' && b.bedClass === a.preferBedClass))
+  // 自動切到該病人保留床所在的病房；沒有保留床就切到第一個有「符合床等空床」的病房，省去逐一翻找
+  const reservedBed = beds.value?.find((b) => b.status === 'reserved' && b.reservedFor === a.id)
+  const w = reservedBed?.ward ?? wards.find((x) => beds.value?.some((b) => b.ward === x && b.status === 'empty' && b.bedClass === a.preferBedClass))
   if (w) ward.value = w
 }
 function startTransfer() {
@@ -86,7 +89,9 @@ const confirmOpen = ref(false)
 const pendingBed = ref<BedView>()
 function onBedClick(b: BedView) {
   if (picking.value) {
-    if (!isPickable(b)) return ui.toast.warning(`${b.bedNo} 目前${bedStatus[b.status].label}，請選擇空床`)
+    if (!isPickable(b)) {
+      return ui.toast.warning(b.status === 'reserved' && b.reservedForName ? `${b.bedNo} 已保留給 ${b.reservedForName}，請選擇其他床位` : `${b.bedNo} 目前${bedStatus[b.status].label}，請選擇空床`)
+    }
     pendingBed.value = b
     confirmOpen.value = true
     return
@@ -118,6 +123,9 @@ const dischargeOpen = ref(false)
 
 // ---------- 病床狀態、預約 ----------
 const setStatus = useAction(admissionApi.setBedStatus, { success: (b) => `${b.bedNo} 已改為${bedStatus[b.status].label}` })
+// 保留給哪一位待報到的病人（保留一定要指定對象）；換一張床就清掉上一次的選擇
+const reserveFor = ref<string | number>('')
+watch(selectedBedId, () => (reserveFor.value = ''))
 // 變更主治醫師：住院中（床位資訊）與預約住院（待報到清單）都可以
 const attendingTarget = ref<AdmissionView>()
 const attendingOpen = computed({ get: () => !!attendingTarget.value, set: (v) => !v && (attendingTarget.value = undefined) })
@@ -204,10 +212,16 @@ const reserveOpen = ref(false)
           <UButton size="sm" variant="success" :icon="Sparkles" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'empty')">清潔完成</UButton>
         </template>
         <template v-else-if="selectedBed.status === 'empty'">
-          <p class="mb-3 text-sm text-slate-600">空床可直接用於報到；若預留給特定病人，可先設為保留。</p>
-          <UButton size="sm" variant="secondary" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'reserved')">設為保留</UButton>
+          <p class="mb-3 text-sm text-slate-600">空床可直接用於報到；若預留給特定病人，可先保留——那位病人報到時可以直接選這床。</p>
+          <div class="flex items-end gap-2">
+            <div class="min-w-0 flex-1">
+              <USelect v-model="reserveFor" label="保留給" placeholder="選擇待報到的病人" :options="(sortedReservations ?? []).map((a) => ({ label: `${a.patientName}（${a.expectedDate.slice(5)}）`, value: a.id }))" :error="setStatus.fieldErrors.value.reservedFor" />
+            </div>
+            <UButton size="sm" variant="secondary" :disabled="!reserveFor" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'reserved', String(reserveFor))">設為保留</UButton>
+          </div>
         </template>
         <template v-else>
+          <p class="mb-3 text-sm text-slate-600">保留給 <b>{{ selectedBed.reservedForName ?? '（未指定）' }}</b>；該病人報到時可直接選這床，預約取消或報到在別床時自動解除保留。</p>
           <UButton size="sm" variant="secondary" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'empty')">取消保留</UButton>
         </template>
       </UCard>

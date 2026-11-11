@@ -51,8 +51,9 @@ const days = computed(() => (props.bed.admission?.admittedAt ? diffDays(props.be
     <div v-else class="mt-auto flex items-center gap-1 font-medium">
       <Sparkles v-if="bed.status === 'cleaning'" class="h-3.5 w-3.5" />
       <BedDouble v-else class="h-3.5 w-3.5" />
-      {{ bedStatus[bed.status].label }}
-      <span v-if="pickable && preferred" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">符合床等</span>
+      {{ bedStatus[bed.status].label }}<template v-if="bed.status === 'reserved' && bed.reservedForName">：{{ bed.reservedForName }}</template>
+      <span v-if="pickable && bed.status === 'reserved'" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">保留給此病人</span>
+      <span v-else-if="pickable && preferred" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">符合床等</span>
     </div>
   </button>
 </template>

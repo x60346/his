@@ -566,9 +566,38 @@ try {
 
   console.log('\n[住院] 預約 → 報到 → 醫囑 → 給藥 → 出院')
   await as('nurse01')
-  const resv = (await api.admissionApi.listAdmissions({ status: ['reserved'] }))[0]
+  const resvList = await api.admissionApi.listAdmissions({ status: ['reserved'] })
+  const resv = resvList[0]
   const bed = dbm.db.beds.find((b) => b.status === 'empty')
+  // U21：保留床要指定病人；那位病人報到時可以直接選，別人不行；報到在別床、預約取消時自動解除保留
+  {
+    const spare = dbm.db.beds.find((b) => b.status === 'empty' && b.id !== bed.id)
+    try {
+      await api.admissionApi.setBedStatus(spare.id, 'reserved')
+      ok(false, '沒指定病人的保留應被擋下')
+    } catch (e) {
+      ok(e.field === 'reservedFor', `保留床沒指定病人 → 「${e.message}」`)
+    }
+    await api.admissionApi.setBedStatus(bed.id, 'reserved', resv.id)
+    await api.admissionApi.setBedStatus(spare.id, 'reserved', resv.id)
+    const shown = (await api.admissionApi.listBeds(bed.ward)).find((b) => b.id === bed.id)
+    ok(shown.reservedForName === resv.patientName, `床位圖顯示「保留：${shown.reservedForName}」`)
+    if (resvList[1]) await expectError(() => api.admissionApi.checkIn(resvList[1].id, bed.id), `別的病人報到在保留給 ${resv.patientName} 的床`)
+    // 新建一筆預約、保留一床，再取消預約：保留的床要放回空床
+    const someone = dbm.db.patients.find((p) => !dbm.db.admissions.some((a) => a.patientId === p.id && ['reserved', 'admitted'].includes(a.status)) && p.birthDate < '2000-01-01')
+    const r2 = await api.admissionApi.reserve({ patientId: someone.id, deptId: resv.deptId, doctorId: resv.doctorId, preferBedClass: '健保床', reason: '測試', diagnosis: 'J18.9 肺炎', expectedDate: T })
+    const third = dbm.db.beds.find((b) => b.status === 'empty' && b.id !== bed.id && b.id !== spare.id)
+    await api.admissionApi.setBedStatus(third.id, 'reserved', r2.id)
+    await api.admissionApi.cancelReservation(r2.id)
+    ok(dbm.db.beds.find((b) => b.id === third.id).status === 'empty' && !dbm.db.beds.find((b) => b.id === third.id).reservedFor, '住院預約取消時，保留給他的床自動放回空床')
+    globalThis.__spareBed = spare.id
+  }
   const adm = await api.admissionApi.checkIn(resv.id, bed.id)
+  {
+    const b1 = dbm.db.beds.find((b) => b.id === bed.id)
+    const b2 = dbm.db.beds.find((b) => b.id === globalThis.__spareBed)
+    ok(b1.status === 'occupied' && !b1.reservedFor && b2.status === 'empty' && !b2.reservedFor, '保留給這位病人的床可以直接報到；他另一張保留床同時放回空床')
+  }
   ok(adm.status === 'admitted' && dbm.db.beds.find((b) => b.id === bed.id).status === 'occupied', `${adm.patientName} 報到 ${bed.bedNo}，住院號 ${adm.admitNo}`)
   const occupied = dbm.db.beds.find((b) => b.status === 'occupied' && b.id !== bed.id)
   await expectError(() => api.admissionApi.transferBed(adm.id, occupied.id), '轉到有人的病床')
@@ -638,6 +667,27 @@ try {
   const statMar = dbm.db.mar.find((m) => m.orderId === statMed.id)
   await api.nursingApi.executeMar(statMar.id, 'given')
   ok(dbm.db.mar.find((m) => m.id === statMar.id).status === 'given' && dbm.db.ipdOrders.find((o) => o.id === statMed.id).status === 'done', '臨時給藥執行後，醫囑即完成')
+  // U20：補登實際給藥時間——不晚於現在、不早於可給時間、最多往前 2 小時；登打時間一併記錄
+  {
+    const S = '2024-05-02 09:00'
+    const N = '2024-05-02 09:40'
+    ok(nr.checkGivenAt(S, '2024-05-02 09:00', N) === null && nr.checkGivenAt(S, '2024-05-02 08:00', N) === null, '補登 09:00、08:00（預定前 60 分鐘內）都可以')
+    ok(nr.checkGivenAt(S, '2024-05-02 09:50', N)?.includes('晚於現在') && nr.checkGivenAt(S, '2024-05-02 07:59', N)?.includes('早於可給藥時間'), '補登不能晚於現在、不能早於可給藥時間（不能繞過太早給藥）')
+    ok(nr.checkGivenAt('2024-05-02 06:00', '2024-05-02 06:00', '2024-05-02 08:01')?.includes('2 小時'), '補登最多往前 2 小時')
+    await as('dr02')
+    const stat2 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'STAT', route: 'PO' })
+    await as('nurse01')
+    const m2 = dbm.db.mar.find((m) => m.orderId === stat2.id)
+    const { addMinutes } = await load('/src/utils/date.ts')
+    const t0 = nowStr()
+    await expectError(() => api.nursingApi.executeMar(m2.id, 'given', '', addMinutes(t0, 10)), '補登未來的給藥時間')
+    const backAt = addMinutes(t0, -10)
+    await api.nursingApi.executeMar(m2.id, 'given', '', backAt)
+    const rec = dbm.db.mar.find((m) => m.id === m2.id)
+    ok(rec.executedAt === backAt && rec.recordedAt && rec.recordedAt >= backAt && dbm.db.ipdOrders.find((o) => o.id === stat2.id).stopAt === backAt && dbm.db.auditLogs[0].detail.includes('補登'),
+      `補登：實際給藥 ${backAt.slice(11)}、登打 ${rec.recordedAt?.slice(11)} 都記下，臨時醫囑完成時間用實際時間，稽核註明補登`)
+    ok(dbm.db.mar.find((m) => m.id === statMar.id).recordedAt === undefined, '沒有補登的給藥不記 recordedAt（畫面不顯示「補登」）')
+  }
   {
     const groups = await api.nursingApi.listNursingOrders(adm.id)
     const all = groups.flatMap((g) => g.orders)

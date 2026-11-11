@@ -361,6 +361,8 @@ export interface Bed {
   extraFee: number
   status: BedStatus
   admissionId?: string
+  /** 保留給哪一筆住院預約（保留一定要指定病人；那位病人報到時可以直接選這床） */
+  reservedFor?: string
 }
 
 export type AdmissionStatus = 'reserved' | 'admitted' | 'discharged' | 'cancelled'
@@ -430,7 +432,10 @@ export interface MarRecord {
   /** 預計給藥時間 YYYY-MM-DD HH:mm */
   scheduledAt: string
   status: 'pending' | 'given' | 'held' | 'refused'
+  /** 實際給藥（或決定暫停、拒絕）的時間 */
   executedAt?: string
+  /** 補登時才有：實際登打的時間（與 executedAt 不同時，畫面標示「補登」）。兩個都是事實，誰也不覆蓋誰 */
+  recordedAt?: string
   nurseId?: string
   note?: string
 }

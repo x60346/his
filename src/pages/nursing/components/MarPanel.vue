@@ -3,10 +3,10 @@
 // 「逾時／待給／未到」由共用規則 marUrgency 依「現在時間」即時計算——時鐘走，顏色就跟著變，不必重新查詢。
 // 服務層用同一條規則把關：未到時間按「給藥」會被擋下，畫面上的停用只是讓人不必白按。
 import { computed, ref, watch } from 'vue'
-import { Check, CircleSlash, Clock, Pause } from 'lucide-vue-next'
-import { UBadge, UButton, UQueryState } from '@/components/ui'
+import { Check, CircleSlash, Clock, History, Pause } from 'lucide-vue-next'
+import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
-import { MAR_EARLY_MIN, marUrgency, nursingApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
+import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -73,6 +73,32 @@ async function give(m: MarView) {
     if (!ok) return
   }
   exec.run(m.id, 'given')
+}
+
+// ---------- 補登給藥時間：先給藥、後登打（規則 checkGivenAt 與服務層共用） ----------
+const backdateFor = ref<MarView | null>(null)
+const backdateOpen = computed({ get: () => !!backdateFor.value, set: (v) => !v && (backdateFor.value = null) })
+const givenAtInput = ref('') // datetime-local：YYYY-MM-DDTHH:mm（可跨午夜：23:30 的藥 00:10 才給）
+const givenAt = computed(() => givenAtInput.value.replace('T', ' '))
+const backdateProblem = computed(() => (backdateFor.value ? checkGivenAt(backdateFor.value.scheduledAt, givenAt.value, props.clock) : null))
+function openBackdate(m: MarView) {
+  exec.fieldErrors.value = {}
+  // 預設預定時間（最常見：照時間給了、晚點才登打）；預定時間還沒到就預設現在
+  givenAtInput.value = (m.scheduledAt <= props.clock ? m.scheduledAt : props.clock).replace(' ', 'T')
+  backdateFor.value = m
+}
+async function submitBackdate() {
+  const m = backdateFor.value
+  if (!m || backdateProblem.value) return
+  if (m.highAlert) {
+    const ok = await ui.confirm({
+      title: '高警訊藥品：雙人核對',
+      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}\n實際給藥時間：${givenAt.value.slice(5)}\n\n補登也要確認當時已雙人核對。`,
+      okText: '已雙人核對，補登',
+    })
+    if (!ok) return
+  }
+  if (await exec.run(m.id, 'given', '', givenAt.value)) backdateFor.value = null
 }
 
 // 暫停、拒絕、PRN 共用一個原因對話框，以 reasonFor 記住「要做什麼」
@@ -166,13 +192,16 @@ async function complete(o: OrderView) {
                 <UBadge :tone="urgencyView[urgencyOf(m)!].tone">{{ urgencyView[urgencyOf(m)!].label }}</UBadge>
                 <div class="flex gap-1">
                   <UButton size="sm" variant="success" :icon="Check" :disabled="urgencyOf(m) === 'upcoming'" :title="urgencyOf(m) === 'upcoming' ? '尚未到給藥時間' : ''" @click="give(m)">給藥</UButton>
+                  <UButton v-if="urgencyOf(m) !== 'upcoming'" size="sm" variant="ghost" :icon="History" title="先給藥、後登打：記錄實際給藥時間" @click="openBackdate(m)">補登</UButton>
                   <UButton size="sm" variant="secondary" :icon="Pause" @click="reasonFor = { kind: 'held', mar: m }">暫停</UButton>
                   <UButton size="sm" variant="ghost" :icon="CircleSlash" @click="reasonFor = { kind: 'refused', mar: m }">拒絕</UButton>
                 </div>
               </template>
               <template v-else>
                 <UBadge :tone="statusView[m.status].tone">{{ statusView[m.status].label }}</UBadge>
-                <div class="tabular w-40 text-right text-xs">{{ m.executedAt?.slice(11) }}・{{ m.nurseName }}</div>
+                <div class="tabular w-40 text-right text-xs">
+                  {{ m.executedAt?.slice(11) }}<span v-if="m.recordedAt" class="text-amber-700">（{{ m.recordedAt.slice(11) }} 補登）</span>・{{ m.nurseName }}
+                </div>
               </template>
             </li>
           </ul>
@@ -222,5 +251,19 @@ async function complete(o: OrderView) {
       :error="reasonError"
       @confirm="confirmReason"
     />
+
+    <UDialog v-model="backdateOpen" title="補登給藥時間" size="sm" @submit="submitBackdate">
+      <div v-if="backdateFor" class="space-y-3 text-sm">
+        <div class="rounded-md bg-slate-50 px-3 py-2">
+          <div class="font-medium text-slate-800">{{ backdateFor.content }}<span v-if="backdateFor.highAlert" class="ml-1 text-violet-700">（高警訊）</span></div>
+          <div class="tabular text-xs text-slate-500">預定 {{ backdateFor.scheduledAt.slice(5) }}・{{ dose(backdateFor) }}</div>
+        </div>
+        <UInput v-model="givenAtInput" type="datetime-local" label="實際給藥時間" required :error="backdateProblem ?? exec.fieldErrors.value.givenAt" :hint="`最多往前 ${MAR_BACKDATE_MAX_MIN / 60} 小時；登打的時間也會一併記錄`" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="backdateOpen = false">取消</UButton>
+        <UButton type="submit" variant="success" :disabled="!!backdateProblem" :loading="exec.pending.value">補登給藥</UButton>
+      </template>
+    </UDialog>
   </div>
 </template>

@@ -7,7 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -200,26 +200,36 @@ export function ackOrders(admissionId: string, orderIds: string[]): Promise<{ co
   })
 }
 
-/** 執行給藥：given 給藥 / held 暫停 / refused 拒絕（後兩者須註明原因） */
-export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = ''): Promise<MarRecord> {
+/**
+ * 執行給藥：given 給藥 / held 暫停 / refused 拒絕（後兩者須註明原因）。
+ * givenAt：補登實際給藥時間（只限 given）；不填就是現在。補登時 recordedAt 記下實際登打的時間。
+ */
+export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string): Promise<MarRecord> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     const m = must(db.mar.find((x) => x.id === marId), '給藥紀錄')
     admitted(m.admissionId)
     if (m.status !== 'pending') fail('此筆已執行', 'CONFLICT')
     if (status !== 'given' && !note.trim()) failField('note', '暫停或拒絕給藥需註明原因')
+    const t = now()
+    // 暫停、拒絕記的是「決定」，就是現在；只有給藥可以補登實際時間
+    const at = status === 'given' && givenAt ? givenAt : t
+    if (at !== t) {
+      const problem = checkGivenAt(m.scheduledAt, at, t)
+      if (problem) failField('givenAt', problem)
+    }
     // 提早給藥是給藥錯誤的一種；「暫停」可以提前決定（例如術前禁食），所以只擋給藥
-    if (status === 'given' && marUrgency(m.scheduledAt, now()) === 'upcoming') {
+    if (status === 'given' && marUrgency(m.scheduledAt, at) === 'upcoming') {
       fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
-    Object.assign(m, { status, note: note.trim() || undefined, executedAt: now(), nurseId: nurse.id })
+    Object.assign(m, { status, note: note.trim() || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
     if (order.type === 'stat') {
       order.status = 'done'
-      order.stopAt = now()
+      order.stopAt = at
     }
-    audit('給藥', `${order.content} ${status}${note ? `：${note}` : ''}`)
+    audit('給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${note ? `：${note}` : ''}`)
     return m
   })
 }

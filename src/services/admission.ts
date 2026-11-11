@@ -5,7 +5,7 @@ import type { Admission, AdmissionStatus, Bed, BedStatus } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { admissionView, find, patientBrief, type AdmissionView, type PatientBrief } from './views'
+import { admissionView, find, nameOf, patientBrief, type AdmissionView, type PatientBrief } from './views'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -26,6 +26,8 @@ export const getAdmission = (id: string): Promise<AdmissionView> => query(() => 
 export interface BedView extends Bed {
   patient?: PatientBrief
   admission?: Admission
+  /** 保留給誰（姓名）：床位圖上顯示「保留：楊佩珊」 */
+  reservedForName?: string
 }
 
 export function listBeds(ward?: string): Promise<BedView[]> {
@@ -34,7 +36,8 @@ export function listBeds(ward?: string): Promise<BedView[]> {
       .filter((b) => !ward || b.ward === ward)
       .map((b) => {
         const adm = b.admissionId ? find.admission(b.admissionId) : undefined
-        return { ...b, admission: adm, patient: adm ? patientBrief(adm.patientId) : undefined }
+        const forAdm = b.status === 'reserved' && b.reservedFor ? find.admission(b.reservedFor) : undefined
+        return { ...b, admission: adm, patient: adm ? patientBrief(adm.patientId) : undefined, reservedForName: forAdm ? nameOf.patient(forAdm.patientId) : undefined }
       }),
   )
 }
@@ -64,6 +67,7 @@ export function cancelReservation(id: string): Promise<Admission> {
     const a = must(find.admission(id), '住院紀錄')
     if (a.status !== 'reserved') fail('只有預約中的住院可以取消', 'CONFLICT')
     a.status = 'cancelled'
+    releaseReservedBeds(a.id)
     audit('取消住院預約', find.patient(a.patientId)?.name ?? '')
     return a
   })
@@ -71,10 +75,26 @@ export function cancelReservation(id: string): Promise<Admission> {
 
 function takeBed(bedId: string, admissionId: string): Bed {
   const bed = must(find.bed(bedId), '病床')
-  if (bed.status !== 'empty') fail(`${bed.bedNo} 目前無法使用（${bedStatusLabel[bed.status]}）`, 'CONFLICT')
+  // 保留給這位病人的床可以直接用（保留就是為了這一刻）；保留給別人的不行
+  const mine = bed.status === 'reserved' && bed.reservedFor === admissionId
+  if (bed.status === 'reserved' && !mine) {
+    const forAdm = bed.reservedFor ? find.admission(bed.reservedFor) : undefined
+    fail(`${bed.bedNo} 已保留給${forAdm ? ` ${nameOf.patient(forAdm.patientId)}` : '其他病人'}`, 'CONFLICT')
+  }
+  if (bed.status !== 'empty' && !mine) fail(`${bed.bedNo} 目前無法使用（${bedStatusLabel[bed.status]}）`, 'CONFLICT')
   bed.status = 'occupied'
   bed.admissionId = admissionId
+  delete bed.reservedFor
   return bed
+}
+
+/** 這筆住院不再需要保留床（預約取消、或報到在別床）：保留的床放回空床，免得一直佔著沒人用 */
+function releaseReservedBeds(admissionId: string): void {
+  for (const b of db.beds.filter((x) => x.status === 'reserved' && x.reservedFor === admissionId)) {
+    b.status = 'empty'
+    delete b.reservedFor
+    audit('取消保留床位', `${b.bedNo}（${nameOf.patient(find.admission(admissionId)?.patientId)}）`)
+  }
 }
 
 function releaseBed(bedId?: string): void {
@@ -94,6 +114,7 @@ export function checkIn(admissionId: string, bedId: string): Promise<AdmissionVi
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'reserved') fail('此住院紀錄不是預約狀態', 'CONFLICT')
     const bed = takeBed(bedId, a.id)
+    releaseReservedBeds(a.id) // 有保留床卻報到在別床：保留的那床放回空床
     const t = now()
     a.status = 'admitted'
     a.bedId = bed.id
@@ -181,11 +202,26 @@ export function discharge(admissionId: string, input: { dischargeType: string; d
 }
 
 /** 病床狀態維護：清潔完成、保留／取消保留 */
-export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied'>): Promise<Bed> {
+/**
+ * 變更病床狀態（清潔完成、保留、取消保留）。
+ * 保留一定要指定給哪一筆住院預約（reservedFor）——沒指定對象的保留沒有意義，報到時也不知道該給誰用。
+ */
+export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied'>, reservedFor?: string): Promise<Bed> {
   return mutate(() => {
     requireUser('clerk', 'nurse')
     const bed = must(find.bed(bedId), '病床')
     if (bed.status === 'occupied') fail('使用中的病床不可直接變更狀態', 'CONFLICT')
+    if (status === 'reserved') {
+      if (bed.status !== 'empty') fail(`只有空床可以保留（${bed.bedNo} 目前${bedStatusLabel[bed.status]}）`, 'CONFLICT')
+      if (!reservedFor) failField('reservedFor', '請選擇要保留給哪一位待報到的病人')
+      const a = must(find.admission(reservedFor!), '住院預約')
+      if (a.status !== 'reserved') fail('只能保留給待報到的病人', 'CONFLICT')
+      bed.reservedFor = a.id
+      audit('保留床位', `${bed.bedNo} → ${nameOf.patient(a.patientId)}`)
+    } else {
+      if (bed.status === 'reserved') audit('取消保留床位', bed.bedNo)
+      delete bed.reservedFor
+    }
     bed.status = status
     return bed
   })
