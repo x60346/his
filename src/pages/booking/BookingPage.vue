@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { computed, ref, watch } from 'vue'
-import { CreditCard, Ticket, UserPlus, X } from 'lucide-vue-next'
+import { CreditCard, List as ListIcon, Ticket, UserPlus, X } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
@@ -71,8 +71,18 @@ const sessionsByPeriod = computed(() =>
     .filter((g) => g.list.length),
 )
 const selectedSession = computed(() => sessions.value?.find((s) => s.id === sessionId.value))
+// 點診次卡：選來掛號，下方清單也跟著換成這一診（以前兩者沒連動，要再從清單的下拉選一次）
 function pickSession(s: SessionView) {
-  if (s.bookable) sessionId.value = s.id
+  if (!s.bookable) return
+  sessionId.value = s.id
+  listSession.value = s.id
+}
+// 「名單」：看這一診有誰、誰退掛——不能掛的診（已截止、額滿、停診）也要能看
+const listEl = ref<HTMLElement>()
+function showList(s: SessionView) {
+  listSession.value = s.id
+  statusTab.value = 'all'
+  listEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 // ---------- 3. 身分、案件、預防保健 ----------
@@ -127,8 +137,9 @@ async function submit() {
 
 // ---------- 當日掛號清單 ----------
 const statusTab = ref('all')
-const listSession = ref<string | number>()
+const listSession = ref<string | number>('')
 const { data: visits, loading: visitsLoading } = useQuery(() => bookingApi.listVisits({ date: date.value }), [date])
+watch(date, () => (listSession.value = '')) // 換日期後，原本篩選的診次已不存在
 
 const tabDefs: { key: string; label: string; match: VisitStatus[] }[] = [
   { key: 'all', label: '全部', match: [] },
@@ -224,29 +235,38 @@ function openIdentity(v: VisitView) {
           <div v-for="g in sessionsByPeriod" :key="g.period" class="mb-4 last:mb-0">
             <div class="mb-2 text-xs font-semibold text-slate-500">{{ periodLabel[g.period] }}</div>
             <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-              <button
+              <!-- 卡片是兩個按鈕：主區「選來掛號」（不能掛時停用）、右側「名單」（一律可按，看這一診有誰）。按鈕裡不能再放按鈕，所以外框用 div -->
+              <div
                 v-for="s in g.list"
                 :key="s.id"
-                :disabled="!s.bookable"
                 :class="[
-                  'rounded-md border px-3 py-2 text-left text-sm transition',
-                  !s.bookable ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60'
+                  'flex items-stretch rounded-md border text-sm transition',
+                  !s.bookable ? 'border-slate-200 bg-slate-50'
                   : s.id === sessionId ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/30'
                   : 'border-slate-200 bg-white hover:border-brand-300',
                 ]"
-                @click="pickSession(s)"
               >
-                <div class="flex items-center justify-between">
-                  <span class="font-medium text-slate-800">{{ s.deptName }}・{{ s.doctorName }}</span>
-                  <UBadge v-if="s.suspended" tone="red">停診</UBadge>
-                  <UBadge v-else-if="s.closed">已截止</UBadge>
-                  <UBadge v-else-if="s.full" tone="red">額滿</UBadge>
-                </div>
-                <div class="mt-0.5 flex justify-between text-xs text-slate-500">
-                  <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
-                  <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
-                </div>
-              </button>
+                <button type="button" :disabled="!s.bookable" :class="['min-w-0 flex-1 px-3 py-2 text-left', !s.bookable && 'cursor-not-allowed opacity-60']" @click="pickSession(s)">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-medium text-slate-800">{{ s.deptName }}・{{ s.doctorName }}</span>
+                    <UBadge v-if="s.suspended" tone="red">停診</UBadge>
+                    <UBadge v-else-if="s.closed">已截止</UBadge>
+                    <UBadge v-else-if="s.full" tone="red">額滿</UBadge>
+                  </div>
+                  <div class="mt-0.5 flex justify-between gap-2 text-xs text-slate-500">
+                    <span>{{ s.roomNo }} 診<template v-if="s.originalDoctorName">・代診（原{{ s.originalDoctorName }}）</template></span>
+                    <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  :class="['flex shrink-0 flex-col items-center justify-center gap-0.5 border-l px-2 text-xs hover:bg-brand-50 hover:text-brand-700', listSession === s.id ? 'border-brand-200 bg-brand-50 font-medium text-brand-700' : 'border-slate-200 text-slate-500']"
+                  :aria-label="`${s.deptName} ${s.doctorName} ${s.roomNo} 診的掛號名單`"
+                  @click="showList(s)"
+                >
+                  <ListIcon class="h-4 w-4" />名單
+                </button>
+              </div>
             </div>
           </div>
         </UCard>
@@ -300,6 +320,7 @@ function openIdentity(v: VisitView) {
     </div>
 
     <!-- 當日掛號清單 -->
+    <div ref="listEl" class="scroll-mt-4">
     <UCard :title="`${date} 掛號清單`" :padded="false">
       <template #actions>
         <div class="w-64"><USelect v-model="listSession" :options="listSessionOptions" placeholder="全部診次" /></div>
@@ -313,6 +334,7 @@ function openIdentity(v: VisitView) {
         </template>
       </UTable>
     </UCard>
+    </div>
 
     <PatientEditDialog v-model="editOpen" :prefill="prefill" @saved="(p) => (patient = p)" />
     <IdentityCorrectDialog v-model="identityOpen" :visit-id="identityVisit?.id" :identity-code="identityVisit?.identityCode" :subject="identityVisit && `${identityVisit.patientName}（${identityVisit.deptName} 第 ${identityVisit.seqNo} 號）・目前身分 ${identityVisit.identityName}`" />
