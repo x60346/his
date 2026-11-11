@@ -65,3 +65,12 @@ export function stockFlags(r: { status: StockStatus; expiredQty: number; expirin
   if (r.expiringSoon) flags.push('expiring')
   return flags
 }
+
+/**
+ * 盤點的「實際清點數量」：0 以上的整數。回傳錯誤訊息，正確回傳 null。
+ * 服務層（stocktake）與盤點對話框共用——輸入不合法時畫面不顯示差異（以前輸入 -3 會同時出現錯誤和「差異 -23（盤虧）」）。
+ */
+export function checkStocktakeActual(v: unknown): string | null {
+  if (v === undefined || v === null || v === '') return '請輸入實際清點數量'
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? null : '實際數量需為 0 以上的整數'
+}

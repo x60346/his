@@ -9,7 +9,7 @@ import type { Drug, DrugLot, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { allocateFefo, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, usableQty, type StockFlag, type StockStatus } from './stock-rules'
+import { allocateFefo, checkStocktakeActual, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, usableQty, type StockFlag, type StockStatus } from './stock-rules'
 import { find, nameOf } from './views'
 
 // ---------- 唯一的寫入點（服務層內部） ----------
@@ -207,7 +207,8 @@ export function stocktake(input: { lotId: string; actual: number; reason: string
   return mutate(() => {
     const u = requireUser('pharmacist')
     const lot = must(db.drugLots.find((l) => l.id === input.lotId), '批號')
-    if (!Number.isInteger(input.actual) || input.actual < 0) failField('actual', '實際數量需為 0 以上的整數')
+    const actualErr = checkStocktakeActual(input.actual)
+    if (actualErr) failField('actual', actualErr)
     const diff = input.actual - lot.qty
     if (diff === 0) return null // 帳實相符，不需要調整
     if (!input.reason.trim()) failField('reason', '帳實不符，請註明原因（例：破損、過期報廢、計數錯誤）')

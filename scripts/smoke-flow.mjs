@@ -131,6 +131,14 @@ try {
   const lotT1 = dbm.db.drugLots.find((l) => l.drugId === recvDrug && l.lotNo === 'T1')
   ok(lotT1 && dbm.db.drugs.find((d) => d.id === recvDrug).stock === before10 + 100, '進貨：批號轉大寫、庫存 +100')
   await expectError(() => api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 97, reason: '' }), '盤點有差異未寫原因')
+  // G6：實際數量的規則（頁面與服務層共用）
+  ok([-3, 2.5, undefined, '', '3', NaN].every((v) => sr.checkStocktakeActual(v)) && [0, 97].every((v) => sr.checkStocktakeActual(v) === null), '盤點實際數量：負數、小數、空白、字串、NaN 不接受；0 與正整數接受')
+  try {
+    await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: -3, reason: '破損' })
+    ok(false, '盤點負數應被擋下')
+  } catch (e) {
+    ok(e.field === 'actual' && e.message === sr.checkStocktakeActual(-3), `盤點負數 → 「${e.message}」（與頁面同一條規則）`)
+  }
   ok((await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 100, reason: '' })) === null, '帳實相符：不產生調整')
   const adj = await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 97, reason: '破損' })
   ok(adj.qty === -3 && dbm.db.drugLots.find((l) => l.id === lotT1.id).qty === 97, '盤點輸入實際 97 → 系統算出 −3 並調整該批號')
