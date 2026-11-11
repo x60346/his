@@ -1124,6 +1124,11 @@ try {
   const dash = await api.dashboardApi.getDashboard()
   console.log(`    今日掛號 ${dash.opd.total}、候診 ${dash.opd.waiting}、待批價 ${dash.opd.toCharge}、待領藥 ${dash.opd.toDispense}；收入 ${dash.revenue.patientTotal} 元；住院 ${dash.ipd.admitted} 人、空床 ${dash.ipd.emptyBeds}`)
   ok(dash.trend.length === 7, '近 7 日趨勢資料')
+  {
+    await as('ph01')
+    const ph = (await api.pharmacyApi.listDispenses({ date: T })).filter((d) => d.status !== 'dispensed').length
+    ok(dash.opd.toDispense === ph, `首頁「待領藥」${dash.opd.toDispense} = 藥局清單待調劑＋已核對（同一個 awaitingPickup）`)
+  }
 
   const leak = await api.patientApi.getPatient(patient.id)
   leak.name = '被頁面改掉'

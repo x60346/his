@@ -4,6 +4,7 @@ import { addDays, now, today } from '@/utils/date'
 import { query } from './http'
 import { nameOf } from './views'
 import { suspendNoticeVisits } from './schedule'
+import { awaitingPickup } from './pharmacy'
 
 export interface DashboardStats {
   date: string
@@ -37,7 +38,7 @@ export function getDashboard(): Promise<DashboardStats> {
         inConsult: count('in-consult'),
         toCharge: count('consulted'),
         // 與藥局清單同一規則：今天以前開立、還沒發藥的都算（前幾日沒領的也還在等）
-        toDispense: db.dispenses.filter((d) => d.status !== 'dispensed' && d.createdAt.slice(0, 10) <= t).length,
+        toDispense: db.dispenses.filter((d) => awaitingPickup(d, t)).length,
         done: count('charged') + count('dispensed'),
         cancelled: count('cancelled'),
       },

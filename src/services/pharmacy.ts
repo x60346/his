@@ -83,10 +83,13 @@ function dispenseView(d: Dispense): DispenseView {
  *   已發藥：當天「發出」的（依發藥時間，不是開立日）——昨天的單今天才領，算今天的工作量。
  * 排序：當天開立的在前（依領藥號），前幾天的接在後面（依日期、領藥號）——窗口前的人優先。
  */
+/** 這一天還等著領藥的單：當天以前（含）開立、還沒發藥。藥局清單與首頁「待領藥」共用 */
+export const awaitingPickup = (d: Pick<Dispense, 'status' | 'createdAt'>, date: string) => d.status !== 'dispensed' && d.createdAt.slice(0, 10) <= date
+
 export function listDispenses(q: { date: string; status?: DispenseStatus[] }): Promise<DispenseView[]> {
   return query(() =>
     db.dispenses
-      .filter((d) => (d.status === 'dispensed' ? !!d.dispensedAt?.startsWith(q.date) : d.createdAt.slice(0, 10) <= q.date))
+      .filter((d) => (d.status === 'dispensed' ? !!d.dispensedAt?.startsWith(q.date) : awaitingPickup(d, q.date)))
       .filter((d) => !q.status || q.status.includes(d.status))
       .sort((a, b) => {
         const da = a.createdAt.slice(0, 10)
