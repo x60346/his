@@ -13,8 +13,9 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import DiagnosisEditor from './components/DiagnosisEditor.vue'
 import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue'
 import ProcedureEditor from './components/ProcedureEditor.vue'
+import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, preventApi } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, preventApi, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -230,6 +231,33 @@ function copyFrom(h: HistoryItem) {
   tab.value = 'orders'
 }
 
+// ---------- 套用組套：合併進目前處方，不覆蓋 ----------
+// 規則和「複製處方」一致：重複的略過、診斷只在本次還沒有時帶入；主訴、計畫只填空白的欄位。
+// 慢性病案件（04／08）天數用預設的 28 天；總量依「劑量 × 頻率 × 天數」重算（和手動開藥同一個 autoQty）。
+function applySet(x: ExpandedOrderSet) {
+  let meds = 0
+  let procsAdded = 0
+  for (const m of x.medications) {
+    if (draft.value.medications.some((y) => y.drugId === m.drugId)) continue
+    const days = defaultDays.value === 28 ? 28 : m.days
+    const q = autoQtyOf({ ...m, days })
+    draft.value.medications.push({ ...m, days, _manual: q === null, qty: q ?? m.qty })
+    meds++
+  }
+  for (const p of x.procedures) {
+    if (draft.value.procedures.some((y) => y.procId === p.procId)) continue
+    draft.value.procedures.push({ ...p })
+    procsAdded++
+  }
+  if (!draft.value.diagnoses.length) draft.value.diagnoses = clonePlain(x.diagnoses)
+  if (!draft.value.subjective.trim() && x.subjective) draft.value.subjective = x.subjective
+  if (!draft.value.plan.trim() && x.plan) draft.value.plan = x.plan
+  const parts = [meds && `${meds} 種藥`, procsAdded && `${procsAdded} 項處置`].filter(Boolean).join('、') || '沒有新的項目（重複的略過）'
+  const skipped = x.skipped.length ? `；${x.skipped.join('、')} 已停用，未帶入` : ''
+  ;(x.skipped.length ? ui.toast.warning : ui.toast.success)(`已套用「${x.name}」：${parts}${skipped}`)
+  tab.value = 'orders'
+}
+
 const defaultDays = computed(() => (visit.value && ['04', '08'].includes(visit.value.caseType) ? 28 : 3))
 const { data: preventItems } = useQuery(() => preventApi.listPreventItems())
 const preventNames = computed(() => (visit.value?.preventItems ?? []).map((c) => preventItems.value?.find((i) => i.code === c)?.name ?? c).join('、'))
@@ -337,6 +365,7 @@ const tabs = computed(() => [
           <DiagnosisEditor v-if="tab === 'dx'" v-model="draft.diagnoses" :readonly="!editable" />
 
           <div v-if="tab === 'orders'" class="space-y-5">
+            <OrderSetBar v-if="editable" :draft="draft" @apply="applySet" />
             <section>
               <h3 class="mb-2 text-sm font-semibold text-slate-700">藥品</h3>
               <MedicationEditor v-model="draft.medications" :drugs="drugs" :freqs="freqs" :warnings="warnings ?? []" :default-days="defaultDays" :readonly="!editable" />

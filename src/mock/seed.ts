@@ -13,6 +13,7 @@ import type {
   MarRecord,
   MedicationOrder,
   NursingNote,
+  OrderSet,
   Patient,
   Period,
   PreventRecord,
@@ -765,6 +766,22 @@ export function buildSeed(): Database {
     drugLots.push(...lots)
   })
 
+  // 醫師個人組套：每位門診醫師兩三組常用處方，展示時打開就有東西可套用
+  const setMed = (drugId: string, dose: number, freq: string, days: number) => {
+    const d = drugMap.get(drugId)!
+    return { drugId, dose, freq, route: d.defaultRoute, days, qty: autoQty(d, dose, freqTimes(freq), days) ?? 1, selfPay: false }
+  }
+  const setDx = (...icds: string[]) => icds.map((code, i) => ({ icd: code, name: codes.icdCodes.find((c) => c.code === code)?.name ?? code, primary: i === 0 }))
+  const setAt = `${addDays(T, -30)} 09:00`
+  const orderSets: OrderSet[] = [
+    { doctorId: 'DR01', name: '上呼吸道感染', diagnoses: setDx('J06.9'), medications: [setMed('M001', 1, 'TID', 3), setMed('M007', 1, 'HS', 3), setMed('M010', 1, 'TID', 3)], procedures: [], subjective: '喉嚨痛、流鼻水', plan: '症狀治療，多喝水休息' },
+    { doctorId: 'DR01', name: '高血壓追蹤', diagnoses: setDx('I10'), medications: [setMed('M012', 1, 'QD', 28)], procedures: [], plan: '持續用藥，居家量血壓' },
+    { doctorId: 'DR01', name: '腸胃炎', diagnoses: setDx('A09'), medications: [setMed('M025', 1, 'TID', 3), setMed('M026', 1, 'PRN', 3)], procedures: [], plan: '清淡飲食、補充水分' },
+    { doctorId: 'DR02', name: '糖尿病追蹤', diagnoses: setDx('E11.9'), medications: [setMed('M015', 1, 'BID', 28)], procedures: [{ procId: 'P004', qty: 1, selfPay: false }, { procId: 'P005', qty: 1, selfPay: false }], plan: '飲食控制，三個月後追蹤 HbA1c' },
+    { doctorId: 'DR02', name: '高血脂', diagnoses: setDx('E78.5'), medications: [setMed('M018', 1, 'HS', 28)], procedures: [{ procId: 'P006', qty: 1, selfPay: false }] },
+    { doctorId: 'DR03', name: '胃食道逆流', diagnoses: setDx('K21.9'), medications: [setMed('M022', 1, 'QD', 14)], procedures: [], plan: '睡前三小時不進食' },
+  ].map((s) => ({ ...s, id: id('OS'), createdAt: setAt, updatedAt: setAt }))
+
   // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
   // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒
   // 核對時間＝事件後 30 分鐘，但不晚於現在（也就不會早於事件本身：事件時間一定 ≤ 現在）
@@ -797,6 +814,7 @@ export function buildSeed(): Database {
     drugs,
     drugLots,
     stockTxns,
+    orderSets,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

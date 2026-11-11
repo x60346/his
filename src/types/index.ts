@@ -195,6 +195,23 @@ export interface ProcedureOrder {
 
 export type EncounterStatus = 'draft' | 'completed'
 
+/**
+ * 醫師個人組套（常用處方）：診斷、藥品、處置，可選帶主訴與計畫文字。
+ * 屬於醫師自己的設定，不是醫療紀錄——可以直接刪除（刪除寫稽核）。
+ */
+export interface OrderSet {
+  id: string
+  doctorId: string
+  name: string
+  diagnoses: Diagnosis[]
+  medications: MedicationOrder[]
+  procedures: ProcedureOrder[]
+  subjective?: string
+  plan?: string
+  createdAt: string
+  updatedAt: string
+}
+
 /** 門診病歷（一次看診的 SOAP 與醫令） */
 export interface Encounter {
   id: string

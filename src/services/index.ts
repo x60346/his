@@ -16,6 +16,7 @@ import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
 import * as admin from './admin'
+import * as orderset from './orderset'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -32,6 +33,8 @@ export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
 export const adminApi = overNetwork(admin)
+export const orderSetApi = overNetwork(orderset)
+export type { OrderSetView, ExpandedOrderSet } from './orderset'
 
 export { ServiceError } from './http'
 export { dbVersion, storageIssue, storageMode } from '@/mock/db'

@@ -285,6 +285,50 @@ try {
       `批價清單的預估應收 = 試算金額（${pend.length} 位待批價）${diffs.length ? '：' + diffs.join('；') : ''}`)
   }
 
+  // U13：醫師個人組套
+  {
+    const billing = await load('/src/services/billing.ts')
+    const times = (f) => dbm.db.frequencies.find((x) => x.code === f)?.timesPerDay ?? 1
+    const bad = dbm.db.orderSets.flatMap((s) => [
+      ...s.medications.filter((m) => { const d = dbm.db.drugs.find((x) => x.id === m.drugId); return !d?.active || m.qty !== (billing.autoQty(d, m.dose, times(m.freq), m.days) ?? m.qty) }).map((m) => `${s.name}/${m.drugId}`),
+      ...s.procedures.filter((p) => !dbm.db.procedures.find((x) => x.id === p.procId)?.active).map((p) => `${s.name}/${p.procId}`),
+      ...s.diagnoses.filter((d) => !dbm.db.icdCodes.some((c) => c.code === d.icd)).map((d) => `${s.name}/${d.icd}`),
+    ])
+    ok(dbm.db.orderSets.length >= 5 && bad.length === 0, `展示組套 ${dbm.db.orderSets.length} 組：項目都可開立、總量與手動開藥算法一致${bad.length ? '：' + bad.join('、') : ''}`)
+    const O = api.orderSetApi
+    await as('nurse01')
+    await expectError(() => O.listOrderSets(), '護理師查看組套')
+    await as('dr01')
+    const mineList = await O.listOrderSets()
+    const dr01 = dbm.db.users.find((u) => u.username === 'dr01').doctorId
+    ok(mineList.length > 0 && mineList.every((s) => s.doctorId === dr01), `只看得到自己的組套（${mineList.map((s) => s.name).join('、')}）`)
+    try {
+      await O.saveOrderSet({ name: '', diagnoses: [], medications: [], procedures: [] })
+      ok(false, '空白組套應被擋下')
+    } catch (e) {
+      ok(e.field === 'name', `存空白組套 → 「${e.message}」`)
+    }
+    const input = { name: '測試組套', diagnoses: [{ icd: 'J00', name: '急性鼻咽炎（感冒）', primary: true }], medications: [{ drugId: 'M001', dose: 1, freq: 'TID', route: 'PO', days: 3, qty: 9, selfPay: false }], procedures: [] }
+    const created = await O.saveOrderSet(input)
+    await expectError(() => O.saveOrderSet(input), '存同名組套（未確認覆蓋）')
+    const over = await O.saveOrderSet({ ...input, medications: [...input.medications, { drugId: 'M007', dose: 1, freq: 'HS', route: 'PO', days: 3, qty: 3, selfPay: false }], overwrite: true })
+    ok(over.id === created.id && over.medications.length === 2 && (await O.listOrderSets()).filter((s) => s.name === '測試組套').length === 1, '確認覆蓋後更新原組套，不會多出一組')
+    // 套用時才檢查停用：存的時候能開，後來停用了，展開時要濾掉並列出
+    const m7 = dbm.db.drugs.find((d) => d.id === 'M007')
+    m7.active = false
+    const ex = await O.expandOrderSet(created.id)
+    ok(ex.medications.length === 1 && ex.medications[0].drugId === 'M001' && ex.skipped.includes(m7.name), `套用時濾掉已停用的藥並列出（${ex.skipped.join('、')} 未帶入）`)
+    await expectError(() => O.saveOrderSet({ ...input, name: '含停用藥', medications: [{ drugId: 'M007', dose: 1, freq: 'HS', route: 'PO', days: 3, qty: 3, selfPay: false }] }), '把已停用的藥存進組套')
+    dbm.db.drugs.find((d) => d.id === 'M007').active = true
+    await as('dr02')
+    await expectError(() => O.expandOrderSet(created.id), '套用別人的組套')
+    await expectError(() => O.deleteOrderSet(created.id), '刪除別人的組套')
+    await as('dr01')
+    await O.deleteOrderSet(created.id)
+    ok(!(await O.listOrderSets()).some((s) => s.id === created.id) && dbm.db.auditLogs[0].action === '刪除組套', '刪除自己的組套，寫入稽核')
+    await as('clerk01')
+  }
+
   // U9：日結報表——未收款名單、作廢金額、依收費人員、依費用類別（加總都要對得上）
   {
     const toVoid = dbm.db.charges.find((c) => !c.voided && c.paidAt.startsWith(T) && dbm.db.dispenses.find((d) => d.visitId === c.visitId)?.status !== 'dispensed')
