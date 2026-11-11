@@ -9,6 +9,8 @@ import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 
 export interface ChargeListItem extends VisitView {
   charge?: Charge
+  /** 待批價者的應收（與結帳試算同一個計算 buildPreview）：清單上就看得到要收多少，不必一個個點進去 */
+  estimate?: number
 }
 
 const pickupNoOf = (visitId: string) => db.dispenses.find((d) => d.visitId === visitId)?.pickupNo
@@ -18,7 +20,11 @@ export function listChargeQueue(date: string): Promise<ChargeListItem[]> {
   return query(() =>
     db.visits
       .filter((v) => v.date === date && ['consulted', 'charged', 'dispensed'].includes(v.status))
-      .map((v) => ({ ...visitView(v), charge: db.charges.find((c) => c.visitId === v.id && !c.voided) }))
+      .map((v) => ({
+        ...visitView(v),
+        charge: db.charges.find((c) => c.visitId === v.id && !c.voided),
+        estimate: v.status === 'consulted' ? buildPreview(v.id).patientTotal : undefined,
+      }))
       .sort((a, b) => Number(!!a.charge) - Number(!!b.charge) || a.seqNo - b.seqNo),
   )
 }

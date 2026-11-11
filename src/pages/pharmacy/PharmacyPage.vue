@@ -21,10 +21,27 @@ const date = ref(today())
 const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: all, loading } = useQuery(() => pharmacyApi.listDispenses({ date: date.value }), [date])
 const tab = ref<DispenseStatus>('pending')
+// 搜尋：病人遞上領藥單時，輸入領藥號按 Enter 就選中，不必捲清單找。三個分頁一起篩，分頁數字跟著變
+const kw = ref('')
+// 1–3 位數字當領藥號（完全相符）；4 位以上才比對病歷號——否則打「4」會連病歷號含 4 的人都找出來，Enter 就選不到唯一一筆
+const matches = (x: { pickupNo: number; patientName: string; chartNo: string }, k: string) => {
+  if (!k) return true
+  if (/^\d{1,3}$/.test(k)) return String(x.pickupNo) === k
+  return x.patientName.includes(k) || x.chartNo.includes(k)
+}
+const searched = computed(() => (all.value ?? []).filter((d) => matches(d, kw.value.trim())))
 const tabs = computed(() =>
-  (['pending', 'verified', 'dispensed'] as DispenseStatus[]).map((s) => ({ key: s, label: dispenseStatus[s].label, count: (all.value ?? []).filter((d) => d.status === s).length })),
+  (['pending', 'verified', 'dispensed'] as DispenseStatus[]).map((s) => ({ key: s, label: dispenseStatus[s].label, count: searched.value.filter((d) => d.status === s).length })),
 )
-const list = computed(() => (all.value ?? []).filter((d) => d.status === tab.value))
+const list = computed(() => searched.value.filter((d) => d.status === tab.value))
+/** Enter：只有一筆符合就直接選中（分頁由下方的 watch 跟著那張單切過去）；多筆就留給使用者從清單點 */
+function onSearchEnter() {
+  const hit = searched.value
+  if (hit.length === 1) {
+    selectedId.value = hit[0].id
+    tab.value = hit[0].status // 明確切過去：若前一張選的單狀態相同，下面跟著狀態切分頁的 watch 不會觸發
+  } else if (hit.length > 1 && !list.value.length) tab.value = hit[0].status
+}
 // 前幾日開立、還沒領的單（服務層排在當天的後面）。領藥號每天重編，要標日期才分得出是哪一天的「3 號」
 const createdDay = (x: { createdAt: string }) => x.createdAt.slice(0, 10)
 const isCarried = (x: { createdAt: string; status: DispenseStatus }) => x.status !== 'dispensed' && createdDay(x) < date.value
@@ -82,8 +99,9 @@ const print = () => window.print()
     <UCard :padded="false" class="no-print self-start">
       <template #title><span class="text-sm font-semibold text-slate-800">調劑清單</span></template>
       <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
+      <div class="px-3 pt-2"><UInput v-model="kw" placeholder="領藥號、姓名、病歷號（Enter 選取）" aria-label="搜尋調劑單" @keydown.enter.prevent="onSearchEnter" /></div>
       <div class="px-3"><UTabs v-model="tab" :tabs="tabs" /></div>
-      <UQueryState :loading="loading" :ready="list.length > 0" :empty-title="`沒有${dispenseStatus[tab].label}的單`">
+      <UQueryState :loading="loading" :ready="list.length > 0" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的${dispenseStatus[tab].label}單` : `沒有${dispenseStatus[tab].label}的單`">
       <ul class="max-h-[calc(100vh-15rem)] divide-y divide-slate-100 overflow-y-auto">
         <li v-for="(x, i) in list" :key="x.id">
           <div v-if="isCarried(x) && (i === 0 || !isCarried(list[i - 1]))" class="bg-slate-50 px-3 py-1 text-xs font-medium text-slate-500">前幾日未領</div>

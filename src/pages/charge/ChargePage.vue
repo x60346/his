@@ -24,6 +24,15 @@ const date = ref(today())
 const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: list, loading: listLoading } = useQuery(() => chargeApi.listChargeQueue(date.value), [date])
 const pendingCount = computed(() => (list.value ?? []).filter((v) => v.status === 'consulted').length)
+// 搜尋姓名或病歷號；只剩一筆時 Enter 直接選取
+const kw = ref('')
+const shown = computed(() => {
+  const k = kw.value.trim()
+  return (list.value ?? []).filter((v) => !k || v.patientName.includes(k) || v.chartNo.includes(k))
+})
+function onSearchEnter() {
+  if (shown.value.length === 1) visitId.value = shown.value[0].id
+}
 
 const visitId = ref<string>()
 useRevealOnNarrow(visitId) // 窄螢幕點選後把明細捲進畫面
@@ -99,9 +108,10 @@ const identityOpen = ref(false)
       <UCard :padded="false" class="no-print self-start">
         <template #title><span class="text-sm font-semibold text-slate-800">批價清單</span></template>
         <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
-        <UQueryState :loading="listLoading" :ready="!!list?.length" empty-title="沒有看診完成的病人">
-        <ul class="max-h-[calc(100vh-13rem)] divide-y divide-slate-100 overflow-y-auto">
-          <li v-for="v in list" :key="v.id">
+        <div class="border-b border-slate-100 px-3 py-2"><UInput v-model="kw" placeholder="姓名、病歷號（Enter 選取）" aria-label="搜尋批價清單" @keydown.enter.prevent="onSearchEnter" /></div>
+        <UQueryState :loading="listLoading" :ready="!!shown.length" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的病人` : '沒有看診完成的病人'">
+        <ul class="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">
+          <li v-for="v in shown" :key="v.id">
             <button :class="['flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50', v.id === visitId && '!bg-brand-50']" @click="visitId = v.id">
               <span class="min-w-0 flex-1">
                 <span class="block font-medium text-slate-800">{{ v.patientName }} <span class="tabular text-xs font-normal text-slate-500">{{ v.chartNo }}</span></span>
@@ -110,6 +120,7 @@ const identityOpen = ref(false)
               <span class="text-right">
                 <UStatusBadge :map="visitStatus" :value="v.status" />
                 <span v-if="v.charge" class="tabular block text-xs text-slate-500">${{ v.charge.patientTotal }}</span>
+                <span v-else-if="v.estimate !== undefined" class="tabular block text-xs font-medium text-slate-700">約 ${{ v.estimate }}</span>
               </span>
             </button>
           </li>

@@ -272,6 +272,19 @@ try {
       `預估金額：健保一般 ${e01.total}、只做預防保健 ${eA3.total}、榮民 ${eVet.total}（免部分負擔）、自費 ${eSelf.total}（含診察費）`)
   }
 
+  // U8：批價清單上待批價者的應收，與點進去的試算同一個數字；已批價者不估
+  {
+    const q = await api.chargeApi.listChargeQueue(T)
+    const pend = q.filter((v) => v.status === 'consulted')
+    const diffs = []
+    for (const v of pend) {
+      const pv = await api.chargeApi.previewCharge(v.id)
+      if (pv.patientTotal !== v.estimate) diffs.push(`${v.patientName} 清單 ${v.estimate}／試算 ${pv.patientTotal}`)
+    }
+    ok(pend.length > 0 && diffs.length === 0 && q.filter((v) => v.status !== 'consulted').every((v) => v.estimate === undefined),
+      `批價清單的預估應收 = 試算金額（${pend.length} 位待批價）${diffs.length ? '：' + diffs.join('；') : ''}`)
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')
