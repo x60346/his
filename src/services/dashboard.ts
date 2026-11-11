@@ -1,7 +1,7 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { query } from './http'
+import { query, sessionUser } from './http'
 import { nameOf } from './views'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
@@ -9,7 +9,8 @@ import { awaitingPickup } from './pharmacy'
 export interface DashboardStats {
   date: string
   opd: { total: number; waiting: number; inConsult: number; toCharge: number; toDispense: number; done: number; cancelled: number }
-  revenue: { patientTotal: number; nhiPoints: number; receipts: number }
+  /** 今日收入：只回傳給掛號批價與管理員——財務數字不是每個角色都該看到（只在畫面上藏起來不夠，資料本身就不送） */
+  revenue?: { patientTotal: number; nhiPoints: number; receipts: number }
   ipd: { admitted: number; reservedToday: number; emptyBeds: number; totalBeds: number; overdueMar: number }
   /** 停診退掛、還沒電話通知的病人數（櫃台待辦） */
   suspendNoticesPending: number
@@ -20,6 +21,7 @@ export interface DashboardStats {
 
 export function getDashboard(): Promise<DashboardStats> {
   return query(() => {
+    const seesRevenue = ['clerk', 'admin'].includes(sessionUser()?.role ?? '')
     const t = today()
     const n = now()
     const visits = db.visits.filter((v) => v.date === t)
@@ -42,11 +44,13 @@ export function getDashboard(): Promise<DashboardStats> {
         done: count('charged') + count('dispensed'),
         cancelled: count('cancelled'),
       },
-      revenue: {
-        patientTotal: charges.reduce((s, c) => s + c.patientTotal, 0),
-        nhiPoints: charges.reduce((s, c) => s + c.nhiPoints, 0),
-        receipts: charges.length,
-      },
+      revenue: seesRevenue
+        ? {
+            patientTotal: charges.reduce((s, c) => s + c.patientTotal, 0),
+            nhiPoints: charges.reduce((s, c) => s + c.nhiPoints, 0),
+            receipts: charges.length,
+          }
+        : undefined,
       ipd: {
         admitted: db.admissions.filter((a) => a.status === 'admitted').length,
         reservedToday: db.admissions.filter((a) => a.status === 'reserved' && a.expectedDate <= t).length,

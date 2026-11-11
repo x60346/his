@@ -93,7 +93,8 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
       <UStatCard label="今日掛號" :value="s.opd.total" :hint="`候診 ${s.opd.waiting}・看診中 ${s.opd.inConsult}・退掛 ${s.opd.cancelled}`" :icon="Users" />
       <UStatCard label="待批價" :value="s.opd.toCharge" hint="看診完成未結帳" :icon="Receipt" tone="amber" />
       <UStatCard label="待領藥" :value="s.opd.toDispense" hint="已批價未發藥" :icon="Pill" tone="amber" />
-      <UStatCard label="今日收入" :value="money(s.revenue.patientTotal)" :hint="`${s.revenue.receipts} 張收據・申報 ${s.revenue.nhiPoints.toLocaleString()} 點`" :icon="Coins" tone="emerald" />
+      <!-- 今日收入只有掛號批價與管理員看得到：其他角色服務層不回傳這筆資料 -->
+      <UStatCard v-if="s.revenue" label="今日收入" :value="money(s.revenue.patientTotal)" :hint="`${s.revenue.receipts} 張收據・申報 ${s.revenue.nhiPoints.toLocaleString()} 點`" :icon="Coins" tone="emerald" />
     </section>
 
     <!-- 住院與藥品指標 -->

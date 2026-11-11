@@ -283,6 +283,8 @@ export interface Dispense {
   verifiedAt?: string
   dispensedBy?: string
   dispensedAt?: string
+  /** 發藥時怎麼確認身分：病人說出生日（birth），或他人代領（proxy，記代領人與關係） */
+  pickupCheck?: { method: 'birth' | 'proxy'; proxyName?: string; relation?: string }
   createdAt: string
 }
 

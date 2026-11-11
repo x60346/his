@@ -4,7 +4,7 @@
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs } from '@/components/ui'
+import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
 import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
@@ -72,9 +72,21 @@ const give = useAction(pharmacyApi.dispense, { success: (x) => `領藥號 ${x.pi
 
 /** 下一張待處理的單：發藥後自動帶到下一位，減少點擊 */
 const nextPending = computed(() => (all.value ?? []).find((x) => x.status !== 'dispensed' && x.id !== selectedId.value))
-async function onDispense() {
+// ---------- 發藥前確認身分：請病人說出出生月日，或登記代領人（比對在服務層） ----------
+const pickupOpen = ref(false)
+const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '' })
+function onDispense() {
   if (!d.value) return
-  if (await give.run(d.value.id)) {
+  give.fieldErrors.value = {}
+  pickup.value = { proxy: false, birthMMDD: '', proxyName: '', relation: '' }
+  pickupOpen.value = true
+}
+async function confirmPickup() {
+  if (!d.value) return
+  const p = pickup.value
+  const check = p.proxy ? { proxy: true, proxyName: p.proxyName, relation: p.relation } : { birthMMDD: p.birthMMDD.trim() }
+  if (await give.run(d.value.id, check)) {
+    pickupOpen.value = false
     // 自動帶到下一張；分頁由上面的 watch 跟著那張單的狀態切換
     if (nextPending.value) selectedId.value = nextPending.value.id
   }
@@ -206,6 +218,31 @@ const print = () => window.print()
       :usable="restockItem?.stock"
       :suggested-qty="restockItem ? restockItem.qty - restockItem.stock + 500 : undefined"
     />
+
+    <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
+      <div v-if="d" class="space-y-3 text-sm">
+        <div class="rounded-md bg-slate-50 px-3 py-2">
+          <span class="text-base font-semibold text-slate-800">{{ d.patientName }}</span>
+          <span class="ml-2 text-slate-500">{{ d.gender === 'M' ? '男' : '女' }}・{{ d.age }} 歲・領藥號 {{ d.pickupNo }}</span>
+        </div>
+        <!-- 「他人代領」放在輸入欄下方：對話框打開時游標落在第一個欄位，多數情況是本人，直接打 4 碼按 Enter -->
+        <template v-if="!pickup.proxy">
+          <p class="text-slate-600">請病人說出<b>姓名與出生月日</b>，輸入病人說的月日：</p>
+          <UInput v-model="pickup.birthMMDD" label="出生月日（4 碼）" placeholder="例：0314" inputmode="numeric" maxlength="4" required :error="give.fieldErrors.value.birthMMDD" />
+        </template>
+        <template v-else>
+          <div class="grid grid-cols-2 gap-3">
+            <UInput v-model="pickup.proxyName" label="代領人姓名" required :error="give.fieldErrors.value.proxyName" />
+            <UInput v-model="pickup.relation" label="與病人關係" placeholder="例：配偶、子女" required :error="give.fieldErrors.value.relation" />
+          </div>
+        </template>
+        <UCheckbox v-model="pickup.proxy" label="他人代領（改為登記代領人）" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="pickupOpen = false">取消</UButton>
+        <UButton type="submit" variant="success" :icon="CheckCheck" :loading="give.pending.value">確認發藥</UButton>
+      </template>
+    </UDialog>
 
     <UDialog v-model="bagOpen" title="藥袋預覽" size="lg">
       <DrugBagLabels v-if="d" :d="d" />

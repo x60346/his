@@ -119,7 +119,27 @@ try {
   const stockBefore = dbm.db.drugs.find((d) => d.id === 'M001').stock
   await expectError(() => api.pharmacyApi.dispense(dp.id), '未核對就發藥')
   await api.pharmacyApi.verifyDispense(dp.id)
-  await api.pharmacyApi.dispense(dp.id)
+  // U23：發藥前要確認身分——病人說出出生月日由服務層比對，或登記代領人
+  {
+    const birth = patient.birthDate.slice(5).replace('-', '')
+    const wrong = birth === '0101' ? '0102' : '0101'
+    try {
+      await api.pharmacyApi.dispense(dp.id)
+      ok(false, '沒有確認身分應被擋下')
+    } catch (e) {
+      ok(e.field === 'birthMMDD', `沒輸入生日就發藥 → 「${e.message}」`)
+    }
+    await expectError(() => api.pharmacyApi.dispense(dp.id, { birthMMDD: wrong }), '生日不符就發藥')
+    try {
+      await api.pharmacyApi.dispense(dp.id, { proxy: true })
+      ok(false, '代領沒填資料應被擋下')
+    } catch (e) {
+      ok(Object.keys(e.fields ?? {}).sort().join() === 'proxyName,relation', '代領：姓名與關係一次標出')
+    }
+    ok(dbm.db.dispenses.find((d) => d.id === dp.id).status === 'verified' && dbm.db.drugs.find((d) => d.id === 'M001').stock === stockBefore, '身分沒確認前，調劑單仍是已核對、沒扣庫存')
+    await api.pharmacyApi.dispense(dp.id, { birthMMDD: birth })
+    ok(dbm.db.dispenses.find((d) => d.id === dp.id).pickupCheck?.method === 'birth' && dbm.db.auditLogs.find((l) => l.action === '發藥')?.detail.includes('核對生日'), '生日相符才發藥，記下確認方式並寫入稽核')
+  }
   ok(dbm.db.drugs.find((d) => d.id === 'M001').stock === stockBefore - 9, `發藥扣庫存 ${stockBefore} → ${stockBefore - 9}`)
   const lastTxn = dbm.db.stockTxns.filter((t) => t.drugId === 'M001').at(-1)
   ok(lastTxn.type === 'dispense' && lastTxn.qty === -9 && lastTxn.ref === `領藥號 ${dp.pickupNo}` && lastTxn.balance === stockBefore - 9, `發藥寫入異動帳（${lastTxn.ref}，${lastTxn.qty}，結存 ${lastTxn.balance}）`)
@@ -1203,6 +1223,16 @@ try {
   }
 
   console.log('\n[首頁]')
+  // U27：今日收入只給掛號批價與管理員；其他角色連資料都不送
+  {
+    const seen = {}
+    for (const u of ['clerk01', 'admin', 'dr01', 'nurse01', 'ph01']) {
+      await as(u)
+      seen[u] = (await api.dashboardApi.getDashboard()).revenue !== undefined
+    }
+    ok(seen.clerk01 && seen.admin && !seen.dr01 && !seen.nurse01 && !seen.ph01, `首頁今日收入：掛號批價、管理員看得到；醫師、護理師、藥師拿不到（${JSON.stringify(seen)}）`)
+    await as('clerk01')
+  }
   const dash = await api.dashboardApi.getDashboard()
   console.log(`    今日掛號 ${dash.opd.total}、候診 ${dash.opd.waiting}、待批價 ${dash.opd.toCharge}、待領藥 ${dash.opd.toDispense}；收入 ${dash.revenue.patientTotal} 元；住院 ${dash.ipd.admitted} 人、空床 ${dash.ipd.emptyBeds}`)
   ok(dash.trend.length === 7, '近 7 日趨勢資料')

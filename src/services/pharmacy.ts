@@ -4,7 +4,7 @@
 import type { Dispense, DispenseStatus, Drug } from '@/types'
 import { db } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './inventory'
@@ -123,11 +123,35 @@ export function verifyDispense(id: string): Promise<DispenseView> {
 }
 
 /** 發藥：扣庫存 → 調劑單 dispensed → 掛號 dispensed（整筆交易，任一藥不足就全部不扣） */
-export function dispense(id: string): Promise<DispenseView> {
+/**
+ * 發藥前的身分確認：請病人說出出生月日（4 碼，例 0314），藥師輸入，由這裡比對；或他人代領（記代領人姓名與關係）。
+ * 「發錯人」是藥局最主要的風險之一。生日在病人資料列上本來就看得到（藥師要拿來比對），
+ * 這一步的用意是逼藥師真的開口問——以前按「發藥」就交出去了，中間沒有任何核對。
+ */
+export interface PickupCheckInput {
+  proxy?: boolean
+  birthMMDD?: string
+  proxyName?: string
+  relation?: string
+}
+
+export function dispense(id: string, check: PickupCheckInput = {}): Promise<DispenseView> {
   return mutate(() => {
     const ph = requireUser('pharmacist')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status !== 'verified') fail('請先完成核對再發藥', 'CONFLICT')
+    const p = must(find.patient(d.patientId), '病患')
+    const v = fieldErrors()
+    if (check.proxy) {
+      if (!check.proxyName?.trim()) v.add('proxyName', '請輸入代領人姓名')
+      if (!check.relation?.trim()) v.add('relation', '請輸入代領人與病人的關係')
+    } else if (!/^\d{4}$/.test(check.birthMMDD ?? '')) {
+      v.add('birthMMDD', '請輸入病人說出的出生月日（4 碼，例 0314）')
+    } else if (check.birthMMDD !== p.birthDate.slice(5).replace('-', '')) {
+      v.add('birthMMDD', '與病人資料不符，請再確認領藥的是不是本人')
+    }
+    v.done()
+    d.pickupCheck = check.proxy ? { method: 'proxy', proxyName: check.proxyName!.trim(), relation: check.relation!.trim() } : { method: 'birth' }
     const view = dispenseView(d)
     assertStock(view)
     // 每個品項寫一筆發藥異動；任何一項失敗，mutate 會整筆回滾（不會只扣一半）
@@ -136,7 +160,7 @@ export function dispense(id: string): Promise<DispenseView> {
     d.dispensedBy = ph.id
     d.dispensedAt = now()
     must(find.visit(d.visitId), '掛號紀錄').status = 'dispensed'
-    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}`)
+    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）`)
     return dispenseView(d)
   })
 }
