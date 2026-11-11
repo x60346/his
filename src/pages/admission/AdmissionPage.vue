@@ -198,6 +198,7 @@ const reserveOpen = ref(false)
               <div class="flex gap-2"><dt class="w-16 text-slate-500">診斷</dt><dd>{{ occupied.diagnosis }}</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">主治</dt><dd>{{ occupied.deptName }}・{{ occupied.doctorName }}</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">入院</dt><dd class="tabular">{{ occupied.admittedAt }}（第 {{ occupied.days }} 天）</dd></div>
+              <div class="flex gap-2"><dt class="w-16 text-slate-500">出院</dt><dd :class="occupied.dischargeReady ? 'font-medium text-emerald-700' : 'text-slate-500'">{{ occupied.dischargeReady ? `醫師已准予出院（${occupied.dischargeSummary?.dischargeType}）` : '醫師尚未准予出院' }}</dd></div>
               <div v-if="occupied.allergies.length" class="flex gap-2"><dt class="w-16 text-slate-500">過敏</dt><dd class="font-medium text-red-600">{{ occupied.allergies.join('、') }}</dd></div>
             </dl>
             <div class="mt-4 flex gap-2">

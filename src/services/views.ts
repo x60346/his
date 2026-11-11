@@ -120,6 +120,10 @@ export interface AdmissionView extends Admission, PatientBrief {
   bed?: Bed
   /** 住院天數（報到當天算第 1 天） */
   days: number
+  /** 醫師已准予出院（病摘已簽署），等住院中心辦理 */
+  dischargeReady: boolean
+  /** 病摘撰寫醫師 */
+  summaryDoctorName?: string
 }
 
 export function admissionView(a: Admission): AdmissionView {
@@ -131,6 +135,8 @@ export function admissionView(a: Admission): AdmissionView {
     deptName: nameOf.dept(a.deptId),
     bed: a.bedId ? find.bed(a.bedId) : undefined,
     days: a.admittedAt ? diffDays(a.admittedAt, end) + 1 : 0,
+    dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
+    summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
   }
 }
 

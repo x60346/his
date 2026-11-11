@@ -1,11 +1,13 @@
 <script setup lang="ts">
-// 住院醫囑：醫師的住院病人 → 長期／臨時醫囑、病程紀錄。
+// 住院醫囑：醫師的住院病人 → 長期／臨時醫囑、病程紀錄、出院病摘。
+// 出院由醫師決定：寫好出院病摘並簽署＝准予出院，住院中心才能辦理手續。
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { Plus, Square } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
+import { LogOut, Plus, Square } from 'lucide-vue-next'
+import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
 import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
@@ -70,8 +72,47 @@ const vitalFields: { label: string; keys: VitalKey[] }[] = [
   { label: '疼痛', keys: ['pain'] },
 ]
 
-// ---------- 病程紀錄 ----------
+// ---------- 分頁 ----------
 const tab = ref('orders')
+const ds = computed(() => adm.value?.dischargeSummary)
+const tabs = computed(() => [
+  { key: 'orders', label: '醫囑', count: orders.value?.filter((o) => o.status === 'active').length },
+  { key: 'notes', label: '病程紀錄', count: notes.value?.length },
+  { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
+])
+
+// ---------- 出院病摘 ----------
+// 已簽署（准予出院）就唯讀；要改先「取消准予出院」，內容會留成草稿
+const dischargeTypes = masterApi.staticCodes.dischargeTypes
+const dsForm = reactive({ diagnosis: '', course: '', condition: '', followUp: '', dischargeType: '' as string | number })
+// 換病人、或病摘存檔／簽署／取消後，表單換成資料庫裡的內容。用字串當 key：adm 每次重新查詢都是新物件，直接看物件會一直重設、把正在打的字洗掉
+watch(
+  () => `${adm.value?.id}|${ds.value?.writtenAt}|${ds.value?.signedAt}`,
+  () => {
+    const d = ds.value
+    Object.assign(dsForm, d
+      ? { diagnosis: d.diagnosis, course: d.course, condition: d.condition, followUp: d.followUp, dischargeType: d.dischargeType }
+      : { diagnosis: adm.value?.diagnosis ?? '', course: '', condition: '', followUp: '', dischargeType: '' })
+  },
+  { immediate: true },
+)
+const saveDs = useAction(ipdApi.saveDischargeSummary, { success: (d) => (d.signedAt ? '已簽署出院病摘，准予出院；住院中心可辦理手續' : '已儲存病摘草稿') })
+function onSaveDs(sign: boolean) {
+  if (!adm.value) return
+  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType) }, sign)
+}
+const cancelOpen = ref(false)
+const cancelReason = ref('')
+const cancelDs = useAction(ipdApi.cancelDischargeOrder, { success: '已取消准予出院，病摘改回草稿' })
+async function onCancelDs() {
+  if (adm.value && (await cancelDs.run(adm.value.id, cancelReason.value))) cancelOpen.value = false
+}
+function openCancel() {
+  cancelReason.value = ''
+  cancelOpen.value = true
+}
+
+// ---------- 病程紀錄 ----------
 const { data: notes } = useQuery(async () => (admissionId.value ? ipdApi.listProgressNotes(admissionId.value) : []), [admissionId])
 const note = reactive({ subjective: '', objective: '', assessment: '', plan: '' })
 const addNote = useAction(ipdApi.addProgressNote, { success: '已新增病程紀錄' })
@@ -99,7 +140,8 @@ async function submitNote() {
               <div class="flex items-center gap-2">
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
                 <span class="font-medium text-slate-800">{{ a.patientName }}</span>
-                <span class="ml-auto text-xs text-slate-500">第 {{ a.days }} 天</span>
+                <UBadge v-if="a.dischargeReady" tone="green" class="ml-auto">准出院</UBadge>
+                <span :class="['text-xs text-slate-500', !a.dischargeReady && 'ml-auto']">第 {{ a.days }} 天</span>
               </div>
               <div class="mt-0.5 truncate text-xs text-slate-500">{{ a.diagnosis }}<template v-if="isAdmin">・{{ a.doctorName }}</template></div>
             </button>
@@ -130,7 +172,7 @@ async function submitNote() {
 
       <UCard :padded="false">
         <div class="flex items-center px-4 pt-1">
-          <UTabs v-model="tab" :tabs="[{ key: 'orders', label: '醫囑', count: orders?.filter((o) => o.status === 'active').length }, { key: 'notes', label: '病程紀錄', count: notes?.length }]" />
+          <UTabs v-model="tab" :tabs="tabs" />
           <UButton v-if="tab === 'orders'" class="ml-auto" size="sm" :icon="Plus" @click="orderOpen = true">新增醫囑</UButton>
         </div>
 
@@ -163,6 +205,34 @@ async function submitNote() {
           </UQueryState>
         </div>
 
+        <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
+        <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
+          <template v-if="ds?.signedAt">
+            <div class="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              <LogOut class="h-4 w-4" />已准予出院，等住院中心辦理手續。
+              <UButton class="ml-auto" size="sm" variant="secondary" @click="openCancel">取消准予出院</UButton>
+            </div>
+            <DischargeSummaryView :summary="ds" :doctor-name="adm.summaryDoctorName" />
+          </template>
+          <template v-else>
+            <p class="text-xs text-slate-500">
+              寫好並「簽署並准予出院」後，住院中心才能辦理出院（轉歸以這裡為準）。可先存草稿。
+              <template v-if="ds">上次儲存：{{ ds.writtenAt }}・{{ adm.summaryDoctorName }}</template>
+            </p>
+            <div class="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-3">
+              <UTextarea v-model="dsForm.diagnosis" label="出院診斷" :rows="2" :error="saveDs.fieldErrors.value.diagnosis" />
+              <USelect v-model="dsForm.dischargeType" label="出院轉歸" placeholder="請選擇" :options="dischargeTypes" :error="saveDs.fieldErrors.value.dischargeType" />
+            </div>
+            <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" />
+            <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" />
+            <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" />
+            <div class="flex justify-end gap-2">
+              <UButton variant="secondary" :loading="saveDs.pending.value" @click="onSaveDs(false)">儲存草稿</UButton>
+              <UButton :icon="LogOut" :loading="saveDs.pending.value" @click="onSaveDs(true)">簽署並准予出院</UButton>
+            </div>
+          </template>
+        </div>
+
         <!-- 病程紀錄 -->
         <div v-else class="space-y-4 p-4">
           <div class="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -188,5 +258,15 @@ async function submitNote() {
     </div>
 
     <OrderDialog v-model="orderOpen" :admission="adm" />
+    <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">
+      <div class="space-y-3 text-sm">
+        <p class="text-slate-600">取消後住院中心不能辦理出院，病摘內容保留為草稿，可修改後再簽署。</p>
+        <UTextarea v-model="cancelReason" label="取消原因" required :rows="2" placeholder="例：病人再度發燒，需再觀察" :error="cancelDs.fieldErrors.value.reason" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="cancelOpen = false">返回</UButton>
+        <UButton variant="danger" :disabled="!cancelReason.trim()" :loading="cancelDs.pending.value" @click="onCancelDs">取消准予出院</UButton>
+      </template>
+    </UDialog>
   </div>
 </template>

@@ -865,15 +865,57 @@ try {
     if (pend[0]) pend[0].scheduledAt = addMinutes(t0, -90)
     if (pend[1]) pend[1].scheduledAt = addMinutes(t0, 120)
     const overdueId = pend[0]?.id
+    // 出院病摘由醫師撰寫；簽署＝准予出院。沒簽署，住院中心不能辦
+    {
+      const I = api.ipdApi
+      const blank = { diagnosis: '', course: '', condition: '', followUp: '', dischargeType: '' }
+      const full = { diagnosis: 'J18.9 肺炎', course: '抗生素治療後退燒', condition: '生命徵象穩定', followUp: '一週後門診', dischargeType: '改善出院' }
+      try {
+        await I.saveDischargeSummary(adm.id, { ...blank, diagnosis: 'J18.9' }, true)
+        ok(false, '病摘空白簽署應被擋下')
+      } catch (e) {
+        ok(Object.keys(e.fields ?? {}).sort().join() === 'condition,course,dischargeType,followUp', '簽署時空白欄位一次標出（住院經過、出院時狀況、追蹤、轉歸）')
+      }
+      await I.saveDischargeSummary(adm.id, { ...blank, diagnosis: 'J18.9 肺炎', course: '寫到一半' }, false)
+      const draft = dbm.db.admissions.find((a) => a.id === adm.id).dischargeSummary
+      ok(draft?.course === '寫到一半' && !draft.signedAt, '可存草稿（不必填齊、未簽署）')
+      await as('clerk01')
+      try {
+        await api.admissionApi.discharge(adm.id, { confirmUnfinished: true })
+        ok(false, '醫師沒准予出院應被擋下')
+      } catch (e) {
+        ok(e.message.includes('醫師尚未准予出院') && dbm.db.admissions.find((a) => a.id === adm.id).status === 'admitted', `病摘只是草稿，住院中心辦出院 → 「${e.message}」`)
+      }
+      await expectError(() => I.saveDischargeSummary(adm.id, full, true), '掛號批價人員寫出院病摘')
+      await as('nurse01')
+      await expectError(() => I.saveDischargeSummary(adm.id, full, true), '護理師寫出院病摘')
+      await as('dr02')
+      await I.saveDischargeSummary(adm.id, full, true)
+      ok((await api.admissionApi.getAdmission(adm.id)).dischargeReady && dbm.db.auditLogs[0].action === '准予出院', '醫師簽署＝准予出院（dischargeReady），寫入稽核')
+      await expectError(() => I.saveDischargeSummary(adm.id, { ...full, course: '偷改' }, false), '已准予出院後直接改病摘')
+      await expectError(() => api.admissionApi.discharge(adm.id, { confirmUnfinished: true }), '醫師自己辦出院手續（手續由住院中心、護理師辦）')
+      try {
+        await I.cancelDischargeOrder(adm.id, ' ')
+        ok(false, '取消沒寫原因應被擋下')
+      } catch (e) {
+        ok(e.field === 'reason', '取消准予出院沒寫原因 → 標在「取消原因」')
+      }
+      await I.cancelDischargeOrder(adm.id, '再度發燒')
+      const back = dbm.db.admissions.find((a) => a.id === adm.id).dischargeSummary
+      ok(!back.signedAt && back.course === full.course && !(await api.admissionApi.getAdmission(adm.id)).dischargeReady, '取消准予出院：簽署取消、內容留著當草稿')
+      await I.saveDischargeSummary(adm.id, { ...full, dischargeType: '治癒出院' }, true)
+      await as('clerk01')
+    }
     const chk = await api.admissionApi.dischargeCheck(adm.id)
     ok(chk.overdueMar.length >= 1 && chk.pendingStat.some((o) => o.content.includes('CBC')) && chk.laterMar >= 1, `出院前檢查：逾時未給藥 ${chk.overdueMar.length}、未執行臨時醫囑 ${chk.pendingStat.length}、之後的排程 ${chk.laterMar}`)
     try {
-      await api.admissionApi.discharge(adm.id, { dischargeType: '改善出院', dischargeSummary: '症狀改善' })
+      await api.admissionApi.discharge(adm.id, {})
       ok(false, '有未執行項目卻沒確認，應被擋下')
     } catch (e) {
       ok(e.field === 'confirmUnfinished' && dbm.db.admissions.find((a) => a.id === adm.id).status === 'admitted', `有未執行項目、沒確認就出院 → 「${e.message}」`)
     }
-    await api.admissionApi.discharge(adm.id, { dischargeType: '改善出院', dischargeSummary: '症狀改善', confirmUnfinished: true })
+    await api.admissionApi.discharge(adm.id, { confirmUnfinished: true })
+    ok(dbm.db.admissions.find((a) => a.id === adm.id).dischargeType === '治癒出院', '出院轉歸取自醫師簽署的病摘（重新簽署改成治癒出院）')
     const kept = dbm.db.mar.find((m) => m.id === overdueId)
     ok(kept?.status === 'held' && kept.note === '出院時未給藥', '逾時沒給的藥保留在紀錄上，標為「暫停：出院時未給藥」（不刪除）')
     ok(dbm.db.ipdOrders.find((o) => o.id === lab.id).status === 'stopped' && !('confirmUnfinished' in dbm.db.admissions.find((a) => a.id === adm.id)) && dbm.db.auditLogs[0].detail.includes('未執行'), '未執行的臨時醫囑停止；確認旗標不寫進住院紀錄；稽核記下未執行數量')
@@ -881,6 +923,15 @@ try {
   ok(dbm.db.beds.find((b) => b.id === bed.id).status === 'cleaning', '出院 → 病床清潔中')
   ok(dbm.db.ipdOrders.filter((o) => o.admissionId === adm.id).every((o) => o.status !== 'active'), '出院 → 所有醫囑停止')
   ok(!dbm.db.mar.some((m) => m.admissionId === adm.id && m.status === 'pending'), '出院 → 還沒到時間的給藥排程清除')
+
+  {
+    // 種子：已出院的都有醫師簽署的病摘，簽署不晚於出院；有一位住院中的已准予出院（展示住院中心辦理）
+    const dis = dbm.db.admissions.filter((a) => a.status === 'discharged')
+    const bad = dis.filter((a) => !a.dischargeSummary?.signedAt || a.dischargeSummary.signedAt > a.dischargedAt || a.dischargeSummary.dischargeType !== a.dischargeType)
+    ok(dis.length > 0 && bad.length === 0, `已出院 ${dis.length} 筆都有醫師簽署的病摘，簽署 ≤ 出院、轉歸一致`)
+    const ready = (await api.admissionApi.listAdmissions({ status: ['admitted'] })).filter((a) => a.dischargeReady)
+    ok(ready.length >= 1 && ready.every((a) => a.dischargeSummary.signedAt <= nowStr()), `住院中已准予出院 ${ready.length} 位（簽署時間不在未來）`)
+  }
 
   // 不變式：資料庫裡不可以有「未來發生的事」（排程類欄位除外）
   const nowS = (await load('/src/utils/date.ts')).now()

@@ -46,7 +46,11 @@ const days = computed(() => (props.bed.admission?.admittedAt ? diffDays(props.be
     <template v-if="bed.status === 'occupied' && bed.patient">
       <div class="mt-1 flex items-center gap-1 text-sm font-semibold"><User class="h-3.5 w-3.5" />{{ bed.patient.patientName }}</div>
       <div class="opacity-80">{{ bed.patient.gender === 'M' ? '男' : '女' }} {{ ageText(bed.patient.birthDate) }}・第 {{ days }} 天</div>
-      <div class="truncate opacity-70">{{ doctorName }}</div>
+      <div class="flex items-center gap-1 truncate opacity-70">
+        <span class="truncate">{{ doctorName }}</span>
+        <!-- 醫師已簽署出院病摘：住院中心一眼看到誰可以辦出院 -->
+        <span v-if="bed.admission?.dischargeSummary?.signedAt" class="ml-auto shrink-0 rounded bg-emerald-600 px-1 text-[10px] font-medium text-white opacity-100">准出院</span>
+      </div>
     </template>
     <div v-else class="mt-auto flex items-center gap-1 font-medium">
       <Sparkles v-if="bed.status === 'cleaning'" class="h-3.5 w-3.5" />

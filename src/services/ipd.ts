@@ -1,9 +1,9 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
-import type { IpdOrder, MarRecord, ProgressNote } from '@/types'
+import type { DischargeSummary, IpdOrder, MarRecord, ProgressNote } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
 import { find, nameOf, usable } from './views'
@@ -214,5 +214,55 @@ export function addProgressNote(input: Pick<ProgressNote, 'admissionId' | 'subje
     db.progressNotes.push(n)
     audit('病程紀錄', a.admitNo)
     return n
+  })
+}
+
+// ---------- 出院病摘（醫師） ----------
+export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType'>
+
+/** 簽署前的必填檢查：一次列出所有空白欄位 */
+export function dischargeSummaryProblems(input: DischargeSummaryInput): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!input.diagnosis.trim()) e.diagnosis = '請填寫出院診斷'
+  if (!input.course.trim()) e.course = '請填寫住院經過'
+  if (!input.condition.trim()) e.condition = '請填寫出院時狀況'
+  if (!input.followUp.trim()) e.followUp = '請填寫出院後追蹤'
+  if (!input.dischargeType) e.dischargeType = '請選擇出院轉歸'
+  return e
+}
+
+/**
+ * 儲存出院病摘。sign = true：簽署並准予出院（必填欄位要齊）；false：存草稿。
+ * 已簽署的不能直接改——要先「取消准予出院」，避免住院中心正在辦出院時內容被換掉。
+ */
+export function saveDischargeSummary(admissionId: string, input: DischargeSummaryInput, sign: boolean): Promise<DischargeSummary> {
+  return mutate(() => {
+    const user = requireUser('doctor')
+    const a = activeAdmission(admissionId)
+    if (a.dischargeSummary?.signedAt) fail('已准予出院，要修改病摘請先取消准予出院', 'CONFLICT')
+    if (sign) failFields(dischargeSummaryProblems(input))
+    else if (![input.diagnosis, input.course, input.condition, input.followUp].some((x) => x.trim())) fail('病摘是空白的，不需要儲存')
+    const t = now()
+    const trim = (x: string) => x.trim()
+    a.dischargeSummary = {
+      diagnosis: trim(input.diagnosis), course: trim(input.course), condition: trim(input.condition), followUp: trim(input.followUp),
+      dischargeType: input.dischargeType, doctorId: user.doctorId ?? a.doctorId, writtenAt: t, ...(sign ? { signedAt: t } : {}),
+    }
+    audit(sign ? '准予出院' : '出院病摘草稿', `${a.admitNo} ${find.patient(a.patientId)?.name}${sign ? `（${input.dischargeType}）` : ''}`)
+    return a.dischargeSummary
+  })
+}
+
+/** 取消准予出院（例：病人又發燒）：簽署取消，內容保留成草稿 */
+export function cancelDischargeOrder(admissionId: string, reason: string): Promise<DischargeSummary> {
+  return mutate(() => {
+    requireUser('doctor')
+    const a = activeAdmission(admissionId)
+    const ds = a.dischargeSummary
+    if (!ds?.signedAt) fail('病人尚未准予出院', 'CONFLICT')
+    if (!reason.trim()) failField('reason', '請輸入取消原因')
+    delete ds!.signedAt
+    audit('取消准予出院', `${a.admitNo} ${find.patient(a.patientId)?.name}：${reason.trim()}`)
+    return ds!
   })
 }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// 病患資料：左邊搜尋清單，右邊基本資料、就醫紀錄、預防保健資格。
+// 病患資料：左邊搜尋清單，右邊基本資料、就醫紀錄、住院紀錄（含出院病摘）、預防保健資格。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
 import { Pencil, UserPlus } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UInput, UStatusBadge, UTable, UTabs, type Column } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
-import { bookingApi, patientApi, preventApi, type VisitView } from '@/services'
+import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
+import { admissionApi, bookingApi, patientApi, preventApi, type VisitView } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { ageText, periodLabel } from '@/utils/date'
@@ -27,6 +28,10 @@ const tab = ref('visits')
 const { data: visits } = useQuery(async () => (selectedId.value ? bookingApi.listVisits({ patientId: selectedId.value }) : []), [selectedId])
 const { data: eligibility } = useQuery(async () => (selectedId.value ? preventApi.eligibilityFor(selectedId.value) : []), [selectedId])
 const visitsDesc = computed(() => [...(visits.value ?? [])].reverse())
+// 住院紀錄（取消的預約不列）：出院病摘以前存了卻沒有地方看
+const { data: admissions } = useQuery(async () => (selectedId.value ? admissionApi.listAdmissions({ patientId: selectedId.value, status: ['reserved', 'admitted', 'discharged'] }) : []), [selectedId])
+const admissionStatusLabel = { reserved: '待報到', admitted: '住院中', discharged: '已出院', cancelled: '已取消' } as const
+const openSummary = ref<string>()
 
 const listColumns: Column<Patient>[] = [
   { key: 'chartNo', label: '病歷號', width: '80px' },
@@ -130,11 +135,30 @@ const fields = computed(() => {
 
       <UCard :padded="false">
         <div class="px-4 pt-2">
-          <UTabs v-model="tab" :tabs="[{ key: 'visits', label: '就醫紀錄', count: visits?.length }, { key: 'prevent', label: '預防保健資格' }]" />
+          <UTabs v-model="tab" :tabs="[{ key: 'visits', label: '就醫紀錄', count: visits?.length }, { key: 'admissions', label: '住院紀錄', count: admissions?.length }, { key: 'prevent', label: '預防保健資格' }]" />
         </div>
         <UTable v-if="tab === 'visits'" :columns="visitColumns" :rows="visitsDesc" :row-key="(v) => v.id" dense empty-text="沒有就醫紀錄">
           <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
         </UTable>
+        <template v-else-if="tab === 'admissions'">
+          <p v-if="!admissions?.length" class="px-4 py-8 text-center text-sm text-slate-400">沒有住院紀錄</p>
+          <ul v-else class="divide-y divide-slate-100">
+            <li v-for="a in admissions" :key="a.id" class="px-4 py-2.5 text-sm">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <UBadge :tone="a.status === 'admitted' ? 'blue' : a.status === 'reserved' ? 'yellow' : 'gray'">{{ admissionStatusLabel[a.status] }}</UBadge>
+                <span class="tabular text-slate-600">{{ (a.admittedAt ?? a.expectedDate).slice(0, 10) }}<template v-if="a.dischargedAt"> ～ {{ a.dischargedAt.slice(0, 10) }}（{{ a.days }} 天）</template></span>
+                <span class="text-slate-800">{{ a.diagnosis }}</span>
+                <span class="text-xs text-slate-500">{{ a.deptName }}・{{ a.doctorName }}</span>
+                <button v-if="a.dischargeSummary" type="button" class="ml-auto text-xs text-brand-600 hover:underline" @click="openSummary = openSummary === a.id ? undefined : a.id">
+                  {{ openSummary === a.id ? '收起病摘' : a.dischargeSummary.signedAt ? '出院病摘' : '出院病摘（草稿）' }}
+                </button>
+              </div>
+              <div v-if="openSummary === a.id && a.dischargeSummary" class="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <DischargeSummaryView :summary="a.dischargeSummary" :doctor-name="a.summaryDoctorName" />
+              </div>
+            </li>
+          </ul>
+        </template>
         <ul v-else class="divide-y divide-slate-100">
           <li v-for="e in eligibility" :key="e.itemCode" class="flex items-center gap-3 px-4 py-2.5 text-sm">
             <UBadge :tone="e.eligible ? 'green' : 'gray'">{{ e.eligible ? '符合' : '不符合' }}</UBadge>

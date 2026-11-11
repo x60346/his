@@ -403,14 +403,37 @@ export interface Admission {
   expectedDate: string
   admittedAt?: string
   dischargedAt?: string
-  dischargeSummary?: string
-  /** 出院轉歸：治癒出院、轉院、自動出院… */
+  /**
+   * 出院病摘：由醫師撰寫。簽署（signedAt）＝准予出院，住院中心才能辦理出院；
+   * 出院前醫師可取消（signedAt 清掉，內容留著當草稿）。
+   */
+  dischargeSummary?: DischargeSummary
+  /** 出院轉歸：辦理出院時從醫師簽署的病摘帶入 */
   dischargeType?: string
   /**
    * 主治醫師變更紀錄（只增不改）：醫師離職、休假交班時由住院中心變更。
    * 選用欄位：舊資料沒有它表示從未變更。已開立的醫囑不受影響——醫囑記的是「當時誰開的」。
    */
   attendingHistory?: { from: string; to: string; at: string; by: string; reason: string }[]
+}
+
+/** 出院病摘 */
+export interface DischargeSummary {
+  /** 出院診斷（預設帶入院診斷，醫師可改） */
+  diagnosis: string
+  /** 住院經過 */
+  course: string
+  /** 出院時狀況 */
+  condition: string
+  /** 出院後追蹤、注意事項 */
+  followUp: string
+  /** 出院轉歸：治癒出院、轉院、自動出院… */
+  dischargeType: string
+  /** 最後撰寫（儲存）的醫師 */
+  doctorId: string
+  writtenAt: string
+  /** 簽署時間＝准予出院；沒有就是草稿 */
+  signedAt?: string
 }
 
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'

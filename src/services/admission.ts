@@ -224,12 +224,14 @@ export function dischargeCheck(admissionId: string): Promise<DischargeCheck> {
  * 辦理出院。有逾時沒給的藥、沒執行的臨時醫囑時，必須確認（confirmUnfinished）才能出院——直接呼叫 API 也一樣。
  * 逾時沒給的藥改為「暫停：出院時未給藥」保留在紀錄上；還沒到時間的排程才刪除（那只是排程，不是紀錄）。
  */
-export function discharge(admissionId: string, input: { dischargeType: string; dischargeSummary: string; confirmUnfinished?: boolean }): Promise<AdmissionView> {
+export function discharge(admissionId: string, input: { confirmUnfinished?: boolean } = {}): Promise<AdmissionView> {
   return mutate(() => {
-    const u = requireUser('doctor', 'nurse', 'clerk')
+    // 醫師決定能不能出院（簽署出院病摘）；住院中心、護理師辦理手續
+    const u = requireUser('nurse', 'clerk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以辦理出院', 'CONFLICT')
-    if (!input.dischargeType) fail('請選擇出院轉歸')
+    const ds = a.dischargeSummary
+    if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
     const t = now()
     const check = dischargeCheckOf(a, t)
     const unfinished = check.overdueMar.length + check.pendingStat.length
@@ -246,9 +248,8 @@ export function discharge(admissionId: string, input: { dischargeType: string; d
     }
     db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
     releaseBed(a.bedId)
-    const { confirmUnfinished: _c, ...rest } = input
-    Object.assign(a, { status: 'discharged', dischargedAt: t, ...rest })
-    audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${input.dischargeType}）${unfinished ? `；未執行：逾時給藥 ${check.overdueMar.length}、臨時醫囑 ${check.pendingStat.length}` : ''}`)
+    Object.assign(a, { status: 'discharged', dischargedAt: t, dischargeType: ds!.dischargeType })
+    audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${ds!.dischargeType}）${unfinished ? `；未執行：逾時給藥 ${check.overdueMar.length}、臨時醫囑 ${check.pendingStat.length}` : ''}`)
     return admissionView(a)
   })
 }

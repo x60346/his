@@ -681,16 +681,37 @@ export function buildSeed(): Database {
     }
   })
 
+  // 醫師已准予出院、等住院中心辦理（泌尿道感染那位）：住院中心的床位圖與護理站會標「准出院」
+  {
+    const ready = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39.0'))
+    if (ready) {
+      const at = notFuture(`${T} 09:30`, 5)
+      ready.dischargeSummary = {
+        diagnosis: ready.diagnosis, dischargeType: '改善出院', doctorId: ready.doctorId, writtenAt: at, signedAt: at,
+        course: '入院後給予靜脈抗生素治療，第二天起退燒，尿液培養為大腸桿菌，對目前抗生素敏感。',
+        condition: '體溫正常 48 小時，解尿疼痛改善，進食正常，可自行下床活動。',
+        followUp: '口服抗生素再服用 5 天；一週後泌尿科門診追蹤尿液檢查。如再發燒或腰痛請立即回診。',
+      }
+    }
+  }
+
   // 已出院（歷史）
   for (let k = 0; k < 4; k++) {
     const pt = patients[int(0, 23)]
     const admitDate = addDays(T, -int(20, 90))
+    const dischargeDate = addDays(admitDate, int(3, 8))
     admissions.push({
       id: id('A'), admitNo: `I${admitDate.replace(/-/g, '').slice(2)}${String(next('admitNo')).padStart(3, '0')}`,
       patientId: pt.id, deptId: 'D02', doctorId: 'DR02', preferBedClass: '健保床', reason: '肺炎', diagnosis: 'J18.9 肺炎',
       status: 'discharged', reservedAt: `${admitDate} 09:00`, expectedDate: admitDate, admittedAt: `${admitDate} 14:00`,
-      dischargedAt: `${addDays(admitDate, int(3, 8))} 11:00`, dischargeType: '治癒出院',
-      dischargeSummary: '住院期間給予抗生素治療，症狀改善，生命徵象穩定，准予出院，一週後門診追蹤。',
+      dischargedAt: `${dischargeDate} 11:00`, dischargeType: '治癒出院',
+      // 出院病摘由主治醫師在出院當天早上簽署（簽署＝准予出院，住院中心才辦理）
+      dischargeSummary: {
+        diagnosis: 'J18.9 肺炎', dischargeType: '治癒出院', doctorId: 'DR02', writtenAt: `${dischargeDate} 09:00`, signedAt: `${dischargeDate} 09:00`,
+        course: '住院期間給予靜脈抗生素治療，第三天起退燒，胸部 X 光浸潤改善。',
+        condition: '生命徵象穩定，未再發燒，咳嗽減輕，血氧正常。',
+        followUp: '一週後胸腔內科門診追蹤，複查胸部 X 光。',
+      },
     })
   }
 

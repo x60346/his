@@ -122,6 +122,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
                     <UBadge v-if="p.unackedCount" tone="cyan">新醫囑 {{ p.unackedCount }}</UBadge>
+                    <UBadge v-if="p.dischargeReady" tone="green">准出院</UBadge>
                   </span>
                 </div>
                 <div class="mt-0.5 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天</div>
