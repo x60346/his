@@ -3,9 +3,9 @@
 // 草稿在頁面裡編輯；「暫存」才寫入，「完成看診」才做完整驗證並推進狀態。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { CheckCircle2, Lock, Megaphone, Pencil, Save, SkipForward } from 'lucide-vue-next'
+import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, SkipForward } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
 } from '@/components/ui'
@@ -140,11 +140,13 @@ const complete = useAction(async (opts: { confirmHighDose?: boolean } = {}) => {
   return r
 }, { success: (r) => (r.admission ? '完成看診，並已建立住院預約' : '完成看診，病人可前往批價') })
 
-async function onComplete() {
+/** 完成看診；回傳是否真的完成（過敏、劑量確認按取消，或服務層擋下，都算沒完成——「完成並叫下一位」就不會往下叫） */
+async function onComplete(): Promise<boolean> {
   // 本地先檢查，省一次往返；服務層仍會再驗證
   if (!draft.value.diagnoses.length) {
     tab.value = 'dx'
-    return ui.toast.warning('請至少輸入一個診斷')
+    ui.toast.warning('請至少輸入一個診斷')
+    return false
   }
   const w = warnings.value ?? []
   if (w.length) {
@@ -154,7 +156,7 @@ async function onComplete() {
       okText: '確認開立',
       danger: true,
     })
-    if (!ok) return
+    if (!ok) return false
   }
   // 劑量：不合理的直接擋（幾乎一定是打錯）；偏高的列出來請醫師確認一次
   const doses = draft.value.medications
@@ -164,7 +166,8 @@ async function onComplete() {
   const absurd = doses.filter((x) => x.level === 'absurd')
   if (absurd.length) {
     tab.value = 'orders'
-    return ui.toast.warning(`${absurd.map((x) => `${x.d.name}：${doseNote(x.d, x.m.dose)}`).join('；')}，請確認是否打錯`)
+    ui.toast.warning(`${absurd.map((x) => `${x.d.name}：${doseNote(x.d, x.m.dose)}`).join('；')}，請確認是否打錯`)
+    return false
   }
   const high = doses.filter((x) => x.level === 'high')
   if (high.length) {
@@ -174,10 +177,37 @@ async function onComplete() {
       okText: '劑量無誤，完成看診',
       danger: true,
     })
-    if (!ok) return
+    if (!ok) return false
   }
-  await complete.run({ confirmHighDose: high.length > 0 })
+  return (await complete.run({ confirmHighDose: high.length > 0 })) !== undefined
 }
+
+/**
+ * 完成並叫下一位：一次點擊做完「完成 → 選下一位 → 叫號」（以前要點三下）。
+ * 過敏、劑量的確認照樣會跳出來；沒有真的完成就停在原病人，不會往下叫。下一位依 nextInQueue（過號的人排後面）。
+ */
+async function onCompleteAndNext() {
+  if (complete.pending.value || start.pending.value) return
+  if (!(await onComplete())) return
+  await callNext()
+}
+/** 選下一位並叫號（已完成看診的畫面上那顆按鈕也用它） */
+async function callNext() {
+  const n = nextWaiting.value
+  if (!n) return
+  await selectVisit(n)
+  if (visitId.value === n.id) await start.run(n.id)
+}
+
+// Ctrl+Enter＝完成並叫下一位：只在「看診中、可編輯」時有效，其他時候按了不會有任何動作
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && editable.value && visit.value?.status === 'in-consult') {
+    e.preventDefault()
+    onCompleteAndNext()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 // 下一位：先叫沒過號的；過號的人回來時直接在清單上點他（規則在 nextInQueue）
 const nextWaiting = computed(() => nextInQueue(queue.value ?? [], visitId.value))
@@ -275,7 +305,7 @@ const tabs = computed(() => [
           <UButton size="sm" variant="secondary" :icon="Pencil" :loading="start.pending.value" @click="callPatient">修改醫囑</UButton>
         </template>
         <template v-else>此次就醫已批價，病歷已鎖定；如需修改，請批價櫃台先作廢收據。</template>
-        <UButton v-if="nextWaiting" size="sm" class="ml-auto" @click="goNext">下一位：第 {{ nextWaiting.seqNo }} 號 {{ nextWaiting.patientName }}</UButton>
+        <UButton v-if="nextWaiting" size="sm" class="ml-auto" :icon="Megaphone" :loading="start.pending.value" @click="callNext">叫號：第 {{ nextWaiting.seqNo }} 號 {{ nextWaiting.patientName }}</UButton>
       </div>
 
       <UCard v-if="visit.status !== 'registered' || history?.length" :padded="false">
@@ -334,7 +364,10 @@ const tabs = computed(() => [
         <div class="ml-auto flex gap-2">
           <UButton variant="ghost" :icon="SkipForward" :loading="skip.pending.value" @click="onSkip">過號</UButton>
           <UButton variant="secondary" :icon="Save" :disabled="!dirty" :loading="saveDraft.pending.value" @click="saveDraft.run()">暫存</UButton>
-          <UButton variant="success" :icon="CheckCircle2" :loading="complete.pending.value" @click="onComplete">完成看診</UButton>
+          <UButton variant="secondary" :icon="CheckCircle2" :loading="complete.pending.value" @click="onComplete">完成看診</UButton>
+          <UButton variant="success" :icon="ChevronsRight" :loading="complete.pending.value || start.pending.value" :title="nextWaiting ? `完成後叫第 ${nextWaiting.seqNo} 號 ${nextWaiting.patientName}（Ctrl+Enter）` : '沒有下一位候診者，只完成看診（Ctrl+Enter）'" @click="onCompleteAndNext">
+            完成並叫下一位<span class="ml-1 hidden text-xs opacity-75 sm:inline">Ctrl+Enter</span>
+          </UButton>
         </div>
       </div>
     </div>
