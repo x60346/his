@@ -285,6 +285,29 @@ try {
       `批價清單的預估應收 = 試算金額（${pend.length} 位待批價）${diffs.length ? '：' + diffs.join('；') : ''}`)
   }
 
+  // U9：日結報表——未收款名單、作廢金額、依收費人員、依費用類別（加總都要對得上）
+  {
+    const toVoid = dbm.db.charges.find((c) => !c.voided && c.paidAt.startsWith(T) && dbm.db.dispenses.find((d) => d.visitId === c.visitId)?.status !== 'dispensed')
+    await api.chargeApi.voidCharge(toVoid.id, '測試日結')
+    const rep = await api.chargeApi.dailyReport(T)
+    const consultedToday = dbm.db.visits.filter((v) => v.date === T && v.status === 'consulted')
+    let estSum = 0
+    for (const v of consultedToday) estSum += (await api.chargeApi.previewCharge(v.id)).patientTotal
+    ok(rep.unpaid.length === consultedToday.length && rep.unpaid.reduce((s, u) => s + u.estimate, 0) === estSum && rep.unpaid.some((u) => u.visitId === toVoid.visitId),
+      `日結「未收款」= 當天看完診還沒批價的 ${rep.unpaid.length} 位（含剛作廢回到待批價的），預估合計 ${estSum}`)
+    const voidedSum = dbm.db.charges.filter((c) => c.voided && c.paidAt.startsWith(T)).reduce((s, c) => s + c.patientTotal, 0)
+    ok(rep.voidedTotal === voidedSum && voidedSum >= toVoid.patientTotal, `作廢金額合計 ${rep.voidedTotal}（${rep.voidedCount} 張）`)
+    const cashierSum = rep.byCashier.reduce((s, c) => s + c.patientTotal, 0)
+    const f = rep.byFeeType
+    ok(cashierSum === rep.patientTotal && rep.byCashier.reduce((s, c) => s + c.count, 0) === rep.count, `依收費人員加總 = 收入合計 ${rep.patientTotal}`)
+    ok(f.reg + f.basicCopay + f.drugCopay + f.selfPay === rep.patientTotal && f.reg > 0, `依費用類別加總 = 收入合計（掛號費 ${f.reg}、基本部分負擔 ${f.basicCopay}、藥品部分負擔 ${f.drugCopay}、自費 ${f.selfPay}）`)
+    // 補收回來：未收款少一位、收入增加
+    const pv = await api.chargeApi.previewCharge(toVoid.visitId)
+    await api.chargeApi.pay(toVoid.visitId, { payMethod: 'cash', received: pv.patientTotal })
+    const rep2 = await api.chargeApi.dailyReport(T)
+    ok(rep2.unpaid.length === rep.unpaid.length - 1 && rep2.patientTotal === rep.patientTotal + pv.patientTotal, '補收後：未收款少一位，收入合計跟著增加')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')

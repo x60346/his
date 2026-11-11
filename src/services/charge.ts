@@ -161,6 +161,14 @@ export interface DailyReport {
   byPayMethod: Record<PayMethod, number>
   byDept: { deptName: string; count: number; patientTotal: number; nhiPoints: number }[]
   charges: (Charge & { patientName: string; chartNo: string; deptName: string })[]
+  /** 作廢收據的金額合計（以前只有張數） */
+  voidedTotal: number
+  /** 依收費人員：交班時各自對自己的錢箱；加總 = 收入合計 */
+  byCashier: { cashierName: string; count: number; patientTotal: number }[]
+  /** 依費用類別（取自收據當時存下的明細，不用現在的設定重算）；加總 = 收入合計 */
+  byFeeType: { reg: number; basicCopay: number; drugCopay: number; selfPay: number }
+  /** 當天看完診、還沒批價的病人（下班前漏收就會出現在這裡）；預估與批價試算同一個計算 */
+  unpaid: { visitId: string; patientName: string; chartNo: string; deptName: string; doctorName: string; estimate: number }[]
 }
 
 export function dailyReport(date: string): Promise<DailyReport> {
@@ -178,10 +186,38 @@ export function dailyReport(date: string): Promise<DailyReport> {
       row.nhiPoints += c.nhiPoints
       dept.set(deptName, row)
     }
+    const cashier = new Map<string, DailyReport['byCashier'][number]>()
+    const byFeeType = { reg: 0, basicCopay: 0, drugCopay: 0, selfPay: 0 }
+    for (const c of valid) {
+      const name = nameOf.user(c.cashierId)
+      const row = cashier.get(name) ?? { cashierName: name, count: 0, patientTotal: 0 }
+      row.count++
+      row.patientTotal += c.patientTotal
+      cashier.set(name, row)
+      const sum = (kind: string) => c.lines.filter((l) => l.patientPay && l.kind === kind).reduce((s, l) => s + l.amount, 0)
+      const reg = sum('reg')
+      const basic = sum('copay-basic')
+      const drug = sum('copay-drug')
+      byFeeType.reg += reg
+      byFeeType.basicCopay += basic
+      byFeeType.drugCopay += drug
+      // 自費（含自費身分的診察費）用「收據總額 − 其他三類」：收據總額四捨五入過，這樣四類加總一定等於收入合計
+      byFeeType.selfPay += c.patientTotal - reg - basic - drug
+    }
+    const unpaid = db.visits
+      .filter((v) => v.date === date && v.status === 'consulted')
+      .map((v) => {
+        const vv = visitView(v)
+        return { visitId: v.id, patientName: vv.patientName, chartNo: vv.chartNo, deptName: vv.deptName, doctorName: vv.doctorName, estimate: buildPreview(v.id).patientTotal }
+      })
     return {
       date,
       count: valid.length,
       voidedCount: all.length - valid.length,
+      voidedTotal: all.filter((c) => c.voided).reduce((s, c) => s + c.patientTotal, 0),
+      byCashier: [...cashier.values()].sort((a, b) => b.patientTotal - a.patientTotal),
+      byFeeType,
+      unpaid,
       patientTotal: valid.reduce((s, c) => s + c.patientTotal, 0),
       nhiPoints: valid.reduce((s, c) => s + c.nhiPoints, 0),
       byPayMethod,

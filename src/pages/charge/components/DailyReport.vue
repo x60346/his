@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 日結報表：櫃台下班前對帳用。數字全部來自服務層 dailyReport。
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { Ban, Coins, FileText, Printer, Stethoscope } from 'lucide-vue-next'
 import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
 import { chargeApi } from '@/services'
@@ -28,6 +28,13 @@ const columns: Column<Row>[] = [
   { key: 'nhiPoints', label: '申報點數', align: 'right', format: (c) => c.nhiPoints.toLocaleString() },
 ]
 const methods: PayMethod[] = ['cash', 'card', 'mobile']
+const feeTypes = [
+  { key: 'reg', label: '掛號費' },
+  { key: 'basicCopay', label: '基本部分負擔' },
+  { key: 'drugCopay', label: '藥品部分負擔' },
+  { key: 'selfPay', label: '自費項目（含自費診察費）' },
+] as const
+const unpaidTotal = computed(() => (r.value?.unpaid ?? []).reduce((s, u) => s + u.estimate, 0))
 
 // 列印表頭：報表名稱、日期、列印時間與列印人——日後對帳時才知道這張紙是誰、何時印的
 // （同一天印兩次、數字不同時查得出原因）。列印時間在按下「列印」那一刻取值，不是頁面打開的時間。
@@ -60,8 +67,45 @@ const print = async () => {
       <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <UStatCard label="收入合計" :value="money(r.patientTotal)" :icon="Coins" tone="emerald" />
         <UStatCard label="有效收據" :value="r.count" hint="張" :icon="FileText" />
-        <UStatCard label="作廢收據" :value="r.voidedCount" hint="張" :icon="Ban" :tone="r.voidedCount ? 'amber' : 'slate'" />
+        <UStatCard label="作廢收據" :value="r.voidedCount" :hint="r.voidedCount ? `張・${money(r.voidedTotal)}` : '張'" :icon="Ban" :tone="r.voidedCount ? 'amber' : 'slate'" />
         <UStatCard label="健保申報" :value="r.nhiPoints.toLocaleString()" hint="點" :icon="Stethoscope" />
+      </div>
+
+      <!-- 看完診還沒批價：下班前對帳要先看這裡，漏收的人不會出現在收據裡。列印時一併印出 -->
+      <UCard v-if="r.unpaid.length" :padded="false" class="border-amber-300">
+        <template #title><span class="text-sm font-semibold text-amber-800">未收款：{{ r.unpaid.length }} 位・預估 {{ money(unpaidTotal) }}</span></template>
+        <template #actions><span class="text-xs text-slate-500">看完診尚未批價</span></template>
+        <ul class="tabular divide-y divide-slate-100 text-sm">
+          <li v-for="u in r.unpaid" :key="u.visitId" class="flex gap-3 px-4 py-1.5">
+            <span class="w-16 text-slate-500">{{ u.chartNo }}</span>
+            <span class="w-20 font-medium text-slate-800">{{ u.patientName }}</span>
+            <span class="flex-1 text-slate-600">{{ u.deptName }} {{ u.doctorName }}</span>
+            <span class="text-right font-medium">{{ money(u.estimate) }}</span>
+          </li>
+        </ul>
+      </UCard>
+      <p v-else class="text-sm text-emerald-700">當日看完診的病人都已批價。</p>
+
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <UCard title="依費用類別" subtitle="取自收據當時的明細">
+          <ul class="tabular space-y-2 text-sm">
+            <li v-for="f in feeTypes" :key="f.key" class="flex justify-between border-b border-slate-100 pb-1.5">
+              <span class="text-slate-600">{{ f.label }}</span>
+              <span class="font-medium text-slate-800">{{ money(r.byFeeType[f.key]) }}</span>
+            </li>
+            <li class="flex justify-between font-semibold"><span>合計</span><span>{{ money(r.patientTotal) }}</span></li>
+          </ul>
+        </UCard>
+        <UCard title="依收費人員" subtitle="交班時各自核對錢箱">
+          <ul class="tabular space-y-2 text-sm">
+            <li v-for="c in r.byCashier" :key="c.cashierName" class="flex justify-between border-b border-slate-100 pb-1.5">
+              <span class="text-slate-600">{{ c.cashierName }}<span class="ml-1 text-xs text-slate-400">{{ c.count }} 張</span></span>
+              <span class="font-medium text-slate-800">{{ money(c.patientTotal) }}</span>
+            </li>
+            <li v-if="!r.byCashier.length" class="py-2 text-center text-slate-400">當日沒有收費</li>
+            <li class="flex justify-between font-semibold"><span>合計</span><span>{{ money(r.patientTotal) }}</span></li>
+          </ul>
+        </UCard>
       </div>
 
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
