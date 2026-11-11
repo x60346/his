@@ -111,6 +111,24 @@ try {
   ok(dbm.db.drugs.find((d) => d.id === 'M001').stock === stockBefore - 9, `發藥扣庫存 ${stockBefore} → ${stockBefore - 9}`)
   const lastTxn = dbm.db.stockTxns.filter((t) => t.drugId === 'M001').at(-1)
   ok(lastTxn.type === 'dispense' && lastTxn.qty === -9 && lastTxn.ref === `領藥號 ${dp.pickupNo}` && lastTxn.balance === stockBefore - 9, `發藥寫入異動帳（${lastTxn.ref}，${lastTxn.qty}，結存 ${lastTxn.balance}）`)
+  // B5：沒領的單跨日要帶著走；已發藥依「發藥日」算
+  {
+    const { addDays } = await load('/src/utils/date.ts')
+    const Y = addDays(T, -1)
+    const pend = dbm.db.dispenses.find((d) => d.status === 'pending' && d.createdAt.startsWith(T))
+    const back = (d, day) => { const orig = d.createdAt; d.createdAt = day + orig.slice(10); return () => (d.createdAt = orig) }
+    const undoPend = back(pend, Y)
+    const undoDp = back(dbm.db.dispenses.find((d) => d.id === dp.id), Y)
+    const todayList = await api.pharmacyApi.listDispenses({ date: T })
+    const idx = todayList.findIndex((d) => d.id === pend.id)
+    ok(idx >= 0 && todayList.slice(0, idx).every((d) => d.createdAt.startsWith(T) || d.status === 'dispensed') && todayList.slice(idx).filter((d) => d.status !== 'dispensed').every((d) => !d.createdAt.startsWith(T)),
+      '昨天開立、還沒領的單出現在今天的清單，排在今天開立的後面')
+    ok(todayList.some((d) => d.id === dp.id && d.status === 'dispensed') && !(await api.pharmacyApi.listDispenses({ date: Y })).some((d) => d.id === dp.id),
+      '昨天開立、今天發藥的單算在今天的「已發藥」，不在昨天')
+    ok(!(await api.pharmacyApi.listDispenses({ date: addDays(Y, -1) })).some((d) => d.id === pend.id), '開立日之前的日期不會出現這張單')
+    undoPend()
+    undoDp()
+  }
 
   console.log('\n[藥品庫存] 帳本、FEFO、進貨、盤點')
   const sr = await load('/src/services/stock-rules.ts')

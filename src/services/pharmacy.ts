@@ -76,11 +76,23 @@ function dispenseView(d: Dispense): DispenseView {
   }
 }
 
+/**
+ * 某一天的調劑清單：
+ *   待調劑／已核對：當天「以前（含）」開立、還沒發藥的——沒做完的工作要一直帶著走，
+ *     以前只看「開立當天」，昨天批價沒領的病人今天回來，清單上找不到他。
+ *   已發藥：當天「發出」的（依發藥時間，不是開立日）——昨天的單今天才領，算今天的工作量。
+ * 排序：當天開立的在前（依領藥號），前幾天的接在後面（依日期、領藥號）——窗口前的人優先。
+ */
 export function listDispenses(q: { date: string; status?: DispenseStatus[] }): Promise<DispenseView[]> {
   return query(() =>
     db.dispenses
-      .filter((d) => d.createdAt.startsWith(q.date) && (!q.status || q.status.includes(d.status)))
-      .sort((a, b) => a.pickupNo - b.pickupNo)
+      .filter((d) => (d.status === 'dispensed' ? !!d.dispensedAt?.startsWith(q.date) : d.createdAt.slice(0, 10) <= q.date))
+      .filter((d) => !q.status || q.status.includes(d.status))
+      .sort((a, b) => {
+        const da = a.createdAt.slice(0, 10)
+        const db_ = b.createdAt.slice(0, 10)
+        return Number(da !== q.date) - Number(db_ !== q.date) || da.localeCompare(db_) || a.pickupNo - b.pickupNo
+      })
       .map(dispenseView),
   )
 }

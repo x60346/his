@@ -12,7 +12,7 @@ import { pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
-import { today } from '@/utils/date'
+import { diffDays, today } from '@/utils/date'
 import { dispenseStatus } from '@/utils/labels'
 import type { DispenseStatus } from '@/types'
 
@@ -25,6 +25,11 @@ const tabs = computed(() =>
   (['pending', 'verified', 'dispensed'] as DispenseStatus[]).map((s) => ({ key: s, label: dispenseStatus[s].label, count: (all.value ?? []).filter((d) => d.status === s).length })),
 )
 const list = computed(() => (all.value ?? []).filter((d) => d.status === tab.value))
+// 前幾日開立、還沒領的單（服務層排在當天的後面）。領藥號每天重編，要標日期才分得出是哪一天的「3 號」
+const createdDay = (x: { createdAt: string }) => x.createdAt.slice(0, 10)
+const isCarried = (x: { createdAt: string; status: DispenseStatus }) => x.status !== 'dispensed' && createdDay(x) < date.value
+/** 一般處方箋 3 日內有效：滿 3 天提醒（不擋，是否需重新看診由藥師判斷） */
+const ageDays = (x: { createdAt: string }) => diffDays(createdDay(x), todayStr.value)
 
 const selectedId = ref<string>()
 useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
@@ -80,12 +85,17 @@ const print = () => window.print()
       <div class="px-3"><UTabs v-model="tab" :tabs="tabs" /></div>
       <UQueryState :loading="loading" :ready="list.length > 0" :empty-title="`沒有${dispenseStatus[tab].label}的單`">
       <ul class="max-h-[calc(100vh-15rem)] divide-y divide-slate-100 overflow-y-auto">
-        <li v-for="x in list" :key="x.id">
+        <li v-for="(x, i) in list" :key="x.id">
+          <div v-if="isCarried(x) && (i === 0 || !isCarried(list[i - 1]))" class="bg-slate-50 px-3 py-1 text-xs font-medium text-slate-500">前幾日未領</div>
           <button :class="['flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50', x.id === selectedId && '!bg-brand-50']" @click="selectedId = x.id">
-            <span class="tabular w-10 text-center text-2xl font-bold text-brand-600">{{ x.pickupNo }}</span>
+            <span class="tabular w-10 text-center leading-tight">
+              <span v-if="createdDay(x) !== date" class="block text-[11px] font-medium text-slate-500">{{ createdDay(x).slice(5).replace('-', '/') }}</span>
+              <span class="text-2xl font-bold text-brand-600">{{ x.pickupNo }}</span>
+            </span>
             <span class="min-w-0 flex-1">
               <span class="block font-medium text-slate-800">{{ x.patientName }}</span>
               <span class="block truncate text-xs text-slate-500">{{ x.deptName }}・{{ x.items.length }} 項藥品</span>
+              <UBadge v-if="x.status !== 'dispensed' && ageDays(x) >= 3" tone="yellow" class="mt-0.5">已開立 {{ ageDays(x) }} 天</UBadge>
             </span>
             <span class="flex flex-col items-end gap-1">
               <AlertTriangle v-if="x.allergyWarnings.length" class="h-4 w-4 text-red-500" aria-label="過敏警示" />
@@ -102,7 +112,7 @@ const print = () => window.print()
     <UCard v-else-if="!d" data-detail class="no-print"><UQueryState :loading="detailLoading" :ready="false" empty-title="找不到這張調劑單" /></UCard>
     <div v-else data-detail class="no-print min-w-0 space-y-3">
       <PatientBanner :patient="d">
-        <UBadge tone="blue">領藥號 {{ d.pickupNo }}</UBadge>
+        <UBadge tone="blue">領藥號 {{ createdDay(d) !== todayStr ? createdDay(d).slice(5).replace('-', '/') + '・' : '' }}{{ d.pickupNo }}</UBadge>
         <UStatusBadge :map="dispenseStatus" :value="d.status" />
       </PatientBanner>
 
