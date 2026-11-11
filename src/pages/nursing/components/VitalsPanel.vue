@@ -65,7 +65,10 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
   <div class="space-y-5 p-4">
     <form class="rounded-md border border-slate-200 bg-slate-50 p-3" @submit.prevent="submit">
       <div class="mb-2 text-sm font-semibold text-slate-700">記錄生命徵象</div>
-      <div class="grid grid-cols-3 gap-x-3 gap-y-2 md:grid-cols-5">
+      <!-- 欄數依「這個區塊實際的寬度」決定（auto-fill），不看視窗寬：護理站右側在病人清單旁邊，視窗寬不代表這裡寬 -->
+      <div class="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-x-3 gap-y-2">
+        <!-- 異常標紅：UInput 把 class 直接給 <input>（inheritAttrs: false），所以寫 !border-red-400 本身；
+             以前寫成 [&_input]:（「裡面的 input」），input 裡面沒有東西，紅框從來沒出現過 -->
         <UInput
           v-for="k in fields"
           :key="k"
@@ -75,7 +78,7 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
           :label="vitalSpecs[k].label"
           :error="errorOf(k)"
           :hint="hintOf(k)"
-          :class="!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k]) && '[&_input]:!border-red-400 [&_input]:!text-red-700'"
+          :class="!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k]) && '!border-red-400 !text-red-700'"
         />
       </div>
       <div class="mt-2 text-right"><UButton type="submit" size="sm" :loading="save.pending.value">儲存</UButton></div>
@@ -84,7 +87,9 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
     <UQueryState :loading="loading && !vitals" :ready="!!vitals" empty-title="尚無生命徵象紀錄">
       <section>
         <h3 class="mb-2 text-sm font-semibold text-slate-700">趨勢（最近 {{ recent.length }} 筆）</h3>
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <!-- 欄數依區塊實際寬度：每張至少 18rem（ULineChart 下限 240px 再留點空間），四張圖在一般寬度排成 2×2、很寬時一列四張。
+             以前用 md:（看視窗寬），在病人清單旁的窄區塊裡硬排兩欄，圖超出邊界 -->
+        <div class="grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-4">
           <ULineChart
             v-for="c in charts"
             :key="c.key"

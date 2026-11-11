@@ -373,7 +373,8 @@ const tabs = computed(() => [
         <div class="p-4">
           <!-- SOAP 與生命徵象 -->
           <div v-show="tab === 'soap' && visit.status !== 'registered'" class="space-y-4">
-            <div class="grid grid-cols-4 gap-3 md:grid-cols-8">
+            <!-- 欄數依區塊實際寬度（auto-fill）：看診區在候診清單旁邊，視窗寬不代表這裡寬（以前 md:grid-cols-8 在 1024 寬只剩 43px 一格） -->
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-3">
               <UInput v-model="draft.vitals.height" label="身高 cm" type="number" :disabled="!editable" />
               <UInput v-model="draft.vitals.weight" label="體重 kg" type="number" :disabled="!editable" />
               <UInput v-model="draft.vitals.temp" label="體溫 °C" type="number" step="0.1" :disabled="!editable" />
@@ -422,7 +423,7 @@ const tabs = computed(() => [
       <div v-if="editable" class="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
         <span v-if="dirty" class="text-xs text-amber-600">● 有未儲存的修改</span>
         <span v-else class="text-xs text-slate-400">已儲存</span>
-        <div class="ml-auto flex gap-2">
+        <div class="ml-auto flex flex-wrap justify-end gap-2">
           <UButton variant="ghost" :icon="SkipForward" :loading="skip.pending.value" @click="onSkip">過號</UButton>
           <UButton variant="secondary" :icon="Save" :disabled="!dirty" :loading="saveDraft.pending.value" @click="saveDraft.run()">暫存</UButton>
           <UButton variant="secondary" :icon="CheckCircle2" :loading="complete.pending.value" @click="onComplete">完成看診</UButton>

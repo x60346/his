@@ -26,11 +26,13 @@ const sizes = { sm: 'h-7 px-2.5 text-xs gap-1', md: 'h-9 px-3.5 text-sm gap-1.5'
 </script>
 
 <template>
+  <!-- 文字不換行（whitespace-nowrap、shrink-0）：按鈕高度固定（h-7／h-9），被擠時換行會讓字擠出按鈕外
+       （看診操作列的「過號」曾被擠成直排）；空間不夠時應由外層換行整顆按鈕，不是把按鈕裡的字拆開 -->
   <button
     :type="props.type"
     :disabled="disabled || loading"
     :class="[
-      'inline-flex items-center justify-center rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:cursor-not-allowed disabled:opacity-50',
+      'inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:cursor-not-allowed disabled:opacity-50',
       variants[variant],
       sizes[size],
       block && 'w-full',

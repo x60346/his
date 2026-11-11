@@ -43,19 +43,33 @@ watch(patients, (list) => {
   if (list && admissionId.value && !list.some((p) => p.id === admissionId.value)) admissionId.value = undefined
 })
 
-const tab = ref('mar')
-const tabs = computed(() => [
-  { key: 'mar', label: '給藥紀錄', count: adm.value ? adm.value.overdueCount + adm.value.dueCount || undefined : undefined },
-  { key: 'orders', label: '醫囑', count: adm.value?.unackedCount || undefined },
-  { key: 'vitals', label: '生命徵象' },
-  { key: 'notes', label: '護理紀錄' },
-  { key: 'handover', label: '交班' },
-])
+// 分頁分兩組：沒選病人時是病房層級（本班待辦、交班）；選了病人才有個人的五個分頁。
+// 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
+const tab = ref('tasks')
+const tabs = computed(() =>
+  !adm.value
+    ? [
+        { key: 'tasks', label: '本班待辦' },
+        { key: 'handover', label: '交班' },
+      ]
+    : [
+        { key: 'mar', label: '給藥紀錄', count: adm.value.overdueCount + adm.value.dueCount || undefined },
+        { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
+        { key: 'vitals', label: '生命徵象' },
+        { key: 'notes', label: '護理紀錄' },
+        { key: 'handover', label: '交班' },
+      ],
+)
+// 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
+watch(admissionId, (id) => {
+  if (id && tab.value === 'tasks') tab.value = 'mar'
+  else if (!id && tab.value !== 'handover') tab.value = 'tasks'
+})
 
 // 本班待辦：取消選取病人就回到全病房清單；點清單的一列跳到該病人的對應分頁
 function showTasks() {
   admissionId.value = undefined
-  if (tab.value === 'handover') tab.value = 'mar'
+  tab.value = 'tasks'
 }
 function openTask(id: string, t: string) {
   admissionId.value = id

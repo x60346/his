@@ -37,10 +37,13 @@ async function submit() {
   <div class="space-y-4 p-4">
     <div class="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div class="mb-2 text-sm font-semibold text-slate-700">新增交班</div>
-      <div class="grid grid-cols-1 gap-2 md:grid-cols-[8rem_14rem_1fr]">
+      <!-- 班別、病人並排，交班重點獨佔一列。以前三欄並排用 md:（看整個視窗寬），
+           但這裡在病人清單旁邊，寬度只有三百多 px，交班重點被擠到剩 26px -->
+      <div class="grid grid-cols-[minmax(6rem,8rem)_1fr] gap-2">
         <USelect v-model="form.shift" label="班別" :options="shifts.map((s) => ({ label: s, value: s }))" />
         <USelect v-model="form.admissionId" label="病人" required :options="patientOptions" placeholder="請選擇" />
-        <UTextarea v-model="form.content" label="交班重點" :rows="2" :error="save.fieldErrors.value.content" placeholder="例：夜間體溫最高 38.1°C，已給退燒藥；明早空腹抽血" />
+        <!-- 外包一層 div：UTextarea 把 class 傳給裡面的 textarea（inheritAttrs: false），col-span 要放在格子本身 -->
+        <div class="col-span-2"><UTextarea v-model="form.content" label="交班重點" :rows="2" :error="save.fieldErrors.value.content" placeholder="例：夜間體溫最高 38.1°C，已給退燒藥；明早空腹抽血" /></div>
       </div>
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>
