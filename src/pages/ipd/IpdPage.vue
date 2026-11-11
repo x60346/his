@@ -7,7 +7,7 @@ import { Plus, Square } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import OrderDialog from './components/OrderDialog.vue'
-import { admissionApi, ipdApi, masterApi, nursingApi } from '@/services'
+import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -60,6 +60,15 @@ async function onStop(o: OrderView) {
 // ---------- 最新生命徵象（護理站記錄，醫師參考） ----------
 const { data: vitals } = useQuery(async () => (admissionId.value ? nursingApi.listVitals(admissionId.value) : []), [admissionId])
 const latestVital = computed(() => vitals.value?.[vitals.value.length - 1])
+// 醫師巡房要看的欄位（血壓收縮／舒張合成一欄）；異常判斷一律用 isAbnormal
+const vitalFields: { label: string; keys: VitalKey[] }[] = [
+  { label: 'T', keys: ['temp'] },
+  { label: 'P', keys: ['pulse'] },
+  { label: 'R', keys: ['resp'] },
+  { label: 'BP', keys: ['sbp', 'dbp'] },
+  { label: 'SpO2', keys: ['spo2'] },
+  { label: '疼痛', keys: ['pain'] },
+]
 
 // ---------- 病程紀錄 ----------
 const tab = ref('orders')
@@ -109,9 +118,12 @@ async function submitNote() {
         <span class="text-slate-500">入院診斷</span><span class="text-slate-800">{{ adm.diagnosis }}</span>
         <template v-if="latestVital">
           <span class="text-slate-500">最新生命徵象（{{ latestVital.at.slice(5) }}）</span>
+          <!-- 異常與否用護理站同一條規則 isAbnormal（以前這裡寫死體溫 ≥38、SpO2 <94，37.8°C 護理站標紅、醫師頁不標） -->
           <span class="tabular text-slate-800">
-            T <b :class="(latestVital.temp ?? 0) >= 38 && 'text-red-600'">{{ latestVital.temp }}</b>・P {{ latestVital.pulse }}・BP {{ latestVital.sbp }}/{{ latestVital.dbp }}・SpO2
-            <b :class="(latestVital.spo2 ?? 100) < 94 && 'text-red-600'">{{ latestVital.spo2 }}</b>
+            <template v-for="(f, i) in vitalFields" :key="f.label">
+              <template v-if="i">・</template>{{ f.label }}
+              <template v-for="(k, j) in f.keys" :key="k"><template v-if="j">/</template><b :class="isAbnormal(k, latestVital[k]) ? 'text-red-600' : 'font-normal'">{{ latestVital[k] ?? '—' }}</b></template>
+            </template>
           </span>
         </template>
       </div>
