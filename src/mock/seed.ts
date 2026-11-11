@@ -611,8 +611,10 @@ export function buildSeed(): Database {
     })
     ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'diet', content: sc.diet, startAt, status: 'active', doctorId: docUser, createdAt: startAt })
     sc.nursing.forEach((n) => ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'nursing', content: n, startAt, status: 'active', doctorId: docUser, createdAt: startAt }))
-    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '全套血液檢查 CBC', startAt, status: 'done', doctorId: docUser, createdAt: startAt })
-    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P013', content: '胸部 X 光', startAt, status: 'done', doctorId: docUser, createdAt: startAt })
+    // 入院時的檢查：入院後一小時內完成。完成時間記在 stopAt（與服務層一致），護理站才看得出何時完成
+    const statDoneAt = notFuture(addMinutes(startAt, 60), 30)
+    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '全套血液檢查 CBC', startAt, stopAt: statDoneAt, status: 'done', doctorId: docUser, createdAt: startAt })
+    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P013', content: '胸部 X 光', startAt, stopAt: statDoneAt, status: 'done', doctorId: docUser, createdAt: startAt })
 
     // 生命徵象：每天 08、14、20 點；發燒情境前兩天體溫偏高並逐日下降
     const febrile = [0, 2, 5, 6, 7].includes(i)

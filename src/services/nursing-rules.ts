@@ -31,6 +31,18 @@ export function handoverShiftOf(dateTime: string): Shift {
 }
 
 /**
+ * 醫囑的「最近異動」：接班的人最需要知道「上一班之後改了什麼」。
+ * 24 小時內新開的標「新」；24 小時內停止或完成的仍列出（劃掉），超過就只留在醫師端的歷史裡。
+ */
+export const ORDER_RECENT_HOURS = 24
+export type OrderChange = 'new' | 'stopped' | 'done'
+export function orderChange(o: { status: 'active' | 'stopped' | 'done'; startAt: string; stopAt?: string }, nowStr: string): OrderChange | null {
+  const since = addMinutes(nowStr, -ORDER_RECENT_HOURS * 60)
+  if (o.status !== 'active') return o.stopAt && o.stopAt >= since ? (o.status === 'done' ? 'done' : 'stopped') : null
+  return o.startAt >= since ? 'new' : null
+}
+
+/**
  * 「哪一班」＝班別＋這一班開始的日期。交班屬於班，不屬於日曆上的某一天：
  * 11/10 的小夜（16–24 點）常在 11/11 00:10 才寫完交班，它仍是「11/10 小夜」。
  * 以前用寫的那一天當日期，小夜 23:45 寫的交班，大夜 00:15 打開就看不到（查的是新的一天）。

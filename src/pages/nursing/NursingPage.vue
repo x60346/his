@@ -9,6 +9,7 @@ import { AlertTriangle, ClipboardList } from 'lucide-vue-next'
 import { UBadge, UCard, UEmpty, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import MarPanel from './components/MarPanel.vue'
+import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
 import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
@@ -44,6 +45,7 @@ watch(patients, (list) => {
 const tab = ref('mar')
 const tabs = computed(() => [
   { key: 'mar', label: '給藥紀錄', count: adm.value ? adm.value.overdueCount + adm.value.dueCount || undefined : undefined },
+  { key: 'orders', label: '醫囑' },
   { key: 'vitals', label: '生命徵象' },
   { key: 'notes', label: '護理紀錄' },
   { key: 'handover', label: '交班' },
@@ -119,6 +121,7 @@ const wardTotals = computed(() => ({
           <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
           <UEmpty v-else-if="!adm" :icon="ClipboardList" title="請從清單選擇病人" description="執行給藥、記錄生命徵象與護理紀錄" class="py-16" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
+          <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />
         </UCard>

@@ -1,12 +1,12 @@
 // 護理站：病房病人總覽、給藥執行（MAR）、生命徵象、護理紀錄（Focus DAR）、交班、執行臨時醫囑。
 // 「現在幾點」決定一筆給藥是待給、逾時還是太早——判斷集中在 nursing-rules 的純函式，
 // 服務層用它把關（太早不能給），頁面用它上色，兩邊不會各算各的。
-import type { HandoverNote, MarRecord, NursingNote, VitalRecord } from '@/types'
+import type { HandoverNote, IpdOrder, MarRecord, NursingNote, VitalRecord } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, recentShifts, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, orderChange, recentShifts, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -81,6 +81,37 @@ export function getMarBoard(admissionId: string, date: string): Promise<MarBoard
   })
 }
 
+// ---------- 護理站的醫囑清單（唯讀）----------
+// 以前護理站只看得到給藥排程、PRN、臨時非給藥醫囑；長期的護理醫囑（翻身 Q2H）、飲食（禁食）、處置，
+// 護理師在任何頁面都看不到——醫師開了，執行的人卻不知道。
+
+export type NursingOrderView = OrderView & { change: OrderChange | null }
+export interface NursingOrderGroup {
+  category: IpdOrder['category']
+  label: string
+  orders: NursingOrderView[]
+}
+const ORDER_GROUPS: { category: IpdOrder['category']; label: string }[] = [
+  { category: 'diet', label: '飲食' },
+  { category: 'nursing', label: '護理' },
+  { category: 'procedure', label: '處置・檢查' },
+  { category: 'medication', label: '用藥（給藥請至給藥紀錄）' },
+]
+
+/** 執行中的醫囑，加上 24 小時內停止或完成的（標示異動），依類別分組；飲食放最前面（禁食最要緊） */
+export function listNursingOrders(admissionId: string): Promise<NursingOrderGroup[]> {
+  return query(() => {
+    const t = now()
+    const shown = db.ipdOrders
+      .filter((o) => o.admissionId === admissionId)
+      .map((o) => ({ ...orderView(o), change: orderChange(o, t) }))
+      .filter((o) => o.status === 'active' || o.change)
+      // 執行中的在前；同一類裡新開的在前
+      .sort((a, b) => Number(a.status !== 'active') - Number(b.status !== 'active') || b.startAt.localeCompare(a.startAt))
+    return ORDER_GROUPS.map((g) => ({ ...g, orders: shown.filter((o) => o.category === g.category) })).filter((g) => g.orders.length)
+  })
+}
+
 /** 執行給藥：given 給藥 / held 暫停 / refused 拒絕（後兩者須註明原因） */
 export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = ''): Promise<MarRecord> {
   return mutate(() => {
@@ -95,8 +126,11 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
     Object.assign(m, { status, note: note.trim() || undefined, executedAt: now(), nurseId: nurse.id })
-    // 臨時給藥醫囑執行後即完成
-    if (order.type === 'stat') order.status = 'done'
+    // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
+    if (order.type === 'stat') {
+      order.status = 'done'
+      order.stopAt = now()
+    }
     audit('給藥', `${order.content} ${status}${note ? `：${note}` : ''}`)
     return m
   })
