@@ -9,6 +9,7 @@ import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
 import { passwordProblem } from './password-rules'
+import { rolesProblem } from './role-rules'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
 
@@ -36,12 +37,12 @@ export function listUsers(): Promise<UserRow[]> {
     return db.users.map((u) => ({
       ...toSafeUser(u),
       doctorName: nameOf.doctor(u.doctorId),
-      lastLoginAt: db.auditLogs.find((l) => l.action === '登入' && l.detail === u.username)?.at,
+      lastLoginAt: db.auditLogs.find((l) => l.action === '登入' && l.userId === u.id)?.at,
     }))
   })
 }
 
-export type UserInput = Pick<User, 'username' | 'name' | 'role' | 'doctorId' | 'active'> & { id?: string; password?: string }
+export type UserInput = Pick<User, 'username' | 'name' | 'roles' | 'doctorId' | 'active'> & { id?: string; password?: string }
 
 export function saveUser(input: UserInput): Promise<SafeUser> {
   return mutate(() => {
@@ -53,8 +54,15 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     const v = fieldErrors()
     if (!USERNAME_RE.test(username)) v.add('username', `帳號需為 ${USERNAME_RULE}`)
     if (!name) v.add('name', '請輸入姓名')
-    if (!ROLES.includes(input.role)) v.add('role', '請選擇角色')
-    if (input.role === 'doctor' && !db.doctors.some((x) => x.id === input.doctorId)) v.add('doctorId', '醫師帳號需對應醫師')
+    // 去重、只留合法角色，並依固定順序存（畫面顯示、比較都一致）
+    const roles = ROLES.filter((x) => (input.roles ?? []).includes(x))
+    if ((input.roles ?? []).some((x) => !ROLES.includes(x))) v.add('roles', '角色不正確')
+    else {
+      const rp = rolesProblem(roles)
+      if (rp) v.add('roles', rp)
+    }
+    const isDoctor = roles.includes('doctor')
+    if (isDoctor && !db.doctors.some((x) => x.id === input.doctorId)) v.add('doctorId', '含醫師角色的帳號需對應醫師')
     if (!old) {
       const pwProblem = passwordProblem(input.password, { username })
       if (pwProblem) v.add('password', pwProblem)
@@ -65,7 +73,7 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     if (db.users.some((u) => u.username === username && u.id !== input.id)) failField('username', '帳號已存在', 'CONFLICT')
     // 醫師帳號必須對應一位在職醫師，且一位醫師只能有一個帳號（否則開的醫囑算誰的？）
     let doctorId: string | undefined
-    if (input.role === 'doctor') {
+    if (isDoctor) {
       const d = db.doctors.find((x) => x.id === input.doctorId)!
       if (!d.active) failField('doctorId', `${d.name} 已停用，不能建立帳號`)
       const taken = db.users.find((u) => u.doctorId === d.id && u.id !== input.id)
@@ -75,11 +83,11 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
 
     if (old && old.id === me.id) {
       // 防止把自己鎖在門外
-      if (input.role !== 'admin') failField('role', '不能變更自己的管理員角色')
+      if (!roles.includes('admin')) failField('roles', '不能拿掉自己的管理員角色')
       if (!input.active) failField('active', '不能停用自己的帳號')
     }
-    if (old && old.role === 'admin' && old.active && (input.role !== 'admin' || !input.active)) {
-      const admins = db.users.filter((u) => u.role === 'admin' && u.active)
+    if (old && old.roles.includes('admin') && old.active && (!roles.includes('admin') || !input.active)) {
+      const admins = db.users.filter((u) => u.roles.includes('admin') && u.active)
       if (admins.length <= 1) fail('系統至少要保留一個啟用中的管理員帳號', 'CONFLICT')
     }
 
@@ -87,13 +95,13 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
 
     const saved: User = {
       ...old,
-      id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, role: input.role, doctorId, active: input.active, password: password!,
+      id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, roles, doctorId, active: input.active, password: password!,
       // 管理員設定的初始密碼：本人第一次登入就要改掉（管理員知道這組密碼）
       ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now() }),
     }
     if (old) Object.assign(old, saved)
     else db.users.push(saved)
-    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.role}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}）`)
+    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.roles.join('+')}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}）`)
     return toSafeUser(saved)
   })
 }
@@ -220,6 +228,8 @@ export interface AuditRow {
   id: string
   at: string
   userId: string
+  /** 當時用的作業角色 */
+  role?: Role
   userName: string
   action: string
   detail: string
@@ -267,7 +277,7 @@ export function importData(json: string): Promise<{ users: number; sessionKept: 
       const names = missing.slice(0, 5).join('、') + (missing.length > 5 ? `… 等 ${missing.length} 項` : '')
       fail(`這不是完整的匯出檔（缺少 ${missing.length} 項資料），請使用本系統「匯出資料」產生的檔案。\n缺少：${names}`)
     }
-    if (!parsed!.users.some((u) => u.role === 'admin' && u.active)) fail('匯入的資料沒有啟用中的管理員，匯入後將無人能管理系統')
+    if (!parsed!.users.some((u) => u.roles?.includes('admin') && u.active)) fail('匯入的資料沒有啟用中的管理員，匯入後將無人能管理系統')
 
     replaceDatabase(parsed!)
     const sessionKept = !!sessionUser()

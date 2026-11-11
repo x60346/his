@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import { UInput, USelect, UTable, type Column } from '@/components/ui'
 import { adminApi, type AuditRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
+import { roleLabel } from '@/utils/labels'
 
 const keyword = ref('')
 const kw = useDebounced(keyword)
@@ -21,6 +22,8 @@ const { data, loading } = useQuery(
 const columns: Column<AuditRow>[] = [
   { key: 'at', label: '時間', width: '9rem' },
   { key: 'userName', label: '操作者', width: '7rem' },
+  // 同一個帳號可能有多個角色：這筆是以哪個身分做的
+  { key: 'role', label: '角色', width: '6rem', format: (r) => (r.role ? roleLabel[r.role] : '—') },
   { key: 'action', label: '動作', width: '9rem' },
   { key: 'detail', label: '內容' },
 ]

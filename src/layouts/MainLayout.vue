@@ -5,7 +5,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { AlertTriangle, Eye, Hospital, KeyRound, Lock, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
 import { UButton, UDialog } from '@/components/ui'
 import { appRoutes, menuGroups } from '@/router/routes'
-import { dbVersion, masterApi, storageIssue, storageMode } from '@/services'
+import { authApi, dbVersion, masterApi, storageIssue, storageMode } from '@/services'
+import { errorMessage } from '@/composables/useService'
+import { isNavigationFailure } from 'vue-router'
+import type { Role } from '@/types'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
 import { roleLabel } from '@/utils/labels'
@@ -60,6 +63,31 @@ async function logout() {
   await auth.logout()
   router.push({ name: 'login' })
 }
+
+// ---------- 切換作業角色（多角色帳號） ----------
+// 先回首頁再切換：現在這頁換了角色可能不能用；離開有未儲存內容的頁面（例：看診）會先問，取消就不切換
+const switching = ref(false)
+async function onSwitchRole(role: Role) {
+  if (!auth.user || role === auth.user.role) return
+  // 已經在首頁就不必導覽（推同一頁會回報「重複導覽」失敗，被誤當成取消）
+  if (route.name !== 'home' && isNavigationFailure(await router.push({ name: 'home' }))) return
+  switching.value = true
+  try {
+    const u = await auth.switchRole(role)
+    ui.toast.success(`已切換為「${roleLabel[u.role]}」`)
+  } catch (e) {
+    ui.toast.error(errorMessage(e))
+  } finally {
+    switching.value = false
+  }
+}
+// 管理員拿掉了這個分頁正在用的角色：服務層已改用帳號的第一個角色，這裡說一次，免得選單突然變了不知道為什麼
+watch(
+  () => auth.user?.role,
+  (now, before) => {
+    if (now && before && now !== before && !switching.value && authApi.roleFellBack()) ui.toast.warning(`你原本使用的角色已被管理員移除，目前以「${roleLabel[now]}」身分使用`)
+  },
+)
 
 // 變更自己的密碼（右上角）
 const pwOpen = ref(false)
@@ -116,7 +144,18 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
         <div class="ml-auto flex items-center gap-3">
           <div class="text-right leading-tight">
             <div class="text-sm font-medium text-slate-800">{{ auth.user?.name }}</div>
-            <div class="text-xs text-slate-500">{{ auth.user ? roleLabel[auth.user.role] : '' }}</div>
+            <!-- 多角色：角色名稱就是切換選單 -->
+            <select
+              v-if="auth.user && auth.user.roles.length > 1"
+              :value="auth.user.role"
+              :disabled="switching"
+              aria-label="切換作業角色"
+              class="cursor-pointer rounded border-0 bg-transparent p-0 pr-5 text-right text-xs text-brand-700 focus:ring-1 focus:ring-brand-400"
+              @change="(e) => { const el = e.target as HTMLSelectElement; const v = el.value as Role; el.value = auth.user!.role; onSwitchRole(v) }"
+            >
+              <option v-for="x in auth.user.roles" :key="x" :value="x">{{ roleLabel[x] }}</option>
+            </select>
+            <div v-else class="text-xs text-slate-500">{{ auth.user ? roleLabel[auth.user.role] : '' }}</div>
           </div>
           <UButton variant="ghost" size="sm" :icon="KeyRound" title="變更密碼" @click="pwOpen = true"><span class="hidden sm:inline">變更密碼</span></UButton>
           <UButton variant="ghost" size="sm" :icon="LogOut" @click="logout">登出</UButton>

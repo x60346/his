@@ -1,7 +1,7 @@
 // 登入與身分。回傳給前端的使用者資料一律移除密碼欄位。
-import type { User } from '@/types'
+import type { Role, User } from '@/types'
 import { db } from '@/mock/db'
-import { fail, failField, fieldErrors, mutate, query, requireUser, sessionLock, sessionUser, setSessionLock, setSessionUser, audit } from './http'
+import { fail, failField, fieldErrors, mutate, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
 import { passwordProblem } from './password-rules'
 import { checkIdleMinutes, IDLE_LOCK_DEFAULT_MIN, UNLOCK_MAX_FAILS } from './idle-rules'
 import { now } from '@/utils/date'
@@ -10,19 +10,49 @@ export type SafeUser = Omit<User, 'password'>
 
 export const toSafeUser = ({ password: _pw, ...rest }: User): SafeUser => rest
 
-export function login(username: string, password: string): Promise<SafeUser> {
-  return mutate(() => {
+/** 目前登入的人：帳號（roles＝能用的所有角色）＋這個分頁的作業角色 role。畫面上的角色判斷一律看 role */
+export type SessionUser = SafeUser & { role: Role }
+
+const toSessionUser = (u: User): SessionUser => ({ ...toSafeUser(u), role: sessionRole() ?? u.roles[0] })
+
+const roleText: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
+
+/** 帳號有多個角色、登入時沒指定：先不登入，回傳可選的角色讓登入頁問一次（不先用第一個角色登入，稽核才不會多一筆沒意義的切換） */
+export type LoginResult = SessionUser | { chooseRole: Role[] }
+
+export function login(username: string, password: string, role?: Role): Promise<LoginResult> {
+  return mutate((): LoginResult => {
     // 帳號一律以小寫儲存（系統管理建立帳號時就轉小寫），登入時也轉小寫比對：打成 ADMIN 也能登入
     const name = username.trim().toLowerCase()
     if (!name || !password) fail('請輸入帳號與密碼', 'BAD_REQUEST')
     const u = db.users.find((x) => x.username === name)
     if (!u || u.password !== password) fail('帳號或密碼錯誤', 'UNAUTHORIZED')
     if (!u.active) fail('此帳號已停用', 'FORBIDDEN')
-    setSessionUser(u.id)
-    audit('登入', u.username)
-    return toSafeUser(u)
+    if (!u.roles.length) fail('此帳號沒有任何角色，請洽系統管理員', 'FORBIDDEN')
+    if (role && !u.roles.includes(role)) fail(`此帳號沒有「${roleText[role]}」角色`, 'FORBIDDEN')
+    if (!role && u.roles.length > 1) return { chooseRole: [...u.roles] }
+    const active = role ?? u.roles[0]
+    setSessionUser(u.id, Date.now(), active)
+    audit('登入', u.roles.length > 1 ? `${u.username}（以${roleText[active]}身分）` : u.username)
+    return toSessionUser(u)
   })
 }
+
+/** 切換作業角色（同一個帳號的其他角色）：不必重新登入；稽核記下切換 */
+export function switchRole(role: Role): Promise<SessionUser> {
+  return mutate(() => {
+    const u = requireUser()
+    if (!u.roles.includes(role)) fail(`此帳號沒有「${roleText[role]}」角色`, 'FORBIDDEN')
+    if (u.role === role) return toSessionUser(u)
+    const from = u.role
+    setSessionRole(role)
+    audit('切換角色', `${u.username}：${roleText[from]} → ${roleText[role]}`)
+    return toSessionUser(u)
+  })
+}
+
+/** 記下的作業角色已被管理員拿掉（已改用帳號的第一個角色）：版面提示一次 */
+export const roleFellBack = (): boolean => sessionRoleFellBack()
 
 export function logout(): Promise<void> {
   return mutate(() => {
@@ -33,16 +63,16 @@ export function logout(): Promise<void> {
 }
 
 /** 同步取得目前登入者（路由守衛在頁面載入前就需要知道） */
-export function currentUser(): SafeUser | null {
+export function currentUser(): SessionUser | null {
   const u = sessionUser()
-  return u ? toSafeUser(u) : null
+  return u ? toSessionUser(u) : null
 }
 
 /** 登入頁的展示帳號快速選擇 */
-export function demoAccounts(): Promise<{ username: string; name: string; role: User['role']; passwordChanged: boolean }[]> {
+export function demoAccounts(): Promise<{ username: string; name: string; roles: Role[]; passwordChanged: boolean }[]> {
   // 公開：登入頁需要。這只是展示系統的便利功能——真實系統絕不能在登入前列出帳號（更不能透露密碼改過沒有）
   // passwordChanged：密碼已不是展示用的 1234，快速登入按鈕只帶入帳號、由使用者自己輸入密碼
-  return query(() => db.users.filter((u) => u.active).map((u) => ({ username: u.username, name: u.name, role: u.role, passwordChanged: u.password !== '1234' })), { public: true })
+  return query(() => db.users.filter((u) => u.active).map((u) => ({ username: u.username, name: u.name, roles: u.roles, passwordChanged: u.password !== '1234' })), { public: true })
 }
 
 /**
@@ -50,7 +80,7 @@ export function demoAccounts(): Promise<{ username: string; name: string; role: 
  * 不用 requireUser：「必須先改密碼」的人也要能呼叫。
  * 改完後，這個分頁的登入時間同步更新（繼續登入）；其他比較早登入的分頁全部失效。
  */
-export function changeOwnPassword(input: { current: string; next: string }): Promise<SafeUser> {
+export function changeOwnPassword(input: { current: string; next: string }): Promise<SessionUser> {
   return mutate(() => {
     const u = sessionUser()
     if (!u) fail('請先登入', 'UNAUTHORIZED')
@@ -62,12 +92,13 @@ export function changeOwnPassword(input: { current: string; next: string }): Pro
     v.done()
     const forced = !!u!.mustChangePassword
     const at = Date.now()
+    const keepRole = sessionRole()
     u!.password = input.next
     u!.passwordChangedAt = at
     delete u!.mustChangePassword
-    setSessionUser(u!.id, at)
+    setSessionUser(u!.id, at, keepRole) // 繼續登入，角色不變
     audit(forced ? '首次變更密碼' : '變更密碼', u!.username)
-    return toSafeUser(u!)
+    return toSessionUser(u!)
   })
 }
 

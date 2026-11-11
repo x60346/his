@@ -1,6 +1,6 @@
 // 服務層共用核心：模擬網路延遲、交易（失敗回滾）、回傳複本、統一錯誤、稽核紀錄。
 // 將來改接真實後端時，這個檔案會換成 fetch 包裝，其餘服務的函式簽章不變。
-import type { User } from '@/types'
+import type { Role, User } from '@/types'
 import { commit, db, newId, replaceDatabase, StorageWriteError } from '@/mock/db'
 import { now } from '@/utils/date'
 
@@ -147,19 +147,24 @@ export function overNetwork<T extends object>(mod: T): T {
 // 存「誰」和「什麼時候登入」（毫秒）：密碼變更後，比變更時間早登入的分頁失效
 const SESSION_KEY = 'his-demo-session'
 const LOGIN_AT_KEY = 'his-demo-login-at'
+// 作業角色：一個帳號可能有多個角色，這個分頁目前用哪一個（各分頁各自記，和登入一樣）
+const ROLE_KEY = 'his-demo-role'
 let sessionUserId: string | null = null
 let sessionLoginAt = 0
+let sessionActiveRole: Role | null = null
 try {
   sessionUserId = sessionStorage.getItem(SESSION_KEY)
   sessionLoginAt = Number(sessionStorage.getItem(LOGIN_AT_KEY)) || 0
+  sessionActiveRole = sessionStorage.getItem(ROLE_KEY) as Role | null
 } catch {
   // 無 sessionStorage
 }
 
-export function setSessionUser(userId: string | null, loginAt = Date.now()): void {
+export function setSessionUser(userId: string | null, loginAt = Date.now(), role: Role | null = null): void {
   sessionUserId = userId
   sessionLoginAt = userId ? loginAt : 0
   setSessionLock(null) // 登入、登出、換人都從「未鎖定」開始
+  setSessionRole(userId ? role : null)
   try {
     if (userId) {
       sessionStorage.setItem(SESSION_KEY, userId)
@@ -172,6 +177,29 @@ export function setSessionUser(userId: string | null, loginAt = Date.now()): voi
     // 無 sessionStorage 時僅保留在記憶體
   }
 }
+
+export function setSessionRole(role: Role | null): void {
+  sessionActiveRole = role
+  try {
+    if (role) sessionStorage.setItem(ROLE_KEY, role)
+    else sessionStorage.removeItem(ROLE_KEY)
+  } catch {
+    // 無 sessionStorage 時僅保留在記憶體
+  }
+}
+
+/**
+ * 這個分頁目前的作業角色。記下的角色若已不在帳號上（管理員剛把它拿掉），改用帳號的第一個角色——
+ * 不登出：被拿掉一個角色不代表不能用其他角色工作
+ */
+export function sessionRole(): Role | null {
+  const u = sessionUser()
+  if (!u) return null
+  return sessionActiveRole && u.roles.includes(sessionActiveRole) ? sessionActiveRole : u.roles[0] ?? null
+}
+
+/** 記下的作業角色已被拿掉、改用其他角色時為 true（版面提示一次） */
+export const sessionRoleFellBack = () => !!sessionActiveRole && sessionRole() !== sessionActiveRole
 
 // ---------- 閒置鎖定 ----------
 // 和登入身分一樣存在 sessionStorage（只屬於這個分頁）：鎖定中按 F5 重新整理，仍然是鎖定的，不能用重新整理繞過
@@ -216,7 +244,10 @@ export function sessionUser(): User | null {
   return u
 }
 
-const roleName: Record<User['role'], string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
+/** 操作者：帳號＋這次用的作業角色。服務層的角色判斷一律看 role（作業角色），不看 roles */
+export type Actor = User & { role: Role }
+
+const roleName: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
 
 /**
  * 取得目前操作者並檢查角色。
@@ -224,15 +255,20 @@ const roleName: Record<User['role'], string> = { admin: '系統管理員', docto
  * 必須由具該角色的人執行——醫療紀錄要記在有執業資格的人名下。
  * 管理員能做的事，在呼叫端明確寫出 'admin'（例：requireUser('admin', 'pharmacist')）。
  */
-export function requireUser(...roles: User['role'][]): User {
-  const u = sessionUser()
-  if (!u) fail('請先登入', 'UNAUTHORIZED')
+export function requireUser(...roles: Role[]): Actor {
+  const raw = sessionUser()
+  if (!raw) fail('請先登入', 'UNAUTHORIZED')
+  if (!raw!.roles.length) fail('此帳號沒有任何角色，請洽系統管理員', 'FORBIDDEN')
+  const u: Actor = { ...raw!, role: sessionRole()! }
   // 鎖定中什麼都不能做（查詢也不行）：畫面蓋住只是體驗，直接呼叫 API 也要擋
   if (sessionLockState) fail('畫面已鎖定，請先解鎖', 'LOCKED')
   // 管理員給的密碼還沒改：除了改密碼、登出，什麼都不能做（直接呼叫 API 也一樣）
   if (u!.mustChangePassword) fail('請先變更密碼', 'PASSWORD_CHANGE')
   if (roles.length && !roles.includes(u.role)) {
     const need = roles.map((r) => roleName[r]).join('、')
+    // 帳號其實有那個角色、只是現在用別的角色：告訴他切換就好，不是沒權限
+    const has = roles.find((x) => u.roles.includes(x))
+    if (has) fail(`請切換為「${roleName[has]}」角色後再操作（右上角）`, 'FORBIDDEN')
     fail(u.role === 'admin' ? `系統管理員不能執行臨床操作，請以${need}帳號登入` : `您沒有執行此操作的權限（限${need}）`, 'FORBIDDEN')
   }
   return u
@@ -240,6 +276,7 @@ export function requireUser(...roles: User['role'][]): User {
 
 /** 稽核紀錄：只在 mutate 內呼叫，跟著同一筆交易成功或回滾 */
 export function audit(action: string, detail: string): void {
-  db.auditLogs.unshift({ id: newId('LOG'), at: now(), userId: sessionUserId ?? '-', action, detail })
+  const role = sessionUserId ? sessionRole() : null
+  db.auditLogs.unshift({ id: newId('LOG'), at: now(), userId: sessionUserId ?? '-', ...(role ? { role } : {}), action, detail })
   if (db.auditLogs.length > 500) db.auditLogs.length = 500
 }

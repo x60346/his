@@ -1,21 +1,37 @@
 // 登入狀態：畫面用來決定顯示什麼（選單、使用者名稱）。
 // 真正的權限檢查在服務層的 requireUser()，這裡只負責「體驗」。
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
-import { authApi, type SafeUser } from '@/services'
+import { computed, ref, watch } from 'vue'
+import { authApi, dbVersion, type LoginResult, type SessionUser } from '@/services'
 import type { Role } from '@/types'
 
 export const useAuth = defineStore('auth', () => {
   // 重新整理頁面時，從服務層的 session 還原
-  const user = ref<SafeUser | null>(authApi.currentUser())
+  // user.role 是這個分頁目前的作業角色；user.roles 是帳號能用的所有角色
+  const user = ref<SessionUser | null>(authApi.currentUser())
   const isLoggedIn = computed(() => !!user.value)
   /** 閒置鎖定中（鎖定時間）；重新整理後從服務層還原，不能用 F5 繞過 */
   const lockedAt = ref<string | null>(authApi.currentLock()?.at ?? null)
 
-  async function login(username: string, password: string) {
-    user.value = await authApi.login(username, password)
+  /** 有多個角色又沒指定時，不登入、回傳可選角色（登入頁接著問） */
+  async function login(username: string, password: string, role?: Role): Promise<LoginResult> {
+    const r = await authApi.login(username, password, role)
+    if (!('chooseRole' in r)) user.value = r
+    return r
+  }
+
+  /** 切換作業角色（同一帳號的其他角色） */
+  async function switchRole(role: Role) {
+    user.value = await authApi.switchRole(role)
     return user.value
   }
+
+  // 管理員改了帳號（例：拿掉目前用的角色、加了新角色）：資料庫有寫入就重新讀一次登入者，選單跟著變
+  watch(dbVersion, () => {
+    if (!user.value) return
+    const now = authApi.currentUser()
+    if (now && (now.role !== user.value.role || now.roles.join() !== user.value.roles.join())) user.value = now
+  })
 
   async function logout() {
     await authApi.logout()
@@ -61,5 +77,5 @@ export const useAuth = defineStore('auth', () => {
     return roles.includes(user.value.role)
   }
 
-  return { user, isLoggedIn, lockedAt, login, logout, changePassword, lock, unlock, expire, canAccess }
+  return { user, isLoggedIn, lockedAt, login, switchRole, logout, changePassword, lock, unlock, expire, canAccess }
 })

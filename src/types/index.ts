@@ -10,8 +10,12 @@ export interface User {
   username: string
   password: string
   name: string
-  role: Role
-  /** 角色為醫師時對應的醫師 id */
+  /**
+   * 這個帳號可以用的角色（至少一個）。同一時間只用其中一個（作業角色，每個分頁各自記），可在右上角切換——
+   * 權限、稽核都看「當下用哪個角色」，每條以角色寫的規則意思不變（例：護理師兼櫃台，新增過敏時是以哪個身分登錄）
+   */
+  roles: Role[]
+  /** 角色含醫師時對應的醫師 id */
   doctorId?: string
   active: boolean
   /** 管理員設定的密碼（新帳號、重設）：登入後必須先改成自己的密碼，才能做其他事 */
@@ -593,6 +597,8 @@ export interface AuditLog {
   id: string
   at: string
   userId: string
+  /** 當時用的作業角色（一個帳號可能有多個角色）；登入前、系統動作沒有 */
+  role?: Role
   action: string
   detail: string
 }

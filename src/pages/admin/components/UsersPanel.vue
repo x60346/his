@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // 帳號管理：新增、修改、停用（不刪除——帳號做過的事都記在稽核紀錄與病歷裡，刪掉就對不上人了）、重設密碼。
+// 一個帳號可以有多個角色（例：護理師兼櫃台）；不能兼任的組合（醫師＋藥師）用和服務層同一條 rolesProblem 即時提示。
 import { computed, reactive, ref } from 'vue'
 import { KeyRound, Pencil, Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect, UTable, type Column } from '@/components/ui'
-import { adminApi, masterApi, PASSWORD_RULE, type UserRow } from '@/services'
+import { adminApi, masterApi, PASSWORD_RULE, rolesProblem, type UserRow } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { roleLabel } from '@/utils/labels'
@@ -15,14 +16,14 @@ const roleFilter = ref<string | number | undefined>('')
 const { data: users, loading } = useQuery(() => adminApi.listUsers())
 const { data: doctors } = useQuery(() => masterApi.listDoctors())
 const rows = computed(() =>
-  (users.value ?? []).filter((u) => (!roleFilter.value || u.role === roleFilter.value) && (!keyword.value || `${u.username} ${u.name}`.includes(keyword.value.trim()))),
+  (users.value ?? []).filter((u) => (!roleFilter.value || u.roles.includes(roleFilter.value as Role)) && (!keyword.value || `${u.username} ${u.name}`.includes(keyword.value.trim()))),
 )
 
 const roles = Object.entries(roleLabel).map(([value, label]) => ({ label, value }))
 const columns: Column<UserRow>[] = [
   { key: 'username', label: '帳號', width: '8rem' },
   { key: 'name', label: '姓名' },
-  { key: 'role', label: '角色', width: '7rem' },
+  { key: 'roles', label: '角色', width: '9rem' },
   { key: 'doctorName', label: '對應醫師' },
   { key: 'lastLoginAt', label: '最近登入', width: '9rem', format: (u) => u.lastLoginAt?.slice(5) ?? '—' },
   { key: 'active', label: '狀態', width: '5rem' },
@@ -31,10 +32,17 @@ const columns: Column<UserRow>[] = [
 
 // ---------- 新增 / 修改 ----------
 const editOpen = ref(false)
-const form = reactive({ id: undefined as string | undefined, username: '', name: '', role: 'clerk' as string | number | undefined, doctorId: undefined as string | number | undefined, active: true, password: '' })
+const form = reactive({ id: undefined as string | undefined, username: '', name: '', roles: ['clerk'] as Role[], doctorId: undefined as string | number | undefined, active: true, password: '' })
+const roleOrder: Role[] = ['doctor', 'nurse', 'pharmacist', 'clerk', 'admin']
+function toggleRole(role: Role, on: boolean) {
+  form.roles = on ? [...form.roles, role] : form.roles.filter((x) => x !== role)
+}
+// 勾的當下就提示不能兼任的組合（服務層也會擋）
+const rolesHint = computed(() => rolesProblem(form.roles))
+const hasDoctor = computed(() => form.roles.includes('doctor'))
 const isSelf = computed(() => !!form.id && form.id === auth.user?.id)
 function openEdit(u?: UserRow) {
-  Object.assign(form, u ? { id: u.id, username: u.username, name: u.name, role: u.role, doctorId: u.doctorId, active: u.active, password: '' } : { id: undefined, username: '', name: '', role: 'clerk', doctorId: undefined, active: true, password: '' })
+  Object.assign(form, u ? { id: u.id, username: u.username, name: u.name, roles: [...u.roles], doctorId: u.doctorId, active: u.active, password: '' } : { id: undefined, username: '', name: '', roles: ['clerk'], doctorId: undefined, active: true, password: '' })
   save.fieldErrors.value = {}
   editOpen.value = true
 }
@@ -50,8 +58,8 @@ async function submit() {
     id: form.id,
     username: form.username,
     name: form.name,
-    role: form.role as Role,
-    doctorId: form.role === 'doctor' ? (form.doctorId as string | undefined) : undefined,
+    roles: form.roles,
+    doctorId: hasDoctor.value ? (form.doctorId as string | undefined) : undefined,
     active: form.active,
     password: form.id ? undefined : form.password,
   })
@@ -85,7 +93,7 @@ async function submitPw() {
       <template #cell-username="{ row }">
         <span class="tabular font-medium">{{ row.username }}</span><UBadge v-if="row.id === auth.user?.id" tone="blue" class="ml-1">我</UBadge>
       </template>
-      <template #cell-role="{ row }">{{ roleLabel[row.role] }}</template>
+      <template #cell-roles="{ row }">{{ row.roles.map((x) => roleLabel[x]).join('、') }}</template>
       <template #cell-doctorName="{ row }">{{ row.doctorName || '—' }}</template>
       <template #cell-active="{ row }"><UBadge :tone="row.active ? 'green' : 'gray'">{{ row.active ? '啟用' : '停用' }}</UBadge></template>
       <template #cell-act="{ row }">
@@ -99,9 +107,25 @@ async function submitPw() {
     <UDialog v-model="editOpen" @submit="submit" :title="form.id ? `編輯帳號：${form.username}` : '新增帳號'">
       <div class="grid grid-cols-2 gap-3">
         <UInput v-model="form.username" label="帳號" required :disabled="!!form.id" :hint="`${adminApi.USERNAME_RULE}，建立後不可修改`" :error="save.fieldErrors.value.username" />
-        <USelect v-model="form.role" label="角色" required :options="roles" :disabled="isSelf" :hint="isSelf ? '不能變更自己的角色' : ''" :error="save.fieldErrors.value.role" />
+        <fieldset class="col-span-2">
+          <legend class="mb-1 text-sm font-medium text-slate-700">角色 <span class="text-red-500">*</span></legend>
+          <div class="flex flex-wrap gap-x-4 gap-y-1">
+            <!-- 自己的管理員角色不能拿掉（防止把自己鎖在門外）；其他角色可以加 -->
+            <UCheckbox
+              v-for="x in roleOrder"
+              :key="x"
+              :model-value="form.roles.includes(x)"
+              :label="roleLabel[x]"
+              :disabled="isSelf && x === 'admin'"
+              @update:model-value="(v: boolean) => toggleRole(x, v)"
+            />
+          </div>
+          <p v-if="rolesHint || save.fieldErrors.value.roles" class="mt-1 text-xs text-red-600">{{ rolesHint ?? save.fieldErrors.value.roles }}</p>
+          <p v-else-if="form.roles.length > 1" class="mt-1 text-xs text-slate-500">多個角色：登入時選一個使用，右上角可切換；權限與稽核都看「當下用的角色」。</p>
+          <p v-if="isSelf" class="mt-1 text-xs text-slate-500">不能拿掉自己的管理員角色。</p>
+        </fieldset>
         <USelect
-          v-if="form.role === 'doctor'"
+          v-if="hasDoctor"
           :model-value="form.doctorId"
           label="對應醫師"
           required
@@ -121,7 +145,7 @@ async function submitPw() {
       </div>
       <template #footer>
         <UButton variant="secondary" @click="editOpen = false">取消</UButton>
-        <UButton :loading="save.pending.value" type="submit">儲存</UButton>
+        <UButton :loading="save.pending.value" :disabled="!!rolesHint" type="submit">儲存</UButton>
       </template>
     </UDialog>
 

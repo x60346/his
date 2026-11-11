@@ -175,15 +175,17 @@ export function buildSeed(): Database {
 
   // ---------- 使用者 ----------
   const users: User[] = [
-    { id: 'U001', username: 'admin', password: '1234', name: '系統管理員', role: 'admin', active: true },
+    { id: 'U001', username: 'admin', password: '1234', name: '系統管理員', roles: ['admin'], active: true },
     ...codes.doctors.map((d, i): User => ({
       id: `U1${String(i + 1).padStart(2, '0')}`, username: `dr${String(i + 1).padStart(2, '0')}`, password: '1234',
-      name: d.name, role: 'doctor', doctorId: d.id, active: true,
+      name: d.name, roles: ['doctor'], doctorId: d.id, active: true,
     })),
-    { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', role: 'nurse', active: true },
-    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', role: 'nurse', active: true },
-    { id: 'U301', username: 'ph01', password: '1234', name: '方建志', role: 'pharmacist', active: true },
-    { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', role: 'clerk', active: true },
+    { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
+    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true },
+    { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
+    { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', roles: ['clerk'], active: true },
+    // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
+    { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
   ]
   const doctorUser = (doctorId: string) => users.find((u) => u.doctorId === doctorId)!.id
 

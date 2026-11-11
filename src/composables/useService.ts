@@ -90,7 +90,9 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
     fieldErrors.value = {}
     try {
       const r = await fn(...args)
-      if (opts.success) ui.toast.success(typeof opts.success === 'function' ? opts.success(r) : opts.success)
+      // success 算出空字串＝這次不提示（例：多角色登入的第一步只是問角色，還沒登入）
+      const msg = opts.success && (typeof opts.success === 'function' ? opts.success(r) : opts.success)
+      if (msg) ui.toast.success(msg)
       return r
     } catch (e) {
       if (e instanceof Cancelled) return undefined

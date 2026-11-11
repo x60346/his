@@ -599,6 +599,80 @@ try {
     await as('clerk01')
   }
 
+  // 多角色：一個帳號多個角色，登入時選一個用、右上角切換；權限與稽核都看當下的角色
+  {
+    const A = api.authApi
+    const RR = await load('/src/services/role-rules.ts')
+    ok(dbm.db.users.every((u) => Array.isArray(u.roles) && u.roles.length >= 1), '種子：每個帳號至少一個角色')
+    ok(RR.rolesProblem([]) && RR.rolesProblem(['doctor', 'pharmacist']) && !RR.rolesProblem(['nurse', 'clerk']) && !RR.rolesProblem(['doctor', 'admin']), '規則：至少一個角色；醫師＋藥師不可兼任（醫藥分業），其他組合可以')
+    await A.logout()
+    const first = await A.login('staff01', '1234')
+    ok(first.chooseRole?.join() === 'nurse,clerk' && !A.currentUser(), '多角色帳號沒指定角色：不登入，回傳可選的角色讓登入頁問')
+    await expectError(() => A.login('staff01', '1234', 'pharmacist'), '用帳號沒有的角色登入')
+    const asNurse = await A.login('staff01', '1234', 'nurse')
+    ok(asNurse.role === 'nurse' && asNurse.roles.join() === 'nurse,clerk' && dbm.db.auditLogs[0].detail.includes('以護理師身分') && dbm.db.auditLogs[0].role === 'nurse', '以護理師身分登入：作業角色 nurse，稽核記下角色')
+    // 以護理師身分：櫃台的事不能做，訊息告訴他切換就好
+    const clerkOnly = () => api.chargeApi.repayDebt('不存在', { payMethod: 'cash', amount: 1 })
+    try {
+      await clerkOnly()
+      ok(false, '護理師身分不能做櫃台的事')
+    } catch (e) {
+      ok(e.code === 'FORBIDDEN' && e.message.includes('請切換為「掛號批價」'), `護理師身分做櫃台的事 → 「${e.message}」（帳號有這個角色，提示切換而不是說沒權限）`)
+    }
+    ok(!(await api.dashboardApi.getDashboard()).revenue, '以護理師身分：首頁看不到收入（看當下角色，不看帳號所有角色）')
+    const sw = await A.switchRole('clerk')
+    ok(sw.role === 'clerk' && dbm.db.auditLogs[0].action === '切換角色' && dbm.db.auditLogs[0].detail.includes('護理師 → 掛號批價') && dbm.db.auditLogs[0].role === 'clerk', '切換為掛號批價：寫入稽核（從哪個角色換到哪個）')
+    ok(!!(await api.dashboardApi.getDashboard()).revenue, '切換後：首頁看得到收入')
+    try {
+      await clerkOnly()
+    } catch (e) {
+      ok(e.code === 'NOT_FOUND', '切換後櫃台的操作通過權限檢查（這裡是找不到收據，不是沒權限）')
+    }
+    await expectError(() => A.switchRole('doctor'), '切換到帳號沒有的角色')
+    // 管理員拿掉正在用的角色：改用帳號剩下的角色，不登出
+    const staff = () => dbm.db.users.find((u) => u.username === 'staff01')
+    await as('admin')
+    await api.adminApi.saveUser({ id: staff().id, username: 'staff01', name: staff().name, roles: ['nurse'], active: true })
+    ok(dbm.db.auditLogs[0].detail.includes('nurse'), '管理員改角色：稽核記下新的角色')
+    ok((await api.adminApi.listUsers()).find((u) => u.username === 'staff01')?.lastLoginAt, '帳號列表的「最近登入」也找得到多角色登入（稽核內容多了角色，改用 userId 比對）')
+    await A.login('staff01', '1234')
+    ok(A.currentUser()?.role === 'nurse', '只剩一個角色時直接登入，不再問')
+    http.setSessionRole('clerk')
+    ok(A.currentUser()?.role === 'nurse' && A.roleFellBack(), '記下的角色已被拿掉：改用剩下的角色（不登出），版面會提示')
+    await as('admin')
+    await api.adminApi.saveUser({ id: staff().id, username: 'staff01', name: staff().name, roles: ['nurse', 'clerk'], active: true })
+    // 醫藥分業、醫師需對應醫師、不能拿掉自己的管理員角色
+    const ph = dbm.db.users.find((u) => u.username === 'ph01')
+    try {
+      await api.adminApi.saveUser({ id: ph.id, username: 'ph01', name: ph.name, roles: ['pharmacist', 'doctor'], doctorId: 'DR09', active: true })
+      ok(false, '醫師＋藥師應被擋下')
+    } catch (e) {
+      ok(e.field === 'roles' && e.message.includes('醫藥分業'), `藥師加醫師角色 → 「${e.message}」`)
+    }
+    try {
+      await api.adminApi.saveUser({ id: ph.id, username: 'ph01', name: ph.name, roles: ['nurse', 'doctor'], active: true })
+      ok(false, '含醫師角色沒對應醫師應被擋下')
+    } catch (e) {
+      ok(Object.keys(e.fields ?? { [e.field]: 1 }).includes('doctorId'), '含醫師角色的帳號要對應醫師')
+    }
+    const me = dbm.db.users.find((u) => u.username === 'admin')
+    try {
+      await api.adminApi.saveUser({ id: me.id, username: 'admin', name: me.name, roles: ['clerk'], active: true })
+      ok(false, '拿掉自己的管理員角色應被擋下')
+    } catch (e) {
+      ok(e.field === 'roles', '不能拿掉自己的管理員角色')
+    }
+    // 院長兼醫師：醫師角色時能看診，管理員角色時不能做臨床操作（「管理員不能臨床」的規則照樣成立）
+    const dr = dbm.db.users.find((u) => u.username === 'dr01')
+    await api.adminApi.saveUser({ id: dr.id, username: 'dr01', name: dr.name, roles: ['doctor', 'admin'], doctorId: dr.doctorId, active: true })
+    await A.login('dr01', '1234', 'admin')
+    await expectError(() => api.opdApi.startConsult('不存在'), '醫師兼管理員以管理員身分看診')
+    ok((await api.adminApi.listUsers()).length > 0, '以管理員身分可以管理帳號')
+    await as('admin')
+    await api.adminApi.saveUser({ id: dr.id, username: 'dr01', name: dr.name, roles: ['doctor'], doctorId: dr.doctorId, active: true })
+    await as('clerk01')
+  }
+
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
   {
     const pending = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01')
@@ -1174,18 +1248,18 @@ try {
     ok(new Set(codes).size === codes.length && dbm.db.departments.find((d) => d.name === '家醫科')?.code === 'FM', `種子科別代碼不重複，家醫科為 FM（${codes.join('、')}）`)
   }
   const self = dbm.db.users.find((u) => u.username === 'admin')
-  await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'admin', active: false }), '停用自己的帳號')
-  await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, role: 'clerk', active: true }), '拿掉自己的管理員角色')
-  await expectError(() => A.saveUser({ username: 'Bad Name', name: 'x', role: 'clerk', active: true, password: 'Welcome123' }), '帳號格式不符')
-  await expectError(() => A.saveUser({ username: 'clerk01', name: 'x', role: 'clerk', active: true, password: 'Welcome123' }), '帳號重複')
-  await expectError(() => A.saveUser({ username: 'dr99', name: 'x', role: 'doctor', doctorId: 'DR01', active: true, password: 'Welcome123' }), '同一位醫師建立第二個帳號')
-  await expectError(() => A.saveUser({ username: 'clerk02', name: '新櫃台', role: 'clerk', active: true, password: '12' }), '新帳號密碼太短')
-  const nu = await A.saveUser({ username: 'Clerk02', name: '新櫃台', role: 'clerk', active: true, password: 'Welcome123' })
+  await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, roles: ['admin'], active: false }), '停用自己的帳號')
+  await expectError(() => A.saveUser({ id: self.id, username: 'admin', name: self.name, roles: ['clerk'], active: true }), '拿掉自己的管理員角色')
+  await expectError(() => A.saveUser({ username: 'Bad Name', name: 'x', roles: ['clerk'], active: true, password: 'Welcome123' }), '帳號格式不符')
+  await expectError(() => A.saveUser({ username: 'clerk01', name: 'x', roles: ['clerk'], active: true, password: 'Welcome123' }), '帳號重複')
+  await expectError(() => A.saveUser({ username: 'dr99', name: 'x', roles: ['doctor'], doctorId: 'DR01', active: true, password: 'Welcome123' }), '同一位醫師建立第二個帳號')
+  await expectError(() => A.saveUser({ username: 'clerk02', name: '新櫃台', roles: ['clerk'], active: true, password: '12' }), '新帳號密碼太短')
+  const nu = await A.saveUser({ username: 'Clerk02', name: '新櫃台', roles: ['clerk'], active: true, password: 'Welcome123' })
   ok(nu.username === 'clerk02' && !('password' in nu), '新增帳號：帳號轉小寫、回傳不含密碼')
-  const admin2 = await A.saveUser({ username: 'admin2', name: '副管理員', role: 'admin', active: true, password: 'Welcome123' })
-  await A.saveUser({ id: admin2.id, username: 'admin2', name: '副管理員', role: 'admin', active: false })
+  const admin2 = await A.saveUser({ username: 'admin2', name: '副管理員', roles: ['admin'], active: true, password: 'Welcome123' })
+  await A.saveUser({ id: admin2.id, username: 'admin2', name: '副管理員', roles: ['admin'], active: false })
   await as('admin')
-  await A.saveUser({ id: nu.id, username: 'clerk02', name: '新櫃台', role: 'clerk', active: false })
+  await A.saveUser({ id: nu.id, username: 'clerk02', name: '新櫃台', roles: ['clerk'], active: false })
   await expectError(() => api.authApi.login('clerk02', 'Welcome123'), '停用的帳號登入')
   await A.resetPassword(nu.id, 'Reset2026x')
   ok(!dbm.db.auditLogs.slice(0, 3).some((l) => l.detail.includes('Reset2026x')), '重設密碼：稽核紀錄不記錄密碼內容')
@@ -1202,7 +1276,7 @@ try {
   await A.saveDoctor({ ...ndoc, active: false })
   await A.saveDepartment({ ...nd, active: false })
   ok(!dbm.db.departments.find((d) => d.id === nd.id).active, '醫師停用後，科別可以停用')
-  await expectError(() => A.saveUser({ username: 'drnew', name: '新醫師', role: 'doctor', doctorId: ndoc.id, active: true, password: 'Welcome123' }), '為停用的醫師建立帳號')
+  await expectError(() => A.saveUser({ username: 'drnew', name: '新醫師', roles: ['doctor'], doctorId: ndoc.id, active: true, password: 'Welcome123' }), '為停用的醫師建立帳號')
 
   // 管理員可以檢視、可以做系統管理，但不能執行臨床操作
   await as('admin')
@@ -1236,7 +1310,7 @@ try {
   delete partial.mar
   await expectError(() => A.importData(JSON.stringify(partial)), '匯入只缺一項的檔案（不加「等 N 項」）')
   const noAdmin = JSON.parse(dump)
-  noAdmin.users = noAdmin.users.filter((u) => u.role !== 'admin')
+  noAdmin.users = noAdmin.users.filter((u) => !u.roles.includes('admin'))
   await expectError(() => A.importData(JSON.stringify(noAdmin)), '匯入沒有管理員的資料')
   const before = dbm.db.patients.length
   const modified = JSON.parse(dump)
@@ -1555,7 +1629,7 @@ try {
     const A = api.adminApi
     const M = api.masterApi
     await as('admin')
-    await multi(() => A.saveUser({ username: '', name: '', role: '', password: '', active: true }), '新增帳號')
+    await multi(() => A.saveUser({ username: '', name: '', roles: [], password: '', active: true }), '新增帳號')
     await multi(() => A.saveDepartment({ code: '', name: '', active: true }), '新增科別')
     await multi(() => A.saveDoctor({ name: '', deptId: '', title: '', licenseNo: '', active: true }), '新增醫師')
     await multi(() => A.saveBillingSettings({ basicCopay: -1, drugCopayFreeUpTo: -1, drugCopayStep: 0, drugCopayPerStep: -1, drugCopayMax: -1 }), '收費設定')

@@ -1,7 +1,7 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { query, sessionUser } from './http'
+import { query, sessionRole } from './http'
 import { nameOf } from './views'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
@@ -21,7 +21,7 @@ export interface DashboardStats {
 
 export function getDashboard(): Promise<DashboardStats> {
   return query(() => {
-    const seesRevenue = ['clerk', 'admin'].includes(sessionUser()?.role ?? '')
+    const seesRevenue = ['clerk', 'admin'].includes(sessionRole() ?? '') // 看「現在用的角色」：護理師兼櫃台，以護理師身分時看不到收入
     const t = today()
     const n = now()
     const visits = db.visits.filter((v) => v.date === t)
