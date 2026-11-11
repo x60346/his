@@ -17,6 +17,8 @@ defineEmits<{ copy: [item: HistoryItem] }>()
       <div class="mb-2 flex items-center gap-2">
         <span class="tabular font-semibold text-slate-800">{{ h.date }}</span>
         <span class="text-slate-500">{{ h.deptName }}・{{ h.doctorName }}</span>
+        <!-- 慢箋領藥不是看診：照原處方調劑，標出來醫師才不會以為病人那天有回診 -->
+        <span v-if="h.refillSeq" class="rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">慢箋第 {{ h.refillSeq }} 次領藥（未看診）</span>
         <UButton v-if="!readonly && h.medications.length" class="ml-auto" size="sm" variant="secondary" :icon="Copy" @click="$emit('copy', h)">複製處方</UButton>
       </div>
       <div class="text-slate-700">

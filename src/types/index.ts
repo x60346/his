@@ -152,6 +152,13 @@ export interface Visit {
   notifiedAt?: string
   /** 記錄「已通知」的人（使用者 id）；撤銷時與 notifiedAt 一起清掉，撤銷經過留在稽核紀錄 */
   notifiedBy?: string
+  /**
+   * 慢箋領藥：原處方的病歷 id。有這個欄位的就醫不看診——櫃台登記後直接是「已看診」，走批價、領藥；
+   * 不屬於任何診次（sessionId 空白），不會出現在醫師候診清單
+   */
+  refillOf?: string
+  /** 慢箋第幾次調劑（看診當天那次是第 1 次，所以這裡從 2 開始） */
+  refillSeq?: number
 }
 
 export interface VitalSigns {

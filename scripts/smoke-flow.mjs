@@ -283,7 +283,7 @@ try {
     const fixedKinds = ['reg', 'consult', 'copay-basic']
     let mismatch = []
     for (const idt of dbm.db.identities) {
-      for (const ct of ['01', '04', '08', 'A3']) {
+      for (const ct of ['01', '04', 'A3']) {
         for (const withPrevent of [false, true]) {
           const est = await api.bookingApi.estimateFee(idt.code, ct, withPrevent)
           const effective = api.bookingApi.effectiveCaseType(ct, withPrevent)
@@ -293,7 +293,7 @@ try {
         }
       }
     }
-    ok(mismatch.length === 0, `預估應收與批價一致（${dbm.db.identities.length} 種身分 × 4 種案件 × 有無預防保健）${mismatch.length ? '：' + mismatch.join('；') : ''}`)
+    ok(mismatch.length === 0, `預估應收與批價一致（${dbm.db.identities.length} 種身分 × 3 種案件 × 有無預防保健；08 慢箋不掛號）${mismatch.length ? '：' + mismatch.join('；') : ''}`)
     const basic = dbm.db.billingSettings.basicCopay
     const e01 = await api.bookingApi.estimateFee('01', '01')
     const eA3 = await api.bookingApi.estimateFee('01', '01', true)
@@ -398,6 +398,82 @@ try {
     await api.chargeApi.pay(toVoid.visitId, { payMethod: 'cash', received: pv.patientTotal })
     const rep2 = await api.chargeApi.dailyReport(T)
     ok(rep2.unpaid.length === rep.unpaid.length - 1 && rep2.patientTotal === rep.patientTotal + pv.patientTotal, '補收後：未收款少一位，收入合計跟著增加')
+  }
+
+  // 慢箋領藥：不看診，櫃台登記 → 批價 → 藥局；時間窗、次數、不能跳次
+  {
+    const R = await load('/src/services/refill-rules.ts')
+    const { addDays } = await load('/src/utils/date.ts')
+    const w = R.refillWindow('2026-01-01', 28)
+    ok(w.from === '2026-01-19' && w.to === '2026-01-28', `規則：01/01 領 28 天 → 01/19–01/28 可領下一次（藥吃完前 10 天）`)
+    const f1 = [{ seq: 1, date: '2026-01-01', status: 'dispensed', dispensedDate: '2026-01-01' }]
+    const at = (d) => R.refillState(3, 28, f1, d)
+    ok(!at('2026-01-18').canRegister && at('2026-01-18').reason === '01/19 起可領' && at('2026-01-19').canRegister && at('2026-01-28').canRegister && at('2026-01-29').expired && !at('2026-01-29').canRegister,
+      '規則：前一天不行、第一天與最後一天可以、隔天過期（要回診）')
+    ok(R.refillState(2, 28, [{ seq: 1, date: '2026-01-01', status: 'charged' }], '2026-01-20').reason === '上次的藥還沒領', '規則：第一次的藥還沒領，不能登記第 2 次')
+    ok(R.refillState(3, 28, [...f1, { seq: 2, date: '2026-01-20', status: 'consulted' }], '2026-01-20').reason === '第 2 次已登記，尚未領藥', '規則：已登記還沒領，不能再登記（不跳次）')
+    const done = R.refillState(2, 28, [...f1, { seq: 2, date: '2026-01-20', status: 'dispensed', dispensedDate: '2026-01-20' }], '2026-02-10')
+    ok(done.nextSeq === null && done.reason === '已領完', '規則：可調劑 2 次＝第一次＋再領 1 次，領完就沒有了')
+    ok(R.refillState(2, 28, [...f1, { seq: 2, date: '2026-01-20', status: 'cancelled' }], '2026-01-20').canRegister, '規則：退掛的那次不算')
+    const rx = (id, date, deptId = 'D02') => ({ id, patientId: 'P1', deptId, date, refillTimes: 2 })
+    const all = [rx('a', '2026-01-01'), rx('b', '2026-01-15'), rx('c', '2026-01-20', 'D06')]
+    ok(R.supersededBy(all[0], all) === '2026-01-15' && !R.supersededBy(all[1], all) && !R.supersededBy(all[2], all), '規則：同科之後又開新慢箋，舊的被取代；別科的不受影響')
+
+    await as('clerk01')
+    const B = api.bookingApi
+    // 種子裡今天可領的那位
+    let ready, pt
+    for (const x of dbm.db.patients) {
+      const list = await B.listRefills(x.id)
+      ready = list.find((f) => f.canRegister)
+      if (ready) { pt = x; break }
+    }
+    ok(!!ready && ready.nextSeq === 2, `種子有一位今天可領慢箋（${pt?.name}，第 ${ready?.nextSeq}/${ready?.total} 次，${ready?.reason}）`)
+    const waiting = []
+    for (const x of dbm.db.patients) for (const f of await B.listRefills(x.id)) if (!f.canRegister && f.window && f.window.from > T) waiting.push(f)
+    ok(waiting.length >= 1, `種子也有還沒到時間的慢箋（${waiting[0]?.reason}）`)
+
+    const orig = dbm.db.encounters.find((e) => e.id === ready.encounterId)
+    const sess = dbm.db.sessions.find((x) => x.date === T && !x.suspended)
+    await expectError(() => B.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '08' }), '用 08 掛號看診')
+    const v = await B.registerRefill(ready.encounterId)
+    const enc = dbm.db.encounters.find((e) => e.visitId === v.id)
+    ok(v.caseType === '08' && v.status === 'consulted' && v.sessionId === '' && v.refillSeq === 2 && v.refillOf === orig.id && dbm.db.auditLogs[0].action === '慢箋領藥登記',
+      '登記領藥：08 案件、直接是已看診、不屬於任何診次、寫入稽核')
+    ok(JSON.stringify(enc.medications) === JSON.stringify(orig.medications) && enc.status === 'completed' && enc.subjective.includes('第 2 次'), '藥照抄原處方（劑量、天數、總量都一樣）')
+    const q = await api.opdApi.listQueue({ date: T, doctorId: v.doctorId })
+    ok(!q.some((x) => x.id === v.id), '不會出現在醫師的候診清單')
+    await expectError(() => B.registerRefill(ready.encounterId), '同一張慢箋重複登記')
+    const pv = await api.chargeApi.previewCharge(v.id)
+    const kinds = pv.lines.map((l) => l.kind)
+    const selfPayId = dbm.db.identities.find((i) => i.code === v.identityCode)?.selfPay
+    ok(!kinds.some((k) => ['reg', 'consult', 'copay-basic', 'copay-drug'].includes(k)) && (selfPayId || pv.patientTotal === 0),
+      `批價：沒有掛號費、診察費、部分負擔（應收 ${pv.patientTotal} 元，申報 ${pv.nhiPoints} 點）`)
+    // 登記錯了可以退：病歷一併刪，之後可重新登記
+    await B.cancelVisit(v.id)
+    ok(dbm.db.visits.find((x) => x.id === v.id).status === 'cancelled' && !dbm.db.encounters.some((e) => e.visitId === v.id) && (await B.listRefills(pt.id)).find((f) => f.encounterId === orig.id)?.canRegister,
+      '批價前退掛：系統代填的病歷刪除，可以重新登記')
+    const v2 = await B.registerRefill(ready.encounterId)
+    await api.chargeApi.pay(v2.id, { payMethod: 'cash', received: pv.patientTotal })
+    await expectError(() => B.cancelVisit(v2.id), '已批價的慢箋領藥退掛')
+    const dp = dbm.db.dispenses.find((d) => d.visitId === v2.id)
+    ok(!!dp && dp.status === 'pending', `批價後產生調劑單（領藥號 ${dp?.pickupNo}）`)
+    await as('ph01')
+    await api.pharmacyApi.verifyDispense(dp.id)
+    const dv = await api.pharmacyApi.dispense(dp.id, { proxy: true, proxyName: '家屬', relation: '子女' })
+    ok(dv.refillSeq === 2 && dbm.db.visits.find((x) => x.id === v2.id).status === 'dispensed', '藥局：標示慢箋第 2 次，發藥完成')
+    await as('clerk01')
+    const after = (await B.listRefills(pt.id)).find((f) => f.encounterId === orig.id)
+    ok(after?.nextSeq === 3 && !after.canRegister && after.window.from === addDays(T, R.supplyDays(orig.medications) - R.REFILL_WINDOW_DAYS), `領完第 2 次：第 3 次 ${after?.reason}`)
+    const hist = await api.opdApi.patientHistory(pt.id)
+    ok(hist.some((h) => h.refillSeq === 2), '醫師的歷史病歷標出這是慢箋領藥（不是看診）')
+    // 種子裡被取代的舊慢箋：不列出、直接呼叫也擋
+    const oldOne = dbm.db.encounters.find((e) => e.status === 'completed' && e.refillTimes >= 2 && R.supersededBy(e, dbm.db.encounters.filter((x) => x.status === 'completed')))
+    if (oldOne) {
+      ok(!(await B.listRefills(oldOne.patientId)).some((f) => f.encounterId === oldOne.id), '被同科新慢箋取代的舊慢箋不列出')
+      await expectError(() => B.registerRefill(oldOne.id), '登記已被取代的舊慢箋')
+    }
+    ok((await B.lastCaseType(pt.id))?.date !== T || (await B.lastCaseType(pt.id))?.caseType !== '08', '「上次案件分類」提示不把慢箋領藥算成上次看診')
   }
 
   // B2：掛號身分選錯可以更正（收費前），更正後依新身分重算
@@ -933,6 +1009,17 @@ try {
     ok(ready.length >= 1 && ready.every((a) => a.dischargeSummary.signedAt <= nowStr()), `住院中已准予出院 ${ready.length} 位（簽署時間不在未來）`)
   }
 
+  {
+    // 慢箋領藥的就醫：不屬於任何診次、藥與原處方相同、第幾次不超過可調劑次數
+    const rv = dbm.db.visits.filter((v) => v.refillOf)
+    const bad = rv.filter((v) => {
+      const o = dbm.db.encounters.find((e) => e.id === v.refillOf)
+      const e = dbm.db.encounters.find((x) => x.visitId === v.id)
+      return v.sessionId !== '' || v.caseType !== '08' || !o || v.refillSeq > o.refillTimes || (v.status !== 'cancelled' && JSON.stringify(e?.medications) !== JSON.stringify(o.medications))
+    })
+    ok(bad.length === 0, `慢箋領藥 ${rv.length} 筆：不屬於診次、08 案件、藥同原處方、次數不超過`)
+  }
+
   // 不變式：資料庫裡不可以有「未來發生的事」（排程類欄位除外）
   const nowS = (await load('/src/utils/date.ts')).now()
   const futureHits = []
@@ -946,7 +1033,8 @@ try {
   ok(futureHits.length === 0, `所有資料的時間戳記都不晚於現在（違規 ${futureHits.length} 筆${futureHits.length ? '：' + futureHits.slice(0, 3).join('、') : ''}）`)
   {
     // 看過診的掛號一定叫過號，而且「掛號 ≤ 叫號 ≤ 完成看診」（種子資料曾經都沒有叫號時間，「目前看到幾號」算不出來）
-    const seen = dbm.db.visits.filter((v) => !['registered', 'cancelled'].includes(v.status))
+    // 慢箋領藥不看診、不叫號，不算在內
+    const seen = dbm.db.visits.filter((v) => !['registered', 'cancelled'].includes(v.status) && !v.refillOf)
     const badCall = seen.filter((v) => {
       const e = dbm.db.encounters.find((x) => x.visitId === v.id)
       return !v.calledAt || v.calledAt < v.createdAt || (e?.completedAt && v.calledAt > e.completedAt)

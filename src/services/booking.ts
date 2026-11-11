@@ -1,12 +1,14 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { ChargeLine, Visit, VisitStatus } from '@/types'
+import type { ChargeLine, Encounter, Visit, VisitStatus } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
-import { now, periodLabel, today } from '@/utils/date'
+import { addDays, now, periodLabel, today } from '@/utils/date'
+import { clonePlain } from '@/utils/clone'
 import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
 import { fixedCharges } from './billing'
+import { refillState, supersededBy, supplyDays, type RefillFill, type RefillState } from './refill-rules'
 
 export interface VisitQuery {
   date?: string
@@ -58,6 +60,8 @@ function createVisit(input: RegisterInput): Visit {
   const session = must(find.session(input.sessionId), '診次')
   must(find.identity(input.identityCode), '就醫身分')
 
+  // 08 慢箋調劑不看診：走「登記領藥」（registerRefill），不能掛進醫師的診
+  if (input.caseType === '08') fail('慢性病連續處方調劑不需看診，請在病人的「慢箋」按「登記領藥」')
   if (session.date < today()) fail('不可掛過去日期的門診')
   if (isSessionClosed(session)) fail(`此診次已於 ${periodCloseTime[session.period]} 截止掛號`, 'CONFLICT')
   if (session.suspended) fail(`此診次停診（${session.suspended.reason}），請改掛其他診次`, 'CONFLICT')
@@ -161,8 +165,9 @@ export function estimateFee(identityCode: string, inputCaseType: string, withPre
 export function lastCaseType(patientId: string): Promise<{ caseType: string; date: string } | null> {
   return query(() => {
     const t = today()
+    // 慢箋領藥不算「上次看診」
     const last = db.visits
-      .filter((v) => v.patientId === patientId && v.date <= t && v.status !== 'cancelled' && v.status !== 'registered')
+      .filter((v) => v.patientId === patientId && v.date <= t && v.status !== 'cancelled' && v.status !== 'registered' && !v.refillOf)
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))[0]
     return last ? { caseType: last.caseType, date: last.date } : null
   })
@@ -198,9 +203,102 @@ export function cancelVisit(visitId: string): Promise<VisitView> {
   return mutate(() => {
     requireUser('clerk', 'nurse')
     const v = must(find.visit(visitId), '掛號紀錄')
+    if (v.refillOf) {
+      // 慢箋領藥登記錯了：批價前可以退，系統代填的病歷一併刪除（它不是醫師寫的，不留在歷史病歷）
+      if (v.status !== 'consulted') fail('已批價的慢箋領藥不能退掛，請先由批價作廢', 'CONFLICT')
+      db.encounters = db.encounters.filter((e) => e.visitId !== v.id)
+      v.status = 'cancelled'
+      audit('退掛', `${find.patient(v.patientId)?.name} ${v.date} 慢箋第 ${v.refillSeq} 次`)
+      return visitView(v)
+    }
     if (v.status !== 'registered') fail('只有尚未看診的掛號可以退掛', 'CONFLICT')
     v.status = 'cancelled'
     audit('退掛', `${find.patient(v.patientId)?.name} ${v.date} #${v.seqNo}`)
+    return visitView(v)
+  })
+}
+
+// ---------- 慢性病連續處方箋（慢箋）領藥 ----------
+
+export interface RefillView extends RefillState {
+  /** 原處方的病歷 id */
+  encounterId: string
+  /** 原處方（看診）日期 */
+  date: string
+  doctorName: string
+  deptName: string
+  /** 一次給幾天 */
+  days: number
+  medicationNames: string[]
+  /** 已登記、還沒批價的那次（可退掛） */
+  pendingVisitId?: string
+}
+
+const dispensedDateOf = (visitId: string) => db.dispenses.find((d) => d.visitId === visitId && d.status === 'dispensed')?.dispensedAt?.slice(0, 10)
+
+function refillStateOf(e: Encounter, t: string): RefillState {
+  const first = must(find.visit(e.visitId), '掛號紀錄')
+  const fills: RefillFill[] = [
+    { seq: 1, date: first.date, status: first.status, dispensedDate: dispensedDateOf(first.id) },
+    ...db.visits.filter((v) => v.refillOf === e.id).map((v) => ({ seq: v.refillSeq!, date: v.date, status: v.status, dispensedDate: dispensedDateOf(v.id) })),
+  ]
+  return refillState(e.refillTimes, supplyDays(e.medications), fills, t)
+}
+
+/**
+ * 病人的慢箋：還能領的、還沒到時間的、剛過期的（過期 30 天內還列著，櫃台才答得出「為什麼不能領」）。
+ * 已領完、早就過期、被同科新慢箋取代的不列。
+ */
+export function listRefills(patientId: string): Promise<RefillView[]> {
+  return query(() => {
+    const t = today()
+    return db.encounters
+      .filter((e) => e.patientId === patientId && e.status === 'completed' && e.refillTimes >= 2 && e.medications.length && find.visit(e.visitId)?.status !== 'cancelled')
+      .filter((e, _, mine) => !supersededBy(e, mine))
+      .map((e) => {
+        const st = refillStateOf(e, t)
+        const pending = db.visits.find((v) => v.refillOf === e.id && v.status === 'consulted')
+        return {
+          ...st, encounterId: e.id, date: e.date, doctorName: nameOf.doctor(e.doctorId), deptName: nameOf.dept(e.deptId),
+          days: supplyDays(e.medications), medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId), pendingVisitId: pending?.id,
+        }
+      })
+      .filter((x) => x.nextSeq !== null && (!x.window || x.window.to >= addDays(t, -30)))
+      .sort((a, b) => b.date.localeCompare(a.date))
+  })
+}
+
+/**
+ * 登記慢箋領藥：建立一筆 08 案件的就醫（直接是「已看診」）＋系統代填的病歷（藥照抄原處方）。
+ * 之後與一般就醫一樣：批價 → 領藥號 → 藥局調劑、發藥。
+ */
+export function registerRefill(encounterId: string): Promise<VisitView> {
+  return mutate(() => {
+    requireUser('clerk', 'nurse')
+    const e = must(db.encounters.find((x) => x.id === encounterId), '原處方')
+    if (e.status !== 'completed' || e.refillTimes < 2) fail('這張處方不是慢性病連續處方箋')
+    const mine = db.encounters.filter((x) => x.patientId === e.patientId && x.status === 'completed' && x.refillTimes >= 2 && find.visit(x.visitId)?.status !== 'cancelled')
+    const newer = supersededBy(e, mine)
+    if (newer) fail(`無法登記領藥：已由 ${newer.slice(5).replace('-', '/')} 的新處方取代`, 'CONFLICT')
+    const p = must(find.patient(e.patientId), '病患')
+    const t = today()
+    const st = refillStateOf(e, t)
+    if (!st.canRegister) fail(`無法登記領藥：${st.reason}`, 'CONFLICT')
+    const first = must(find.visit(e.visitId), '掛號紀錄')
+    const v: Visit = {
+      id: newId('V'), date: t, sessionId: '', deptId: e.deptId, doctorId: e.doctorId, patientId: p.id, seqNo: 0,
+      identityCode: p.defaultIdentity, caseType: '08', cardSeq: String(nextCounter(`cardseq:${p.id}`)).padStart(4, '0'),
+      status: 'consulted', firstVisit: false, preventItems: [], createdAt: now(), refillOf: e.id, refillSeq: st.nextSeq!,
+    }
+    db.visits.push(v)
+    const doctor = nameOf.doctor(e.doctorId)
+    db.encounters.push({
+      id: newId('E'), visitId: v.id, patientId: p.id, doctorId: e.doctorId, deptId: e.deptId, date: t,
+      subjective: `慢性病連續處方箋第 ${v.refillSeq} 次調劑（原處方 ${first.date} ${doctor}）`, objective: '', assessment: '', plan: '',
+      vitals: {}, diagnoses: clonePlain(e.diagnoses), medications: clonePlain(e.medications), procedures: [],
+      refillTimes: 0, admissionRequested: false, status: 'completed', completedAt: now(),
+    })
+    audit('慢箋領藥登記', `${p.chartNo} ${p.name} 第 ${v.refillSeq}/${e.refillTimes} 次（原處方 ${first.date} ${doctor}）`)
     return visitView(v)
   })
 }

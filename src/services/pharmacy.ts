@@ -38,6 +38,8 @@ export interface DispenseView extends Dispense, PatientBrief {
   items: DispenseItem[]
   allergyWarnings: AllergyWarning[]
   diagnoses: string[]
+  /** 慢箋第幾次調劑（一般看診沒有） */
+  refillSeq?: number
 }
 
 function dispenseView(d: Dispense): DispenseView {
@@ -73,6 +75,7 @@ function dispenseView(d: Dispense): DispenseView {
     items,
     allergyWarnings: checkAllergies(p?.allergies ?? [], drugs),
     diagnoses: e.diagnoses.map((x) => `${x.icd} ${x.name}`),
+    refillSeq: find.visit(d.visitId)?.refillSeq,
   }
 }
 

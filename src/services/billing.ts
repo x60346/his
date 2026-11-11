@@ -56,9 +56,13 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
   const selfPayVisit = lk.identity.selfPay
   const lines: ChargeLine[] = []
 
-  lines.push(regLine(lk.identity))
-  const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID))
-  if (consult) lines.push(consult)
+  // 慢箋領藥（refillOf）不看診：沒有掛號費、診察費、基本部分負擔，只有藥（藥品部分負擔 08 案件本來就免）
+  const refill = !!visit.refillOf
+  if (!refill) {
+    lines.push(regLine(lk.identity))
+    const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID))
+    if (consult) lines.push(consult)
+  }
 
   let nhiDrugTotal = 0
   for (const m of enc.medications) {
@@ -84,7 +88,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     }
   }
 
-  const basic = basicCopayLine(lk.identity, visit.caseType, lk.settings)
+  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, lk.settings)
   if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
     const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, lk.settings)

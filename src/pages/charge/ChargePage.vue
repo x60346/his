@@ -57,7 +57,8 @@ const total = computed(() => preview.value?.patientTotal ?? 0)
 const owe = ref(false)
 const oweReason = ref('')
 // 換病人時預設實收＝應收，欠款選項清掉
-watch(total, (t) => {
+// 看「換了病人」也看「金額變了」：只看金額的話，應收 0 元（慢箋領藥）時 0 → 0 沒有變化，實收永遠是空的
+watch([() => item.value?.id, total], ([, t]) => {
   received.value = t
   owe.value = false
   oweReason.value = ''
@@ -151,7 +152,7 @@ const identityOpen = ref(false)
             <button :class="['flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50', v.id === visitId && '!bg-brand-50']" @click="visitId = v.id">
               <span class="min-w-0 flex-1">
                 <span class="block font-medium text-slate-800">{{ v.patientName }} <span class="tabular text-xs font-normal text-slate-500">{{ v.chartNo }}</span></span>
-                <span class="block truncate text-xs text-slate-500">{{ periodLabel[v.period] }}・{{ v.deptName }} {{ v.doctorName }}</span>
+                <span class="block truncate text-xs text-slate-500">{{ v.refillOf ? `慢箋第 ${v.refillSeq} 次` : periodLabel[v.period] }}・{{ v.deptName }} {{ v.doctorName }}</span>
               </span>
               <span class="text-right">
                 <UStatusBadge :map="visitStatus" :value="v.status" />
@@ -172,6 +173,7 @@ const identityOpen = ref(false)
           <UBadge tone="blue">{{ item.identityName }}</UBadge>
           <button v-if="item.status === 'consulted'" type="button" class="text-xs text-brand-600 underline-offset-2 hover:underline" @click="identityOpen = true">更正身分</button>
           <UBadge>案件 {{ item.caseType }}</UBadge>
+          <UBadge v-if="item.refillOf" tone="purple">慢箋第 {{ item.refillSeq }} 次領藥</UBadge>
         </PatientBanner>
         <!-- 之前的欠款：病人來批價（或專程來還錢）時，櫃台一眼看到、當場收回 -->
         <UCard v-if="debts.length" :padded="false" class="no-print border-amber-300">

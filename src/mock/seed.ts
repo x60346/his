@@ -444,6 +444,26 @@ export function buildSeed(): Database {
     }
   }
 
+  // 慢箋（連續處方箋）示範：一位今天可以來領第 2 次（約 20 天前領的 28 天藥），一位還沒到時間（5 天前才領）
+  {
+    const sc = scenarios.find((x) => x.caseType === '04' && x.dept === 'D02')!
+    // 挑最近 60 天沒有慢箋的病人：之後若有同科的新慢箋，示範的這張會被取代（不再列出）
+    const free = [...opdPatients.slice(17), ...opdPatients.slice(6, 17)].filter((pt) => deptFits(pt, 'D02', T) && !encounters.some((e) => e.patientId === pt.id && e.refillTimes >= 2 && e.date > addDays(T, -60)))
+    const demo: [Patient, number, number][] = [[free[0], 20, 3], [free[1], 5, 2]].filter(([pt]) => pt) as [Patient, number, number][]
+    for (const [pt, ago, times] of demo) {
+      // 往前找最近一個有內科門診、這位病人適合的日子（週末沒有門診）
+      let session: ClinicSession | undefined
+      for (let k = ago; k < ago + 7 && !session; k++) session = sessionsOn(addDays(T, -k)).find((x) => x.deptId === 'D02' && x.period === 'AM' && deptFits(pt, 'D02', x.date))
+      if (!session) continue
+      const v = makeVisit(pt, session, 'dispensed', 9, '04')
+      const e = makeEncounter(v, sc, true)
+      e.refillTimes = times
+      const at = `${session.date} 10:10`
+      makeCharge(v, e, at)
+      makeDispense(v, e, 'dispensed', at)
+    }
+  }
+
   // 一筆舊欠款（U10）：今天看完診、等批價的那位病人，上次來忘了帶錢。批價、掛號頁都會提醒收回
   {
     const debtor = opdPatients[todayPlan.find(([, , , st]) => st === 'consulted')![0]]
@@ -510,6 +530,13 @@ export function buildSeed(): Database {
     // 抹片、肺癌篩檢兩週內的報告通常還沒出來
     const pendingReport = daysAgo <= 14 && (item.code === 'CERVIX' || item.code === 'LUNG')
     preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode: item.code, date, doctorId: pick(['DR01', 'DR02', 'DR03']), result: pendingReport ? '待報告' : result, data: pendingReport ? {} : withDerivedFields(data) })
+  }
+  // 「補登報告」要有東西可示範：上面是亂數，前面的種子一改（多抽幾次亂數）就可能一筆待報告都沒有。沒有就補一筆一週前的抹片
+  if (!preventRecords.some((r) => r.result === '待報告')) {
+    const date = addDays(T, -7)
+    const cervix = codes.preventItems.find((i) => i.code === 'CERVIX')!
+    const pt = patients.find((x) => checkEligibility(x, cervix, preventRecords, date).eligible)
+    if (pt) preventRecords.push({ id: id('PR'), patientId: pt.id, itemCode: 'CERVIX', date, doctorId: 'DR01', result: '待報告', data: {} })
   }
 
   // 今天的掛號：部分病人在掛號時勾了預防保健（預防保健頁的「今日待執行」）

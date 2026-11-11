@@ -17,7 +17,8 @@ export interface QueueItem extends VisitView {
 export function listQueue(q: { date: string; doctorId: string; period?: string }): Promise<QueueItem[]> {
   return query(() =>
     db.visits
-      .filter((v) => v.date === q.date && v.doctorId === q.doctorId && v.status !== 'cancelled')
+      // 慢箋領藥（refillOf）掛在原處方醫師名下申報，但不看診，不列在候診清單
+      .filter((v) => v.date === q.date && v.doctorId === q.doctorId && v.status !== 'cancelled' && !v.refillOf)
       .map((v) => ({ ...visitView(v), encounterStatus: find.encounterOfVisit(v.id)?.status }))
       .filter((v) => !q.period || v.period === q.period)
       // 先依診別（上午→下午→夜診）再依看診號，不同診別的號碼才不會交錯
@@ -32,6 +33,7 @@ const LOCKED: VisitStatus[] = ['charged', 'dispensed']
 function editableEncounter(encounterId: string): Encounter {
   const e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
   const v = must(find.visit(e.visitId), '掛號紀錄')
+  if (v.refillOf) fail('慢箋領藥照原處方調劑，不能修改；要改藥請掛號看診', 'CONFLICT')
   if (LOCKED.includes(v.status)) fail('此次就醫已批價，病歷已鎖定；如需修改請先由批價作廢', 'CONFLICT')
   return e
 }
@@ -42,6 +44,7 @@ export function startConsult(visitId: string): Promise<Encounter> {
     const user = requireUser('doctor')
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status === 'cancelled') fail('此掛號已退掛')
+    if (v.refillOf) fail('慢箋領藥不需看診', 'CONFLICT')
     if (LOCKED.includes(v.status)) fail('此次就醫已批價，只能檢視', 'CONFLICT')
     if (user.role === 'doctor' && user.doctorId !== v.doctorId) fail('這不是您的病人', 'FORBIDDEN')
 
@@ -159,6 +162,8 @@ export function allergyWarnings(patientId: string, drugIds: string[]): Promise<A
 }
 
 export interface HistoryItem extends Encounter {
+  /** 慢箋第幾次調劑（不是看診）；一般看診沒有 */
+  refillSeq?: number
   doctorName: string
   deptName: string
   medicationNames: string[]
@@ -172,6 +177,7 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
       .sort((a, b) => b.date.localeCompare(a.date))
       .map((e) => ({
         ...e,
+        refillSeq: find.visit(e.visitId)?.refillSeq,
         doctorName: nameOf.doctor(e.doctorId),
         deptName: nameOf.dept(e.deptId),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),

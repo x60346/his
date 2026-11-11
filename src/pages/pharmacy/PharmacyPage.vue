@@ -157,7 +157,7 @@ const print = () => window.print()
 
       <UCard :padded="false">
         <template #title>
-          <div class="text-sm font-semibold text-slate-800">處方內容</div>
+          <div class="text-sm font-semibold text-slate-800">處方內容<span v-if="d.refillSeq" class="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">慢箋第 {{ d.refillSeq }} 次</span></div>
           <div class="text-xs text-slate-500">{{ d.deptName }}・{{ d.doctorName }}｜診斷：{{ d.diagnoses.join('、') }}</div>
         </template>
         <table class="tabular w-full text-sm">

@@ -108,7 +108,8 @@ const identityCode = ref<string | number>('01')
 const caseType = ref<string | number>('01')
 const preventItems = ref<string[]>([])
 const { data: identities } = useQuery(() => masterApi.listIdentities())
-const caseTypeOptions = masterApi.staticCodes.caseTypes.map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
+// 08 慢箋調劑不看診，不在這裡掛（走病人卡片上的「登記領藥」）；以前可以選 08 掛進醫師的診，醫師得重開一次處方
+const caseTypeOptions = masterApi.staticCodes.caseTypes.filter((c) => c.code !== '08').map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
 
 // 換病人時，身分、案件分類、預防保健都回到預設——以前案件分類沒重設，上一位選 04 慢性病，下一位就沿用
 watch(patient, (p) => {
@@ -116,6 +117,12 @@ watch(patient, (p) => {
   caseType.value = '01'
   preventItems.value = []
 })
+// 慢箋：病人來領第 2、3 次藥，不必掛號看診——在這裡登記，直接去批價、領藥
+const { data: refills } = useQuery(async () => (patient.value ? bookingApi.listRefills(patient.value.id) : []), [patient])
+const registerRefill = useAction(bookingApi.registerRefill, { success: (v) => `已登記 ${v.patientName} 慢箋第 ${v.refillSeq} 次領藥，請至批價` })
+const cancelRefill = useAction(bookingApi.cancelVisit, { success: (v) => `已取消 ${v.patientName} 的慢箋領藥登記` })
+const md = (d: string) => d.slice(5).replace('-', '/')
+
 // 之前的欠款：只提醒，不擋掛號（病人生病來看診，不能因為欠錢就不給掛）；批價時一併收回
 const { data: debts } = useQuery(async () => (patient.value ? chargeApi.listDebts(patient.value.id) : []), [patient])
 const debtTotal = computed(() => (debts.value ?? []).reduce((s, d) => s + d.outstanding, 0))
@@ -123,7 +130,7 @@ const debtTotal = computed(() => (debts.value ?? []).reduce((s, d) => s + d.outs
 const { data: lastCase } = useQuery(async () => (patient.value ? bookingApi.lastCaseType(patient.value.id) : null), [patient])
 const lastCaseHint = computed(() => {
   const l = lastCase.value
-  if (!l || !['04', '08'].includes(l.caseType) || caseType.value === l.caseType) return ''
+  if (!l || l.caseType !== '04' || caseType.value === l.caseType) return ''
   return `上次（${l.date.slice(5).replace('-', '/')}）為 ${l.caseType} ${masterApi.staticCodes.caseTypes.find((c) => c.code === l.caseType)?.name ?? ''}`
 })
 
@@ -217,8 +224,8 @@ const filtered = computed(() => {
 const listSessionOptions = computed(() => (listSessions.value ?? []).map((s) => ({ label: `${periodLabel[s.period]} ${s.roomNo} ${s.deptName} ${s.doctorName}`, value: s.id })))
 
 const columns: Column<VisitView>[] = [
-  { key: 'seqNo', label: '號', align: 'center', width: '50px' },
-  { key: 'session', label: '診別', format: (v) => `${periodLabel[v.period]} ${v.roomNo}` },
+  { key: 'seqNo', label: '號', align: 'center', width: '50px', format: (v) => (v.refillOf ? '—' : String(v.seqNo)) },
+  { key: 'session', label: '診別', format: (v) => (v.refillOf ? `慢箋第 ${v.refillSeq} 次` : `${periodLabel[v.period]} ${v.roomNo}`) },
   { key: 'doctor', label: '科別／醫師', format: (v) => `${v.deptName} ${v.doctorName}` },
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
@@ -230,7 +237,8 @@ const columns: Column<VisitView>[] = [
 
 const cancel = useAction(bookingApi.cancelVisit, { success: (v) => `已退掛：${v.patientName}` })
 async function onCancel(v: VisitView) {
-  const ok = await ui.confirm({ title: '退掛', message: `確定將 ${v.patientName}（${v.deptName} 第 ${v.seqNo} 號）退掛？`, okText: '退掛', danger: true })
+  const what = v.refillOf ? `慢箋第 ${v.refillSeq} 次領藥` : `${v.deptName} 第 ${v.seqNo} 號`
+  const ok = await ui.confirm({ title: '退掛', message: `確定將 ${v.patientName}（${what}）退掛？`, okText: '退掛', danger: true })
   if (ok && (await cancel.run(v.id)) && rescheduling.value?.id === v.id) rescheduling.value = undefined
 }
 
@@ -284,6 +292,21 @@ function openIdentity(v: VisitView) {
             </div>
             <div class="mt-1 text-slate-600">病歷號 {{ patient.chartNo }}・{{ maskId(patient.idNo) }}</div>
             <div v-if="patient.allergies.length" class="mt-1 font-medium text-red-600">過敏：{{ patient.allergies.join('、') }}</div>
+            <!-- 慢箋：可領、還沒到時間、剛過期的都列，不能領的寫原因 -->
+            <div v-if="refills?.length" class="mt-2 space-y-1.5 border-t border-brand-100 pt-2 text-xs">
+              <div class="font-medium text-slate-600">慢性病連續處方箋</div>
+              <div v-for="f in refills" :key="f.encounterId" class="rounded border border-slate-200 bg-white px-2 py-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 text-slate-700">{{ md(f.date) }} {{ f.deptName }} {{ f.doctorName }}・{{ f.days }} 天・第 <b>{{ f.pendingVisitId ? f.used : f.nextSeq }}</b>/{{ f.total }} 次</span>
+                  <UButton v-if="f.pendingVisitId" size="sm" variant="ghost" :loading="cancelRefill.pending.value" @click="cancelRefill.run(f.pendingVisitId)">取消登記</UButton>
+                  <UButton v-else size="sm" variant="secondary" :disabled="!f.canRegister" :loading="registerRefill.pending.value" @click="registerRefill.run(f.encounterId)">登記領藥</UButton>
+                </div>
+                <div class="truncate text-slate-500">{{ f.medicationNames.join('、') }}</div>
+                <div :class="f.canRegister ? 'text-emerald-700' : f.expired ? 'text-red-600' : 'text-slate-500'">
+                  {{ f.pendingVisitId ? '已登記，請病人至批價' : f.reason }}<template v-if="f.window && !f.pendingVisitId">（可領期間 {{ md(f.window.from) }}–{{ md(f.window.to) }}）</template>
+                </div>
+              </div>
+            </div>
             <div v-if="debtTotal" class="tabular mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" role="status">
               尚欠 {{ debtTotal.toLocaleString() }} 元（{{ debts!.length }} 筆，最早 {{ debts![0].date.slice(5).replace('-', '/') }}）。可照常掛號，批價時一併收回。
             </div>
@@ -428,7 +451,7 @@ function openIdentity(v: VisitView) {
         <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
         <template #cell-actions="{ row }">
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
-          <UButton v-if="row.status === 'registered'" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
+          <UButton v-if="row.status === 'registered' || (row.refillOf && row.status === 'consulted')" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
         </template>
       </UTable>
     </UCard>
