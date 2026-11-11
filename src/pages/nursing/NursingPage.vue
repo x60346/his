@@ -5,14 +5,15 @@
 //   2. 服務層算好的（病人清單上的逾時數）：資料是查詢當下算的，所以要定時重新查詢
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { AlertTriangle, ClipboardList } from 'lucide-vue-next'
-import { UBadge, UCard, UEmpty, UQueryState, UTabs } from '@/components/ui'
+import { AlertTriangle, ListChecks } from 'lucide-vue-next'
+import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
 import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
+import WardTasksPanel from './components/WardTasksPanel.vue'
 import { masterApi, nursingApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
@@ -51,6 +52,16 @@ const tabs = computed(() => [
   { key: 'handover', label: '交班' },
 ])
 
+// 本班待辦：取消選取病人就回到全病房清單；點清單的一列跳到該病人的對應分頁
+function showTasks() {
+  admissionId.value = undefined
+  if (tab.value === 'handover') tab.value = 'mar'
+}
+function openTask(id: string, t: string) {
+  admissionId.value = id
+  tab.value = t
+}
+
 const wardTotals = computed(() => ({
   overdue: (patients.value ?? []).reduce((s, p) => s + p.overdueCount, 0),
   stat: (patients.value ?? []).reduce((s, p) => s + p.pendingStatCount, 0),
@@ -70,6 +81,7 @@ const wardTotals = computed(() => ({
           @click="ward = w"
         >{{ w }}</button>
       </div>
+      <UButton size="sm" :variant="!admissionId && tab !== 'handover' ? 'primary' : 'secondary'" :icon="ListChecks" @click="showTasks">本班待辦</UButton>
       <UBadge v-if="wardTotals.overdue" tone="red">全病房逾時給藥 {{ wardTotals.overdue }}</UBadge>
       <UBadge v-if="wardTotals.stat" tone="yellow">待執行臨時醫囑 {{ wardTotals.stat }}</UBadge>
       <UBadge v-if="wardTotals.unacked" tone="cyan">待核對醫囑 {{ wardTotals.unacked }}</UBadge>
@@ -122,7 +134,8 @@ const wardTotals = computed(() => ({
           <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="tabs" /></div>
           <!-- 交班是病房層級，不必先選病人 -->
           <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
-          <UEmpty v-else-if="!adm" :icon="ClipboardList" title="請從清單選擇病人" description="執行給藥、記錄生命徵象與護理紀錄" class="py-16" />
+          <!-- 沒選病人時顯示全病房的本班待辦（以前是空白的「請選擇病人」）；點一列跳到該病人的對應分頁 -->
+          <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />

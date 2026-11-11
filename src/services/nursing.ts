@@ -6,7 +6,8 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
-import { isAbnormal, MAR_EARLY_MIN, marUrgency, needsAck, orderChange, recentShifts, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { doseUnitOf } from './billing'
+import { isAbnormal, MAR_EARLY_MIN, marUrgency, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -37,7 +38,8 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
       .filter((a) => a.status === 'admitted' && a.bedId && find.bed(a.bedId)?.ward === ward)
       .map((a) => {
         changed = ensureMar(a.id, today()) || changed
-        const latest = db.vitals.filter((v) => v.admissionId === a.id).sort((x, y) => y.at.localeCompare(x.at))[0]
+        // 最新一筆：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值）
+        const latest = db.vitals.filter((v) => v.admissionId === a.id).reduce<VitalRecord | undefined>((best, v) => (!best || v.at >= best.at ? v : best), undefined)
         const pending = db.mar.filter((m) => m.admissionId === a.id && m.status === 'pending').map((m) => marUrgency(m.scheduledAt, t))
         return {
           ...admissionView(a),
@@ -52,6 +54,60 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
     if (changed) commitIfPossible()
     return list
+  })
+}
+
+// ---------- 本班待辦（全病房）----------
+// 以前病房層級只有「逾時給藥 N」「待執行臨時醫囑 N」兩個總數，哪一床、哪個藥、幾點要給，
+// 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
+// （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
+
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals'
+export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
+export interface WardTask {
+  id: string
+  admissionId: string
+  bedNo: string
+  patientName: string
+  kind: WardTaskKind
+  urgency: WardTaskUrgency
+  /** 預定時間（給藥）或開立時間（臨時醫囑） */
+  at?: string
+  text: string
+}
+const URGENCY_RANK: Record<WardTaskUrgency, number> = { overdue: 0, due: 1, todo: 2, upcoming: 3 }
+
+export function listWardTasks(ward: string): Promise<WardTask[]> {
+  return query(() => {
+    const t = now()
+    const { start, end } = shiftRange(t)
+    const tasks: WardTask[] = []
+    let changed = false
+    for (const a of db.admissions.filter((x) => x.status === 'admitted' && x.bedId && find.bed(x.bedId)?.ward === ward)) {
+      changed = ensureMar(a.id, today()) || changed
+      const base = { admissionId: a.id, bedNo: find.bed(a.bedId!)?.bedNo ?? '', patientName: nameOf.patient(a.patientId) }
+      // 給藥：逾時、可給的一律列（不論哪一班留下的，也包括 15:30 時已可提早給的 16:10）；
+      // 還沒到時間的只列到這一班結束——和病人清單的「逾時／待給」數字同一個範圍
+      for (const m of db.mar.filter((x) => x.admissionId === a.id && x.status === 'pending')) {
+        const urgency = marUrgency(m.scheduledAt, t)
+        if (urgency === 'upcoming' && m.scheduledAt >= end) continue
+        const o = db.ipdOrders.find((x) => x.id === m.orderId)
+        const d = o?.drugId ? find.drug(o.drugId) : undefined
+        tasks.push({ ...base, id: m.id, kind: 'mar', urgency, at: m.scheduledAt, text: `${o?.content ?? ''}${o?.dose ? ` ${o.dose} ${d ? doseUnitOf(d) : ''}` : ''}${o?.route ? `・${o.route}` : ''}` })
+      }
+      // 臨時醫囑（檢驗、處置）：開了就該做
+      for (const o of db.ipdOrders.filter((x) => x.admissionId === a.id && x.type === 'stat' && x.status === 'active' && x.category !== 'medication')) {
+        tasks.push({ ...base, id: o.id, kind: 'stat', urgency: 'due', at: o.startAt, text: `臨時醫囑：${o.content}` })
+      }
+      const unacked = db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length
+      if (unacked) tasks.push({ ...base, id: `ack-${a.id}`, kind: 'ack', urgency: 'todo', text: `${unacked} 項醫囑異動待核對` })
+      // 這一班還沒量過生命徵象（入院時間在這一班開始之後的，從入院算起）
+      if (!db.vitals.some((v) => v.admissionId === a.id && v.at >= start)) {
+        tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象' })
+      }
+    }
+    if (changed) commitIfPossible()
+    return tasks.sort((x, y) => URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency] || (x.at ?? '9').localeCompare(y.at ?? '9') || x.bedNo.localeCompare(y.bedNo))
   })
 }
 

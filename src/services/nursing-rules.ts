@@ -73,6 +73,16 @@ export function shiftInstanceOf(shift: Shift, dateTime: string): ShiftInstance {
   return { date: shift === '小夜' && h < 16 ? addMinutes(`${d} 00:00`, -1).slice(0, 10) : d, shift }
 }
 
+/** 班別開始的鐘點 */
+const SHIFT_START_HOUR: Record<Shift, number> = { 大夜: 0, 白班: 8, 小夜: 16 }
+
+/** dateTime 所在這一班的起訖（訖不含）：例 10:30 → 08:00 ~ 16:00 */
+export function shiftRange(dateTime: string): { start: string; end: string } {
+  const shift = shiftOf(dateTime)
+  const start = `${dateTime.slice(0, 10)} ${String(SHIFT_START_HOUR[shift]).padStart(2, '0')}:00`
+  return { start, end: addMinutes(start, 8 * 60) }
+}
+
 /** 從 dateTime 所在的班往回數 n 班（含目前這班），最新的在前：00:15 → 11/11 大夜、11/10 小夜、11/10 白班 */
 export function recentShifts(dateTime: string, n: number): ShiftInstance[] {
   const out: ShiftInstance[] = []
