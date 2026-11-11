@@ -130,8 +130,30 @@ const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingA
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
 const canRegister = computed(() => !!patient.value && !!selectedSession.value)
 
+// ---------- 改期：病人來電要換時間。退舊掛新在服務層同一筆交易完成（新診次掛不上就全部不動）----------
+const rescheduling = ref<VisitView>()
+const reschedule = useAction(bookingApi.rescheduleVisit, { success: (v) => `已改期：${v.patientName} ${v.date} ${v.deptName} 第 ${v.seqNo} 號` })
+function startReschedule(u: VisitView) {
+  rescheduling.value = u
+  // 沿用原本的身分、案件分類、預防保健（仍可修改）；新的診次在步驟 2 選
+  identityCode.value = u.identityCode
+  caseType.value = u.caseType === 'A3' ? '01' : u.caseType // A3 是「只做預防保健」自動轉的，改回 01 由系統重新判斷
+  preventItems.value = [...u.preventItems]
+  sessionId.value = undefined
+}
+watch(patient, () => (rescheduling.value = undefined))
+
 async function submit() {
   if (!patient.value || !sessionId.value) return
+  if (rescheduling.value) {
+    const v = await reschedule.run(rescheduling.value.id, { sessionId: sessionId.value, identityCode: String(identityCode.value), caseType: String(caseType.value), preventItems: preventItems.value })
+    if (v) {
+      lastResult.value = v
+      rescheduling.value = undefined
+      patient.value = null
+    }
+    return
+  }
   const v = await register.run({
     patientId: patient.value.id,
     sessionId: sessionId.value,
@@ -183,7 +205,7 @@ const columns: Column<VisitView>[] = [
 const cancel = useAction(bookingApi.cancelVisit, { success: (v) => `已退掛：${v.patientName}` })
 async function onCancel(v: VisitView) {
   const ok = await ui.confirm({ title: '退掛', message: `確定將 ${v.patientName}（${v.deptName} 第 ${v.seqNo} 號）退掛？`, okText: '退掛', danger: true })
-  if (ok) cancel.run(v.id)
+  if (ok && (await cancel.run(v.id)) && rescheduling.value?.id === v.id) rescheduling.value = undefined
 }
 
 // 更正就醫身分：病人看完卡片才發現選錯，是最常更正的時機；收費前都可以改（規則在服務層）
@@ -231,7 +253,12 @@ function openIdentity(v: VisitView) {
             </div>
             <div v-if="upcoming?.length" class="mt-2 border-t border-brand-100 pt-2 text-xs text-slate-600">
               <div class="mb-0.5 font-medium">已有預約：</div>
-              <div v-for="u in upcoming" :key="u.id">{{ u.date }} {{ periodLabel[u.period] }} {{ u.deptName }} {{ u.doctorName }} 第 {{ u.seqNo }} 號</div>
+              <!-- 病人來電取消或換時間：直接在這裡處理，不必到下方清單換日期再找人 -->
+              <div v-for="u in upcoming" :key="u.id" :class="['flex items-center gap-2 py-0.5', rescheduling?.id === u.id && 'font-medium text-amber-800']">
+                <span class="min-w-0 flex-1">{{ u.date.slice(5).replace('-', '/') }}（{{ weekdayLabel(u.date) }}）{{ periodLabel[u.period] }} {{ u.deptName }} {{ u.doctorName }} 第 {{ u.seqNo }} 號</span>
+                <button type="button" class="shrink-0 text-brand-600 hover:underline" @click="startReschedule(u)">改期</button>
+                <button type="button" class="shrink-0 text-red-600 hover:underline" @click="onCancel(u)">退掛</button>
+              </div>
             </div>
           </div>
           <p v-else class="mt-3 text-xs text-slate-400">搜尋病人，或按「讀健保卡」。未建檔的新病人請按「初診」。</p>
@@ -282,8 +309,12 @@ function openIdentity(v: VisitView) {
           </div>
         </UCard>
 
-        <UCard title="3. 確認掛號" class="xl:col-start-1 xl:row-start-2">
+        <UCard :title="rescheduling ? '3. 確認改期' : '3. 確認掛號'" class="xl:col-start-1 xl:row-start-2">
           <div class="space-y-3">
+            <div v-if="rescheduling" class="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span class="min-w-0 flex-1">改期中：原 {{ rescheduling.date.slice(5).replace('-', '/') }} {{ periodLabel[rescheduling.period] }} {{ rescheduling.doctorName }} 第 {{ rescheduling.seqNo }} 號<br /><span class="text-xs">請在步驟 2 選新的診次</span></span>
+              <button type="button" class="shrink-0 text-amber-700 hover:text-amber-900" aria-label="取消改期" @click="rescheduling = undefined"><X class="h-4 w-4" /></button>
+            </div>
             <div class="rounded-md bg-slate-50 px-3 py-2 text-sm">
               <template v-if="selectedSession">
                 {{ selectedSession.date }}（{{ weekdayLabel(selectedSession.date) }}）{{ periodLabel[selectedSession.period] }}<br />
@@ -322,7 +353,7 @@ function openIdentity(v: VisitView) {
               <!-- 自費身分沒有「部分負擔」，藥費全額自付 -->
               <div class="mt-0.5 text-xs text-slate-400">{{ estimate.copayNote === '自費身分' ? '藥費等項目' : '藥品部分負擔、自費項目' }}看診後才確定；看診後至批價櫃台結帳</div>
             </div>
-            <UButton block :icon="Ticket" :disabled="!canRegister" :loading="register.pending.value" @click="submit">掛號</UButton>
+            <UButton block :icon="Ticket" :disabled="!canRegister || (!!rescheduling && sessionId === rescheduling.sessionId)" :loading="register.pending.value || reschedule.pending.value" @click="submit">{{ rescheduling ? '改期到此診' : '掛號' }}</UButton>
           </div>
         </UCard>
 
