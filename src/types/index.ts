@@ -806,6 +806,47 @@ export interface PurchaseOrder {
   closeReason?: string
 }
 
+/**
+ * 撥補單（大型醫院）：藥局向藥庫請領 → 藥庫依 FEFO 撥發（運送中，藥庫已扣、藥局還沒入）→ 藥局逐批簽收才入帳。
+ * 簽收數量可以少於撥發（短少要寫原因：破損、遺失…）；運送中的藥不屬於任何地點。
+ */
+export type TransferStatus = 'requested' | 'issued' | 'received' | 'cancelled'
+
+export interface TransferLine {
+  id: string
+  drugId: string
+  /** 請領數量 */
+  qty: number
+  /** 由哪一張補貨申請帶入（門診藥局缺藥、病人在等）；簽收時沖銷 */
+  restockId?: string
+  /** 實際撥發的數量（藥庫不夠可以少撥；0＝這次沒撥） */
+  issuedQty?: number
+  /** 撥發的批號（批號、效期跟著藥走）；簽收時逐批填實收 */
+  lots?: { lotNo: string; expiry: string; qty: number; receivedQty?: number }[]
+  /** 簽收短少的原因 */
+  shortReason?: string
+}
+
+export interface TransferOrder {
+  id: string
+  /** 單號：TR20261112-01 */
+  no: string
+  fromLocationId: string
+  toLocationId: string
+  status: TransferStatus
+  lines: TransferLine[]
+  note?: string
+  requestedBy: string
+  requestedAt: string
+  issuedBy?: string
+  issuedAt?: string
+  receivedBy?: string
+  receivedAt?: string
+  cancelledBy?: string
+  cancelledAt?: string
+  cancelReason?: string
+}
+
 /** 某地點對某藥的安全庫存（沒設定就用藥品主檔的 safetyStock） */
 export interface SafetyStock {
   locationId: string

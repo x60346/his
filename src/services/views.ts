@@ -88,6 +88,9 @@ export const stockLoc = {
    */
   counting: (drugId: string, locationId: string) =>
     db.stocktakes.find((s) => (s.status === 'counting' || s.status === 'submitted') && s.locationId === locationId && s.lines.some((l) => l.drugId === drugId))?.no,
+  /** 撥往這個地點、運送中還沒簽收的量（藥庫已扣、藥局還沒入；庫存頁另外標出來） */
+  inTransit: (drugId: string, locationId: string) =>
+    db.transfers.filter((x) => x.status === 'issued' && x.toLocationId === locationId).flatMap((x) => x.lines).filter((l) => l.drugId === drugId).reduce((n, l) => n + (l.issuedQty ?? 0), 0),
   /** 某藥在某地點的安全庫存（沒設定就用藥品主檔的值） */
   safety: (drug: Pick<Drug, 'id' | 'safetyStock'>, locationId: string) => db.safetyStocks.find((x) => x.locationId === locationId && x.drugId === drug.id)?.qty ?? drug.safetyStock,
 }

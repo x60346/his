@@ -17,6 +17,7 @@ import type {
   OrderSet,
   Drug,
   Phrase,
+  TransferOrder,
   PurchaseOrder,
   SafetyStock,
   StockLocation,
@@ -999,12 +1000,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const req = restockRequests[0]
     const other = drugs.find((d) => d.id !== req?.drugId && d.active && d.category === '口服' && d.id !== 'M009')!
     const lines: PurchaseOrder['lines'] = [
-      ...(req ? [{ id: 'L1', drugId: req.drugId, qty: req.qty, unitCost: costOf(req.drugId), restockId: req.id, receivedQty: 0, txnIds: [] }] : []),
+      ...(req ? [{ id: 'L1', drugId: req.drugId, qty: req.qty, unitCost: costOf(req.drugId), ...(scale === 'small' ? { restockId: req.id } : {}), receivedQty: 0, txnIds: [] }] : []),
       { id: req ? 'L2' : 'L1', drugId: other.id, qty: 200, unitCost: costOf(other.id), receivedQty: 0, txnIds: [] },
     ]
     purchaseOrders.push({
       id: 'PO-SEED-P1', no: `PO${addDays(T, -1).replace(/-/g, '')}-01`, supplier: SUPPLIERS[0], status: 'pending', locationId: recvLoc, lines,
-      note: '補貨申請轉採購', createdBy: 'U301', createdAt: `${addDays(T, -1)} 16:50`, submittedAt: `${addDays(T, -1)} 16:55`,
+      note: scale === 'small' ? '補貨申請轉採購' : '藥庫備量', createdBy: 'U301', createdAt: `${addDays(T, -1)} 16:50`, submittedAt: `${addDays(T, -1)} 16:55`,
     })
     const o1 = drugs.find((d) => d.id === 'M010')!
     const o2 = drugs.find((d) => d.id === 'M018')!
@@ -1014,6 +1015,52 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       lines: [o1, o2].map((d, i) => ({ id: `L${i + 1}`, drugId: d.id, qty: d.safetyStock * 2, unitCost: costOf(d.id), receivedQty: 0, txnIds: [] })),
       createdBy: 'U301', createdAt: `${addDays(T, -3)} 10:20`, submittedAt: `${addDays(T, -3)} 10:25`, approvedBy: 'U001', approvedAt: `${addDays(T, -3)} 14:00`,
     })
+  }
+
+  // 撥補單（大型醫院，不抽亂數）：
+  //   1. 歷史：帳上每一組「撥出／撥入」都屬於一張已簽收的撥補單（同一天、同一個藥局合成一張；異動單號改成撥補單號）
+  //   2. 請領中：門診藥局為上面那張補貨申請向藥庫請領（藥庫打開就有東西可撥）
+  const transfers: TransferOrder[] = []
+  if (scale === 'large') {
+    const outs = stockTxns.filter((t) => t.type === 'transfer-out').sort((x, y) => x.at.localeCompare(y.at))
+    // 同一天、同一個藥局合成一張；同一種藥同一天撥兩次就另開一張（一張單裡同一種藥只有一行）
+    const groups: { day: string; to: string; list: StockTxn[] }[] = []
+    for (const o of outs) {
+      const inn = stockTxns.find((t) => t.type === 'transfer-in' && t.ref === o.ref && t.drugId === o.drugId)!
+      const day = o.at.slice(0, 10)
+      const g = groups.find((x) => x.day === day && x.to === inn.locationId && !x.list.some((y) => y.drugId === o.drugId))
+      if (g) g.list.push(o)
+      else groups.push({ day, to: inn.locationId, list: [o] })
+    }
+    const perDay = new Map<string, number>()
+    for (const { day, to, list } of groups) {
+      const n = (perDay.get(day) ?? 0) + 1
+      perDay.set(day, n)
+      const no = `TR${day.replace(/-/g, '')}-${String(n).padStart(2, '0')}`
+      const lines: TransferOrder['lines'] = []
+      for (const o of list) {
+        const inn = stockTxns.find((t) => t.type === 'transfer-in' && t.ref === o.ref && t.drugId === o.drugId)!
+        o.ref = no
+        inn.ref = no
+        const lots = o.lots.map((x) => ({ lotNo: x.lotNo, expiry: drugLots.find((l) => l.drugId === o.drugId && l.lotNo === x.lotNo)!.expiry, qty: -x.qty, receivedQty: -x.qty }))
+        lines.push({ id: `L${lines.length + 1}`, drugId: o.drugId, qty: -o.qty, issuedQty: -o.qty, lots })
+      }
+      const first = list.map((o) => o.at).sort()[0]
+      const last = list.map((o) => o.at).sort().at(-1)!
+      transfers.push({
+        id: `TR-SEED-${transfers.length + 1}`, no, fromLocationId: recvLoc, toLocationId: to, status: 'received', lines,
+        requestedBy: 'U301', requestedAt: first, issuedBy: 'U302', issuedAt: first, receivedBy: 'U301', receivedAt: last,
+      })
+    }
+    const req = restockRequests[0]
+    if (req) {
+      transfers.push({
+        id: 'TR-SEED-REQ', no: `TR${addDays(T, -1).replace(/-/g, '')}-90`, fromLocationId: recvLoc, toLocationId: opdLoc, status: 'requested',
+        // 第二行是藥庫有的藥：示範「藥庫不夠就少撥」——缺貨的那行先撥 0，等採購到貨再請領
+        lines: [{ id: 'L1', drugId: req.drugId, qty: req.qty, restockId: req.id }, { id: 'L2', drugId: 'M001', qty: drugs.find((d) => d.id === 'M001')!.safetyStock }],
+        note: '窗口缺藥，病人在等', requestedBy: 'U301', requestedAt: `${addDays(T, -1)} 16:45`,
+      })
+    }
   }
 
   // 組套：每位門診醫師兩三組個人常用處方；內科的「糖尿病追蹤」是科室共用（陳映如、黃柏翰都看得到、都能改）
@@ -1121,6 +1168,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     safetyStocks,
     stocktakes: [],
     purchaseOrders,
+    transfers,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

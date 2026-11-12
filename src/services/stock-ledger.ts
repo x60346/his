@@ -80,10 +80,13 @@ export const openRestockOf = (drugId: string) => db.restockRequests.find((x) => 
 export const outstandingOf = (r: RestockRequest) => Math.max(0, r.qty - r.receivedQty)
 
 /**
- * 入庫後沖銷這種藥待到貨的補貨申請（不管是無單進貨還是採購到貨）——不然貨已經上架，申請還掛著，首頁一直提醒「待到貨」。
- * 到齊就結案，不足留著記下尚欠。
+ * 入庫後沖銷這種藥待到貨的補貨申請——不然貨已經上架，申請還掛著，首頁一直提醒「待到貨」。到齊就結案，不足留著記下尚欠。
+ * 補貨申請是「門診藥局」的需求（窗口缺藥、病人在等），只有藥進了門診藥局才算：
+ * 小型醫院採購到貨就是進藥局；大型醫院採購到貨進的是藥庫，要等撥補簽收進門診藥局才沖銷
+ * （以前不分地點，大型醫院藥庫一到貨申請就結案，病人在窗口還是領不到）。
  */
 export function offsetRestock(drugId: string, txn: StockTxn, userId: string): { id: string; status: RestockStatus; outstanding: number } | undefined {
+  if (txn.locationId !== stockLoc.opd()) return undefined
   const req = openRestockOf(drugId)
   if (!req) return undefined
   req.receivedQty += txn.qty

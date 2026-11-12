@@ -110,7 +110,8 @@ export function purchaseCandidates(): Promise<PurchaseCandidate[]> {
       if (stockLoc.counting(d.id, loc)) continue
       const usable = usableQty(stockLoc.lots(d.id, loc), t)
       const safety = stockLoc.safety(d, loc)
-      const req = openRestockOf(d.id)
+      // 補貨申請是門診藥局的需求：只有「採購到貨就進門診藥局」的小型醫院才拿來開採購單；大型醫院走撥補（藥庫撥給藥局）
+      const req = loc === stockLoc.opd() ? openRestockOf(d.id) : undefined
       const freeReq = req && !poOfRestock(req.id) ? req : undefined
       const low = stockStatus(usable, safety) !== 'ok'
       if (!freeReq && !low) continue

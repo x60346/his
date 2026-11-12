@@ -1,11 +1,15 @@
 <script setup lang="ts">
 // 補貨申請（U25）：調劑窗口缺藥、藥品庫存頁偏低時共用。
-// 只問「要多少」——批號、效期要等貨到了看包裝才知道，在藥品庫存頁「到貨入庫」時填。
+// 只問「要多少」——批號、效期要等貨到了看包裝才知道，到貨入庫時才填。
+// 申請是「門診藥局的需求」：小型醫院由採購單滿足（開單時勾選帶入），大型醫院由藥庫撥補滿足（請領時勾選帶入）。
 // 以前窗口的「補貨」直接開進貨單，病人在窗口等，藥師得憑空編一個批號和效期。
 import { reactive, ref, watch } from 'vue'
 import { UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import { inventoryApi, type RestockPlan } from '@/services'
 import { useAction } from '@/composables/useService'
+import { useWorkLocation } from '@/composables/useWorkLocation'
+
+const work = useWorkLocation()
 
 const open = defineModel<boolean>({ default: false })
 const props = defineProps<{ drugId?: string; dispenseId?: string; pickupNo?: number }>()
@@ -47,6 +51,9 @@ const hm = (t: string) => t.slice(5, 16).replace('-', '/')
   <UDialog v-model="open" @submit="submit" :title="plan?.open ? `追加補貨申請：${plan.drugName}` : `申請補貨：${plan?.drugName ?? ''}`" size="sm">
     <UQueryState :loading="!plan && !loadErr" :ready="!!plan" empty-title="無法取得庫存資料">
       <div v-if="plan" class="space-y-3 text-sm">
+        <p class="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          {{ work.multi.value ? '申請後到「藥品庫存 → 撥補單」向藥庫請領（需求清單會列出這張申請）；門診藥局簽收後自動結案。' : '申請後到「藥品庫存 → 採購單」開單（需求清單會列出這張申請）；到貨入庫後自動結案。' }}
+        </p>
         <dl class="grid grid-cols-3 gap-2 text-center">
           <div class="rounded-md bg-slate-50 p-2">
             <dt class="text-xs text-slate-500">現有可用</dt>

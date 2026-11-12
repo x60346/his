@@ -20,6 +20,7 @@ import * as orderset from './orderset'
 import * as phrase from './phrase'
 import * as stocktake from './stocktake'
 import * as purchase from './purchase'
+import * as transfer from './transfer'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -40,6 +41,7 @@ export const orderSetApi = overNetwork(orderset)
 export const phraseApi = overNetwork(phrase)
 export const stocktakeApi = overNetwork(stocktake)
 export const purchaseApi = overNetwork(purchase)
+export const transferApi = overNetwork(transfer)
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
 
@@ -69,6 +71,7 @@ export type { VisitView, AdmissionView, PatientBrief } from './views'
 export type { DrugView } from './master'
 export type { StocktakeView, StocktakeLineView, StocktakeInput } from './stocktake'
 export type { PurchaseView, PurchaseLineView, PurchaseInput, PurchaseCandidate } from './purchase'
+export type { TransferView, TransferLineView, TransferCandidate } from './transfer'
 export type { RefillView } from './booking'
 export type { MarView, OrderView } from './ipd'
 export type { WardPatient, MarBoard, PrnView, HandoverView, HandoverGroup, WardTask } from './nursing'

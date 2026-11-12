@@ -22,6 +22,8 @@ const USAGE_DAYS = 30
 export interface InventoryRow extends Drug {
   /** 這一列是哪個地點的（stock、safetyStock 也是這個地點的） */
   locationId: string
+  /** 撥往這裡、運送中還沒簽收的量（大型醫院） */
+  inTransit: number
   /**
    * 正在盤點（盲盤）：盤點單號。有它時 stock、usable、expiredQty、daysLeft 都是 0／null、flags 為空——
    * 數量不給看，畫面要先看這個欄位，顯示「盤點中」而不是 0
@@ -61,6 +63,7 @@ function inventoryRow(d: Drug, t: string, locationId: string): InventoryRow {
     safetyStock,
     stock: lots.reduce((s, l) => s + l.qty, 0),
     locationId,
+    inTransit: stockLoc.inTransit(d.id, locationId),
     usable,
     expiredQty: lots.filter((l) => l.expiry < t).reduce((s, l) => s + l.qty, 0),
     status: stockStatus(usable, safetyStock),
@@ -255,6 +258,8 @@ export interface RestockWaiting {
 export interface RestockView extends RestockRequest {
   /** 已列入哪張進行中的採購單（草稿、待核准、已訂購）；到貨請在採購單入庫 */
   purchase?: { id: string; no: string; status: string }
+  /** 大型醫院：已列入哪張進行中的撥補單（請領中、運送中）；門診藥局簽收後沖銷 */
+  transfer?: { id: string; no: string; status: string }
   drugName: string
   unit: string
   usable: number
@@ -270,6 +275,10 @@ function restockView(r: RestockRequest): RestockView {
   return {
     ...r,
     ...(po ? { purchase: { id: po.id, no: po.no, status: po.status } } : {}),
+    ...(() => {
+      const tr = db.transfers.find((x) => ['requested', 'issued'].includes(x.status) && x.lines.some((l) => l.restockId === r.id))
+      return tr ? { transfer: { id: tr.id, no: tr.no, status: tr.status } } : {}
+    })(),
     drugName: drug?.name ?? r.drugId,
     unit: drug?.unit ?? '',
     usable: stockLoc.counting(r.drugId, stockLoc.opd()) ? 0 : usableQty(stockLoc.lots(r.drugId, stockLoc.opd()), today()),
@@ -420,4 +429,23 @@ export function listStockLocations(): Promise<{ scale: HospitalScale; locations:
     opd: stockLoc.opd(),
     receiving: stockLoc.receiving(),
   }))
+}
+
+/**
+ * 設定某地點的安全庫存（大型醫院各地點各自設；沒設定的地點用藥品主檔的值）。
+ * 低於它就標「偏低」、列入採購或請領的需求清單。
+ */
+export function setSafetyStock(drugId: string, locationId: string, qty: number): Promise<{ qty: number }> {
+  return mutate(() => {
+    requireUser('pharmacist')
+    const d = must(find.drug(drugId), '藥品')
+    const loc = stockLoc.usable(locationId)
+    if (!Number.isInteger(qty) || qty < 0) failField('qty', '安全庫存需為 0 以上的整數')
+    const before = stockLoc.safety(d, loc.id)
+    const row = db.safetyStocks.find((x) => x.locationId === loc.id && x.drugId === d.id)
+    if (row) row.qty = qty
+    else db.safetyStocks.push({ locationId: loc.id, drugId: d.id, qty })
+    audit('修改安全庫存', `${d.name} ${loc.name}：${before} → ${qty}`)
+    return { qty }
+  })
 }

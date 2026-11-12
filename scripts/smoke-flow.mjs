@@ -2902,8 +2902,92 @@ try {
     await api.purchaseApi.receivePurchase(ordL.id, ordL.lines[0].id, { qty: 1, lotNo: 'BIG-PO', expiry: '2030-01-01' })
     ok(ordL.locationId === 'LOC-WH' && dbm.db.drugLots.some((l) => l.lotNo === 'BIG-PO' && l.locationId === 'LOC-WH'), '大型：採購到貨進藥庫')
     ok(ledgerBroken(dbm.db).length === 0, '大型操作後，各地點帳本仍對得起來')
+    // ---- 撥補單（大型醫院）：藥局請領 → 藥庫撥發（運送中）→ 藥局逐批簽收 ----
+    const TRA = api.transferApi
+    const trTxns = dbm.db.stockTxns.filter((t) => t.type === 'transfer-out' || t.type === 'transfer-in')
+    const orphanTr = trTxns.filter((t) => !dbm.db.transfers.some((x) => x.no === t.ref && x.status === 'received'))
+    const dupLine = dbm.db.transfers.filter((x) => new Set(x.lines.map((l) => l.drugId)).size !== x.lines.length)
+    ok(trTxns.length > 0 && !orphanTr.length && !dupLine.length, `種子：${trTxns.length} 筆撥出／撥入都對得到已簽收的撥補單（單號＝異動單號；一張單同一種藥只有一行）`)
+    const reqTr = dbm.db.transfers.find((x) => x.status === 'requested')
+    const rsId = reqTr?.lines[0].restockId
+    ok(!!rsId && !dbm.db.purchaseOrders.some((p) => p.lines.some((l) => l.restockId === rsId)), '種子：補貨申請在大型醫院列入請領中的撥補單（不是採購單）')
+    // 補貨申請是門診藥局的需求：藥庫到貨不能沖銷
+    const rsDrug = reqTr.lines[0].drugId
+    await I.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: rsDrug, locationId: 'LOC-WH', qty: 999, lotNo: 'WH-ONLY', expiry: '2030-01-01' })
+    ok(dbm.db.restockRequests.find((r) => r.id === rsId).status === 'open', '藥庫到貨不沖銷門診藥局的補貨申請（以前一到藥庫就結案，病人在窗口還是領不到）')
+    await expectError(() => TRA.transferCandidates('LOC-WH'), '從藥庫發起請領')
+    const tc = await TRA.transferCandidates('LOC-OPD')
+    ok(!tc.some((c) => c.restock?.id === rsId), '請領需求清單：已在撥補單上的補貨申請不重複列出')
+    await expectError(() => TRA.requestTransfer({ toLocationId: 'LOC-OPD', lines: [{ drugId: rsDrug, qty: 1, restockId: rsId }] }), '同一張補貨申請請領兩次')
+    try {
+      await TRA.requestTransfer({ toLocationId: 'LOC-OPD', lines: [{ drugId: 'M001', qty: 5 }, { drugId: 'M001', qty: 3 }] })
+      ok(false, '重複品項應被擋下')
+    } catch (e) {
+      ok(e.fields?.['line-1']?.includes('重複'), '請領同一種藥兩行：標在那一行')
+    }
+    // 撥發
+    const line = reqTr.lines[0]
+    const line2 = reqTr.lines[1]
+    ok(!!line2 && line2.drugId === 'M001', '種子的請領單第二行是藥庫有的藥（示範少撥）')
+    try {
+      await TRA.issueTransfer(reqTr.id, { [line.id]: line.qty + 1, [line2.id]: line2.qty })
+      ok(false, '多撥應被擋下')
+    } catch (e) {
+      ok(e.field === `issue-${line.id}`, `撥發多於請領 → 「${e.message}」`)
+    }
+    await expectError(() => TRA.issueTransfer(reqTr.id, { [line.id]: 0, [line2.id]: 0 }), '每一項都撥 0')
+    await expectError(() => TRA.issueTransfer(reqTr.id, { [line.id]: line.qty }), '漏填某一行的撥發數量')
+    const totalBefore = dbm.db.drugs.find((d) => d.id === rsDrug).stock
+    const issued = await TRA.issueTransfer(reqTr.id, { [line.id]: line.qty, [line2.id]: line2.qty - 5 })
+    const outTxn = dbm.db.stockTxns.filter((t) => t.type === 'transfer-out' && t.drugId === rsDrug).at(-1)
+    ok(issued.lines[1].issuedQty === line2.qty - 5, '藥庫可以少撥（第二行少撥 5）')
+    ok(issued.status === 'issued' && outTxn.type === 'transfer-out' && outTxn.locationId === 'LOC-WH' && outTxn.ref === reqTr.no && issued.lines[0].lots.reduce((n, x) => n + x.qty, 0) === line.qty, `撥發：藥庫依 FEFO 扣 ${line.qty}（${issued.lines[0].lots.map((x) => x.lotNo).join('、')}），單號寫在異動上`)
+    ok(dbm.db.drugs.find((d) => d.id === rsDrug).stock === totalBefore - line.qty && (await I.listInventory({ locationId: 'LOC-OPD' })).find((r) => r.id === rsDrug).inTransit === line.qty, '運送中：藥庫已扣、門診藥局還沒入（庫存頁標「運送中」）')
+    await expectError(() => TRA.cancelTransfer(reqTr.id, '不要了'), '運送中取消')
+    // 簽收：多收擋下、短少要原因
+    const lots = issued.lines[0].lots
+    try {
+      await TRA.receiveTransfer(reqTr.id, { received: { [line.id]: lots.map((x, k) => (k === 0 ? x.qty + 1 : x.qty)), [line2.id]: issued.lines[1].lots.map((x) => x.qty) } })
+      ok(false, '多收應被擋下')
+    } catch (e) {
+      ok(e.field === `recv-${line.id}-0`, `簽收多於撥發 → 「${e.message}」`)
+    }
+    const less = lots.map((x, k) => (k === 0 ? x.qty - 1 : x.qty))
+    try {
+      await TRA.receiveTransfer(reqTr.id, { received: { [line.id]: less, [line2.id]: issued.lines[1].lots.map((x) => x.qty) } })
+      ok(false, '短少沒原因應被擋下')
+    } catch (e) {
+      ok(e.field === `short-${line.id}`, `短少 1 沒寫原因 → 「${e.message}」`)
+    }
+    const opdBefore = dbm.db.drugLots.filter((l) => l.drugId === rsDrug && l.locationId === 'LOC-OPD').reduce((n, l) => n + l.qty, 0)
+    const done = await TRA.receiveTransfer(reqTr.id, { received: { [line.id]: less, [line2.id]: issued.lines[1].lots.map((x) => x.qty) }, shortReasons: { [line.id]: '運送破損 1 盒' } })
+    const inTx = dbm.db.stockTxns.filter((t) => t.type === 'transfer-in' && t.ref === reqTr.no && t.drugId === rsDrug)
+    ok(done.status === 'received' && done.lines[0].shortQty === 1 && inTx.every((t) => t.locationId === 'LOC-OPD') && inTx.every((t) => lots.some((x) => x.lotNo === t.lots[0].lotNo)), '簽收：實收入門診藥局（批號效期照撥出的），短少 1 記下原因')
+    ok(dbm.db.drugLots.filter((l) => l.drugId === rsDrug && l.locationId === 'LOC-OPD').reduce((n, l) => n + l.qty, 0) === opdBefore + line.qty - 1 && dbm.db.drugs.find((d) => d.id === rsDrug).stock === totalBefore - 1, '門診藥局多了實收量；全院總量只少了短少的 1')
+    const rs = dbm.db.restockRequests.find((r) => r.id === rsId)
+    ok(rs.receivedQty === line.qty - 1 && (rs.qty > line.qty - 1 ? rs.status === 'open' : rs.status === 'fulfilled'), `補貨申請由門診藥局簽收沖銷（收 ${line.qty - 1}／申請 ${rs.qty}，${rs.status === 'open' ? '短少的部分仍待補' : '已結案'}）`)
+    // 新請領 → 取消
+    const nt = await TRA.requestTransfer({ toLocationId: 'LOC-IPD', note: '測試', lines: [{ drugId: 'M001', qty: 10 }] })
+    ok(nt.status === 'requested' && nt.fromLocationId === 'LOC-WH' && nt.toLocationId === 'LOC-IPD', `住院藥局請領 ${nt.no}：向藥庫`)
+    await expectError(() => TRA.cancelTransfer(nt.id, ''), '取消請領沒寫原因')
+    ok((await TRA.cancelTransfer(nt.id, '開錯了')).status === 'cancelled', '請領中可以取消（寫原因）')
+    // 各地點安全庫存可改
+    try {
+      await I.setSafetyStock('M001', 'LOC-WH', -1)
+      ok(false, '負數應被擋下')
+    } catch (e) {
+      ok(e.field === 'qty', `安全庫存負數 → 「${e.message}」`)
+    }
+    await I.setSafetyStock('M001', 'LOC-WH', 7777)
+    ok((await I.listInventory({ locationId: 'LOC-WH' })).find((r) => r.id === 'M001').safetyStock === 7777 && (await I.listInventory({ locationId: 'LOC-OPD' })).find((r) => r.id === 'M001').safetyStock !== 7777, '各地點的安全庫存各自改（藥庫改了、門診藥局不變）')
+    const dashL = await api.dashboardApi.getDashboard()
+    ok(dashL.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested').length && dashL.transferIssued === 0, '首頁待辦（大型）：撥補待撥發、待簽收')
+    ok(!Object.values(api).some((m) => m && typeof m === 'object' && ('inTransit' in m || 'inTransitTo' in m)), '內部查詢（運送中數量）不經 Api 對外')
     dbm.resetDatabase('small')
     ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.length === 1, '再重建回小型')
+    await as('ph01')
+    await expectError(() => api.transferApi.requestTransfer({ toLocationId: 'LOC-PH', lines: [{ drugId: 'M001', qty: 1 }] }), '小型醫院（只有一個藥局）請領')
+    ok((await api.dashboardApi.getDashboard()).transferRequested === undefined, '小型醫院首頁沒有撥補待辦')
     await as('clerk01')
   }
 } catch (e) {

@@ -59,6 +59,19 @@ async function confirmCancel() {
 }
 const md = (t: string) => t.slice(5, 16).replace('-', '/')
 
+// ---------- 各地點安全庫存（大型醫院） ----------
+const safetyOpen = ref(false)
+const safetyQty = ref<number | undefined>()
+function openSafety() {
+  safetyQty.value = row.value?.safetyStock
+  setSafety.fieldErrors.value = {}
+  safetyOpen.value = true
+}
+const setSafety = useAction(inventoryApi.setSafetyStock, { success: (r) => `${props.locationName}的安全庫存改為 ${r.qty}` })
+async function onSafety() {
+  if (row.value && props.locationId && (await setSafety.run(row.value.id, props.locationId, safetyQty.value as number))) safetyOpen.value = false
+}
+
 const scrap = useAction(inventoryApi.scrapExpired, { success: (t) => `已報廢 ${t.length} 個過期批號` })
 async function onScrap() {
   if (!row.value) return
@@ -94,7 +107,9 @@ async function onScrap() {
         </p>
         <div class="mt-2 flex gap-2">
           <!-- 到貨一律對採購單入庫：申請只是需求，開採購單時勾選帶入 -->
-          <span v-if="restock.purchase" class="text-xs">已列入採購單 <b class="tabular">{{ restock.purchase.no }}</b>（{{ { draft: '草稿', pending: '待核准', ordered: '已訂購，等到貨' }[restock.purchase.status] ?? restock.purchase.status }}）；到貨請在「採購單」入庫</span>
+          <span v-if="restock.transfer" class="text-xs">已向藥庫請領 <b class="tabular">{{ restock.transfer.no }}</b>（{{ restock.transfer.status === 'issued' ? '運送中，等簽收' : '請領中，等藥庫撥發' }}）；門診藥局簽收後結案</span>
+          <span v-else-if="restock.purchase" class="text-xs">已列入採購單 <b class="tabular">{{ restock.purchase.no }}</b>（{{ { draft: '草稿', pending: '待核准', ordered: '已訂購，等到貨' }[restock.purchase.status] ?? restock.purchase.status }}）；到貨請在「採購單」入庫</span>
+          <span v-else-if="locationName" class="text-xs">尚未請領：到「撥補單」向藥庫請領時會列出這張申請</span>
           <span v-else class="text-xs">尚未列入採購單：到「採購單」分頁開單時會列出這張申請</span>
           <UButton size="sm" variant="ghost" @click="startCancel">取消申請</UButton>
         </div>
@@ -107,7 +122,12 @@ async function onScrap() {
         <div class="rounded-md bg-slate-50 p-2">
           <dt class="text-xs text-slate-500">可用庫存</dt>
           <dd :class="['tabular text-xl font-semibold', row.status === 'out' ? 'text-red-600' : row.status === 'low' ? 'text-amber-700' : 'text-slate-800']">{{ row.usable }}</dd>
-          <dd class="text-xs text-slate-400">安全庫存 {{ row.safetyStock }} {{ row.unit }}</dd>
+          <dd class="text-xs text-slate-400">
+            安全庫存 {{ row.safetyStock }} {{ row.unit }}
+            <!-- 大型醫院：各地點各自設（藥庫通常存得比藥局多） -->
+            <button v-if="locationName" type="button" class="ml-1 text-brand-600 hover:underline" @click="openSafety">修改</button>
+          </dd>
+          <dd v-if="row.inTransit" class="text-xs text-sky-700">運送中 {{ row.inTransit }}</dd>
         </div>
         <div class="rounded-md bg-slate-50 p-2">
           <dt class="text-xs text-slate-500">近 30 天用量</dt>
@@ -170,6 +190,13 @@ async function onScrap() {
 
       <ReceiveStockDialog v-model="receiveOpen" :location-id="locationId" :location-name="locationName" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="ledger.counting ? undefined : row.usable" :restock-outstanding="restock?.outstanding" />
       <RestockRequestDialog v-model="requestOpen" :drug-id="row.id" />
+      <UDialog v-model="safetyOpen" :title="`安全庫存：${row.name}（${locationName}）`" size="sm" @submit="onSafety">
+        <UInput v-model="safetyQty" label="安全庫存" type="number" min="0" :hint="`${row.unit}；低於它就標「偏低」、列入${locationName === '藥庫' ? '採購' : '請領'}的需求清單`" :error="setSafety.fieldErrors.value.qty" />
+        <template #footer>
+          <UButton variant="secondary" @click="safetyOpen = false">取消</UButton>
+          <UButton type="submit" :loading="setSafety.pending.value">儲存</UButton>
+        </template>
+      </UDialog>
       <UDialog v-model="cancelOpen" title="取消補貨申請" size="sm" @submit="confirmCancel">
         <div class="space-y-3 text-sm">
           <p class="text-slate-600">{{ row.name }} 的補貨申請（尚欠 {{ restock?.outstanding }} {{ row.unit }}）取消後，等候中的病人需改開替代藥或另行調貨。</p>

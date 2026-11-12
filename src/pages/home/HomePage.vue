@@ -51,6 +51,12 @@ const todos = computed<Todo[]>(() => {
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
     { roles: ['pharmacist'], label: '低於安全庫存', count: s.value.lowStockDrugs, hint: '需要補貨的藥品', route: 'drugs', icon: Package, urgent: true },
     { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
+    ...(s.value.transferRequested !== undefined
+      ? [
+          { roles: ['pharmacist'], label: '撥補待撥發', count: s.value.transferRequested, hint: '藥局請領、等藥庫撥發', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
+          { roles: ['pharmacist'], label: '撥補待簽收', count: s.value.transferIssued ?? 0, hint: '運送中，藥局簽收才入帳', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
+        ]
+      : []),
     { roles: ['pharmacist'], label: '採購單待到貨', count: s.value.purchaseOrdered, hint: '已核准訂購，貨到了對品項入庫', route: 'drugs', query: { tab: 'purchase' }, icon: Truck },
     // 管理員唯一的待辦：核准採購（開單與核准分開，是給管理員做的事）
     { roles: ['admin'], label: '採購單待核准', count: s.value.purchasePending, hint: '藥師送出、等核准才算訂購', route: 'drugs', query: { tab: 'purchase' }, icon: Truck, urgent: true },

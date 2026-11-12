@@ -21,6 +21,9 @@ export interface DashboardStats {
   /** 採購單待核准（管理員待辦）、已訂購待到貨（藥師待辦） */
   purchasePending: number
   purchaseOrdered: number
+  /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
+  transferRequested?: number
+  transferIssued?: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
 }
@@ -70,6 +73,9 @@ export function getDashboard(): Promise<DashboardStats> {
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
+      ...(db.stockLocations.length > 1
+        ? { transferRequested: db.transfers.filter((x) => x.status === 'requested').length, transferIssued: db.transfers.filter((x) => x.status === 'issued').length }
+        : {}),
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {
         const date = addDays(t, i - 6)
