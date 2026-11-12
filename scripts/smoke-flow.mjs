@@ -52,6 +52,22 @@ try {
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  // 盤點單整套走一次（建立 → 依 counts 清點 → 送出 → 管理員覆核過帳）：測試要調整庫存一律照盤點單的路走，帳本不變式仍成立。
+  // counts(line, lot) 回傳實點數量；結束時登入身分是 ph01
+  const takeStock = async (drugIds, counts, reasonText = '測試', locationId) => {
+    await as('ph01')
+    // 範圍內沒有庫存批號（例：本來就缺貨的藥）就沒什麼好盤的——盤點單會擋「沒有批號」，這裡直接略過
+    const loc = locationId ?? dbm.db.stockLocations.find((x) => x.dispensesOpd).id
+    if (!dbm.db.drugLots.some((x) => drugIds.includes(x.drugId) && x.locationId === loc && x.qty > 0)) return null
+    const sheet = await api.stocktakeApi.createStocktake({ scope: { kind: 'drugs', drugIds }, ...(locationId ? { locationId } : {}) })
+    for (const l of sheet.lines) await api.stocktakeApi.countLine(sheet.id, l.id, counts(l, dbm.db.drugLots.find((x) => x.id === l.lotId)))
+    await api.stocktakeApi.submitStocktake(sheet.id)
+    await as('admin')
+    const v = await api.stocktakeApi.getStocktake(sheet.id)
+    const r = await api.stocktakeApi.postStocktake(sheet.id, Object.fromEntries(v.lines.filter((l) => l.diff).map((l) => [l.id, reasonText])))
+    await as('ph01')
+    return r
+  }
 
   console.log('\n[門診] 掛號 → 看診 → 批價 → 發藥')
   await as('clerk01')
@@ -227,18 +243,13 @@ try {
   await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 5, lotNo: 'T1', expiry: '2031-01-01' }), '同批號不同效期')
   const lotT1 = dbm.db.drugLots.find((l) => l.drugId === recvDrug && l.lotNo === 'T1')
   ok(lotT1 && dbm.db.drugs.find((d) => d.id === recvDrug).stock === before10 + 100, '進貨：批號轉大寫、庫存 +100')
-  await expectError(() => api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 97, reason: '' }), '盤點有差異未寫原因')
   // G6：實際數量的規則（頁面與服務層共用）
   ok([-3, 2.5, undefined, '', '3', NaN].every((v) => sr.checkStocktakeActual(v)) && [0, 97].every((v) => sr.checkStocktakeActual(v) === null), '盤點實際數量：負數、小數、空白、字串、NaN 不接受；0 與正整數接受')
-  try {
-    await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: -3, reason: '破損' })
-    ok(false, '盤點負數應被擋下')
-  } catch (e) {
-    ok(e.field === 'actual' && e.message === sr.checkStocktakeActual(-3), `盤點負數 → 「${e.message}」（與頁面同一條規則）`)
-  }
-  ok((await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 100, reason: '' })) === null, '帳實相符：不產生調整')
-  const adj = await api.inventoryApi.stocktake({ lotId: lotT1.id, actual: 97, reason: '破損' })
-  ok(adj.qty === -3 && dbm.db.drugLots.find((l) => l.id === lotT1.id).qty === 97, '盤點輸入實際 97 → 系統算出 −3 並調整該批號')
+  // 盤點一律走盤點單：T1 實點 97，其他批號照帳 → 過帳時系統算出 −3 並調整該批號
+  const posted = await takeStock([recvDrug], (l, lot) => (l.lotNo === 'T1' ? 97 : lot.qty), '破損')
+  const adjLine = posted.lines.find((l) => l.lotNo === 'T1')
+  ok(adjLine.diff === -3 && dbm.db.drugLots.find((l) => l.id === lotT1.id).qty === 97 && posted.lines.filter((l) => l.diff).length === 1, '盤點單：T1 實點 97 → 差異 −3，只調整這一批（其他批號帳實相符不調整）')
+  await as('ph01')
   await as('admin')
   const m10 = dbm.db.drugs.find((d) => d.id === recvDrug)
   await api.masterApi.saveDrug({ ...m10, name: m10.name, stock: 99999 })
@@ -2150,6 +2161,148 @@ try {
     await as('clerk01')
   }
 
+  // 盤點單：建立 → 盲盤清點（期間照常發藥）→ 送出 → 另一人覆核過帳；退回、取消、架上找到的批號
+  console.log('\n[盤點單]')
+  {
+    const R = await load('/src/services/stocktake-rules.ts')
+    const INV = await load('/src/services/inventory.ts')
+    const S = api.stocktakeApi
+    const sheetLike = { status: 'submitted', submittedBy: 'U302', lines: [{ countedBy: 'U301', counted: 5, systemQty: 7 }, { countedBy: 'U302', counted: 3, systemQty: 3 }] }
+    ok(R.lineDiff({ counted: 5, systemQty: 7 }) === -2 && R.lineDiff({ counted: 4 }) === 4 && R.lineDiff({}) === undefined, '差異＝實點 − 清點那一刻的帳（架上找到的批號帳上為 0）')
+    ok(R.reviewBlocker(sheetLike, 'U301') && R.reviewBlocker(sheetLike, 'U302') && !R.reviewBlocker(sheetLike, 'U001') && R.reviewBlocker({ ...sheetLike, status: 'counting' }, 'U001'), '覆核：清點過的人、送出的人都不能覆核；其他人可以；還沒送出不能覆核')
+
+    await as('nurse01')
+    await expectError(() => S.createStocktake({ scope: { kind: 'all' } }), '護理師建立盤點單')
+    await as('ph01')
+    try {
+      await S.createStocktake({ scope: { kind: 'drugs', drugIds: [] } })
+      ok(false, '指定藥品卻沒選應被擋下')
+    } catch (e) {
+      ok(e.field === 'drugIds', `指定藥品沒選 → 「${e.message}」`)
+    }
+    const opd = dbm.db.stockLocations.find((x) => x.dispensesOpd).id
+    const lotsOf = (id) => dbm.db.drugLots.filter((l) => l.drugId === id && l.locationId === opd && l.qty > 0)
+    const sheet = await S.createStocktake({ scope: { kind: 'drugs', drugIds: ['M001', 'M003'] } })
+    ok(sheet.no.startsWith(`PD${T.replace(/-/g, '')}-`) && sheet.total === lotsOf('M001').length + lotsOf('M003').length && sheet.status === 'counting', `建立 ${sheet.no}：範圍內有庫存的批號各一列（${sheet.total} 批）`)
+    ok(!sheet.revealed && sheet.lines.every((l) => !('systemQty' in l) && !('diff' in l)), '清點中：帳上數量與差異根本不出服務層（不只是畫面不顯示）')
+    await expectError(() => S.createStocktake({ scope: { kind: 'drugs', drugIds: ['M001'] } }), '同一批號同時在兩張進行中的盤點單')
+
+    // 盲盤：庫存頁、明細、補貨對話框都看不到 M001 的數量；不在範圍內的 M002 照常
+    const rows = await api.inventoryApi.listInventory({})
+    const r1 = rows.find((r) => r.id === 'M001')
+    const r2 = rows.find((r) => r.id === 'M002')
+    ok(r1.counting === sheet.no && r1.usable === 0 && r1.stock === 0 && r1.daysLeft === null && !r1.flags.length && !r2.counting && r2.usable > 0, '盲盤：庫存清單上 M001 顯示盤點中（數量、標籤都遮掉），範圍外的 M002 照常')
+    const led = await api.inventoryApi.getDrugLedger('M001')
+    ok(led.counting === sheet.no && led.txns.length === 0 && led.lots.every((l) => l.qty === 0) && led.lots.length > 0, '盲盤：藥品明細列批號效期、不列數量與異動（結存就是帳上數量）')
+    const plan = await api.inventoryApi.getRestockPlan('M001')
+    ok(plan.counting === sheet.no && plan.usable === 0 && plan.suggestion.qty === 0 && plan.suggestion.formula.includes('盤點中'), '盲盤：補貨對話框也不給可用量與建議量（建議量是用可用量算的）')
+    const summary = await api.inventoryApi.inventorySummary()
+    ok(typeof summary.low === 'number', '摘要卡片照常（盤點中的藥不計入缺貨／偏低）')
+
+    // 清點：負數擋下（與頁面同一條規則）；重填會覆蓋
+    const [a1, a2] = sheet.lines.filter((l) => l.drugId === 'M001')
+    try {
+      await S.countLine(sheet.id, a1.id, -1)
+      ok(false, '負數應被擋下')
+    } catch (e) {
+      ok(e.field === 'counted', `清點負數 → 「${e.message}」`)
+    }
+    const lotA = dbm.db.drugLots.find((l) => l.id === a1.lotId)
+    const qA = lotA.qty
+    await S.countLine(sheet.id, a1.id, qA + 5)
+    await S.countLine(sheet.id, a1.id, qA - 2) // 重填：實點比帳少 2
+    // 清點之後才發藥 5（盤點期間照常發藥）：差異仍是 −2，不會變成 −7
+    INV.postStock({ kind: 'out', type: 'dispense', drugId: 'M001', locationId: opd, qty: 5, lotId: lotA.id, ref: '測試：盤點期間發藥' }, 'U301')
+    await expectError(() => S.submitStocktake(sheet.id), '還有批號沒填數量就送出')
+    for (const l of sheet.lines.filter((x) => x.id !== a1.id)) await S.countLine(sheet.id, l.id, dbm.db.drugLots.find((x) => x.id === l.lotId).qty)
+    const sub = await S.submitStocktake(sheet.id)
+    const subA = sub.lines.find((l) => l.id === a1.id)
+    ok(sub.status === 'submitted' && sub.revealed && subA.systemQty === qA && subA.diff === -2 && sub.diffCount === 1, `送出後才揭露：${a1.lotNo} 帳 ${qA}（清點那一刻）、實點 ${qA - 2}、差異 −2；盤點期間發出的 5 不算盤虧`)
+    await expectError(() => S.countLine(sheet.id, a1.id, 1), '送出後再改數量')
+    await expectError(() => S.postStocktake(sheet.id, { [a1.id]: 'x' }), '清點的人自己覆核')
+    await as('ph02')
+    try {
+      await S.postStocktake(sheet.id, {})
+      ok(false, '有差異沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === `reason-${a1.id}`, `有差異沒寫原因 → 「${e.message}」（標在那一列）`)
+    }
+    const done = await S.postStocktake(sheet.id, { [a1.id]: '破損 2 盒' })
+    const txn = dbm.db.stockTxns.find((t) => t.id === done.lines.find((l) => l.id === a1.id).txnId)
+    ok(done.status === 'posted' && done.reviewedByName === '林雅婷' && txn.type === 'adjust' && txn.qty === -2 && txn.ref === sheet.no && txn.reason.includes('破損'), '另一位藥師覆核過帳：一批一筆調整，單號、原因寫在異動上')
+    ok(dbm.db.drugLots.find((l) => l.id === lotA.id).qty === qA - 2 - 5, `過帳後這一批＝實點 ${qA - 2} − 清點後發出 5（帳實一致）`)
+    ok(!(await api.inventoryApi.listInventory({})).find((r) => r.id === 'M001').counting && dbm.db.auditLogs[0].action === '盤點過帳', '過帳後恢復顯示數量；稽核記下盤點過帳')
+    ok(!a2 || !done.lines.find((l) => l.id === a2.id).txnId, '帳實相符的批號不產生調整')
+
+    // 退回重盤、取消
+    await as('ph01')
+    const s2 = await S.createStocktake({ scope: { kind: 'category', category: '眼用' } })
+    for (const l of s2.lines) await S.countLine(s2.id, l.id, 1)
+    await S.submitStocktake(s2.id)
+    await as('admin')
+    await expectError(() => S.returnStocktake(s2.id, ''), '退回沒寫原因')
+    const back = await S.returnStocktake(s2.id, '差異太大，請重點')
+    ok(back.status === 'counting' && back.returns.length === 1 && !back.revealed && back.lines.every((l) => l.counted === 1), '管理員退回重盤：回到清點中、數量保留、又看不到帳上數量')
+    await as('ph01')
+    await expectError(() => S.cancelStocktake(s2.id, ''), '取消沒寫原因')
+    const can = await S.cancelStocktake(s2.id, '改天再盤')
+    const eyeDrug = s2.lines[0].drugId
+    ok(can.status === 'cancelled' && !(await api.inventoryApi.listInventory({})).find((r) => r.id === eyeDrug).counting, '取消盤點：不調整，數量恢復顯示')
+
+    // 架上找到、帳上沒有的批號：加一列，過帳時盤盈入庫
+    const s3 = await S.createStocktake({ scope: { kind: 'drugs', drugIds: ['M002'] } })
+    for (const l of s3.lines) await S.countLine(s3.id, l.id, dbm.db.drugLots.find((x) => x.id === l.lotId).qty)
+    try {
+      await S.addFoundLot(s3.id, { drugId: 'M003', lotNo: 'X', expiry: '2030-01-01', counted: 1 })
+      ok(false, '範圍外的藥應被擋下')
+    } catch (e) {
+      ok(e.field === 'drugId', `加範圍外的藥 → 「${e.message}」`)
+    }
+    const s3b = await S.addFoundLot(s3.id, { drugId: 'M002', lotNo: 'found-1', expiry: '2029-05-31', counted: 12 })
+    await expectError(() => S.addFoundLot(s3.id, { drugId: 'M002', lotNo: 'FOUND-1', expiry: '2029-05-31', counted: 1 }), '同一批號加兩次')
+    await S.submitStocktake(s3.id)
+    await as('admin')
+    const fl = s3b.lines.at(-1)
+    await S.postStocktake(s3.id, { [fl.id]: '進貨未登記' })
+    const newLot = dbm.db.drugLots.find((l) => l.drugId === 'M002' && l.lotNo === 'FOUND-1' && l.locationId === opd)
+    ok(newLot?.qty === 12 && newLot.expiry === '2029-05-31', '架上找到的批號：過帳時盤盈 12 入庫（新批號）')
+
+    // 清點後這一批又被發光、帳上不夠扣盤虧：整張不過帳，請退回重盤
+    await as('ph01')
+    const s4 = await S.createStocktake({ scope: { kind: 'drugs', drugIds: ['M003'] } })
+    const l4 = s4.lines[0]
+    const lot4 = dbm.db.drugLots.find((l) => l.id === l4.lotId)
+    for (const l of s4.lines) await S.countLine(s4.id, l.id, l.id === l4.id ? lot4.qty - 3 : dbm.db.drugLots.find((x) => x.id === l.lotId).qty)
+    INV.postStock({ kind: 'out', type: 'dispense', drugId: 'M003', locationId: opd, qty: lot4.qty, lotId: lot4.id, ref: '測試：清點後發光' }, 'U301')
+    await S.submitStocktake(s4.id)
+    await as('admin')
+    await expectError(() => S.postStocktake(s4.id, { [l4.id]: '破損' }), '清點後這一批已發光、不夠扣盤虧')
+    ok(dbm.db.stocktakes.find((x) => x.id === s4.id).status === 'submitted', '過帳失敗整張不動（仍待覆核，可退回重盤）')
+    await S.cancelStocktake(s4.id, '測試結束')
+
+    // 藥局：盤點中的藥，調劑單上看不到庫存數字，但有貨照樣能核對（缺不缺用真的量判斷，不能拿遮掉的 0 擋人）
+    await as('ph01')
+    const medsOf2 = (d) => dbm.db.encounters.find((e) => e.id === d.encounterId).medications
+    const pd = dbm.db.dispenses.find((d) => d.status === 'pending' && medsOf2(d).every((m) => dbm.db.drugLots.filter((l) => l.drugId === m.drugId && l.locationId === opd && l.expiry >= T).reduce((n, l) => n + l.qty, 0) >= m.qty))
+    if (pd) {
+      const dId = medsOf2(pd)[0].drugId
+      const s5 = await S.createStocktake({ scope: { kind: 'drugs', drugIds: [dId] } })
+      const item = (await api.pharmacyApi.getDispense(pd.id)).items.find((i) => i.drugId === dId)
+      ok(item.counting === s5.no && item.stock === 0 && !item.shortage, '盲盤：調劑單上這種藥顯示盤點中（不給數字），不算缺藥')
+      ok((await api.pharmacyApi.verifyDispense(pd.id)).status === 'verified', '盤點中照常核對（缺藥判斷用真的可用量）')
+      await S.cancelStocktake(s5.id, '測試結束')
+    } else ok(false, '找不到可核對的待調劑單來測盤點中調劑')
+    ok(!('stocktake' in api.inventoryApi), '單批直接調整已移除：所有盤點都走盤點單（另一人覆核）')
+    const { readFileSync, existsSync } = await import('node:fs')
+    ok(!existsSync('src/pages/drugs/components/StocktakeDialog.vue') && !readFileSync('src/pages/drugs/components/DrugDetail.vue', 'utf8').includes('StocktakeDialog'), '藥品明細不再有「盤點」按鈕')
+    const sheetVue = readFileSync('src/pages/drugs/components/StocktakeSheet.vue', 'utf8')
+    ok(sheetVue.includes('checkStocktakeActual(') && !/countedBy\s*===|submittedBy\s*===/.test(sheetVue), '盤點畫面：數量規則與服務層同一條；誰能覆核看服務層的 reviewBlocked，不自己判斷')
+    // 清點存檔要排隊：共用一個 useAction 時，上一列還在存、下一列的存檔會被「進行中」擋掉（數字留在格子裡、其實沒存）
+    ok(!sheetVue.includes('useAction(stocktakeApi.countLine') && sheetVue.includes('queue = queue.then') && sheetVue.includes('await queue'), '清點存檔排隊送出，送出前等所有存檔完成（手快不會漏存）')
+    ok(ledgerBroken(dbm.db).length === 0, '盤點過帳後各地點帳本仍對得起來')
+    await as('clerk01')
+  }
+
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
   console.log('\n[藥袋法定欄位]')
   {
@@ -2427,7 +2580,7 @@ try {
     // 先清掉這種藥原本的待到貨申請（若有），確保從頭開始
     for (const r0 of dbm.db.restockRequests.filter((x) => x.drugId === drugId && x.status === 'open')) await api.inventoryApi.cancelRestock(r0.id, '測試前清除')
     // 用盤點把可用庫存清成 0（照服務層的路走，帳本不變式仍成立）
-    for (const l of dbm.db.drugLots.filter((x) => x.drugId === drugId && x.qty > 0 && x.expiry >= T)) await api.inventoryApi.stocktake({ lotId: l.id, actual: 0, reason: '測試：模擬缺藥' })
+    await takeStock([drugId], (l, lot) => (l.expiry >= T ? 0 : lot.qty), '測試：模擬缺藥')
     const itemOf = async () => (await api.pharmacyApi.getDispense(pend.id)).items.find((i) => i.drugId === drugId)
     let it = await itemOf()
     ok(it.shortage && !it.restock, `${it.drugName} 清空後：調劑單顯示缺藥、還沒有補貨申請`)

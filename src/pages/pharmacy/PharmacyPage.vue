@@ -192,7 +192,9 @@ const print = () => window.print()
               <td class="px-3 py-2 text-right">{{ it.days }}</td>
               <td class="px-3 py-2 text-right font-semibold">{{ it.qty }}</td>
               <td :class="['px-3 py-2 text-right', it.shortage ? 'font-semibold text-red-600' : 'text-slate-500']">
-                {{ it.stock }}<div v-if="it.shortage" class="text-xs">缺 {{ it.qty - it.stock }}</div>
+                <!-- 盲盤：盤點中不顯示庫存數字（服務層已遮掉）；缺不缺仍照實提示 -->
+                <template v-if="it.counting"><span class="text-xs text-violet-700">盤點中</span><div v-if="it.shortage" class="text-xs">不足</div></template>
+                <template v-else>{{ it.stock }}<div v-if="it.shortage" class="text-xs">缺 {{ it.qty - it.stock }}</div></template>
               </td>
             </tr>
             <!-- 缺藥的處理放在下一列、跨整列：窄螢幕時明細只有 400px 寬，擠在最後一欄會撐出橫向捲軸 -->

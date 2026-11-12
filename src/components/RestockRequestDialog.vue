@@ -50,7 +50,8 @@ const hm = (t: string) => t.slice(5, 16).replace('-', '/')
         <dl class="grid grid-cols-3 gap-2 text-center">
           <div class="rounded-md bg-slate-50 p-2">
             <dt class="text-xs text-slate-500">現有可用</dt>
-            <dd class="tabular font-semibold text-slate-800">{{ plan.usable }} <span class="text-xs font-normal text-slate-400">{{ plan.unit }}</span></dd>
+            <dd v-if="plan.counting" class="text-xs text-violet-700">盤點中</dd>
+            <dd v-else class="tabular font-semibold text-slate-800">{{ plan.usable }} <span class="text-xs font-normal text-slate-400">{{ plan.unit }}</span></dd>
           </div>
           <div class="rounded-md bg-slate-50 p-2">
             <dt class="text-xs text-slate-500">等待中的處方</dt>

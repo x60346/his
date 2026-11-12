@@ -39,6 +39,8 @@ export interface DispenseItem {
   indication: string
   warning: string
   shortage: boolean
+  /** 門診藥局正在盤點這種藥（盲盤）：stock 不給看（0），畫面顯示「盤點中」；缺藥判斷 shortage 仍用真的量 */
+  counting?: string
   /** 這種藥有待到貨的補貨申請：申請量、尚欠、何時申請、這張單是否已在等待名單上 */
   restock?: { qty: number; outstanding: number; requestedAt: string; includesThis: boolean }
 }
@@ -85,7 +87,8 @@ function dispenseView(d: Dispense): DispenseView {
       route: m.route,
       days: m.days,
       qty: m.qty,
-      stock: usable,
+      stock: stockLoc.counting(m.drugId, stockLoc.opd()) ? 0 : usable,
+      ...(stockLoc.counting(m.drugId, stockLoc.opd()) ? { counting: stockLoc.counting(m.drugId, stockLoc.opd()) } : {}),
       highAlert: drug?.highAlert ?? false,
       timingText: timingText(drug?.timing, m.freq, m.route),
       timingShort: timingText(drug?.timing, m.freq, m.route, true),
@@ -140,8 +143,9 @@ export function listDispenses(q: { date: string; status?: DispenseStatus[] }): P
 export const getDispense = (id: string): Promise<DispenseView> => query(() => dispenseView(must(db.dispenses.find((d) => d.id === id), '調劑單')))
 
 function assertStock(view: DispenseView): void {
-  const short = view.items.filter((i) => i.stock < i.qty)
-  if (short.length) fail(`庫存不足：${short.map((i) => `${i.drugName}（需 ${i.qty}，存 ${i.stock}）`).join('、')}`, 'CONFLICT')
+  // 用 shortage（真的可用量算的），不用 stock——盤點中 stock 被遮成 0，拿它判斷會把有貨的藥擋下
+  const short = view.items.filter((i) => i.shortage)
+  if (short.length) fail(`庫存不足：${short.map((i) => `${i.drugName}（需 ${i.qty}${i.counting ? '，盤點中' : `，存 ${i.stock}`}）`).join('、')}`, 'CONFLICT')
 }
 
 /** 核對處方（第一位藥師） */

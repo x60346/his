@@ -82,6 +82,12 @@ export const stockLoc = {
   },
   /** 某藥在某地點的批號 */
   lots: (drugId: string, locationId: string) => db.drugLots.filter((l) => l.drugId === drugId && l.locationId === locationId),
+  /**
+   * 盲盤：這種藥在這個地點正在盤點（清點中、待覆核）就回傳盤點單號——帳上數量不給看。
+   * 由服務層遮掉（回 0 並標出單號），不是畫面藏起來：資料根本不出去
+   */
+  counting: (drugId: string, locationId: string) =>
+    db.stocktakes.find((s) => (s.status === 'counting' || s.status === 'submitted') && s.locationId === locationId && s.lines.some((l) => l.drugId === drugId))?.no,
   /** 某藥在某地點的安全庫存（沒設定就用藥品主檔的值） */
   safety: (drug: Pick<Drug, 'id' | 'safetyStock'>, locationId: string) => db.safetyStocks.find((x) => x.locationId === locationId && x.drugId === drug.id)?.qty ?? drug.safetyStock,
 }

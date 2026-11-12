@@ -716,6 +716,52 @@ export interface StockLocation {
   active: boolean
 }
 
+/**
+ * 盤點單：某個地點、某個範圍（全部／劑型／指定藥品），建立時展開成「每個批號一列」。
+ * 清點中 → 送出（待覆核）→ 另一人覆核過帳；任何時候可取消（要寫原因）。
+ * 清點中與待覆核時，範圍內藥品在這個地點的帳上數量不給看（盲盤），由服務層遮掉。
+ */
+export type StocktakeStatus = 'counting' | 'submitted' | 'posted' | 'cancelled'
+
+export interface StocktakeLine {
+  id: string
+  drugId: string
+  /** 帳上的批號（清點時才發現、帳上沒有的批號為空，過帳時新建） */
+  lotId?: string
+  lotNo: string
+  expiry: string
+  counted?: number
+  countedBy?: string
+  countedAt?: string
+  /** 清點那一刻的帳上數量（服務層記下；清點中不給看）。差異＝counted − systemQty */
+  systemQty?: number
+  /** 覆核時寫的差異原因 */
+  reason?: string
+  /** 過帳產生的調整異動 */
+  txnId?: string
+}
+
+export interface StocktakeSheet {
+  id: string
+  /** 單號：PD20261112-01 */
+  no: string
+  locationId: string
+  scope: { kind: 'all' } | { kind: 'category'; category: string } | { kind: 'drugs'; drugIds: string[] }
+  status: StocktakeStatus
+  lines: StocktakeLine[]
+  createdBy: string
+  createdAt: string
+  submittedBy?: string
+  submittedAt?: string
+  reviewedBy?: string
+  reviewedAt?: string
+  /** 退回重盤的紀錄（覆核者、時間、原因） */
+  returns?: { by: string; at: string; reason: string }[]
+  cancelledBy?: string
+  cancelledAt?: string
+  cancelReason?: string
+}
+
 /** 某地點對某藥的安全庫存（沒設定就用藥品主檔的 safetyStock） */
 export interface SafetyStock {
   locationId: string

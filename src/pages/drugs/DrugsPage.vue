@@ -7,13 +7,17 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AlertTriangle, CalendarClock, PackageX, Pill, Truck, X } from 'lucide-vue-next'
 import type { StockFlag } from '@/services/stock-rules'
-import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, type Column } from '@/components/ui'
+import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, UTabs, type Column } from '@/components/ui'
 import DrugDetail from './components/DrugDetail.vue'
+import StocktakePanel from './components/StocktakePanel.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
 import { useWorkLocation } from '@/composables/useWorkLocation'
 
 const work = useWorkLocation()
+// 庫存／盤點單（首頁待辦帶 ?tab=stocktake 進來直接看盤點單）
+const route0 = useRoute()
+const view = ref(route0.query.tab === 'stocktake' ? 'stocktake' : 'stock')
 
 const keyword = ref('')
 const kw = useDebounced(keyword)
@@ -73,6 +77,9 @@ const shown = computed(() => rows.value?.length ?? 0)
       </div>
       <p class="pb-2 text-xs text-slate-500">下方的庫存、批號、進貨、報廢都是「{{ work.location.value?.name }}」的；醫師開藥看到的可用量是門診藥局的。</p>
     </div>
+    <UTabs v-model="view" :tabs="[{ key: 'stock', label: '庫存' }, { key: 'stocktake', label: '盤點單' }]" />
+    <StocktakePanel v-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
+    <template v-else>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
       <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />
       <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
@@ -111,8 +118,9 @@ const shown = computed(() => rows.value?.length ?? 0)
             <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.spec }}・{{ row.category }}</div>
           </template>
           <template #cell-usable="{ row }">
-            <span :class="['tabular font-medium', row.status === 'out' ? 'text-red-600' : row.status === 'low' ? 'text-amber-700' : 'text-slate-800']">{{ row.usable }}</span>
-            <span class="text-xs text-slate-400"> {{ row.unit }}</span>
+            <span v-if="row.counting" class="text-xs text-violet-700">盤點中</span>
+            <span v-else :class="['tabular font-medium', row.status === 'out' ? 'text-red-600' : row.status === 'low' ? 'text-amber-700' : 'text-slate-800']">{{ row.usable }}</span>
+            <span v-if="!row.counting" class="text-xs text-slate-400"> {{ row.unit }}</span>
             <div v-if="row.expiredQty" class="text-xs text-red-600">另過期 {{ row.expiredQty }}</div>
           </template>
           <template #cell-daysLeft="{ row }">
@@ -124,7 +132,8 @@ const shown = computed(() => rows.value?.length ?? 0)
           <template #cell-status="{ row }">
             <div class="flex flex-wrap gap-1">
               <UBadge v-for="f in row.flags" :key="f" :tone="flagView[f].tone">{{ flagView[f].label }}</UBadge>
-              <UBadge v-if="!row.flags.length && !row.restock" tone="green">正常</UBadge>
+              <UBadge v-if="row.counting" tone="purple" :title="`盤點單 ${row.counting}`">盤點中</UBadge>
+              <UBadge v-else-if="!row.flags.length && !row.restock" tone="green">正常</UBadge>
               <UBadge v-if="row.restock" tone="blue" :title="`補貨申請尚欠 ${row.restock.outstanding}`">待到貨{{ row.restock.waiting ? `・${row.restock.waiting} 人等` : '' }}</UBadge>
             </div>
           </template>
@@ -136,5 +145,6 @@ const shown = computed(() => rows.value?.length ?? 0)
         <DrugDetail v-else :drug-id="selectedId" :location-id="work.locationId.value" :location-name="work.multi.value ? work.location.value?.name : undefined" />
       </UCard>
     </div>
+    </template>
   </div>
 </template>

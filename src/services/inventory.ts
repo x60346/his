@@ -9,7 +9,7 @@ import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockSta
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { allocateFefo, checkStocktakeActual, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus } from './stock-rules'
+import { allocateFefo, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
 import { matchesDrug } from './drug-rules'
 
@@ -63,6 +63,11 @@ const USAGE_DAYS = 30
 export interface InventoryRow extends Drug {
   /** 這一列是哪個地點的（stock、safetyStock 也是這個地點的） */
   locationId: string
+  /**
+   * 正在盤點（盲盤）：盤點單號。有它時 stock、usable、expiredQty、daysLeft 都是 0／null、flags 為空——
+   * 數量不給看，畫面要先看這個欄位，顯示「盤點中」而不是 0
+   */
+  counting?: string
   /** 未過期、可發給病人的數量 */
   usable: number
   /** 已過期、待報廢的數量 */
@@ -106,7 +111,11 @@ function inventoryRow(d: Drug, t: string, locationId: string): InventoryRow {
     expiringSoon: !!nearestExpiry && isExpiringSoon(nearestExpiry, t),
   }
   const req = openRestockOf(d.id)
-  return { ...row, flags: stockFlags(row), ...(req ? { restock: { id: req.id, outstanding: outstandingOf(req), waiting: waitingOf(req).length } } : {}) }
+  const restock = req ? { restock: { id: req.id, outstanding: outstandingOf(req), waiting: waitingOf(req).length } } : {}
+  const counting = stockLoc.counting(d.id, locationId)
+  // 盲盤：數量、可用天數、缺貨偏低的標籤都會洩漏帳上數量，一律遮掉
+  if (counting) return { ...row, stock: 0, usable: 0, expiredQty: 0, daysLeft: null, status: 'ok', flags: [], counting, ...restock }
+  return { ...row, flags: stockFlags(row), ...restock }
 }
 
 export interface InventoryQuery {
@@ -174,6 +183,8 @@ export interface StockTxnView extends StockTxn {
 
 /** 藥品庫存明細（BFF）：庫存狀態、批號、異動紀錄、近 30 天每日用量，一次取回 */
 export interface DrugLedger {
+  /** 正在盤點：批號只列批號效期（數量 0）、異動不列（結存會洩漏帳上數量） */
+  counting?: string
   row: InventoryRow
   lots: DrugLot[]
   txns: StockTxnView[]
@@ -193,12 +204,15 @@ export function getDrugLedger(drugId: string, locationId?: string): Promise<Drug
       date,
       qty: -txns.filter((x) => isUsage(x) && x.at.startsWith(date)).reduce((s, x) => s + x.qty, 0),
     }))
+    const counting = stockLoc.counting(d.id, loc)
+    const lots = stockLoc.lots(d.id, loc).filter((l) => l.qty > 0).sort((a, b) => a.expiry.localeCompare(b.expiry))
     return {
+      ...(counting ? { counting } : {}),
       row: inventoryRow(d, t, loc),
-      lots: stockLoc.lots(d.id, loc).filter((l) => l.qty > 0).sort((a, b) => a.expiry.localeCompare(b.expiry)),
+      lots: counting ? lots.map((l) => ({ ...l, qty: 0 })) : lots,
       // 帳本只增不改，寫入順序就是發生順序：新到舊直接反轉，不用時間排序——
       // 時間只到分鐘，同一分鐘的兩筆（報廢後馬上盤點）用時間排會分不出先後，結存就看起來跳號
-      txns: [...txns].reverse().slice(0, 100).map((x) => ({ ...x, userName: nameOf.user(x.userId) })),
+      txns: counting ? [] : [...txns].reverse().slice(0, 100).map((x) => ({ ...x, userName: nameOf.user(x.userId) })),
       daily,
       ...(openRestockOf(d.id) ? { restock: restockView(openRestockOf(d.id)!) } : {}),
     }
@@ -253,30 +267,6 @@ export function receiveStock(input: ReceiveInput): Promise<ReceiveResult> {
   })
 }
 
-/**
- * 盤點：輸入「實際清點到的數量」，系統算出差異並寫入調整。
- * 人只負責填看到的事實（貨架上還有 47 盒），差異由系統算，避免心算出錯。
- * 盤點以批號為單位——不同批號效期不同，混在一起盤就不知道少的是哪一批。
- */
-export function stocktake(input: { lotId: string; actual: number; reason: string }): Promise<StockTxn | null> {
-  return mutate(() => {
-    const u = requireUser('pharmacist')
-    const lot = must(db.drugLots.find((l) => l.id === input.lotId), '批號')
-    const actualErr = checkStocktakeActual(input.actual)
-    if (actualErr) failField('actual', actualErr)
-    const diff = input.actual - lot.qty
-    if (diff === 0) return null // 帳實相符，不需要調整
-    if (!input.reason.trim()) failField('reason', '帳實不符，請註明原因（例：破損、過期報廢、計數錯誤）')
-    const reason = input.reason.trim()
-    const txn =
-      diff > 0
-        ? postStock({ kind: 'in', type: 'adjust', drugId: lot.drugId, locationId: lot.locationId, qty: diff, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, reason }, u.id)
-        : postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: lot.locationId, qty: -diff, lotId: lot.id, reason }, u.id)
-    audit('藥品盤點', `${find.drug(lot.drugId)?.name} ${nameOf.location(lot.locationId)} 批號 ${lot.lotNo}：帳 ${lot.qty - diff} → 實 ${input.actual}（${reason}）`)
-    return txn
-  })
-}
-
 /** 報廢某藥在某地點所有已過期批號（沒給地點＝門診藥局） */
 export function scrapExpired(drugId: string, locationId?: string): Promise<StockTxn[]> {
   return mutate(() => {
@@ -327,7 +317,7 @@ function restockView(r: RestockRequest): RestockView {
     ...r,
     drugName: drug?.name ?? r.drugId,
     unit: drug?.unit ?? '',
-    usable: usableQty(stockLoc.lots(r.drugId, stockLoc.opd()), today()),
+    usable: stockLoc.counting(r.drugId, stockLoc.opd()) ? 0 : usableQty(stockLoc.lots(r.drugId, stockLoc.opd()), today()),
     outstanding: outstandingOf(r),
     requestedByName: nameOf.user(r.requestedBy),
     waiting: waitingOf(r).map((d) => ({
@@ -342,6 +332,8 @@ function restockView(r: RestockRequest): RestockView {
 
 /** 申請對話框要的資料：現有可用、所有等這種藥的需求、已申請未到貨、建議數量（算式） */
 export interface RestockPlan {
+  /** 門診藥局正在盤點：可用量與建議量不給（建議量是用可用量算的），請自行填數量 */
+  counting?: string
   drugId: string
   drugName: string
   unit: string
@@ -362,7 +354,9 @@ export function getRestockPlan(drugId: string): Promise<RestockPlan> {
     const waiting = db.dispenses.filter((x) => x.status !== 'dispensed' && medsOf(x).some((m) => m.drugId === d.id))
     const need = waiting.reduce((n, x) => n + medsOf(x).filter((m) => m.drugId === d.id).reduce((k, m) => k + m.qty, 0), 0)
     const open = openRestockOf(d.id)
+    const counting = row.counting
     return {
+      ...(counting ? { counting } : {}),
       drugId: d.id,
       drugName: d.name,
       unit: d.unit,
@@ -372,7 +366,7 @@ export function getRestockPlan(drugId: string): Promise<RestockPlan> {
       need,
       waitingCount: waiting.length,
       ...(open ? { open: restockView(open) } : {}),
-      suggestion: suggestRestockQty({ usable: row.usable, need, safetyStock: row.safetyStock, used30: row.used30, onOrder: open ? outstandingOf(open) : 0 }),
+      suggestion: counting ? { qty: 0, raw: 0, formula: `盤點中（${counting}），可用量暫不顯示，請自行填寫數量` } : suggestRestockQty({ usable: row.usable, need, safetyStock: row.safetyStock, used30: row.used30, onOrder: open ? outstandingOf(open) : 0 }),
     }
   })
 }
