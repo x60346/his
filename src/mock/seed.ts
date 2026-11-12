@@ -22,6 +22,7 @@ import type {
   UdDispense,
   UdLine,
   PurchaseOrder,
+  Supplier,
   SafetyStock,
   StockLocation,
   HospitalScale,
@@ -1030,18 +1031,36 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   //   2. 待核准：昨天藥師開的，帶入上面那張補貨申請（管理員打開就有東西可核准）
   //   3. 已訂購：三天前核准、還沒到貨（藥師打開就有東西可入庫）
   const purchaseOrders: PurchaseOrder[] = []
-  const costOf = (drugId: string) => Math.round(drugMap.get(drugId)!.nhiPrice * 85) / 100
-  const SUPPLIERS = ['台灣藥品股份有限公司', '永信醫藥科技股份有限公司', '杏林藥業有限公司']
+  // 供應商主檔（虛構的公司、統編符合檢查碼、電話是示範號碼）。各家折扣不同，供應商頁的「以前的進價」才有比價可看；
+  // 第四家是停用的示範（不再往來，舊資料仍在）
+  const suppliers: Supplier[] = [
+    { id: 'S001', name: '台灣藥品股份有限公司', taxId: '24536801', contact: '王建民', phone: '02-2345-6789', active: true, createdAt: `${addDays(T, -400)} 10:00` },
+    { id: 'S002', name: '永信醫藥科技股份有限公司', taxId: '53716200', contact: '李美玲', phone: '04-2234-5678', active: true, createdAt: `${addDays(T, -400)} 10:05` },
+    { id: 'S003', name: '杏林藥業有限公司', taxId: '80421502', contact: '陳志豪', phone: '07-3345-6789', note: '急件可當天送', active: true, createdAt: `${addDays(T, -400)} 10:10` },
+    { id: 'S004', name: '安心藥品有限公司', phone: '02-2765-4321', note: '已不再往來', active: false, createdAt: `${addDays(T, -700)} 09:00`, updatedAt: `${addDays(T, -200)} 11:00` },
+  ]
+  /** 各家的進價折扣（健保價的幾 %） */
+  const DISCOUNT = [85, 82, 88]
+  const costOf = (drugId: string, k = 0) => Math.round(drugMap.get(drugId)!.nhiPrice * DISCOUNT[k]) / 100
+  const supplierOf = (k: number) => ({ supplierId: suppliers[k].id, supplier: suppliers[k].name })
   const recvByDay = new Map<string, StockTxn[]>()
   for (const t of stockTxns.filter((x) => x.type === 'receive')) recvByDay.set(t.at.slice(0, 10), [...(recvByDay.get(t.at.slice(0, 10)) ?? []), t])
+  // 同一天到貨的分給三家供應商（依藥品與日期輪替、不抽亂數）：每家都有進貨紀錄，同一種藥不同天向不同家買，才有比價可看
+  const drugIdx = new Map(drugs.map((d, i) => [d.id, i]))
   ;[...recvByDay.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([day, txns], k) => {
-    const no = `PO${addDays(day, -5).replace(/-/g, '')}-01`
-    for (const t of txns) t.ref = no
-    purchaseOrders.push({
-      id: `PO-SEED-H${k + 1}`, no, supplier: SUPPLIERS[k % SUPPLIERS.length], status: 'received', locationId: recvLoc,
-      lines: txns.map((t, i) => ({ id: `L${i + 1}`, drugId: t.drugId, qty: t.qty, unitCost: costOf(t.drugId), receivedQty: t.qty, txnIds: [t.id] })),
-      createdBy: 'U301', createdAt: `${addDays(day, -5)} 15:00`, submittedAt: `${addDays(day, -5)} 15:10`,
-      approvedBy: 'U001', approvedAt: `${addDays(day, -4)} 09:30`, closedBy: 'U301', closedAt: txns[txns.length - 1].at,
+    const bySupplier = [0, 1, 2].map((sk) => txns.filter((t) => ((drugIdx.get(t.drugId) ?? 0) + k) % 3 === sk))
+    let n = 0
+    bySupplier.forEach((group, sk) => {
+      if (!group.length) return
+      n++
+      const no = `PO${addDays(day, -5).replace(/-/g, '')}-${String(n).padStart(2, '0')}`
+      for (const t of group) t.ref = no
+      purchaseOrders.push({
+        id: `PO-SEED-H${k + 1}-${n}`, no, ...supplierOf(sk), status: 'received', locationId: recvLoc,
+        lines: group.map((t, i) => ({ id: `L${i + 1}`, drugId: t.drugId, qty: t.qty, unitCost: costOf(t.drugId, sk), receivedQty: t.qty, txnIds: [t.id] })),
+        createdBy: 'U301', createdAt: `${addDays(day, -5)} 15:0${n}`, submittedAt: `${addDays(day, -5)} 15:1${n}`,
+        approvedBy: 'U001', approvedAt: `${addDays(day, -4)} 09:3${n}`, closedBy: 'U301', closedAt: group[group.length - 1].at,
+      })
     })
   })
   {
@@ -1052,15 +1071,15 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       { id: req ? 'L2' : 'L1', drugId: other.id, qty: 200, unitCost: costOf(other.id), receivedQty: 0, txnIds: [] },
     ]
     purchaseOrders.push({
-      id: 'PO-SEED-P1', no: `PO${addDays(T, -1).replace(/-/g, '')}-01`, supplier: SUPPLIERS[0], status: 'pending', locationId: recvLoc, lines,
+      id: 'PO-SEED-P1', no: `PO${addDays(T, -1).replace(/-/g, '')}-01`, ...supplierOf(0), status: 'pending', locationId: recvLoc, lines,
       note: scale === 'small' ? '補貨申請轉採購' : '藥庫備量', createdBy: 'U301', createdAt: `${addDays(T, -1)} 16:50`, submittedAt: `${addDays(T, -1)} 16:55`,
     })
     const o1 = drugs.find((d) => d.id === 'M010')!
     const o2 = drugs.find((d) => d.id === 'M018')!
     purchaseOrders.push({
-      id: 'PO-SEED-O1', no: `PO${addDays(T, -3).replace(/-/g, '')}-01`, supplier: SUPPLIERS[1], status: 'ordered', locationId: recvLoc,
+      id: 'PO-SEED-O1', no: `PO${addDays(T, -3).replace(/-/g, '')}-01`, ...supplierOf(1), status: 'ordered', locationId: recvLoc,
       expectedDate: addDays(T, 1),
-      lines: [o1, o2].map((d, i) => ({ id: `L${i + 1}`, drugId: d.id, qty: d.safetyStock * 2, unitCost: costOf(d.id), receivedQty: 0, txnIds: [] })),
+      lines: [o1, o2].map((d, i) => ({ id: `L${i + 1}`, drugId: d.id, qty: d.safetyStock * 2, unitCost: costOf(d.id, 1), receivedQty: 0, txnIds: [] })),
       createdBy: 'U301', createdAt: `${addDays(T, -3)} 10:20`, submittedAt: `${addDays(T, -3)} 10:25`, approvedBy: 'U001', approvedAt: `${addDays(T, -3)} 14:00`,
     })
   }
@@ -1223,6 +1242,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     stockLocations,
     safetyStocks,
     stocktakes: [],
+    suppliers,
     purchaseOrders,
     transfers,
     udDispenses,

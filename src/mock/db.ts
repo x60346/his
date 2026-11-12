@@ -29,6 +29,7 @@ import type {
   SafetyStock,
   StocktakeSheet,
   PurchaseOrder,
+  Supplier,
   TransferOrder,
   UdDispense,
   Patient,
@@ -107,6 +108,8 @@ export interface Database {
   safetyStocks: SafetyStock[]
   /** 盤點單 */
   stocktakes: StocktakeSheet[]
+  /** 供應商主檔 */
+  suppliers: Supplier[]
   /** 採購單 */
   purchaseOrders: PurchaseOrder[]
   /** 撥補單（大型醫院） */
@@ -119,7 +122,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 49
+export const SCHEMA_VERSION = 50
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

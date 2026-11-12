@@ -919,10 +919,29 @@ export interface PurchaseLine {
   txnIds: string[]
 }
 
+/**
+ * 供應商主檔：採購單只能選這裡有的、啟用中的。以前供應商是文字欄位，同一家打成兩種寫法就分成兩家，
+ * 也查不出「這家以前賣多少」。只能停用、不能刪除（舊採購單指向它）
+ */
+export interface Supplier {
+  id: string
+  name: string
+  /** 統一編號（8 碼，有檢查碼；選填——個人藥商可能沒有） */
+  taxId?: string
+  contact?: string
+  phone?: string
+  note?: string
+  active: boolean
+  createdAt: string
+  updatedAt?: string
+}
+
 export interface PurchaseOrder {
   id: string
   /** 單號：PO20261112-01 */
   no: string
+  supplierId: string
+  /** 開單（存草稿）當時的供應商名稱：單據是文件，供應商之後改名，舊單仍印當時的名稱 */
   supplier: string
   expectedDate?: string
   note?: string

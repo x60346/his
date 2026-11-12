@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 一張採購單：
-//   新單／草稿（藥師）：供應商、預計到貨日、品項（可從「需求清單」勾選帶入補貨申請與低於安全庫存的藥）→ 存草稿、送出
+//   新單／草稿（藥師）：供應商（主檔裡啟用中的）、預計到貨日、品項（可從「需求清單」勾選帶入補貨申請與低於安全庫存的藥）→ 存草稿、送出
+//   選了供應商，每一行顯示「這家上次的進價」（供應商主檔的價格紀錄，supplierPrices）
 //   待核准（管理員）：核准或退回（寫原因）
 //   已訂購（藥師）：每一行「到貨入庫」（批號效期照實物，可分批）；短交結案、取消
 // 金額、尚未到貨數量、誰能做什麼都由服務層判斷；這裡照資料顯示。
@@ -26,24 +27,34 @@ const editable = computed(() => role.value === 'pharmacist' && (!props.orderId |
 
 // ---------- 草稿表單 ----------
 type FormLine = { drugId: string | number; qty?: number; unitCost?: number; restockId?: string }
-const form = reactive({ supplier: '', expectedDate: '', note: '', lines: [] as FormLine[] })
+const form = reactive({ supplierId: '' as string | number, expectedDate: '', note: '', lines: [] as FormLine[] })
 watch(po, (p) => {
   if (!p) return
-  Object.assign(form, { supplier: p.supplier, expectedDate: p.expectedDate ?? '', note: p.note ?? '', lines: p.lines.map((l) => ({ drugId: l.drugId, qty: l.qty, unitCost: l.unitCost, restockId: l.restockId })) })
+  Object.assign(form, { supplierId: p.supplierId, expectedDate: p.expectedDate ?? '', note: p.note ?? '', lines: p.lines.map((l) => ({ drugId: l.drugId, qty: l.qty, unitCost: l.unitCost, restockId: l.restockId })) })
 }, { immediate: true })
 const { data: drugs } = useQuery(() => masterApi.listDrugs())
 const drugOptions = computed(() => (drugs.value ?? []).map((d) => ({ label: `${d.name}（${d.nameZh}）`, value: d.id })))
 const unitOf = (id: string | number) => drugs.value?.find((d) => d.id === id)?.unit ?? ''
-const { data: suppliers } = useQuery(() => purchaseApi.listSuppliers())
+// 供應商選單：啟用中的；草稿上的供應商若已停用，也列出來（標停用）讓藥師看得到、改選
+const { data: suppliers } = useQuery(() => purchaseApi.listSuppliers({ includeInactive: true }))
+const supplierOptions = computed(() =>
+  (suppliers.value ?? []).filter((x) => x.active || x.id === po.value?.supplierId).map((x) => ({ label: x.active ? x.name : `${x.name}（已停用）`, value: x.id })),
+)
+const activeSupplier = (id?: string) => suppliers.value?.find((x) => x.id === id && x.active)
+// 這家以前的進價：每一行提示「這家上次 X 元」
+const { data: prices } = useQuery(async () => (editable.value && form.supplierId ? purchaseApi.supplierPrices(String(form.supplierId)) : []), [editable, () => form.supplierId])
+const priceOf = (drugId: string | number) => prices.value?.find((x) => x.drugId === drugId)
 const draftTotal = computed(() => purchaseTotal(form.lines.map((l) => ({ qty: l.qty ?? 0, unitCost: l.unitCost ?? 0 }))))
 
 // 需求清單：待處理的補貨申請＋採購入庫地點低於安全庫存的藥（建議量由服務層算）
 const { data: candidates } = useQuery(async () => (editable.value ? purchaseApi.purchaseCandidates() : []), [editable])
 const inForm = (drugId: string) => form.lines.some((l) => l.drugId === drugId)
 function toggleCandidate(c: NonNullable<typeof candidates.value>[number], on: boolean) {
-  if (on && !inForm(c.drugId)) form.lines.push({ drugId: c.drugId, qty: c.suggestedQty || undefined, unitCost: c.last?.unitCost, restockId: c.restock?.id })
+  // 還沒選供應商：帶入上次買這種藥的那家（還在往來的才帶）
+  if (on && !form.supplierId && c.last && activeSupplier(c.last.supplierId)) form.supplierId = c.last.supplierId
+  // 進價：已選的那家買過就用它上次的價格，否則用上次（不論哪家）的
+  if (on && !inForm(c.drugId)) form.lines.push({ drugId: c.drugId, qty: c.suggestedQty || undefined, unitCost: priceOf(c.drugId)?.unitCost ?? c.last?.unitCost, restockId: c.restock?.id })
   if (!on) form.lines = form.lines.filter((l) => l.drugId !== c.drugId)
-  if (on && !form.supplier && c.last) form.supplier = c.last.supplier
 }
 
 function candNote(c: NonNullable<typeof candidates.value>[number]) {
@@ -54,7 +65,7 @@ function candNote(c: NonNullable<typeof candidates.value>[number]) {
 const save = useAction(purchaseApi.savePurchaseDraft, { success: (p) => `已儲存 ${p.no}` })
 const payload = () => ({
   id: props.orderId,
-  supplier: form.supplier,
+  supplierId: String(form.supplierId ?? ''),
   expectedDate: form.expectedDate || undefined,
   note: form.note,
   lines: form.lines.map((l) => ({ drugId: String(l.drugId ?? ''), qty: l.qty as number, unitCost: l.unitCost as number, ...(l.restockId ? { restockId: l.restockId } : {}) })),
@@ -135,10 +146,7 @@ const md = (t?: string) => (t ? t.slice(5, 16).replace('-', '/') : '')
       <!-- 草稿：可編輯 -->
       <template v-if="editable">
         <div class="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
-          <div>
-            <UInput v-model="form.supplier" label="供應商" required list="po-suppliers" :error="save.fieldErrors.value.supplier" />
-            <datalist id="po-suppliers"><option v-for="s in suppliers ?? []" :key="s" :value="s" /></datalist>
-          </div>
+          <USelect v-model="form.supplierId" label="供應商" required :options="supplierOptions" placeholder="選擇供應商" hint="主檔在「供應商」分頁維護" :error="save.fieldErrors.value.supplierId" />
           <UInput v-model="form.expectedDate" label="預計到貨日（選填）" type="date" :error="save.fieldErrors.value.expectedDate" />
           <UInput v-model="form.note" label="備註（選填）" />
         </div>
@@ -166,6 +174,9 @@ const md = (t?: string) => (t ? t.slice(5, 16).replace('-', '/') : '')
                 <td class="min-w-56 px-3 py-1.5">
                   <USelect v-model="l.drugId" :options="drugOptions" placeholder="選擇藥品" :aria-label="`第 ${i + 1} 項藥品`" />
                   <div v-if="l.restockId" class="mt-0.5 text-xs text-sky-700">由補貨申請帶入</div>
+                  <div v-if="priceOf(l.drugId)" class="mt-0.5 text-xs text-slate-500">
+                    這家上次 {{ priceOf(l.drugId)!.unitCost }} 元（{{ priceOf(l.drugId)!.date.slice(5).replace('-', '/') }}）<template v-if="priceOf(l.drugId)!.other">・{{ priceOf(l.drugId)!.other!.supplier }} {{ priceOf(l.drugId)!.other!.unitCost }} 元</template>
+                  </div>
                   <div v-if="save.fieldErrors.value[`line-${i}`]" class="text-xs text-red-600">{{ save.fieldErrors.value[`line-${i}`] }}</div>
                 </td>
                 <td class="whitespace-nowrap px-2 text-right"><input v-model.number="l.qty" type="number" min="1" step="1" class="form-control w-24 text-right" :aria-label="`第 ${i + 1} 項數量`" /> <span class="text-xs text-slate-400">{{ unitOf(l.drugId) }}</span></td>

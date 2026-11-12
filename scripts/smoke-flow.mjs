@@ -2477,24 +2477,24 @@ try {
 
     // 開單驗證
     try {
-      await P.savePurchaseDraft({ supplier: '', lines: [] })
+      await P.savePurchaseDraft({ supplierId: '', lines: [] })
       ok(false, '空白採購單應被擋下')
     } catch (e) {
-      ok(e.fields?.supplier && e.fields?.lines, '空白採購單：供應商、品項一次標出')
+      ok(e.fields?.supplierId && e.fields?.lines, '空白採購單：供應商、品項一次標出')
     }
     try {
-      await P.savePurchaseDraft({ supplier: 'X', lines: [{ drugId: 'M001', qty: 10, unitCost: 1 }, { drugId: 'M001', qty: 5, unitCost: 1 }, { drugId: 'M002', qty: 0, unitCost: 1 }] })
+      await P.savePurchaseDraft({ supplierId: 'S001', lines: [{ drugId: 'M001', qty: 10, unitCost: 1 }, { drugId: 'M001', qty: 5, unitCost: 1 }, { drugId: 'M002', qty: 0, unitCost: 1 }] })
       ok(false, '重複品項應被擋下')
     } catch (e) {
       ok(e.fields?.['line-1']?.includes('重複') && e.fields?.['line-2']?.includes('正整數'), '同一種藥兩行、數量 0：標在那一行')
     }
-    await expectError(() => P.savePurchaseDraft({ supplier: 'X', lines: [{ drugId: pend.lines.find((l) => l.restockId).drugId, qty: 1, unitCost: 1, restockId: pend.lines.find((l) => l.restockId).restockId }] }), '同一張補貨申請列入兩張採購單')
+    await expectError(() => P.savePurchaseDraft({ supplierId: 'S001', lines: [{ drugId: pend.lines.find((l) => l.restockId).drugId, qty: 1, unitCost: 1, restockId: pend.lines.find((l) => l.restockId).restockId }] }), '同一張補貨申請列入兩張採購單')
 
     // 開單 → 送出 → 核准（只有管理員）→ 分批到貨 → 到齊
-    const draft = await P.savePurchaseDraft({ supplier: '測試藥商', expectedDate: T, lines: [{ drugId: 'M002', qty: 30, unitCost: 2.5 }, { drugId: 'M003', qty: 10, unitCost: 3 }] })
+    const draft = await P.savePurchaseDraft({ supplierId: 'S003', expectedDate: T, lines: [{ drugId: 'M002', qty: 30, unitCost: 2.5 }, { drugId: 'M003', qty: 10, unitCost: 3 }] })
     ok(draft.status === 'draft' && draft.no.startsWith(`PO${T.replace(/-/g, '')}-`) && draft.total === 105, `開單 ${draft.no}：草稿、金額 105 元`)
     await P.submitPurchase(draft.id)
-    await expectError(() => P.savePurchaseDraft({ id: draft.id, supplier: '改', lines: [{ drugId: 'M002', qty: 1, unitCost: 1 }] }), '送出後修改')
+    await expectError(() => P.savePurchaseDraft({ id: draft.id, supplierId: 'S001', lines: [{ drugId: 'M002', qty: 1, unitCost: 1 }] }), '送出後修改')
     await expectError(() => P.receivePurchase(draft.id, 'L1', { qty: 1, lotNo: 'A', expiry: '2030-01-01' }), '還沒核准就到貨入庫')
     await expectError(() => P.approvePurchase(draft.id), '藥師自己核准')
     await as('admin')
@@ -2524,7 +2524,7 @@ try {
     ok(dbm.db.restockRequests.find((r) => r.id === reqLine.restockId).status === 'fulfilled', '採購到貨照常沖銷補貨申請（到齊就結案）')
 
     // 退回、短交結案、取消
-    const d2 = await P.savePurchaseDraft({ supplier: '測試藥商', lines: [{ drugId: 'M004', qty: 5, unitCost: 9 }] })
+    const d2 = await P.savePurchaseDraft({ supplierId: 'S003', lines: [{ drugId: 'M004', qty: 5, unitCost: 9 }] })
     await P.submitPurchase(d2.id)
     await as('admin')
     await expectError(() => P.rejectPurchase(d2.id, ''), '退回沒寫原因')
@@ -2778,6 +2778,68 @@ try {
     const bsrc = readFileSync('src/services/billing.ts', 'utf8')
     ok(!/identity\.regFee|consult\.(points|selfPrice)|proc\.(points|selfPrice)|lk\.settings\.basicCopay/.test(bsrc) && bsrc.includes('regFeeOn(identity, date)') && bsrc.includes('procPriceOn(proc, date)'),
       '批價不直接讀主檔的掛號費、點數、部分負擔，一律依看診日查')
+  }
+
+  // 供應商主檔：採購單只能選主檔裡啟用中的；統編檢查碼；停用前檢查進行中的單；以前的進價
+  console.log('\n[供應商主檔]')
+  {
+    const R = await load('/src/services/purchase-rules.ts')
+    ok(R.taxIdProblem('') === null && R.taxIdProblem('04595257') === null && R.taxIdProblem('10000073') === null, '統編：空白不檢查；檢查碼正確的通過（含第 7 碼是 7 的特例）')
+    ok(R.taxIdProblem('04595258')?.includes('檢查碼') && R.taxIdProblem('1234567')?.includes('8 碼') && R.taxIdProblem('0459525A')?.includes('8 碼'), '統編：打錯一碼擋下、不是 8 碼數字擋下')
+    ok(R.normalizeSupplierName(' 杏林藥業（股）  公司') === R.normalizeSupplierName('杏林藥業(股) 公司'), '名稱比對：空白、全形半形括號視為相同')
+
+    const P = api.purchaseApi
+    await as('nurse01')
+    await expectError(() => P.listSuppliers(), '護理師看供應商')
+    await as('ph01')
+    const all = await P.listSuppliers({ includeInactive: true })
+    const act = await P.listSuppliers()
+    ok(all.length === 4 && act.length === 3 && !act.some((x) => x.id === 'S004'), `示範資料 ${all.length} 家（1 家停用）；預設只列往來中的`)
+    ok(dbm.db.purchaseOrders.every((po) => dbm.db.suppliers.some((x) => x.id === po.supplierId) && po.supplier), '每張採購單都指向供應商主檔，並存開單時的名稱')
+    ok(all.every((x) => R.taxIdProblem(x.taxId) === null), '示範資料的統編都符合檢查碼')
+
+    // 新增：名稱必填、同名（含停用的）擋、統編錯擋、統編重複擋——一次標出
+    try {
+      await P.saveSupplier({ name: '', taxId: '12345678', active: true })
+      ok(false, '空白名稱應被擋下')
+    } catch (e) {
+      ok(e.fields?.name && e.fields?.taxId, '新增供應商：名稱空白、統編錯一次標出')
+    }
+    await expectError(() => P.saveSupplier({ name: '安心藥品有限公司', active: true }), '新增和停用中的同名供應商')
+    await expectError(() => P.saveSupplier({ name: '新藥商', taxId: '24536801', active: true }), '統編和現有供應商重複')
+    const ns = await P.saveSupplier({ name: '  新興藥品  有限公司 ', taxId: '10000073', contact: '林小姐', phone: '02-1234-5678', active: true })
+    ok(ns.id === 'S005' && ns.name === '新興藥品 有限公司' && ns.taxId === '10000073' && dbm.db.auditLogs[0].action === '新增供應商', `新增 ${ns.id}：名稱去多餘空白、寫稽核`)
+
+    // 採購單：只能選啟用中的；名稱存當時的
+    await expectError(() => P.savePurchaseDraft({ supplierId: 'S004', lines: [{ drugId: 'M002', qty: 1, unitCost: 1 }] }), '採購單選停用的供應商')
+    await expectError(() => P.savePurchaseDraft({ supplierId: 'NOPE', lines: [{ drugId: 'M002', qty: 1, unitCost: 1 }] }), '採購單選不存在的供應商')
+    const d = await P.savePurchaseDraft({ supplierId: ns.id, lines: [{ drugId: 'M002', qty: 10, unitCost: 2 }] })
+    ok(d.supplierId === ns.id && d.supplier === ns.name, '採購單記供應商 id 與當時的名稱')
+    // 有進行中的單不能停用；改名不影響舊單
+    await expectError(() => P.saveSupplier({ ...ns, active: false }), '有進行中採購單的供應商停用')
+    const renamed = await P.saveSupplier({ ...ns, name: '新興藥品股份有限公司' })
+    ok(renamed.name === '新興藥品股份有限公司' && (await P.getPurchaseOrder(d.id)).supplier === ns.name, '供應商改名：舊採購單仍是開單時的名稱')
+    ok((await P.listSuppliers()).find((x) => x.id === ns.id).openOrders.includes(d.no), '清單列出進行中的採購單號（停用前要先處理）')
+    await P.cancelPurchase(d.id, '測試取消')
+    const off = await P.saveSupplier({ ...renamed, active: false })
+    ok(!off.active && !(await P.listSuppliers()).some((x) => x.id === ns.id), '取消採購單後可以停用；停用的不在採購單選單')
+
+    // 以前的進價：每種藥最近一次，附其他供應商最近的
+    const pr = await P.supplierPrices('S001')
+    const counted = dbm.db.purchaseOrders.filter((po) => po.supplierId === 'S001' && ['ordered', 'received', 'closed'].includes(po.status))
+    const latest = (drugId) => counted.filter((po) => po.lines.some((l) => l.drugId === drugId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    ok(pr.length > 0 && pr.every((x) => latest(x.drugId).no === x.poNo && latest(x.drugId).lines.find((l) => l.drugId === x.drugId).unitCost === x.unitCost),
+      `台灣藥品 ${pr.length} 種藥的最近進價都對（單號、價格）`)
+    const withOther = pr.find((x) => x.other)
+    ok(!!withOther && withOther.other.supplier !== '台灣藥品股份有限公司', `附其他供應商比價（例：${withOther?.drugName} 這家 ${withOther?.unitCost}、${withOther?.other?.supplier} ${withOther?.other?.unitCost}）`)
+    ok((await P.supplierPrices(ns.id)).length === 0, '取消的採購單不算進價紀錄')
+    const pendPo = await P.savePurchaseDraft({ supplierId: 'S003', lines: [{ drugId: 'M002', qty: 10, unitCost: 0.5 }] })
+    await P.submitPurchase(pendPo.id)
+    ok(!(await P.supplierPrices('S003')).some((x) => x.poNo === pendPo.no), `待核准的 ${pendPo.no} 不算進價紀錄（可能被退回）`)
+    await P.cancelPurchase(pendPo.id, '測試取消')
+    ok((await P.listSuppliers()).every((x) => x.orderCount > 0), '示範資料：三家往來中的都有進貨紀錄（同一天到貨依藥品輪替分給三家）')
+    const cand = await P.purchaseCandidates()
+    ok(cand.filter((c) => c.last).every((c) => dbm.db.suppliers.some((x) => x.id === c.last.supplierId)), '需求清單的「上次」帶供應商 id（開單時可直接選上）')
   }
 
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則

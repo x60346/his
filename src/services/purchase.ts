@@ -5,14 +5,14 @@
 //   - 補貨申請是「需求來源」：開單時列出待處理的申請與低於安全庫存的藥，勾選帶入；到貨照常沖銷申請
 //   - 到貨一律對品項入，超過尚未到貨的數量擋下；全部到齊自動「已到齊」，短交要寫原因結案
 //   - 入庫地點＝採購入庫的地點（小型＝藥局、大型＝藥庫），核准時記下
-import type { PurchaseLine, PurchaseOrder } from '@/types'
+import type { PurchaseLine, PurchaseOrder, Supplier } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
 import { stockStatus, suggestRestockQty, usableQty } from './stock-rules'
-import { purchaseTotal, remainingOf } from './purchase-rules'
+import { normalizeSupplierName, purchaseTotal, remainingOf, taxIdProblem } from './purchase-rules'
 
 export interface PurchaseLineView extends PurchaseLine {
   drugName: string
@@ -84,7 +84,7 @@ export interface PurchaseCandidate {
   /** 待處理的補貨申請（沒列入其他採購單的）；有病人在等的排前面 */
   restock?: { id: string; outstanding: number; waiting: number }
   /** 上次採購的供應商與進價（帶入用） */
-  last?: { supplier: string; unitCost: number; date: string }
+  last?: { supplierId: string; supplier: string; unitCost: number; date: string }
   reason: 'restock' | 'low'
 }
 
@@ -102,7 +102,7 @@ export function purchaseCandidates(): Promise<PurchaseCandidate[]> {
     const lastOf = (drugId: string) => {
       const p = db.purchaseOrders.filter((x) => x.status !== 'draft' && x.status !== 'cancelled' && x.lines.some((l) => l.drugId === drugId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
       const l = p?.lines.find((x) => x.drugId === drugId)
-      return p && l ? { supplier: p.supplier, unitCost: l.unitCost, date: p.createdAt.slice(0, 10) } : undefined
+      return p && l ? { supplierId: p.supplierId, supplier: p.supplier, unitCost: l.unitCost, date: p.createdAt.slice(0, 10) } : undefined
     }
     const out: PurchaseCandidate[] = []
     for (const d of db.drugs.filter((x) => x.active)) {
@@ -133,13 +133,120 @@ export function purchaseCandidates(): Promise<PurchaseCandidate[]> {
   })
 }
 
-/** 以前用過的供應商（開單時提示） */
-export const listSuppliers = (): Promise<string[]> =>
-  query(() => (requireUser('pharmacist', 'admin'), [...new Set(db.purchaseOrders.map((p) => p.supplier).filter(Boolean))].sort()))
+// ---------- 供應商主檔 ----------
+// 藥師（開採購單的人）與管理員都能維護。只能停用、不能刪除；還有進行中的採購單不能停用。
+
+export interface SupplierView extends Supplier {
+  /** 採購單張數（不含草稿、取消）與最近一次開單日 */
+  orderCount: number
+  lastOrderAt?: string
+  /** 進行中（草稿、待核准、已訂購）的採購單號：停用前要先處理 */
+  openOrders: string[]
+}
+
+/** 算進「以前的進價」的採購單：核准訂購過的（草稿、待核准只是打算——可能被退回；取消的沒買成） */
+const countedPo = (p: PurchaseOrder) => ['ordered', 'received', 'closed'].includes(p.status)
+
+export function listSuppliers(q: { includeInactive?: boolean } = {}): Promise<SupplierView[]> {
+  return query(() => {
+    requireUser('pharmacist', 'admin')
+    return db.suppliers
+      .filter((x) => q.includeInactive || x.active)
+      .map((x) => {
+        const pos = db.purchaseOrders.filter((p) => p.supplierId === x.id)
+        const counted = pos.filter(countedPo).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        return { ...x, orderCount: counted.length, ...(counted[0] ? { lastOrderAt: counted[0].createdAt.slice(0, 10) } : {}), openOrders: pos.filter((p) => ACTIVE.includes(p.status)).map((p) => p.no) }
+      })
+      .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'zh-Hant'))
+  })
+}
+
+export type SupplierInput = Pick<Supplier, 'name' | 'taxId' | 'contact' | 'phone' | 'note' | 'active'> & { id?: string }
+
+export function saveSupplier(input: SupplierInput): Promise<Supplier> {
+  return mutate(() => {
+    requireUser('pharmacist', 'admin')
+    const old = input.id ? db.suppliers.find((x) => x.id === input.id) : undefined
+    if (input.id && !old) fail('找不到供應商', 'NOT_FOUND')
+    const name = (input.name ?? '').trim().replace(/\s+/g, ' ')
+    const taxId = (input.taxId ?? '').trim()
+    const errors: Record<string, string> = {}
+    if (!name) errors.name = '請輸入供應商名稱'
+    else {
+      // 同名（含停用的）：多半是同一家，停用的請直接啟用——兩筆同一家，進價紀錄就分散了
+      const same = db.suppliers.find((x) => x.id !== old?.id && normalizeSupplierName(x.name) === normalizeSupplierName(name))
+      if (same) errors.name = `已有同名供應商${same.active ? '' : '（停用中，請直接啟用那一筆）'}`
+    }
+    const tp = taxIdProblem(taxId)
+    if (tp) errors.taxId = tp
+    else if (taxId) {
+      const same = db.suppliers.find((x) => x.id !== old?.id && x.taxId === taxId)
+      if (same) errors.taxId = `統一編號和「${same.name}」相同`
+    }
+    failFields(errors)
+    if (old?.active && !input.active) {
+      const open = db.purchaseOrders.filter((p) => p.supplierId === old.id && ACTIVE.includes(p.status))
+      if (open.length) failField('active', `還有 ${open.length} 張進行中的採購單（${open.map((p) => p.no).join('、')}），請先到貨結案或取消再停用`, 'CONFLICT')
+    }
+    const t = now()
+    const saved: Supplier = {
+      id: old?.id ?? `S${String(db.suppliers.length + 1).padStart(3, '0')}`,
+      name, ...(taxId ? { taxId } : {}),
+      ...(input.contact?.trim() ? { contact: input.contact.trim() } : {}),
+      ...(input.phone?.trim() ? { phone: input.phone.trim() } : {}),
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      active: !!input.active, createdAt: old?.createdAt ?? t, ...(old ? { updatedAt: t } : {}),
+    }
+    if (old) db.suppliers[db.suppliers.indexOf(old)] = saved
+    else db.suppliers.push(saved)
+    audit(old ? '修改供應商' : '新增供應商', `${saved.id} ${name}${input.id && !input.active ? '（停用）' : ''}`)
+    return saved
+  })
+}
+
+export interface SupplierPrice {
+  drugId: string
+  drugName: string
+  unit: string
+  /** 這家最近一次的進價、日期、單號；買過幾次 */
+  unitCost: number
+  date: string
+  poNo: string
+  times: number
+  /** 其他供應商最近一次的進價（比價用） */
+  other?: { supplier: string; unitCost: number; date: string }
+}
+
+/** 這家供應商以前的進價：每種藥最近一次（送出過的採購單），附其他供應商最近的價格比較 */
+export function supplierPrices(supplierId: string): Promise<SupplierPrice[]> {
+  return query(() => {
+    requireUser('pharmacist', 'admin')
+    must(db.suppliers.find((x) => x.id === supplierId), '供應商')
+    const pos = db.purchaseOrders.filter(countedPo).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const out = new Map<string, SupplierPrice>()
+    for (const p of pos.filter((x) => x.supplierId === supplierId)) {
+      for (const l of p.lines) {
+        const cur = out.get(l.drugId)
+        if (cur) {
+          cur.times++
+          continue
+        }
+        const d = find.drug(l.drugId)
+        const otherPo = pos.find((x) => x.supplierId !== supplierId && x.lines.some((y) => y.drugId === l.drugId))
+        const ol = otherPo?.lines.find((y) => y.drugId === l.drugId)
+        out.set(l.drugId, {
+          drugId: l.drugId, drugName: d?.name ?? l.drugId, unit: d?.unit ?? '', unitCost: l.unitCost, date: p.createdAt.slice(0, 10), poNo: p.no, times: 1,
+          ...(otherPo && ol ? { other: { supplier: otherPo.supplier, unitCost: ol.unitCost, date: otherPo.createdAt.slice(0, 10) } } : {}),
+        })
+      }
+    }
+    return [...out.values()].sort((a, b) => b.date.localeCompare(a.date) || a.drugName.localeCompare(b.drugName))
+  })
+}
 
 export interface PurchaseInput {
   id?: string
-  supplier: string
+  supplierId: string
   expectedDate?: string
   note?: string
   lines: { drugId: string; qty: number; unitCost: number; restockId?: string }[]
@@ -152,8 +259,11 @@ export function savePurchaseDraft(input: PurchaseInput): Promise<PurchaseView> {
     const old = input.id ? poOf(input.id) : undefined
     if (old && old.status !== 'draft') fail('只有草稿可以修改（已送出的單請管理員退回後再改）', 'CONFLICT')
     const errors: Record<string, string> = {}
-    const supplier = (input.supplier ?? '').trim()
-    if (!supplier) errors.supplier = '請輸入供應商'
+    // 供應商：只能選主檔裡啟用中的（以前是文字欄位，同一家打成兩種寫法就分成兩家）
+    const sup = db.suppliers.find((x) => x.id === input.supplierId)
+    if (!input.supplierId) errors.supplierId = '請選擇供應商'
+    else if (!sup) errors.supplierId = '找不到這家供應商'
+    else if (!sup.active) errors.supplierId = `${sup.name} 已停用，請改選其他供應商`
     if (input.expectedDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.expectedDate)) errors.expectedDate = '日期格式不正確'
     else if (input.expectedDate && input.expectedDate < today()) errors.expectedDate = '預計到貨日不能早於今天'
     if (!input.lines?.length) errors.lines = '請至少加一個品項'
@@ -176,7 +286,9 @@ export function savePurchaseDraft(input: PurchaseInput): Promise<PurchaseView> {
     const lines: PurchaseLine[] = input.lines.map((l, i) => ({
       id: `L${i + 1}`, drugId: l.drugId, qty: l.qty, unitCost: Math.round(l.unitCost * 100) / 100, ...(l.restockId ? { restockId: l.restockId } : {}), receivedQty: 0, txnIds: [],
     }))
-    const content = { supplier, expectedDate: input.expectedDate || undefined, note: input.note?.trim() || undefined, lines }
+    // 名稱存當時的（單據是文件）；供應商之後改名，舊單仍是開單時的名稱
+    const supplier = sup!.name
+    const content = { supplierId: sup!.id, supplier, expectedDate: input.expectedDate || undefined, note: input.note?.trim() || undefined, lines }
     if (old) {
       Object.assign(old, content)
       audit('修改採購單', `${old.no}（${lines.length} 項）`)
