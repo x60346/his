@@ -5,6 +5,7 @@ import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
 import { fail, must } from './http'
+import { openQuery } from './nursing-rules'
 import { checkInProblem } from './queue-rules'
 
 export const find = {
@@ -181,6 +182,8 @@ export interface AdmissionView extends Admission, PatientBrief {
   dischargeReady: boolean
   /** 病摘撰寫醫師 */
   summaryDoctorName?: string
+  /** 待醫師回覆的醫囑疑問數 */
+  openQueries: number
 }
 
 export function admissionView(a: Admission): AdmissionView {
@@ -194,6 +197,8 @@ export function admissionView(a: Admission): AdmissionView {
     days: a.admittedAt ? diffDays(a.admittedAt, end) + 1 : 0,
     dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
+    // 護理師提出、待醫師回覆的醫囑疑問（醫師的住院病人清單標出來）
+    openQueries: db.ipdOrders.filter((o) => o.admissionId === a.id && !!openQuery(o)).length,
   }
 }
 

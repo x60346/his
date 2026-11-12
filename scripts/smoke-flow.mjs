@@ -1149,6 +1149,80 @@ try {
       `核對 ${r.count} 項後只剩剛開、還沒顯示的那 1 筆待核對；寫入稽核`)
     await api.nursingApi.ackOrders(adm.id, [lateOrder.id])
     await expectError(() => api.nursingApi.ackOrders(adm.id, [lateOrder.id]), '重複核對')
+    // 醫囑逐筆核對、有疑問退回醫師：疑問期間不能核對、執行暫停（緊急可寫原因強制）；醫師回覆確認或停止
+    {
+      const N = api.nursingApi
+      const { addMinutes } = await load('/src/utils/date.ts')
+      ok(!nr.openQuery({}) && nr.openQuery({ queries: [{ reason: 'a' }] })?.reason === 'a' && !nr.openQuery({ queries: [{ reason: 'a', replyAt: 'x' }] }) && nr.openQuery({ queries: [{ reason: 'a', replyAt: 'x' }, { reason: 'b' }] })?.reason === 'b',
+        '待醫師回覆＝最後一筆疑問還沒回覆（可以多輪）')
+      await as('dr02')
+      const med = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'long', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'QID', route: 'PO' })
+      const other = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'long', category: 'nursing', content: '測試：翻身 Q2H' })
+      const lab = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+      await as('nurse01')
+      try {
+        await N.queryOrder(med.id, '')
+        ok(false, '疑問沒寫原因應被擋下')
+      } catch (e) {
+        ok(e.field === 'reason', `有疑問沒寫原因 → 「${e.message}」`)
+      }
+      await N.queryOrder(med.id, '頻率 QID 疑為 TID')
+      await expectError(() => N.queryOrder(med.id, '再問一次'), '已有疑問還沒回覆又提')
+      const v1 = (await N.listNursingOrders(adm.id)).flatMap((g) => g.orders)
+      ok(v1.find((o) => o.id === med.id)?.pendingQuery?.reason === '頻率 QID 疑為 TID' && dbm.db.auditLogs[0].action === '醫囑疑問', '提出疑問：醫囑上標「待醫師回覆」、寫入稽核')
+      await expectError(() => N.ackOrders(adm.id, [med.id]), '核對有疑問的醫囑（單筆）')
+      const bulk = await N.ackOrders(adm.id, [med.id, other.id])
+      ok(bulk.count === 1 && bulk.skipped === 1 && nr.needsAck(dbm.db.ipdOrders.find((o) => o.id === med.id)), '整批核對：有疑問的那筆跳過、其他照常核對（回報略過幾筆）')
+      // 給藥暫停：排一筆現在該給的
+      const mar = dbm.db.mar.find((m) => m.orderId === med.id && m.status === 'pending')
+      mar.scheduledAt = addMinutes(nowStr(), -5)
+      const mv = (await api.ipdApi.listMar(adm.id, mar.scheduledAt.slice(0, 10))).find((m) => m.id === mar.id)
+      ok(mv?.queried === '頻率 QID 疑為 TID', '給藥紀錄這一筆標「待醫師回覆」')
+      try {
+        await N.executeMar(mar.id, 'given')
+        ok(false, '疑問期間給藥應被擋下')
+      } catch (e) {
+        ok(e.code === 'CONFLICT' && e.field === 'query', `疑問期間給藥 → 「${e.message}」`)
+      }
+      const forced = await N.executeMar(mar.id, 'given', '', undefined, { reason: '已電話請示醫師，口頭確認' })
+      ok(forced.status === 'given' && forced.note.includes('疑問期間仍給藥：已電話請示醫師') && dbm.db.auditLogs[0].action === '疑問期間仍給藥', '緊急時寫原因強制給藥：記在給藥紀錄與稽核')
+      // 醫師端：病人清單、首頁待辦、醫囑上都看得到
+      await as('dr02')
+      const myAdm = (await api.admissionApi.listAdmissions({ status: ['admitted'] })).find((a) => a.id === adm.id)
+      const ov = (await api.ipdApi.listOrders(adm.id)).find((o) => o.id === med.id)
+      // 首頁待辦算的是「我主治的病人」：用這位病人的主治醫師登入看
+      const attending = dbm.db.users.find((u) => u.doctorId === dbm.db.admissions.find((x) => x.id === adm.id).doctorId)
+      await as(attending.username)
+      const dash = await api.dashboardApi.getDashboard()
+      await as('dr02')
+      ok(myAdm.openQueries === 1 && ov.pendingQuery?.byName && dash.orderQueries >= 1, `醫師看得到：病人清單「疑問 ${myAdm.openQueries}」、首頁待辦 ${dash.orderQueries}、醫囑上的疑問與提問人`)
+      await as('nurse01')
+      await expectError(() => api.ipdApi.replyOrderQuery(med.id, '護理師自己回'), '護理師回覆疑問')
+      await as('dr02')
+      try {
+        await api.ipdApi.replyOrderQuery(med.id, '')
+        ok(false, '回覆空白應被擋下')
+      } catch (e) {
+        ok(e.field === 'reply', `回覆空白 → 「${e.message}」`)
+      }
+      await api.ipdApi.replyOrderQuery(med.id, '頻率無誤，依疼痛控制需求 QID')
+      await as('nurse01')
+      const v2 = (await N.listNursingOrders(adm.id)).flatMap((g) => g.orders).find((o) => o.id === med.id)
+      ok(!v2.pendingQuery && v2.lastReply?.reply.includes('頻率無誤') && v2.needsAck, '醫師確認無誤：疑問解除，護理師看到回覆、要再核對一次')
+      ok((await N.ackOrders(adm.id, [med.id])).count === 1, '回覆後可以核對')
+      // 臨時醫囑：疑問期間不能執行；醫師停止 → 疑問自動結案
+      await N.queryOrder(lab.id, '病人今早已抽過血')
+      await expectError(() => N.completeStatOrder(lab.id), '疑問期間執行臨時醫囑')
+      await as('dr02')
+      await api.ipdApi.stopOrder(lab.id)
+      const labQ = dbm.db.ipdOrders.find((o) => o.id === lab.id).queries.at(-1)
+      ok(labQ.resolution === 'stopped' && labQ.replyAt && dbm.db.auditLogs[0].detail.includes('回覆護理師疑問'), '醫師停止有疑問的醫囑：疑問自動結案（記為「已停止此醫囑」）')
+      await as('nurse01')
+      await N.ackOrders(adm.id, dbm.db.ipdOrders.filter((o) => o.admissionId === adm.id && nr.needsAck(o)).map((o) => o.id))
+      const { readFileSync } = await import('node:fs')
+      const pages = ['src/pages/nursing/components/OrdersPanel.vue', 'src/pages/nursing/components/MarPanel.vue', 'src/pages/ipd/IpdPage.vue'].map((p) => readFileSync(p, 'utf8')).join('\n')
+      ok(!pages.includes('replyAt') && !pages.includes('queries'), '頁面不自己判斷「待回覆」：用服務層的 pendingQuery／queried（規則 openQuery 只有一份）')
+    }
     // U17：本班待辦（全病房）
     {
       const r = (s) => `${s.start}~${s.end.slice(11)}`

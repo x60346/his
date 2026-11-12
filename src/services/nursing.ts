@@ -7,7 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
-import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
 export interface WardPatient extends AdmissionView {
@@ -151,7 +151,14 @@ export function getMarBoard(admissionId: string, date: string): Promise<MarBoard
 // 以前護理站只看得到給藥排程、PRN、臨時非給藥醫囑；長期的護理醫囑（翻身 Q2H）、飲食（禁食）、處置，
 // 護理師在任何頁面都看不到——醫師開了，執行的人卻不知道。
 
-export type NursingOrderView = OrderView & { change: OrderChange | null; needsAck: boolean }
+export type NursingOrderView = OrderView & {
+  change: OrderChange | null
+  needsAck: boolean
+  /** 待醫師回覆的疑問（不能核對、給藥暫停） */
+  pendingQuery?: { reason: string; byName: string; at: string }
+  /** 醫師最近一次回覆（核對前要看到） */
+  lastReply?: { reply: string; byName: string; at: string; resolution?: string }
+}
 export interface NursingOrderGroup {
   category: IpdOrder['category']
   label: string
@@ -170,7 +177,17 @@ export function listNursingOrders(admissionId: string): Promise<NursingOrderGrou
     const t = now()
     const shown = db.ipdOrders
       .filter((o) => o.admissionId === admissionId)
-      .map((o) => ({ ...orderView(o), change: orderChange(o, t), needsAck: needsAck(o) }))
+      .map((o) => {
+        const q = openQuery(o)
+        const answered = !q ? o.queries?.filter((x) => x.replyAt).at(-1) : undefined
+        return {
+          ...orderView(o),
+          change: orderChange(o, t),
+          needsAck: needsAck(o),
+          ...(q ? { pendingQuery: { reason: q.reason, byName: nameOf.user(q.by), at: q.at } } : {}),
+          ...(answered ? { lastReply: { reply: answered.reply ?? '', byName: nameOf.user(answered.replyBy), at: answered.replyAt!, resolution: answered.resolution } } : {}),
+        }
+      })
       // 還沒核對的停止醫囑即使超過 24 小時也要列出——沒人確認過，就還不能從清單上消失
       .filter((o) => o.status === 'active' || o.change || o.needsAck)
       // 執行中的在前；同一類裡新開的在前
@@ -180,31 +197,53 @@ export function listNursingOrders(admissionId: string): Promise<NursingOrderGrou
 }
 
 /**
- * 核對醫囑：把這位病人所有「新開未簽收、停止未確認」的醫囑一次核對。
- * 只核對按下當時看得到的那幾筆（orderIds）：若醫師剛好又開了一筆，畫面還沒顯示，就不能一起被簽掉。
- * 稽核記下核對了哪幾筆。
+ * 核對醫囑：逐筆（orderIds 一筆）或整批（畫面上看得到的全部）核對「新開未簽收、停止未確認」的醫囑。
+ * 只核對按下當時看得到的那幾筆：若醫師剛好又開了一筆，畫面還沒顯示，就不能一起被簽掉。
+ * 有疑問、待醫師回覆的不能核對（整批核對時跳過並回報 skipped；單筆指定則擋下）。稽核記下核對了哪幾筆。
  */
-export function ackOrders(admissionId: string, orderIds: string[]): Promise<{ count: number }> {
+export function ackOrders(admissionId: string, orderIds: string[]): Promise<{ count: number; skipped: number }> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     admitted(admissionId)
     const t = now()
-    const targets = db.ipdOrders.filter((o) => o.admissionId === admissionId && orderIds.includes(o.id) && needsAck(o))
+    const asked = db.ipdOrders.filter((o) => o.admissionId === admissionId && orderIds.includes(o.id) && needsAck(o))
+    const targets = asked.filter((o) => !openQuery(o))
+    if (asked.length && !targets.length) fail('這筆醫囑有疑問、待醫師回覆，回覆後才能核對', 'CONFLICT')
     if (!targets.length) fail('沒有需要核對的醫囑', 'CONFLICT')
     for (const o of targets) {
       if (o.status === 'active') Object.assign(o, { ackAt: t, ackBy: nurse.id })
       else Object.assign(o, { stopAckAt: t, stopAckBy: nurse.id })
     }
     audit('核對醫囑', targets.map((o) => `${o.status === 'active' ? '新' : '停'}：${o.content}`).join('、'))
-    return { count: targets.length }
+    return { count: targets.length, skipped: asked.length - targets.length }
+  })
+}
+
+/**
+ * 有疑問、退回醫師：護理師對某筆執行中的醫囑提出疑問（寫原因）。醫師回覆前不能核對、給藥暫停
+ * （緊急時可寫原因強制給藥）。已經核對過的也可以提（疑問可能在執行時才發現）。
+ */
+export function queryOrder(orderId: string, reason: string): Promise<{ ok: true }> {
+  return mutate(() => {
+    const nurse = requireUser('nurse')
+    const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
+    admitted(o.admissionId)
+    if (o.status !== 'active') fail('已停止或完成的醫囑不能再提疑問', 'CONFLICT')
+    if (openQuery(o)) fail('這筆醫囑已有疑問、待醫師回覆', 'CONFLICT')
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫疑問（例：劑量 1000mg 疑為 100mg）')
+    o.queries = [...(o.queries ?? []), { by: nurse.id, at: now(), reason: why! }]
+    audit('醫囑疑問', `${o.content}：${why}`)
+    return { ok: true as const }
   })
 }
 
 /**
  * 執行給藥：given 給藥 / held 暫停 / refused 拒絕（後兩者須註明原因）。
+ * 醫囑有疑問、待醫師回覆時，給藥要帶 force 並寫原因（例：醫師電話口頭確認、病人急需）——暫停、拒絕照常。
  * givenAt：補登實際給藥時間（只限 given）；不填就是現在。補登時 recordedAt 記下實際登打的時間。
  */
-export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string): Promise<MarRecord> {
+export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string, force?: { reason: string }): Promise<MarRecord> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     const m = must(db.mar.find((x) => x.id === marId), '給藥紀錄')
@@ -223,44 +262,64 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
       fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
-    Object.assign(m, { status, note: note.trim() || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
+    // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
+    const forced = status === 'given' ? holdForQuery(order, force) : undefined
+    const noteText = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
+    Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
     if (order.type === 'stat') {
       order.status = 'done'
       order.stopAt = at
     }
-    audit('給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${note ? `：${note}` : ''}`)
+    audit(forced ? '疑問期間仍給藥' : '給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${noteText ? `：${noteText}` : ''}`)
     return m
   })
 }
 
 /** PRN（需要時）給藥：沒有排程，執行時直接新增一筆已給藥紀錄 */
-export function givePrn(orderId: string, note: string): Promise<MarRecord> {
+export function givePrn(orderId: string, note: string, force?: { reason: string }): Promise<MarRecord> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.status !== 'active' || o.freq !== 'PRN') fail('此醫囑不是有效的 PRN 給藥')
     if (!note.trim()) failField('note', '請註明給藥原因（例：體溫 38.5°C）')
+    const forced = holdForQuery(o, force)
     const t = now()
-    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: note.trim() }
+    const text = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
+    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text }
     db.mar.push(m)
-    audit('PRN 給藥', `${o.content}：${note}`)
+    audit(forced ? '疑問期間仍給藥' : 'PRN 給藥', `${o.content}：${text}`)
     return m
   })
 }
 
+/**
+ * 醫囑有疑問、待醫師回覆：執行要暫停。緊急時可帶 force（寫原因）強制執行，回傳那個原因（寫進紀錄與稽核）。
+ * 沒有疑問回傳 undefined。給藥（排程、PRN）與臨時醫囑的執行共用這一條。
+ */
+function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefined {
+  const q = openQuery(o)
+  if (!q) return undefined
+  const why = force?.reason?.trim()
+  if (!why) fail(`這筆醫囑有疑問、待醫師回覆（${q.reason}）；執行暫停，緊急時請寫原因強制執行`, 'CONFLICT', 'query')
+  return why
+}
+
 /** 執行臨時醫囑（檢驗、處置等非給藥） */
-export function completeStatOrder(orderId: string): Promise<void> {
+/** 回傳 { ok: true }：讓呼叫端分得出「成功」與「失敗被擋」（void 的話兩者都是 undefined） */
+export function completeStatOrder(orderId: string, force?: { reason: string }): Promise<{ ok: true }> {
   return mutate(() => {
     requireUser('nurse')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.type !== 'stat' || o.status !== 'active') fail('此醫囑無需執行')
     if (o.category === 'medication') fail('給藥醫囑請由給藥紀錄執行')
+    const forced = holdForQuery(o, force)
     o.status = 'done'
     o.stopAt = now()
-    audit('執行臨時醫囑', o.content)
+    audit(forced ? '疑問期間仍執行' : '執行臨時醫囑', `${o.content}${forced ? `：${forced}` : ''}`)
+    return { ok: true as const }
   })
 }
 

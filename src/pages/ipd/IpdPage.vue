@@ -9,6 +9,7 @@ import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, U
 import PatientBanner from '@/components/PatientBanner.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
+import ReasonDialog from '@/components/ReasonDialog.vue'
 import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
@@ -56,7 +57,16 @@ async function onStop(o: OrderView) {
   // 同一種藥可能有兩筆醫囑：帶上劑量、頻率、途徑與開立時間，才分得出要停的是哪一筆
   const detail = o.category === 'medication' ? `\n每次 ${o.dose} ${o.unit}・${o.freq}・${o.route}` : ''
   const message = `確定停止「${o.content}」？${detail}\n（${o.startAt.slice(5)} 開立，${o.doctorName}）${extra}`
-  if (await ui.confirm({ title: '停止醫囑', message, okText: '停止', danger: true })) stop.run(o.id)
+  const q = o.pendingQuery ? `\n\n護理師的疑問「${o.pendingQuery.reason}」會一併結案（記為「已停止此醫囑」）；要改的話請另開正確的一筆。` : ''
+  if (await ui.confirm({ title: '停止醫囑', message: message + q, okText: '停止', danger: true })) stop.run(o.id)
+}
+
+// ---------- 回覆護理師疑問：確認原醫囑無誤（寫說明）；要改就「停止」再另開 ----------
+const replying = ref<OrderView | null>(null)
+const replyOpen = computed({ get: () => !!replying.value, set: (v) => !v && (replying.value = null) })
+const reply = useAction(ipdApi.replyOrderQuery, { success: (o) => `已回覆：${o.content}（護理師核對後恢復執行）` })
+async function confirmReply(text: string) {
+  if (replying.value && (await reply.run(replying.value.id, text))) replying.value = null
 }
 
 // ---------- 最新生命徵象（護理站記錄，醫師參考） ----------
@@ -140,8 +150,9 @@ async function submitNote() {
               <div class="flex items-center gap-2">
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
                 <span class="font-medium text-slate-800">{{ a.patientName }}</span>
-                <UBadge v-if="a.dischargeReady" tone="green" class="ml-auto">准出院</UBadge>
-                <span :class="['text-xs text-slate-500', !a.dischargeReady && 'ml-auto']">第 {{ a.days }} 天</span>
+                <UBadge v-if="a.openQueries" tone="yellow" class="ml-auto" :title="`護理師有 ${a.openQueries} 筆醫囑疑問待回覆`">疑問 {{ a.openQueries }}</UBadge>
+                <UBadge v-if="a.dischargeReady" tone="green" :class="!a.openQueries && 'ml-auto'">准出院</UBadge>
+                <span :class="['text-xs text-slate-500', !a.dischargeReady && !a.openQueries && 'ml-auto']">第 {{ a.days }} 天</span>
               </div>
               <div class="mt-0.5 truncate text-xs text-slate-500">{{ a.diagnosis }}<template v-if="isAdmin">・{{ a.doctorName }}</template></div>
             </button>
@@ -183,7 +194,7 @@ async function submitNote() {
               <h3 class="mb-2 text-sm font-semibold text-slate-700">{{ sec.title }}</h3>
               <p v-if="!sec.list.length" class="text-sm text-slate-400">沒有{{ sec.title }}</p>
               <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
-                <li v-for="o in sec.list" :key="o.id" :class="['flex items-center gap-3 px-3 py-2 text-sm', o.status !== 'active' && 'bg-slate-50 text-slate-400']">
+                <li v-for="o in sec.list" :key="o.id" :class="['flex flex-wrap items-center gap-3 px-3 py-2 text-sm', o.status !== 'active' && 'bg-slate-50 text-slate-400', o.pendingQuery && 'border-l-4 border-l-amber-500 bg-amber-50/50']">
                   <UBadge :tone="o.status === 'active' ? categoryLabel[o.category].tone : 'gray'">{{ categoryLabel[o.category].label }}</UBadge>
                   <div class="min-w-0 flex-1">
                     <div :class="['font-medium', o.status === 'active' && 'text-slate-800', o.status === 'stopped' && 'line-through']">
@@ -199,6 +210,11 @@ async function submitNote() {
                   <span class="w-12 text-xs">{{ statusLabel[o.status] }}</span>
                   <UButton v-if="o.status === 'active'" size="sm" variant="ghost" :icon="Square" @click="onStop(o)">停止</UButton>
                   <span v-else class="w-[4.25rem]" />
+                  <!-- 護理師的疑問：回覆前這筆暫停執行。確認無誤就回覆；要改就停止再另開 -->
+                  <div v-if="o.pendingQuery" class="flex w-full items-center gap-2 text-xs text-amber-900">
+                    <span class="min-w-0 flex-1">護理師疑問（{{ o.pendingQuery.byName }} {{ o.pendingQuery.at.slice(5) }}）：{{ o.pendingQuery.reason }}・回覆前暫停執行</span>
+                    <UButton size="sm" @click="replying = o">回覆：確認無誤</UButton>
+                  </div>
                 </li>
               </ul>
             </section>
@@ -257,6 +273,17 @@ async function submitNote() {
       </UCard>
     </div>
 
+    <ReasonDialog
+      v-model="replyOpen"
+      title="回覆護理師疑問：確認醫囑無誤"
+      :subject="replying ? `${replying.content}${replying.dose ? `・每次 ${replying.dose} ${replying.unit}` : ''}・疑問：${replying.pendingQuery?.reason}` : ''"
+      label="說明（護理師會看到；要改醫囑請按「停止」再另開）"
+      :presets="['劑量無誤，依體重計算', '依病情需要，已向病人說明', '已確認過敏史，無交叉過敏']"
+      ok-text="回覆"
+      :pending="reply.pending.value"
+      :error="reply.fieldErrors.value.reply"
+      @confirm="confirmReply"
+    />
     <OrderDialog v-model="orderOpen" :admission="adm" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">
       <div class="space-y-3 text-sm">

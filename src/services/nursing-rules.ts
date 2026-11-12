@@ -66,6 +66,12 @@ export function needsAck(o: { status: 'active' | 'stopped' | 'done'; ackAt?: str
   return (o.status === 'active' && !o.ackAt) || (o.status === 'stopped' && !o.stopAckAt)
 }
 
+/** 待醫師回覆的疑問（最後一筆還沒回覆）；沒有回傳 undefined */
+export function openQuery<Q extends { replyAt?: string }>(o: { queries?: Q[] }): Q | undefined {
+  const last = o.queries?.at(-1)
+  return last && !last.replyAt ? last : undefined
+}
+
 /**
  * 「哪一班」＝班別＋這一班開始的日期。交班屬於班，不屬於日曆上的某一天：
  * 11/10 的小夜（16–24 點）常在 11/11 00:10 才寫完交班，它仍是「11/10 小夜」。

@@ -62,8 +62,14 @@ const dose = (m: { dose?: number; unit: string; route?: string }) => `每次 ${m
 
 // ---------- 執行 ----------
 const exec = useAction(nursingApi.executeMar, { success: (m) => (m.status === 'given' ? '已記錄給藥' : '已記錄') })
+const done = useAction(nursingApi.completeStatOrder, { success: '已完成臨時醫囑' })
 
 async function give(m: MarView) {
+  // 醫囑有疑問、待醫師回覆：給藥暫停；緊急時寫原因強制（服務層一樣會擋，這裡先問）
+  if (m.queried) {
+    reasonFor.value = { kind: 'force-mar', mar: m }
+    return
+  }
   if (m.highAlert) {
     const ok = await ui.confirm({
       title: '高警訊藥品：雙人核對',
@@ -102,14 +108,27 @@ async function submitBackdate() {
 }
 
 // 暫停、拒絕、PRN 共用一個原因對話框，以 reasonFor 記住「要做什麼」
-type ReasonTarget = { kind: 'held' | 'refused'; mar: MarView } | { kind: 'prn'; order: PrnView }
+type ReasonTarget =
+  | { kind: 'held' | 'refused' | 'force-mar'; mar: MarView }
+  | { kind: 'prn'; order: PrnView }
+  | { kind: 'force-stat'; order: OrderView }
 const reasonFor = ref<ReasonTarget | null>(null)
 const reasonOpen = computed({ get: () => !!reasonFor.value, set: (v) => !v && (reasonFor.value = null) })
 const reasonConfig = computed(() => {
   const r = reasonFor.value
   if (!r) return { title: '', label: '', presets: [] as string[], subject: '' }
   if (r.kind === 'prn') {
-    return { title: 'PRN 給藥', subject: `${r.order.content}・每次 ${r.order.dose} ${r.order.unit}・${r.order.route}`, label: '給藥原因', presets: ['體溫 38.5°C', '疼痛分數 6 分', '噁心嘔吐', '無法入睡'], okText: '給藥' }
+    // 醫囑有疑問時：同一個原因也當作「疑問期間仍給藥」的理由（服務層兩者都記下）
+    const q = r.order.pendingQuery
+    return q
+      ? { title: 'PRN 給藥（醫囑有疑問、待醫師回覆）', subject: `${r.order.content}・疑問：${q.reason}`, label: '給藥原因，並寫明為何不等醫師回覆', presets: ['已電話請示醫師，口頭確認', '病人急需，依標準處置'], okText: '仍要給藥', danger: true }
+      : { title: 'PRN 給藥', subject: `${r.order.content}・每次 ${r.order.dose} ${r.order.unit}・${r.order.route}`, label: '給藥原因', presets: ['體溫 38.5°C', '疼痛分數 6 分', '噁心嘔吐', '無法入睡'], okText: '給藥' }
+  }
+  if (r.kind === 'force-mar') {
+    return { title: '醫囑有疑問、待醫師回覆', subject: `${r.mar.scheduledAt.slice(11)} ${r.mar.content}・疑問：${r.mar.queried}`, label: '仍要給藥的原因（會記在給藥紀錄與稽核）', presets: ['已電話請示醫師，口頭確認', '病人急需，依標準處置'], okText: '仍要給藥', danger: true }
+  }
+  if (r.kind === 'force-stat') {
+    return { title: '醫囑有疑問、待醫師回覆', subject: `${r.order.content}・疑問：${r.order.pendingQuery?.reason}`, label: '仍要執行的原因（會記在稽核）', presets: ['已電話請示醫師，口頭確認', '病人急需，依標準處置'], okText: '仍要執行', danger: true }
   }
   return r.kind === 'held'
     ? { title: '暫停給藥', subject: `${r.mar.scheduledAt.slice(11)} ${r.mar.content}`, label: '暫停原因', presets: ['術前禁食', '病人外出檢查', '血壓過低', '依醫師指示'], okText: '暫停' }
@@ -122,13 +141,18 @@ watch(reasonFor, () => {
   exec.fieldErrors.value = {}
   prn.fieldErrors.value = {}
 })
-const reasonPending = computed(() => exec.pending.value || prn.pending.value)
+const reasonPending = computed(() => exec.pending.value || prn.pending.value || done.pending.value)
 const reasonError = computed(() => exec.fieldErrors.value.note ?? prn.fieldErrors.value.note)
 async function confirmReason(note: string) {
   const r = reasonFor.value
   if (!r) return
-  const ok = r.kind === 'prn' ? await prn.run(r.order.id, note) : await exec.run(r.mar.id, r.kind, note)
-  if (ok) reasonFor.value = null
+  const force = { reason: note }
+  const ok =
+    r.kind === 'prn' ? await prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined)
+    : r.kind === 'force-mar' ? await exec.run(r.mar.id, 'given', '', undefined, force)
+    : r.kind === 'force-stat' ? await done.run(r.order.id, force)
+    : await exec.run(r.mar.id, r.kind, note)
+  if (ok !== undefined) reasonFor.value = null
 }
 
 /** 距今多久，例：3 小時前 */
@@ -139,8 +163,11 @@ function ago(at: string) {
 }
 
 // ---------- 臨時醫囑 ----------
-const done = useAction(nursingApi.completeStatOrder, { success: '已完成臨時醫囑' })
 async function complete(o: OrderView) {
+  if (o.pendingQuery) {
+    reasonFor.value = { kind: 'force-stat', order: o }
+    return
+  }
   if (await ui.confirm({ title: '執行臨時醫囑', message: `確認已完成「${o.content}」？`, okText: '已完成' })) done.run(o.id)
 }
 </script>
@@ -183,7 +210,9 @@ async function complete(o: OrderView) {
                   {{ m.content }}
                   <UBadge v-if="m.highAlert" tone="purple">高警訊</UBadge>
                   <UBadge v-if="m.orderType === 'stat'" tone="blue">STAT</UBadge>
+                  <UBadge v-if="m.queried" tone="yellow" :title="`疑問：${m.queried}`">待醫師回覆</UBadge>
                 </div>
+                <div v-if="m.queried" class="text-xs text-amber-800">護理師疑問：{{ m.queried }}（給藥暫停）</div>
                 <div class="tabular text-xs text-slate-500">{{ dose(m) }}<template v-if="m.freq">・{{ m.freq }}</template></div>
                 <div v-if="m.note" class="text-xs text-slate-600">原因：{{ m.note }}</div>
               </div>
@@ -192,7 +221,7 @@ async function complete(o: OrderView) {
                 <UBadge :tone="urgencyView[urgencyOf(m)!].tone">{{ urgencyView[urgencyOf(m)!].label }}</UBadge>
                 <div class="flex gap-1">
                   <UButton size="sm" variant="success" :icon="Check" :disabled="urgencyOf(m) === 'upcoming'" :title="urgencyOf(m) === 'upcoming' ? '尚未到給藥時間' : ''" @click="give(m)">給藥</UButton>
-                  <UButton v-if="urgencyOf(m) !== 'upcoming'" size="sm" variant="ghost" :icon="History" title="先給藥、後登打：記錄實際給藥時間" @click="openBackdate(m)">補登</UButton>
+                  <UButton v-if="urgencyOf(m) !== 'upcoming' && !m.queried" size="sm" variant="ghost" :icon="History" title="先給藥、後登打：記錄實際給藥時間" @click="openBackdate(m)">補登</UButton>
                   <UButton size="sm" variant="secondary" :icon="Pause" @click="reasonFor = { kind: 'held', mar: m }">暫停</UButton>
                   <UButton size="sm" variant="ghost" :icon="CircleSlash" @click="reasonFor = { kind: 'refused', mar: m }">拒絕</UButton>
                 </div>
@@ -214,8 +243,9 @@ async function complete(o: OrderView) {
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
             <li v-for="o in board.prn" :key="o.id" class="flex items-center gap-3 px-3 py-2 text-sm">
               <div class="min-w-0 flex-1">
-                <div class="font-medium text-slate-800">{{ o.content }}</div>
+                <div class="font-medium text-slate-800">{{ o.content }}<UBadge v-if="o.pendingQuery" tone="yellow" class="ml-1">待醫師回覆</UBadge></div>
                 <div class="tabular text-xs text-slate-500">{{ dose(o) }}・PRN</div>
+                <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}</div>
               </div>
               <span class="flex items-center gap-1 text-xs text-slate-500">
                 <Clock class="h-3.5 w-3.5" />
@@ -236,6 +266,7 @@ async function complete(o: OrderView) {
               <div class="min-w-0 flex-1">
                 <div class="font-medium text-slate-800">{{ o.content }}</div>
                 <div class="tabular text-xs text-slate-500">{{ o.startAt.slice(5) }} 開立・{{ o.doctorName }}</div>
+                <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}（執行暫停）</div>
               </div>
               <UButton size="sm" :icon="Check" @click="complete(o)">完成</UButton>
             </li>

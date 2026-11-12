@@ -1,7 +1,8 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { query, sessionRole } from './http'
+import { query, sessionRole, sessionUser } from './http'
+import { openQuery } from './nursing-rules'
 import { nameOf, stockLoc } from './views'
 import { usableQty } from './stock-rules'
 import { suspendNoticeVisits } from './schedule'
@@ -21,6 +22,8 @@ export interface DashboardStats {
   /** 採購單待核准（管理員待辦）、已訂購待到貨（藥師待辦） */
   purchasePending: number
   purchaseOrdered: number
+  /** 醫師：我（主治）的住院病人有幾筆醫囑疑問待回覆 */
+  orderQueries?: number
   /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
   transferRequested?: number
   transferIssued?: number
@@ -72,6 +75,12 @@ export function getDashboard(): Promise<DashboardStats> {
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
+      ...(() => {
+        const me = sessionUser()
+        if (sessionRole() !== 'doctor' || !me?.doctorId) return {}
+        const mine = new Set(db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId).map((a) => a.id))
+        return { orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length }
+      })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       ...(db.stockLocations.length > 1
         ? { transferRequested: db.transfers.filter((x) => x.status === 'requested').length, transferIssued: db.transfers.filter((x) => x.status === 'issued').length }

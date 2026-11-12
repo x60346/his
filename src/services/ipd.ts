@@ -7,6 +7,7 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
 import { find, nameOf, usable } from './views'
+import { openQuery } from './nursing-rules'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -32,6 +33,8 @@ export function ensureMar(admissionId: string, date: string): boolean {
 }
 
 export interface OrderView extends IpdOrder {
+  /** 護理師的疑問（待醫師回覆）；醫師在醫囑上看到原因與提問的人 */
+  pendingQuery?: { reason: string; byName: string; at: string }
   doctorName: string
   highAlert: boolean
   freqLabel: string
@@ -41,8 +44,10 @@ export interface OrderView extends IpdOrder {
 
 export const orderView = (o: IpdOrder): OrderView => {
   const drug = o.drugId ? find.drug(o.drugId) : undefined
+  const q = openQuery(o)
   return {
     ...o,
+    ...(q ? { pendingQuery: { reason: q.reason, byName: nameOf.user(q.by), at: q.at } } : {}),
     doctorName: nameOf.doctor(o.doctorId),
     highAlert: drug?.highAlert ?? false,
     freqLabel: o.freq ? find.freq(o.freq)?.label ?? o.freq : '',
@@ -142,19 +147,24 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
 /** 停止醫囑：之後尚未執行的給藥排程一併刪除 */
 export function stopOrder(orderId: string): Promise<OrderView> {
   return mutate(() => {
-    requireUser('doctor')
+    const user = requireUser('doctor')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (o.status !== 'active') fail('此醫囑已停止或完成')
     const t = now()
     o.status = 'stopped'
     o.stopAt = t
     db.mar = db.mar.filter((m) => !(m.orderId === o.id && m.status === 'pending'))
-    audit('停止住院醫囑', o.content)
+    // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）
+    const q = openQuery(o)
+    if (q) Object.assign(q, { replyBy: user.id, replyAt: t, reply: '已停止此醫囑', resolution: 'stopped' })
+    audit('停止住院醫囑', `${o.content}${q ? `（回覆護理師疑問：${q.reason}）` : ''}`)
     return orderView(o)
   })
 }
 
 export interface MarView extends MarRecord {
+  /** 醫囑有疑問、待醫師回覆：給藥暫停（緊急時寫原因強制） */
+  queried?: string
   content: string
   dose?: number
   unit: string
@@ -174,8 +184,10 @@ export function marViews(admissionId: string, date: string): MarView[] {
     .map((m) => {
       const o = db.ipdOrders.find((x) => x.id === m.orderId)
       const d = o?.drugId ? find.drug(o.drugId) : undefined
+      const q = o ? openQuery(o) : undefined
       return {
         ...m,
+        ...(q && m.status === 'pending' ? { queried: q.reason } : {}),
         content: o?.content ?? '',
         dose: o?.dose,
         unit: d ? doseUnitOf(d) : '',
@@ -264,5 +276,26 @@ export function cancelDischargeOrder(admissionId: string, reason: string): Promi
     delete ds!.signedAt
     audit('取消准予出院', `${a.admitNo} ${find.patient(a.patientId)?.name}：${reason.trim()}`)
     return ds!
+  })
+}
+
+/**
+ * 醫師回覆護理師的疑問：確認原醫囑無誤（寫說明）。回覆後這筆醫囑要護理師重新核對（看到回覆才簽收）。
+ * 要改醫囑的，請停止這筆（疑問自動解決）再開正確的一筆。
+ */
+export function replyOrderQuery(orderId: string, reply: string): Promise<OrderView> {
+  return mutate(() => {
+    const user = requireUser('doctor')
+    const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
+    const q = openQuery(o)
+    if (!q) fail('這筆醫囑沒有待回覆的疑問', 'CONFLICT')
+    const text = reply?.trim()
+    if (!text) failField('reply', '請寫回覆（例：劑量無誤，依體重計算）')
+    Object.assign(q!, { replyBy: user.id, replyAt: now(), reply: text, resolution: 'confirmed' })
+    // 要護理師看到回覆再核對一次
+    delete o.ackAt
+    delete o.ackBy
+    audit('回覆醫囑疑問', `${o.content}：${text}`)
+    return orderView(o)
   })
 }

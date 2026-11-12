@@ -559,6 +559,22 @@ export interface IpdOrder {
   /** 護理師確認「已停止」的時間與人：醫囑停了也要讓執行的人知道 */
   stopAckAt?: string
   stopAckBy?: string
+  /**
+   * 護理師的疑問（可多輪）：「有疑問、退回醫師」。最後一筆沒有 replyAt 就是「待醫師回覆」——
+   * 這段期間不能核對、給藥暫停（緊急時可寫原因強制給藥）。醫師回覆「確認無誤」或停止這筆醫囑後解除
+   */
+  queries?: OrderQuery[]
+}
+
+export interface OrderQuery {
+  by: string
+  at: string
+  reason: string
+  replyBy?: string
+  replyAt?: string
+  reply?: string
+  /** confirmed＝醫師確認原醫囑無誤（寫說明）；stopped＝醫師停止這筆醫囑（通常會另開正確的） */
+  resolution?: 'confirmed' | 'stopped'
 }
 
 /** 給藥紀錄（MAR） */

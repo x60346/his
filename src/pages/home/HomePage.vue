@@ -43,6 +43,7 @@ const todos = computed<Todo[]>(() => {
   if (!s.value) return []
   const role = auth.user?.role
   const list: (Todo & { roles: string[] })[] = [
+    { roles: ['doctor'], label: '護理師醫囑疑問', count: s.value.orderQueries ?? 0, hint: '我的住院病人，待回覆（回覆前給藥暫停）', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
