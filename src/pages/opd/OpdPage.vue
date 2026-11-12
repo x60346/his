@@ -16,9 +16,9 @@ import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, type ExpandedOrderSet } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, ServiceError, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
-import { useAction, useQuery } from '@/composables/useService'
+import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
@@ -139,7 +139,29 @@ const { data: warnings } = useQuery(
 )
 
 // ---------- 動作 ----------
-const start = useAction(opdApi.startConsult)
+/**
+ * 叫號：這位醫師還有別人在看診中時，服務層先擋下（field = 'parallel'），這裡問醫師要不要回去完成那一位。
+ * 「仍要叫號」才帶 allowParallel 重送（病人去檢查、等報告時先看下一位）；「回到第 N 號」直接選回那位病人。
+ */
+const start = useAction(async (id: string) => {
+  try {
+    return await opdApi.startConsult(id)
+  } catch (e) {
+    if (!(e instanceof ServiceError && e.code === 'CONFLICT' && e.field === 'parallel')) throw e
+    const other = queue.value?.find((x) => x.status === 'in-consult' && x.id !== id)
+    const ok = await ui.confirm({
+      title: '上一位還在看診中',
+      message: `${e.message}。\n\n病人去做檢查、等報告時，可以先看下一位；否則請先回去完成他，免得病歷停在草稿、批價等不到人。`,
+      okText: '仍要叫號',
+      cancelText: other ? `回到第 ${other.seqNo} 號` : '取消',
+    })
+    if (!ok) {
+      if (other) await selectVisit(other)
+      throw new Cancelled()
+    }
+    return opdApi.startConsult(id, { allowParallel: true })
+  }
+})
 async function callPatient() {
   if (visit.value) await start.run(visit.value.id)
 }
@@ -367,6 +389,8 @@ const lastOpen = ref(true)
             </span>
             <UBadge v-if="v.status === 'registered' && v.skippedAt" tone="yellow">過號</UBadge>
             <UStatusBadge v-else :map="visitStatus" :value="v.status" />
+            <!-- 同時有兩位以上看診中：提醒醫師還有人沒結束（去檢查、等報告的病人，或忘了按完成的） -->
+            <UBadge v-if="v.status === 'in-consult' && counts.inConsult > 1" tone="yellow">同時看診</UBadge>
           </button>
         </li>
       </ul>
@@ -416,8 +440,8 @@ const lastOpen = ref(true)
         </UEmpty>
       </UCard>
 
-      <!-- 已完成或已鎖定：說明狀態 -->
-      <div v-else-if="!editable" class="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-600">
+      <!-- 已完成或已鎖定：說明狀態。看診中的一定有草稿病歷，不可編輯只會是「病歷還在載入」——以前這一瞬間會閃出「已批價，病歷已鎖定」 -->
+      <div v-else-if="!editable && visit.status !== 'in-consult'"class="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-600">
         <Lock class="h-4 w-4" />
         <template v-if="visit.status === 'consulted'">
           已完成看診，等待批價。病人尚未結帳前仍可修改。

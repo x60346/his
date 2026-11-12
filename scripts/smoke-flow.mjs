@@ -1767,6 +1767,42 @@ try {
   leak.name = '被頁面改掉'
   ok(dbm.db.patients.find((p) => p.id === patient.id).name === patient.name, '頁面修改回傳物件不會影響資料庫（回傳的是複本）')
 
+  // 同一位醫師同時兩位看診中：叫號時先擋下、確認後才能叫（病人去檢查時先看下一位是正常的，要防的是忘了按完成）
+  console.log('\n[同時看診]')
+  {
+    const regsOf = (docId) => dbm.db.visits.filter((v) => v.date === T && v.doctorId === docId && v.status === 'registered' && !v.refillOf)
+    const docs = dbm.db.users.filter((u) => u.active && u.roles.includes('doctor') && u.doctorId && !dbm.db.visits.some((v) => v.date === T && v.doctorId === u.doctorId && v.status === 'in-consult'))
+    const docA = docs.find((u) => regsOf(u.doctorId).length >= 3)
+    const docB = docs.find((u) => u !== docA && regsOf(u.doctorId).length >= 1)
+    ok(!!docA && !!docB, `今天有兩位醫師有候診病人（${docA?.username}、${docB?.username}）`)
+    const [a, b, c] = regsOf(docA.doctorId)
+    await as(docA.username)
+    await api.opdApi.startConsult(a.id)
+    try {
+      await api.opdApi.startConsult(b.id)
+      ok(false, '上一位還在看診中就叫下一位，應先擋下')
+    } catch (e) {
+      ok(e.code === 'CONFLICT' && e.field === 'parallel' && e.message.includes(`第 ${a.seqNo} 號`), `上一位沒完成就叫號 → 「${e.message}」`)
+    }
+    ok(dbm.db.visits.find((v) => v.id === b.id).status === 'registered', '被擋下時下一位還是候診（沒有被改到一半）')
+    ok((await api.opdApi.startConsult(a.id)).visitId === a.id, '重新開啟同一位（自己就是看診中的那位）不算衝突')
+    await as(docB.username)
+    const bOther = regsOf(docB.doctorId)[0]
+    await api.opdApi.startConsult(bOther.id)
+    ok(dbm.db.visits.find((v) => v.id === bOther.id).status === 'in-consult', '別的醫師的看診中不算：另一位醫師照常叫號')
+    await api.opdApi.skipPatient(bOther.id)
+    await as(docA.username)
+    await api.opdApi.startConsult(b.id, { allowParallel: true })
+    const both = dbm.db.visits.filter((v) => [a.id, b.id].includes(v.id) && v.status === 'in-consult').length
+    ok(both === 2 && dbm.db.auditLogs[0].action === '開始看診' && dbm.db.auditLogs[0].detail.includes('同時看診') && dbm.db.auditLogs[0].detail.includes(`第 ${a.seqNo} 號`),
+      `確認後可以同時看診，稽核記下「${dbm.db.auditLogs[0].detail}」`)
+    await api.opdApi.skipPatient(a.id)
+    await api.opdApi.skipPatient(b.id)
+    await api.opdApi.startConsult(c.id)
+    ok(dbm.db.visits.find((v) => v.id === c.id).status === 'in-consult' && !dbm.db.auditLogs[0].detail.includes('同時看診'), '前面的人過號（或完成）後叫號，不再提醒')
+    await api.opdApi.skipPatient(c.id)
+  }
+
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案
   console.log('\n[補貨申請（U25）]')
   {
