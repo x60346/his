@@ -685,6 +685,8 @@ export interface AuditLog {
 export interface DrugLot {
   id: string
   drugId: string
+  /** 存放地點（同一批號撥到別的地點，是另一筆 DrugLot、批號效期相同） */
+  locationId: string
   lotNo: string
   /** 效期 YYYY-MM-DD */
   expiry: string
@@ -693,7 +695,33 @@ export interface DrugLot {
   receivedAt: string
 }
 
-export type StockTxnType = 'opening' | 'receive' | 'dispense' | 'adjust'
+export type StockTxnType = 'opening' | 'receive' | 'dispense' | 'adjust' | 'transfer-out' | 'transfer-in'
+
+/**
+ * 醫院規模（重建展示資料時選，不隨時切換）：
+ *   small 小型：只有一個藥局，藥庫＝藥局（進貨、發藥都在這裡）
+ *   large 大型：一個藥庫（進貨）＋多個藥局（門診藥局發藥、住院藥局），藥局向藥庫請領撥補
+ */
+export type HospitalScale = 'small' | 'large'
+
+/** 庫存地點：每個批號、每筆異動都屬於某個地點 */
+export interface StockLocation {
+  id: string
+  name: string
+  kind: 'warehouse' | 'pharmacy'
+  /** 採購到貨入庫的地點（大型＝藥庫；小型＝唯一的藥局） */
+  receivesPurchase: boolean
+  /** 門診發藥從這裡扣（醫師開藥看的「可用量」也是這裡的） */
+  dispensesOpd: boolean
+  active: boolean
+}
+
+/** 某地點對某藥的安全庫存（沒設定就用藥品主檔的 safetyStock） */
+export interface SafetyStock {
+  locationId: string
+  drugId: string
+  qty: number
+}
 
 export type RestockStatus = 'open' | 'fulfilled' | 'cancelled'
 
@@ -729,6 +757,8 @@ export interface RestockRequest {
 export interface StockTxn {
   id: string
   drugId: string
+  /** 發生在哪個地點；balance 是這個地點異動後的結存 */
+  locationId: string
   at: string
   type: StockTxnType
   /** 增減數量：進貨為正、發藥為負 */

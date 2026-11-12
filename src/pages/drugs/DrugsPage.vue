@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 藥品庫存：摘要卡 → 藥品清單（篩選）→ 右側明細（批號、用量、異動帳）。
 // 清單上「可用庫存」「可用天數」「效期」都是服務層依帳本算好的；頁面只負責呈現與篩選條件。
+// 大型醫院有多個庫存地點（藥庫、門診藥局…）：頂端選「目前地點」，摘要、清單、明細、進貨、報廢都是那個地點的。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -10,6 +11,9 @@ import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, t
 import DrugDetail from './components/DrugDetail.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
+import { useWorkLocation } from '@/composables/useWorkLocation'
+
+const work = useWorkLocation()
 
 const keyword = ref('')
 const kw = useDebounced(keyword)
@@ -30,17 +34,18 @@ const route = useRoute()
 const cardFilter = ref<CardKey | null>(route.query.filter === 'restock' ? 'restock' : null)
 const toggleCard = (k: CardKey | null) => (cardFilter.value = cardFilter.value === k ? null : k)
 
-const { data: summary } = useQuery(() => inventoryApi.inventorySummary())
+const { data: summary } = useQuery(() => inventoryApi.inventorySummary(work.locationId.value || undefined), [work.locationId])
 const { data: rows, loading } = useQuery(
   () =>
     inventoryApi.listInventory({
+      locationId: work.locationId.value || undefined,
       keyword: kw.value,
       category: String(category.value ?? ''),
       attentionOnly: attentionOnly.value,
       flags: cardFilter.value ? [...cardFilters[cardFilter.value].flags] : undefined,
       restockOnly: cardFilter.value === 'restock',
     }),
-  [kw, category, attentionOnly, cardFilter],
+  [kw, category, attentionOnly, cardFilter, work.locationId],
 )
 
 const selectedId = ref<string>()
@@ -61,6 +66,13 @@ const shown = computed(() => rows.value?.length ?? 0)
 
 <template>
   <div class="space-y-4">
+    <!-- 多個地點才有選單：小型醫院只有一個藥局，不用選 -->
+    <div v-if="work.multi.value" class="flex flex-wrap items-end gap-3">
+      <div class="w-60">
+        <USelect :model-value="work.locationId.value" label="目前地點" :options="work.locations.value.map((l) => ({ label: `${l.name}${l.dispensesOpd ? '（門診發藥）' : l.receivesPurchase ? '（採購入庫）' : ''}`, value: l.id }))" @update:model-value="work.select" />
+      </div>
+      <p class="pb-2 text-xs text-slate-500">下方的庫存、批號、進貨、報廢都是「{{ work.location.value?.name }}」的；醫師開藥看到的可用量是門診藥局的。</p>
+    </div>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
       <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />
       <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
@@ -121,7 +133,7 @@ const shown = computed(() => rows.value?.length ?? 0)
 
       <UCard data-detail class="self-start">
         <UEmpty v-if="!selectedId" :icon="Pill" title="請從清單選擇藥品" description="檢視批號、用量趨勢與異動紀錄，並可進貨、盤點" />
-        <DrugDetail v-else :drug-id="selectedId" />
+        <DrugDetail v-else :drug-id="selectedId" :location-id="work.locationId.value" :location-name="work.multi.value ? work.location.value?.name : undefined" />
       </UCard>
     </div>
   </div>

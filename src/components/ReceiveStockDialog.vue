@@ -9,7 +9,7 @@ import { useAction } from '@/composables/useService'
 import { addDays, today } from '@/utils/date'
 
 const open = defineModel<boolean>({ default: false })
-const props = defineProps<{ drugId?: string; drugName?: string; unit?: string; usable?: number; suggestedQty?: number; title?: string; restockOutstanding?: number }>()
+const props = defineProps<{ drugId?: string; drugName?: string; unit?: string; usable?: number; suggestedQty?: number; title?: string; restockOutstanding?: number; locationId?: string; locationName?: string }>()
 const emit = defineEmits<{ done: [] }>()
 
 const form = reactive({ qty: undefined as number | undefined, lotNo: '', expiry: '', ref: '' })
@@ -27,7 +27,7 @@ const save = useAction(inventoryApi.receiveStock, {
 })
 async function submit() {
   if (!props.drugId) return
-  const ok = await save.run({ drugId: props.drugId, qty: form.qty ?? 0, lotNo: form.lotNo, expiry: form.expiry, ref: form.ref })
+  const ok = await save.run({ drugId: props.drugId, locationId: props.locationId || undefined, qty: form.qty ?? 0, lotNo: form.lotNo, expiry: form.expiry, ref: form.ref })
   if (ok) {
     open.value = false
     emit('done')
@@ -36,7 +36,7 @@ async function submit() {
 </script>
 
 <template>
-  <UDialog v-model="open" @submit="submit" :title="`${title ?? '進貨'}：${drugName ?? ''}`" size="sm">
+  <UDialog v-model="open" @submit="submit" :title="`${title ?? '進貨'}：${drugName ?? ''}${locationName ? `（入${locationName}）` : ''}`" size="sm">
     <div class="space-y-3 text-sm">
       <p v-if="usable !== undefined" class="text-slate-600">目前可用庫存 <b class="tabular text-slate-800">{{ usable }}</b> {{ unit }}</p>
       <p v-if="restockOutstanding" class="rounded-md bg-sky-50 px-3 py-2 text-sky-900">補貨申請尚欠 <b class="tabular">{{ restockOutstanding }}</b> {{ unit }}：這次進貨會抵掉申請，到齊就自動結案；不足（分批到貨）申請會留著。</p>

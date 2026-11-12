@@ -11,7 +11,7 @@ import { postStock } from './inventory'
 import { usableQty } from './stock-rules'
 import { rxExpired, rxValidUntil } from './rx-rules'
 import { timingText } from './drug-rules'
-import { find, nameOf, patientBrief, type PatientBrief } from './views'
+import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 
 export interface DispenseItem {
   drugId: string
@@ -69,7 +69,8 @@ function dispenseView(d: Dispense): DispenseView {
   const p = find.patient(d.patientId)
   const items: DispenseItem[] = e.medications.map((m) => {
     const drug = find.drug(m.drugId)
-    const usable = usableQty(db.drugLots.filter((l) => l.drugId === m.drugId), today())
+    // 門診發藥的藥局（大型醫院藥庫裡有，不代表窗口發得出來）
+    const usable = usableQty(stockLoc.lots(m.drugId, stockLoc.opd()), today())
     const req = db.restockRequests.find((x) => x.drugId === m.drugId && x.status === 'open')
     return {
       drugId: m.drugId,
@@ -191,7 +192,7 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     const view = dispenseView(d)
     assertStock(view)
     // 每個品項寫一筆發藥異動；任何一項失敗，mutate 會整筆回滾（不會只扣一半）
-    for (const item of view.items) postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, qty: item.qty, ref: `領藥號 ${d.pickupNo}` }, ph.id)
+    for (const item of view.items) postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, locationId: stockLoc.opd(), qty: item.qty, ref: `領藥號 ${d.pickupNo}` }, ph.id)
     d.status = 'dispensed'
     d.dispensedBy = ph.id
     d.dispensedAt = now()

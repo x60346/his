@@ -3,7 +3,7 @@
 // 匯入是「整個資料庫換掉」的危險操作：先讀檔、先驗證、再確認、最後才替換；任何一步失敗都不動現有資料。
 import { computed, ref } from 'vue'
 import { Download, RotateCcw, Upload } from 'lucide-vue-next'
-import { UButton } from '@/components/ui'
+import { UButton, USelect } from '@/components/ui'
 import { adminApi, dbVersion, masterApi } from '@/services'
 import { useAction } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -16,11 +16,16 @@ const auth = useAuth()
 const router = useRouter()
 const seed = computed(() => (dbVersion.value, masterApi.seedInfo()))
 
+// 醫院規模在重建時選（真實醫院的規模是導入時就決定的設定，不會平常切換；也就不會有「已有庫存時切換，庫存要搬去哪」的問題）
+const SCALE_LABEL = { small: '小型醫院（單一藥局，藥庫＝藥局）', large: '大型醫院（藥庫＋門診藥局＋住院藥局）' } as const
+const scale = ref<'small' | 'large'>(seed.value.scale)
 async function reset() {
-  const ok = await ui.confirm({ title: '重置展示資料', message: '所有資料將還原為「以今天為基準」的初始展示資料，目前的操作紀錄會被清除。', okText: '重置', danger: true })
+  const changing = scale.value !== seed.value.scale ? `
+醫院規模改為：${SCALE_LABEL[scale.value]}` : ''
+  const ok = await ui.confirm({ title: '重置展示資料', message: `所有資料將還原為「以今天為基準」的初始展示資料，目前的操作紀錄會被清除。${changing}`, okText: '重置', danger: true })
   if (!ok) return
-  await masterApi.resetDemoData()
-  ui.toast.success('已重置為今天的展示資料')
+  await masterApi.resetDemoData(scale.value)
+  ui.toast.success(`已重置為今天的展示資料（${scale.value === 'large' ? '大型' : '小型'}醫院）`)
 }
 
 const exporting = useAction(adminApi.exportData)
@@ -61,11 +66,14 @@ async function onFile(e: Event) {
 </script>
 
 <template>
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+  <!-- 欄數依區塊實際寬度：在側欄旁邊，視窗寬不代表這裡寬（md:grid-cols-3 在 1024 寬時按鈕會凸出卡片） -->
+  <div class="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-4">
     <section class="rounded-md border border-slate-200 p-4">
       <h3 class="flex items-center gap-1.5 text-sm font-semibold text-slate-700"><RotateCcw class="h-4 w-4" />重置</h3>
       <p class="mt-1 text-sm text-slate-600">目前資料建立於 <b class="tabular">{{ toRoc(seed.seededAt) }}</b><span v-if="seed.stale" class="text-amber-700">（不是今天）</span>。</p>
       <p class="mt-1 text-xs text-slate-500">展示資料以「建立當天」為基準產生（今日掛號、住院天數…），隔天使用建議重置。</p>
+      <p class="mt-2 text-sm text-slate-600">目前規模：<b>{{ seed.scale === 'large' ? '大型' : '小型' }}醫院</b>（{{ seed.locations.join('、') }}）</p>
+      <div class="mt-2"><USelect v-model="scale" label="重置時的醫院規模" :options="[{ label: SCALE_LABEL.small, value: 'small' }, { label: SCALE_LABEL.large, value: 'large' }]" /></div>
       <UButton class="mt-3" variant="danger" @click="reset">重置為今天的展示資料</UButton>
     </section>
 

@@ -1,6 +1,6 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
-import type { Admission, Bed, ClinicSession, Diagnosis, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
+import type { Admission, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
@@ -65,11 +65,33 @@ export function pickUsable(src: { diagnoses: Diagnosis[]; medications: Medicatio
   return { diagnoses, medications, procedures, skipped }
 }
 
+/**
+ * 庫存地點（小型只有一個藥局；大型是藥庫＋多個藥局）。哪裡發門診藥、哪裡收採購，由地點主檔的旗標決定，
+ * 各服務一律用這幾個函式，不自己寫死「藥局」——同一套程式跑兩種規模。
+ */
+export const stockLoc = {
+  /** 門診發藥的藥局：醫師開藥看的「可用量」、藥局發藥扣的都是這裡 */
+  opd: () => (db.stockLocations.find((l) => l.dispensesOpd && l.active) ?? db.stockLocations[0]).id,
+  /** 採購到貨入庫的地點 */
+  receiving: () => (db.stockLocations.find((l) => l.receivesPurchase && l.active) ?? db.stockLocations[0]).id,
+  /** 指定的地點（沒指定＝門診藥局）；不存在或停用就擋 */
+  usable(id?: string) {
+    const loc = must(db.stockLocations.find((l) => l.id === (id || stockLoc.opd())), '庫存地點')
+    if (!loc.active) fail(`${loc.name}已停用`)
+    return loc
+  },
+  /** 某藥在某地點的批號 */
+  lots: (drugId: string, locationId: string) => db.drugLots.filter((l) => l.drugId === drugId && l.locationId === locationId),
+  /** 某藥在某地點的安全庫存（沒設定就用藥品主檔的值） */
+  safety: (drug: Pick<Drug, 'id' | 'safetyStock'>, locationId: string) => db.safetyStocks.find((x) => x.locationId === locationId && x.drugId === drug.id)?.qty ?? drug.safetyStock,
+}
+
 export const nameOf = {
   doctor: (id?: string) => (id ? find.doctor(id)?.name ?? id : ''),
   dept: (id?: string) => (id ? find.dept(id)?.name ?? id : ''),
   identity: (code?: string) => (code ? find.identity(code)?.name ?? code : ''),
   user: (id?: string) => (id ? find.user(id)?.name ?? id : ''),
+  location: (id?: string) => (id ? db.stockLocations.find((l) => l.id === id)?.name ?? id : ''),
   patient: (id?: string) => (id ? find.patient(id)?.name ?? id : ''),
 }
 

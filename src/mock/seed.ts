@@ -17,6 +17,9 @@ import type {
   OrderSet,
   Drug,
   Phrase,
+  SafetyStock,
+  StockLocation,
+  HospitalScale,
   PriceChange,
   Patient,
   Period,
@@ -161,7 +164,8 @@ const areaLetters = ['D', 'R', 'E', 'S', 'B', 'A']
 const streets = ['中山路', '民生路', '府前路', '東門路', '健康路', '永華路', '大同路', '北門路']
 const relatives = ['配偶', '兒子', '女兒', '父親', '母親']
 
-export function buildSeed(): Database {
+export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
+  const scale: HospitalScale = opts.scale ?? 'small'
   const rand = mulberry32(20240501)
   const pick = <T>(arr: T[]): T => arr[Math.floor(rand() * arr.length)]
   const int = (min: number, max: number) => min + Math.floor(rand() * (max - min + 1))
@@ -828,6 +832,20 @@ export function buildSeed(): Database {
   const drugs = structuredClone(codes.drugs).map(withPrices)
   const drugLots: DrugLot[] = []
   const stockTxns: StockTxn[] = []
+  // 庫存地點：小型只有一個藥局（進貨、發藥都在這）；大型是藥庫（進貨）＋門診藥局（發藥）＋住院藥局。
+  // 兩種規模重播的事件完全相同（亂數抽的次數一樣），差別只在「放在哪」：
+  // 大型的門診藥局快不夠發時，先從藥庫撥一批過來（依 FEFO、帶著批號效期）——最後全院總量和小型一模一樣
+  const stockLocations: StockLocation[] =
+    scale === 'small'
+      ? [{ id: 'LOC-PH', name: '藥局', kind: 'pharmacy', receivesPurchase: true, dispensesOpd: true, active: true }]
+      : [
+          { id: 'LOC-WH', name: '藥庫', kind: 'warehouse', receivesPurchase: true, dispensesOpd: false, active: true },
+          { id: 'LOC-OPD', name: '門診藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: true, active: true },
+          { id: 'LOC-IPD', name: '住院藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: false, active: true },
+        ]
+  const recvLoc = stockLocations.find((l) => l.receivesPurchase)!.id
+  const opdLoc = stockLocations.find((l) => l.dispensesOpd)!.id
+  const safetyStocks: SafetyStock[] = []
   const realOut = new Map<string, { at: string; qty: number; ref: string }[]>()
   for (const d of dispenses.filter((x) => x.status === 'dispensed')) {
     const e = encounters.find((x) => x.id === d.encounterId)!
@@ -865,30 +883,78 @@ export function buildSeed(): Database {
       receive = outAfterExpiry + 20
       opening = Math.max(target + totalOut - receive, outBefore + 20)
     }
-    const events: ({ kind: 'lot'; at: string; lot: DrugLot; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string })[] = [
+    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string })[] = [
       { kind: 'lot' as const, at: `${addDays(T, -31)} 08:00`, type: 'opening' as const, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year - 1).slice(2)}${String(di).padStart(3, '0')}A`, expiry: oldExpiry, qty: opening, receivedAt: `${addDays(T, -31)} 08:00` } },
       ...(receive > 0 ? [{ kind: 'lot' as const, at: receiveAt, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}B`, expiry: `${year + 2}-0${int(1, 9)}-28`, qty: receive, receivedAt: receiveAt } }] : []),
+      // 大型：藥庫的備量比單一藥局多——一般的藥另外進一批（安全庫存 5 倍：撥給藥局後仍高於藥庫自己的 3 倍安全量；固定批號效期、不抽亂數）。
+      // 示範用「偏低／缺貨」的藥不加：全院都短缺，門診藥局和藥庫才會一起顯示偏低（不然藥庫一直撥，藥局永遠不缺）
+      ...(scale === 'large' && target === drug.stock
+        ? [{ kind: 'lot' as const, at: `${addDays(T, -7)} 10:00`, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}W`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}W`, expiry: `${year + 2}-06-30`, qty: drug.safetyStock * 5, receivedAt: `${addDays(T, -7)} 10:00` } }]
+        : []),
       ...outs.map((o) => ({ kind: 'out' as const, ...o })),
     ].sort((a, b) => a.at.localeCompare(b.at))
 
-    let balance = 0
+    // 各地點的批號與結存（小型只有一個地點，recvLoc === opdLoc，行為和以前完全相同）
     const lots: DrugLot[] = []
+    const balance: Record<string, number> = {}
+    const at = (loc: string) => lots.filter((l) => l.locationId === loc)
+    const post = (loc: string, type: StockTxn['type'], when: string, qty: number, moved: { lotNo: string; qty: number }[], ref?: string) => {
+      balance[loc] = (balance[loc] ?? 0) + qty
+      stockTxns.push({ id: id('ST'), drugId: drug.id, locationId: loc, at: when, type, qty, balance: balance[loc], lots: moved, ref, userId: 'U301' })
+    }
+    /** 從藥庫撥 qty 到 to（FEFO），兩筆異動同一個單號 */
+    const transfer = (to: string, qty: number, when: string, ref: string) => {
+      const takes = allocateFefo(at(recvLoc), qty, when)
+      if (!takes) throw new Error(`種子資料撥補錯誤：${drug.id} 於 ${when} 藥庫可用量不足（需 ${qty}）`)
+      for (const t of takes) lots.find((l) => l.id === t.lotId)!.qty -= t.qty
+      post(recvLoc, 'transfer-out', when, -qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ref)
+      for (const t of takes) {
+        const src = lots.find((l) => l.id === t.lotId)!
+        let dst = lots.find((l) => l.locationId === to && l.lotNo === src.lotNo)
+        if (!dst) {
+          dst = { id: id('LOT'), drugId: drug.id, locationId: to, lotNo: src.lotNo, expiry: src.expiry, qty: 0, receivedAt: when }
+          lots.push(dst)
+        }
+        dst.qty += t.qty
+      }
+      post(to, 'transfer-in', when, qty, takes.map((t) => ({ lotNo: t.lotNo, qty: t.qty })), ref)
+    }
+    let xfer = 0
+    const xferRef = () => `撥補 TR${drug.id}-${String(++xfer).padStart(2, '0')}`
     for (const ev of events) {
       if (ev.kind === 'lot') {
-        lots.push(ev.lot)
-        balance += ev.lot.qty
-        stockTxns.push({ id: id('ST'), drugId: drug.id, at: ev.at, type: ev.type, qty: ev.lot.qty, balance, lots: [{ lotNo: ev.lot.lotNo, qty: ev.lot.qty }], ref: ev.ref, userId: 'U301' })
+        lots.push({ ...ev.lot, locationId: recvLoc })
+        post(recvLoc, ev.type, ev.at, ev.lot.qty, [{ lotNo: ev.lot.lotNo, qty: ev.lot.qty }], ev.ref)
+        // 大型：住院藥局開帳時從藥庫撥一些注射劑（住院給藥目前不扣庫存，這些是盤點、撥補示範用的存量）
+        if (scale === 'large' && ev.type === 'opening' && drug.category === '注射') {
+          const q = Math.min(20, Math.floor(ev.lot.qty / 10))
+          if (q > 0) transfer('LOC-IPD', q, `${ev.at.slice(0, 10)} 09:00`, xferRef())
+        }
         continue
       }
-      const takes = allocateFefo(lots, ev.qty, ev.at)
+      // 大型：門診藥局發完會低於安全庫存，就先向藥庫請領，補到 3 倍安全庫存（藥庫不夠就撥它有的）——
+      // 真實藥局是「低於安全量就請領」，不是等到發不出來才請；以前這樣做，示範時一大半的藥都顯示「偏低」，真正的警示反而被淹沒
+      if (opdLoc !== recvLoc) {
+        const have = usableQty(at(opdLoc), ev.at)
+        if (have - ev.qty < drug.safetyStock) {
+          const want = drug.safetyStock * 3 + ev.qty - have
+          const whHas = usableQty(at(recvLoc), ev.at)
+          if (whHas > 0) transfer(opdLoc, Math.min(want, whHas), ev.at, xferRef())
+        }
+      }
+      const takes = allocateFefo(at(opdLoc), ev.qty, ev.at)
       // 不足就直接報錯：之前這裡是「默默略過」，結果期初之前的舊發藥被略過卻仍算進總量，期初多出 120 都沒人發現
       if (!takes) throw new Error(`種子資料庫存帳錯誤：${drug.id} 於 ${ev.at} 可用量不足（需 ${ev.qty}）`)
       for (const t of takes) lots.find((l) => l.id === t.lotId)!.qty -= t.qty
-      balance -= ev.qty
-      stockTxns.push({ id: id('ST'), drugId: drug.id, at: ev.at, type: 'dispense', qty: -ev.qty, balance, lots: takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ref: ev.ref, userId: 'U301' })
+      post(opdLoc, 'dispense', ev.at, -ev.qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ev.ref)
     }
-    drug.stock = balance
+    drug.stock = Object.values(balance).reduce((a, b) => a + b, 0)
     drugLots.push(...lots)
+    // 大型：藥庫要存得比藥局多（安全庫存 3 倍）；住院藥局只放少量注射劑
+    if (scale === 'large') {
+      safetyStocks.push({ locationId: 'LOC-WH', drugId: drug.id, qty: drug.safetyStock * 3 })
+      if (drug.category === '注射') safetyStocks.push({ locationId: 'LOC-IPD', drugId: drug.id, qty: 5 })
+    }
   })
 
   // 展示用（U25）：一張昨天提出、還沒到貨的補貨申請（第一種「偏低」的藥）——
@@ -896,8 +962,8 @@ export function buildSeed(): Database {
   const restockRequests: RestockRequest[] = []
   const lowDrug = drugs[4]
   if (lowDrug) {
-    const usable = usableQty(drugLots.filter((l) => l.drugId === lowDrug.id && l.qty > 0), T)
-    const used30 = -stockTxns.filter((x) => x.drugId === lowDrug.id && x.type === 'dispense' && x.at >= addDays(T, -30)).reduce((n, x) => n + x.qty, 0)
+    const usable = usableQty(drugLots.filter((l) => l.drugId === lowDrug.id && l.locationId === opdLoc && l.qty > 0), T)
+    const used30 = -stockTxns.filter((x) => x.drugId === lowDrug.id && x.locationId === opdLoc && x.type === 'dispense' && x.at >= addDays(T, -30)).reduce((n, x) => n + x.qty, 0)
     const { qty } = suggestRestockQty({ usable, need: 0, safetyStock: lowDrug.safetyStock, used30 })
     if (qty > 0) {
       restockRequests.push({
@@ -1007,6 +1073,9 @@ export function buildSeed(): Database {
     restockRequests,
     orderSets,
     phrases,
+    hospitalScale: scale,
+    stockLocations,
+    safetyStocks,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

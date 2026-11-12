@@ -200,16 +200,21 @@ try {
   ok(sr.allocateFefo(lotsT, 16, '2026-06-01') === null, '可用量（未過期）不足時不扣（過期品不能發）')
   ok(sr.daysOfSupply(100, 0, 30) === null && sr.daysOfSupply(100, 60, 30) === 50, '可用天數：無用量為「不知道」（null），不是無限大')
 
-  // 不變式：每種藥 stock = 批號剩餘總和 = 帳本加總，且每筆帳的結存連續
-  const broken = dbm.db.drugs.filter((d) => {
-    const lots = dbm.db.drugLots.filter((l) => l.drugId === d.id).reduce((s, l) => s + l.qty, 0)
-    const txns = dbm.db.stockTxns.filter((t) => t.drugId === d.id)
-    const sum = txns.reduce((s, t) => s + t.qty, 0)
-    let run = 0
-    const chain = txns.every((t) => (run += t.qty) === t.balance)
-    return d.stock !== lots || d.stock !== sum || !chain || dbm.db.drugLots.some((l) => l.drugId === d.id && l.qty < 0)
-  })
-  ok(broken.length === 0, `${dbm.db.drugs.length} 種藥：庫存 = 批號總和 = 帳本加總，結存連續（不符 ${broken.length} 種）`)
+  // 不變式（每個庫存地點各自成立）：該地點批號總和 = 該地點帳本加總，且結存連續；drug.stock = 各地點總和
+  const ledgerBroken = (db) =>
+    db.drugs.filter((d) => {
+      const lots = db.drugLots.filter((l) => l.drugId === d.id)
+      if (lots.some((l) => l.qty < 0 || !db.stockLocations.some((x) => x.id === l.locationId))) return true
+      const perLoc = db.stockLocations.every((loc) => {
+        const lq = lots.filter((l) => l.locationId === loc.id).reduce((s, l) => s + l.qty, 0)
+        const txns = db.stockTxns.filter((t) => t.drugId === d.id && t.locationId === loc.id)
+        let run = 0
+        return txns.every((t) => (run += t.qty) === t.balance) && run === lq
+      })
+      return !perLoc || d.stock !== lots.reduce((s, l) => s + l.qty, 0) || db.stockTxns.some((t) => t.drugId === d.id && !t.locationId)
+    })
+  const broken = ledgerBroken(dbm.db)
+  ok(broken.length === 0, `${dbm.db.drugs.length} 種藥：每個地點的批號總和 = 帳本加總、結存連續；庫存 = 各地點總和（不符 ${broken.length} 種）`)
 
   const recvDrug = 'M010'
   const before10 = dbm.db.drugs.find((d) => d.id === recvDrug).stock
@@ -2564,6 +2569,70 @@ try {
       ok(!sameTime, `${label} 重建：今天沒有一大群人擠在同一個掛號時間`)
     }
     setClock(14, 30)
+  }
+
+  // 醫院規模：大型（藥庫＋門診藥局＋住院藥局）。重播的事件與小型相同，只是放在不同地點
+  console.log('\n[醫院規模：大型]')
+  {
+    const { buildSeed } = await load('/src/mock/seed.ts')
+    const small = buildSeed({ scale: 'small' })
+    const large = buildSeed({ scale: 'large' })
+    ok(small.stockLocations.length === 1 && large.stockLocations.map((l) => l.name).join('、') === '藥庫、門診藥局、住院藥局', `小型 1 個地點；大型 ${large.stockLocations.map((l) => l.name).join('、')}`)
+    // 全院總量：大型＝小型＋藥庫多進的那一批（示範用偏低、缺貨的藥沒有多進，兩邊一樣）
+    const extra = (d) => large.stockTxns.filter((t) => t.drugId === d.id && t.type === 'receive' && t.ref?.endsWith('W')).reduce((a, t) => a + t.qty, 0)
+    ok(large.drugs.every((d) => d.stock === small.drugs.find((x) => x.id === d.id).stock + extra(d)), '兩種規模的全院總量只差藥庫多進的那一批（其餘事件完全相同）')
+    const flagCount = (db, loc) => db.drugs.filter((d) => {
+      const u = db.drugLots.filter((l) => l.drugId === d.id && l.locationId === loc && l.expiry >= T).reduce((a, l) => a + l.qty, 0)
+      return u <= (db.safetyStocks.find((s) => s.locationId === loc && s.drugId === d.id)?.qty ?? d.safetyStock)
+    }).length
+    ok(flagCount(large, 'LOC-OPD') <= flagCount(small, 'LOC-PH') + 1 && flagCount(large, 'LOC-WH') <= flagCount(small, 'LOC-PH') + 1,
+      `偏低／缺貨的數量合理：小型 ${flagCount(small, 'LOC-PH')}、大型門診藥局 ${flagCount(large, 'LOC-OPD')}、藥庫 ${flagCount(large, 'LOC-WH')}（不會一大半都在警示）`)
+    ok(ledgerBroken(large).length === 0, '大型：每個地點的批號、帳本、結存都對得起來')
+    const byType = (t) => [...new Set(large.stockTxns.filter((x) => x.type === t).map((x) => x.locationId))].join()
+    ok(byType('dispense') === 'LOC-OPD' && byType('receive') === 'LOC-WH' && byType('opening') === 'LOC-WH', '發藥只從門診藥局扣；期初、進貨只進藥庫')
+    const outs = large.stockTxns.filter((x) => x.type === 'transfer-out')
+    const unpaired = outs.filter((o) => {
+      const i = large.stockTxns.find((x) => x.type === 'transfer-in' && x.ref === o.ref && x.drugId === o.drugId)
+      return !i || i.qty !== -o.qty || JSON.stringify(i.lots.map((l) => [l.lotNo, l.qty])) !== JSON.stringify(o.lots.map((l) => [l.lotNo, -l.qty]))
+    })
+    ok(outs.length > 0 && !unpaired.length && outs.every((o) => o.locationId === 'LOC-WH'), `撥補 ${outs.length} 次：藥庫撥出與藥局撥入成對（同單號、同數量、同批號）`)
+    const sameLot = large.drugLots.filter((l) => l.locationId !== 'LOC-WH').every((l) => large.drugLots.some((w) => w.locationId === 'LOC-WH' && w.drugId === l.drugId && w.lotNo === l.lotNo && w.expiry === l.expiry))
+    ok(sameLot, '藥局的批號都來自藥庫（批號、效期跟著藥走，追溯得到）')
+    const m1 = large.drugs.find((d) => d.id === 'M001')
+    ok(large.safetyStocks.find((x) => x.locationId === 'LOC-WH' && x.drugId === 'M001')?.qty === m1.safetyStock * 3, '藥庫的安全庫存另外設定（主檔的 3 倍）')
+
+    // 大型實際操作：重建 → 發藥扣門診藥局、進貨預設進藥庫、各地點庫存查得到
+    dbm.resetDatabase('large')
+    ok(dbm.db.hospitalScale === 'large', '重建展示資料可選大型')
+    await as('ph01')
+    const I = api.inventoryApi
+    const L = await I.listStockLocations()
+    ok(L.scale === 'large' && L.opd === 'LOC-OPD' && L.receiving === 'LOC-WH' && L.locations.length === 3, '地點清單：門診發藥＝門診藥局、採購入庫＝藥庫')
+    const pend = dbm.db.dispenses.find((d) => d.status === 'pending' && dbm.db.encounters.find((e) => e.id === d.encounterId).medications.every((m) => dbm.db.drugLots.filter((l) => l.drugId === m.drugId && l.locationId === 'LOC-OPD' && l.expiry >= T).reduce((a, l) => a + l.qty, 0) >= m.qty))
+    ok(!!pend, '有門診藥局發得出來的待調劑單')
+    const whBefore = dbm.db.drugLots.filter((l) => l.locationId === 'LOC-WH').reduce((a, l) => a + l.qty, 0)
+    await api.pharmacyApi.verifyDispense(pend.id)
+    const pt = dbm.db.patients.find((p) => p.id === pend.patientId)
+    await api.pharmacyApi.dispense(pend.id, { birthMMDD: pt.birthDate.slice(5).replace('-', '') })
+    const last = dbm.db.stockTxns.at(-1)
+    ok(last.type === 'dispense' && last.locationId === 'LOC-OPD' && dbm.db.drugLots.filter((l) => l.locationId === 'LOC-WH').reduce((a, l) => a + l.qty, 0) === whBefore, '發藥扣門診藥局，藥庫不動')
+    const rcv = await I.receiveStock({ drugId: 'M010', qty: 50, lotNo: 'BIG-1', expiry: '2030-01-01' })
+    ok(rcv.locationId === 'LOC-WH' && dbm.db.drugLots.some((l) => l.lotNo === 'BIG-1' && l.locationId === 'LOC-WH'), '進貨沒指定地點：進藥庫')
+    const wh = await I.listInventory({ locationId: 'LOC-WH' })
+    const opd = await I.listInventory({ locationId: 'LOC-OPD' })
+    const m10wh = wh.find((r) => r.id === 'M010')
+    const m10opd = opd.find((r) => r.id === 'M010')
+    ok(m10wh.stock + m10opd.stock + (await I.listInventory({ locationId: 'LOC-IPD' })).find((r) => r.id === 'M010').stock === dbm.db.drugs.find((d) => d.id === 'M010').stock, '各地點的庫存加起來＝全院總量')
+    ok(m10wh.safetyStock === dbm.db.drugs.find((d) => d.id === 'M010').safetyStock * 3 && m10opd.safetyStock === dbm.db.drugs.find((d) => d.id === 'M010').safetyStock, '庫存頁的安全庫存是該地點的（藥庫 3 倍、門診藥局用主檔值）')
+    const opdDrugs = await api.masterApi.listDrugs({ includeInactive: true })
+    ok(opdDrugs.every((d) => d.usable === m10opd.usable || d.id !== 'M010'), '醫師開藥看到的可用量＝門診藥局的（不是全院、不是藥庫）')
+    const ledger = await I.getDrugLedger('M010', 'LOC-WH')
+    ok(ledger.txns.every((t) => t.locationId === 'LOC-WH') && ledger.lots.every((l) => l.locationId === 'LOC-WH'), '藥品明細依地點：只列這個地點的批號與異動')
+    await expectError(() => I.listInventory({ locationId: 'LOC-NOPE' }), '查不存在的地點')
+    ok(ledgerBroken(dbm.db).length === 0, '大型操作後，各地點帳本仍對得起來')
+    dbm.resetDatabase('small')
+    ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.length === 1, '再重建回小型')
+    await as('clerk01')
   }
 } catch (e) {
   failed++

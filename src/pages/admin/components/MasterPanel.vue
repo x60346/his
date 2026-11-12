@@ -47,7 +47,8 @@ const drugColumns: Column<DrugView>[] = [
   { key: 'category', label: '劑型', width: '4rem' },
   { key: 'nhiPrice', label: '健保價', align: 'right', width: '5rem' },
   { key: 'selfPrice', label: '自費價', align: 'right', width: '5rem' },
-  { key: 'stock', label: '庫存', align: 'right', width: '5rem', format: (d) => `${d.stock} ${d.unit}` },
+  // 全院總量（大型醫院是藥庫＋各藥局加總，含過期待報廢的）；各地點的可用量看「藥品庫存」
+  { key: 'stock', label: '全院庫存', align: 'right', width: '5rem', format: (d) => `${d.stock} ${d.unit}` },
 ]
 const drugFields = computed<FieldDef[]>(() => [
   { key: 'name', label: '藥名', required: true },

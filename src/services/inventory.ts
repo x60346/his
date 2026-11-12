@@ -1,28 +1,29 @@
 // 藥品庫存：帳本（異動紀錄）、批號、進貨、盤點、報廢過期。
 //
 // 核心原則：庫存只能透過 postStock 改變。
-//   - 每次增減寫一筆 StockTxn（帳本只增不改）
-//   - 同時更新批號剩餘量與 drug.stock（快取）
-//   - drug.stock 永遠等於所有批號剩餘量的總和，也等於帳本加總——流程測試會驗證這個不變式
+//   - 每次增減寫一筆 StockTxn（帳本只增不改），記在某個庫存地點（小型只有一個藥局；大型有藥庫與多個藥局）
+//   - 同時更新該地點的批號剩餘量與 drug.stock（全院總量的快取）
+//   - 不變式（流程測試驗證）：每個地點的批號總和 = 該地點帳本加總，且結存連續；drug.stock = 各地點總和
 // 其他模組（藥局發藥）要扣庫存，也是呼叫 postStock，不可以自己去改 drug.stock。
-import type { Dispense, Drug, DrugLot, RestockRequest, RestockStatus, StockTxn, StockTxnType } from '@/types'
+import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockStatus, StockLocation, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { allocateFefo, checkStocktakeActual, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus } from './stock-rules'
-import { find, nameOf } from './views'
+import { find, nameOf, stockLoc } from './views'
 import { matchesDrug } from './drug-rules'
 
 // ---------- 唯一的寫入點（服務層內部） ----------
 type Post =
-  | { kind: 'in'; drugId: string; qty: number; type: StockTxnType; lot: Pick<DrugLot, 'lotNo' | 'expiry'>; ref?: string; reason?: string }
-  | { kind: 'out'; drugId: string; qty: number; type: StockTxnType; ref?: string; reason?: string; includeExpired?: boolean; lotId?: string }
+  | { kind: 'in'; drugId: string; locationId: string; qty: number; type: StockTxnType; lot: Pick<DrugLot, 'lotNo' | 'expiry'>; ref?: string; reason?: string }
+  | { kind: 'out'; drugId: string; locationId: string; qty: number; type: StockTxnType; ref?: string; reason?: string; includeExpired?: boolean; lotId?: string }
 
 /** 寫入一筆庫存異動。出庫依 FEFO 扣批號（或指定批號），不足時整筆失敗 */
 export function postStock(p: Post, userId: string, at = now()): StockTxn {
   const drug = must(find.drug(p.drugId), '藥品')
   if (!Number.isInteger(p.qty) || p.qty <= 0) fail('數量需為正整數')
-  const lots = db.drugLots.filter((l) => l.drugId === drug.id)
+  const loc = stockLoc.usable(p.locationId)
+  const lots = stockLoc.lots(drug.id, loc.id)
   let moved: { lotNo: string; qty: number }[]
 
   if (p.kind === 'in') {
@@ -30,7 +31,7 @@ export function postStock(p: Post, userId: string, at = now()): StockTxn {
     let lot = lots.find((l) => l.lotNo === p.lot.lotNo)
     if (lot && lot.expiry !== p.lot.expiry) failField('lotNo', `批號 ${p.lot.lotNo} 已存在，效期為 ${lot.expiry}，與輸入不符`)
     if (!lot) {
-      lot = { id: newId('LOT'), drugId: drug.id, lotNo: p.lot.lotNo, expiry: p.lot.expiry, qty: 0, receivedAt: at }
+      lot = { id: newId('LOT'), drugId: drug.id, locationId: loc.id, lotNo: p.lot.lotNo, expiry: p.lot.expiry, qty: 0, receivedAt: at }
       db.drugLots.push(lot)
     }
     lot.qty += p.qty
@@ -42,14 +43,16 @@ export function postStock(p: Post, userId: string, at = now()): StockTxn {
           return l.qty >= p.qty ? [{ lotId: l.id, lotNo: l.lotNo, qty: p.qty }] : null
         })()
       : allocateFefo(lots, p.qty, at, p.includeExpired)
-    if (!takes) fail(`${drug.name} 可用庫存不足（需 ${p.qty}，可用 ${usableQty(lots, at)}）`, 'CONFLICT')
+    if (!takes) fail(`${drug.name} ${loc.name}可用庫存不足（需 ${p.qty}，可用 ${usableQty(lots, at)}）`, 'CONFLICT')
     for (const t of takes!) db.drugLots.find((l) => l.id === t.lotId)!.qty -= t.qty
     moved = takes!.map((t) => ({ lotNo: t.lotNo, qty: -t.qty }))
   }
 
   const signed = p.kind === 'in' ? p.qty : -p.qty
   drug.stock += signed
-  const txn: StockTxn = { id: newId('ST'), drugId: drug.id, at, type: p.type, qty: signed, balance: drug.stock, lots: moved, ref: p.ref, reason: p.reason, userId }
+  // 結存是「這個地點」的：異動後該地點所有批號的總和（和帳本逐筆累加一致）
+  const balance = stockLoc.lots(drug.id, loc.id).reduce((s, l) => s + l.qty, 0)
+  const txn: StockTxn = { id: newId('ST'), drugId: drug.id, locationId: loc.id, at, type: p.type, qty: signed, balance, lots: moved, ref: p.ref, reason: p.reason, userId }
   db.stockTxns.push(txn)
   return txn
 }
@@ -58,6 +61,8 @@ export function postStock(p: Post, userId: string, at = now()): StockTxn {
 const USAGE_DAYS = 30
 
 export interface InventoryRow extends Drug {
+  /** 這一列是哪個地點的（stock、safetyStock 也是這個地點的） */
+  locationId: string
   /** 未過期、可發給病人的數量 */
   usable: number
   /** 已過期、待報廢的數量 */
@@ -76,17 +81,25 @@ export interface InventoryRow extends Drug {
   restock?: { id: string; outstanding: number; waiting: number }
 }
 
-function inventoryRow(d: Drug, t: string): InventoryRow {
-  const lots = db.drugLots.filter((l) => l.drugId === d.id && l.qty > 0)
+/** 這個地點的「用量」：發給病人的，加上撥給別的地點的（藥庫的用量就是撥出量） */
+const isUsage = (x: StockTxn) => x.type === 'dispense' || x.type === 'transfer-out'
+
+function inventoryRow(d: Drug, t: string, locationId: string): InventoryRow {
+  const lots = stockLoc.lots(d.id, locationId).filter((l) => l.qty > 0)
   const usable = usableQty(lots, t)
   const since = addDays(t, -USAGE_DAYS)
-  const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.type === 'dispense' && x.at >= since).reduce((s, x) => s + x.qty, 0)
+  const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === locationId && isUsage(x) && x.at >= since).reduce((s, x) => s + x.qty, 0)
+  const safetyStock = stockLoc.safety(d, locationId)
   const nearestExpiry = lots.filter((l) => l.expiry >= t).map((l) => l.expiry).sort()[0]
   const row = {
     ...d,
+    // 這個地點的安全庫存與帳上量（藥品主檔的 stock 是全院總量）
+    safetyStock,
+    stock: lots.reduce((s, l) => s + l.qty, 0),
+    locationId,
     usable,
     expiredQty: lots.filter((l) => l.expiry < t).reduce((s, l) => s + l.qty, 0),
-    status: stockStatus(usable, d.safetyStock),
+    status: stockStatus(usable, safetyStock),
     used30,
     daysLeft: daysOfSupply(usable, used30, USAGE_DAYS),
     nearestExpiry,
@@ -97,6 +110,8 @@ function inventoryRow(d: Drug, t: string): InventoryRow {
 }
 
 export interface InventoryQuery {
+  /** 哪個地點（沒給＝門診發藥的藥局） */
+  locationId?: string
   keyword?: string
   category?: string
   /** 只看需要處理的：缺貨、偏低、效期將到、有過期品 */
@@ -110,11 +125,12 @@ export interface InventoryQuery {
 export function listInventory(q: InventoryQuery = {}): Promise<InventoryRow[]> {
   return query(() => {
     const t = today()
+    const loc = stockLoc.usable(q.locationId).id
     const kw = q.keyword?.trim().toLowerCase()
     return db.drugs
       .filter((d) => d.active && (!q.category || d.category === q.category))
       .filter((d) => !kw || matchesDrug(d, kw))
-      .map((d) => inventoryRow(d, t))
+      .map((d) => inventoryRow(d, t, loc))
       .filter((r) => !q.attentionOnly || r.flags.length > 0)
       .filter((r) => !q.flags?.length || r.flags.some((f) => q.flags!.includes(f)))
       .filter((r) => !q.restockOnly || !!r.restock)
@@ -135,10 +151,11 @@ export interface InventorySummary {
   restockOpen: number
 }
 
-export function inventorySummary(): Promise<InventorySummary> {
+export function inventorySummary(locationId?: string): Promise<InventorySummary> {
   return query(() => {
     const t = today()
-    const rows = db.drugs.filter((d) => d.active).map((d) => inventoryRow(d, t))
+    const loc = stockLoc.usable(locationId).id
+    const rows = db.drugs.filter((d) => d.active).map((d) => inventoryRow(d, t, loc))
     return {
       total: rows.length,
       // 和清單的標籤同一個來源：卡片上的數字 = 有該標籤的藥品數
@@ -166,18 +183,19 @@ export interface DrugLedger {
   restock?: RestockView
 }
 
-export function getDrugLedger(drugId: string): Promise<DrugLedger> {
+export function getDrugLedger(drugId: string, locationId?: string): Promise<DrugLedger> {
   return query(() => {
     const d = must(find.drug(drugId), '藥品')
     const t = today()
-    const txns = db.stockTxns.filter((x) => x.drugId === d.id)
+    const loc = stockLoc.usable(locationId).id
+    const txns = db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === loc)
     const daily = Array.from({ length: USAGE_DAYS }, (_, i) => addDays(t, i - USAGE_DAYS + 1)).map((date) => ({
       date,
-      qty: -txns.filter((x) => x.type === 'dispense' && x.at.startsWith(date)).reduce((s, x) => s + x.qty, 0),
+      qty: -txns.filter((x) => isUsage(x) && x.at.startsWith(date)).reduce((s, x) => s + x.qty, 0),
     }))
     return {
-      row: inventoryRow(d, t),
-      lots: db.drugLots.filter((l) => l.drugId === d.id && l.qty > 0).sort((a, b) => a.expiry.localeCompare(b.expiry)),
+      row: inventoryRow(d, t, loc),
+      lots: stockLoc.lots(d.id, loc).filter((l) => l.qty > 0).sort((a, b) => a.expiry.localeCompare(b.expiry)),
       // 帳本只增不改，寫入順序就是發生順序：新到舊直接反轉，不用時間排序——
       // 時間只到分鐘，同一分鐘的兩筆（報廢後馬上盤點）用時間排會分不出先後，結存就看起來跳號
       txns: [...txns].reverse().slice(0, 100).map((x) => ({ ...x, userName: nameOf.user(x.userId) })),
@@ -190,6 +208,8 @@ export function getDrugLedger(drugId: string): Promise<DrugLedger> {
 // ---------- 異動 ----------
 export interface ReceiveInput {
   drugId: string
+  /** 入哪個地點（沒給＝採購入庫的地點：小型＝藥局、大型＝藥庫） */
+  locationId?: string
   qty: number
   lotNo: string
   expiry: string
@@ -217,7 +237,7 @@ export function receiveStock(input: ReceiveInput): Promise<ReceiveResult> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry ?? '')) v.add('expiry', '請輸入效期')
     else if (input.expiry <= today()) v.add('expiry', '效期已過或為今天，不可進貨')
     v.done()
-    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref: input.ref?.trim() || undefined }, u.id)
+    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, locationId: input.locationId || stockLoc.receiving(), qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref: input.ref?.trim() || undefined }, u.id)
     const req = openRestockOf(input.drugId)
     let restock: ReceiveResult['restock']
     if (req) {
@@ -250,22 +270,23 @@ export function stocktake(input: { lotId: string; actual: number; reason: string
     const reason = input.reason.trim()
     const txn =
       diff > 0
-        ? postStock({ kind: 'in', type: 'adjust', drugId: lot.drugId, qty: diff, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, reason }, u.id)
-        : postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, qty: -diff, lotId: lot.id, reason }, u.id)
-    audit('藥品盤點', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo}：帳 ${lot.qty - diff} → 實 ${input.actual}（${reason}）`)
+        ? postStock({ kind: 'in', type: 'adjust', drugId: lot.drugId, locationId: lot.locationId, qty: diff, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, reason }, u.id)
+        : postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: lot.locationId, qty: -diff, lotId: lot.id, reason }, u.id)
+    audit('藥品盤點', `${find.drug(lot.drugId)?.name} ${nameOf.location(lot.locationId)} 批號 ${lot.lotNo}：帳 ${lot.qty - diff} → 實 ${input.actual}（${reason}）`)
     return txn
   })
 }
 
-/** 報廢某藥所有已過期批號 */
-export function scrapExpired(drugId: string): Promise<StockTxn[]> {
+/** 報廢某藥在某地點所有已過期批號（沒給地點＝門診藥局） */
+export function scrapExpired(drugId: string, locationId?: string): Promise<StockTxn[]> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const t = today()
-    const expired = db.drugLots.filter((l) => l.drugId === drugId && l.qty > 0 && l.expiry < t)
-    if (!expired.length) fail('沒有已過期的批號')
-    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}）` }, u.id))
-    audit('過期藥品報廢', `${find.drug(drugId)?.name} ${expired.map((l) => l.lotNo).join('、')}`)
+    const loc = stockLoc.usable(locationId)
+    const expired = stockLoc.lots(drugId, loc.id).filter((l) => l.qty > 0 && l.expiry < t)
+    if (!expired.length) fail(`${loc.name}沒有已過期的批號`)
+    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, locationId: loc.id, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}）` }, u.id))
+    audit('過期藥品報廢', `${find.drug(drugId)?.name} ${loc.name} ${expired.map((l) => l.lotNo).join('、')}`)
     return txns
   })
 }
@@ -306,7 +327,7 @@ function restockView(r: RestockRequest): RestockView {
     ...r,
     drugName: drug?.name ?? r.drugId,
     unit: drug?.unit ?? '',
-    usable: usableQty(db.drugLots.filter((l) => l.drugId === r.drugId), today()),
+    usable: usableQty(stockLoc.lots(r.drugId, stockLoc.opd()), today()),
     outstanding: outstandingOf(r),
     requestedByName: nameOf.user(r.requestedBy),
     waiting: waitingOf(r).map((d) => ({
@@ -337,7 +358,7 @@ export interface RestockPlan {
 export function getRestockPlan(drugId: string): Promise<RestockPlan> {
   return query(() => {
     const d = must(find.drug(drugId), '藥品')
-    const row = inventoryRow(d, today())
+    const row = inventoryRow(d, today(), stockLoc.opd())
     const waiting = db.dispenses.filter((x) => x.status !== 'dispensed' && medsOf(x).some((m) => m.drugId === d.id))
     const need = waiting.reduce((n, x) => n + medsOf(x).filter((m) => m.drugId === d.id).reduce((k, m) => k + m.qty, 0), 0)
     const open = openRestockOf(d.id)
@@ -346,12 +367,12 @@ export function getRestockPlan(drugId: string): Promise<RestockPlan> {
       drugName: d.name,
       unit: d.unit,
       usable: row.usable,
-      safetyStock: d.safetyStock,
+      safetyStock: row.safetyStock,
       used30: row.used30,
       need,
       waitingCount: waiting.length,
       ...(open ? { open: restockView(open) } : {}),
-      suggestion: suggestRestockQty({ usable: row.usable, need, safetyStock: d.safetyStock, used30: row.used30, onOrder: open ? outstandingOf(open) : 0 }),
+      suggestion: suggestRestockQty({ usable: row.usable, need, safetyStock: row.safetyStock, used30: row.used30, onOrder: open ? outstandingOf(open) : 0 }),
     }
   })
 }
@@ -432,4 +453,22 @@ export function listRestockRequests(q: { status?: RestockStatus } = {}): Promise
       .map(restockView)
       .sort((a, b) => Number(b.waiting.length > 0) - Number(a.waiting.length > 0) || a.requestedAt.localeCompare(b.requestedAt)),
   )
+}
+
+// ---------- 庫存地點 ----------
+export interface StockLocationView extends StockLocation {
+  /** 有幾種藥在這裡有庫存 */
+  drugCount: number
+}
+
+/** 庫存地點與醫院規模：庫存頁的地點選單用（小型只有一個，頁面就不顯示選單） */
+export function listStockLocations(): Promise<{ scale: HospitalScale; locations: StockLocationView[]; opd: string; receiving: string }> {
+  return query(() => ({
+    scale: db.hospitalScale,
+    locations: db.stockLocations
+      .filter((l) => l.active)
+      .map((l) => ({ ...l, drugCount: new Set(db.drugLots.filter((x) => x.locationId === l.id && x.qty > 0).map((x) => x.drugId)).size })),
+    opd: stockLoc.opd(),
+    receiving: stockLoc.receiving(),
+  }))
 }

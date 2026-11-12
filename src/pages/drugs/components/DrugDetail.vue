@@ -13,17 +13,20 @@ import { useUi } from '@/stores/ui'
 import { today } from '@/utils/date'
 import type { DrugLot, StockTxnType } from '@/types'
 
-const props = defineProps<{ drugId: string }>()
+/** locationId：哪個地點的批號與異動；locationName：多地點時才給（顯示在標題，單一藥局不必提） */
+const props = defineProps<{ drugId: string; locationId?: string; locationName?: string }>()
 const ui = useUi()
 
 const { data, loading } = useQuery(
   async () => {
     const id = props.drugId
-    return { id, ledger: await inventoryApi.getDrugLedger(id) }
+    const loc = props.locationId || undefined
+    return { id, loc, ledger: await inventoryApi.getDrugLedger(id, loc) }
   },
-  [() => props.drugId],
+  [() => props.drugId, () => props.locationId],
 )
-const ledger = computed(() => (data.value?.id === props.drugId ? data.value.ledger : undefined))
+// 換藥、換地點的瞬間，舊的明細不能冒充新的（藥對、地點也要對）
+const ledger = computed(() => (data.value?.id === props.drugId && data.value.loc === (props.locationId || undefined) ? data.value.ledger : undefined))
 const row = computed(() => ledger.value?.row)
 
 const bars = computed<BarDatum[]>(() => (ledger.value?.daily ?? []).map((d) => ({ label: d.date.slice(8), value: d.qty, title: d.date })))
@@ -32,6 +35,8 @@ const typeView: Record<StockTxnType, { label: string; tone: 'gray' | 'green' | '
   opening: { label: '期初', tone: 'gray' },
   receive: { label: '進貨', tone: 'green' },
   dispense: { label: '發藥', tone: 'blue' },
+  'transfer-out': { label: '撥出', tone: 'gray' },
+  'transfer-in': { label: '撥入', tone: 'green' },
   adjust: { label: '盤點調整', tone: 'yellow' },
 }
 const lotState = (l: DrugLot) => (l.expiry < today() ? { label: '已過期', tone: 'red' as const } : isExpiringSoon(l.expiry, today()) ? { label: '即將到期', tone: 'yellow' as const } : null)
@@ -66,7 +71,7 @@ const scrap = useAction(inventoryApi.scrapExpired, { success: (t) => `已報廢 
 async function onScrap() {
   if (!row.value) return
   const ok = await ui.confirm({ title: '報廢過期藥品', message: `${row.value.name} 已過期 ${row.value.expiredQty} ${row.value.unit}，確定報廢？\n報廢會寫入盤點調整紀錄。`, okText: '報廢', danger: true })
-  if (ok) scrap.run(row.value.id)
+  if (ok) scrap.run(row.value.id, props.locationId || undefined)
 }
 </script>
 
@@ -122,7 +127,7 @@ async function onScrap() {
       <!-- 批號 -->
       <section>
         <div class="mb-2 flex items-center">
-          <h3 class="text-sm font-semibold text-slate-700">批號（發藥依效期先後扣除）</h3>
+          <h3 class="text-sm font-semibold text-slate-700"><template v-if="locationName">{{ locationName }}・</template>批號（發藥依效期先後扣除）</h3>
           <UButton v-if="row.expiredQty" class="ml-auto" size="sm" variant="danger" :icon="Trash2" :loading="scrap.pending.value" @click="onScrap">報廢過期 {{ row.expiredQty }}</UButton>
         </div>
         <p v-if="!ledger.lots.length" class="text-sm text-slate-400">目前沒有庫存批號</p>
@@ -139,7 +144,7 @@ async function onScrap() {
 
       <!-- 用量 -->
       <section>
-        <UBarChart :data="bars" title="近 30 天每日發藥量" :unit="row.unit" :height="150" />
+        <UBarChart :data="bars" :title="locationName ? `近 30 天每日用量（發藥＋撥出）` : '近 30 天每日發藥量'" :unit="row.unit" :height="150" />
       </section>
 
       <!-- 異動紀錄 -->
@@ -166,8 +171,8 @@ async function onScrap() {
         </div>
       </section>
 
-      <ReceiveStockDialog v-model="receiveOpen" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :restock-outstanding="restock?.outstanding" />
-      <ReceiveStockDialog v-model="arriveOpen" title="到貨入庫" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :suggested-qty="restock?.outstanding" :restock-outstanding="restock?.outstanding" />
+      <ReceiveStockDialog v-model="receiveOpen" :location-id="locationId" :location-name="locationName" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :restock-outstanding="restock?.outstanding" />
+      <ReceiveStockDialog v-model="arriveOpen" title="到貨入庫" :location-id="locationId" :location-name="locationName" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="row.usable" :suggested-qty="restock?.outstanding" :restock-outstanding="restock?.outstanding" />
       <RestockRequestDialog v-model="requestOpen" :drug-id="row.id" />
       <UDialog v-model="cancelOpen" title="取消補貨申請" size="sm" @submit="confirmCancel">
         <div class="space-y-3 text-sm">

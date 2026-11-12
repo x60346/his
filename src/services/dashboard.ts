@@ -2,7 +2,8 @@
 import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { query, sessionRole } from './http'
-import { nameOf } from './views'
+import { nameOf, stockLoc } from './views'
+import { usableQty } from './stock-rules'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 
@@ -61,7 +62,8 @@ export function getDashboard(): Promise<DashboardStats> {
         overdueMar: db.mar.filter((m) => m.status === 'pending' && m.scheduledAt < n).length,
       },
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
-      lowStockDrugs: db.drugs.filter((d) => d.active && d.stock <= d.safetyStock).length,
+      // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
+      lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {

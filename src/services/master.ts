@@ -1,10 +1,10 @@
 // 主檔（參考資料）查詢與維護：科別、醫師、身分、藥品、醫令、ICD、頻率，以及展示資料重置。
 // 帳號、科別醫師的維護在 admin.ts（有較多連動規則）。
-import type { Department, Doctor, Drug, DrugLot, Frequency, IcdCode, Identity, PreventItem, PriceChange, Procedure } from '@/types'
+import type { Department, Doctor, Drug, DrugLot, Frequency, HospitalScale, IcdCode, Identity, PreventItem, PriceChange, Procedure } from '@/types'
 import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { contains } from './views'
+import { contains, stockLoc } from './views'
 import { applyPriceChange, describeDrugs, drugPriceOn, matchesDrug, needsSameNameCheck, nextPriceChange, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
 import { now, today } from '@/utils/date'
 import { usableQty } from './stock-rules'
@@ -55,13 +55,15 @@ export interface DrugView extends Drug {
 export function listDrugs(q: DrugQuery = {}): Promise<DrugView[]> {
   return query(() => {
     const t = today()
+    // 可用量看「門診發藥的藥局」：醫師開的藥從那裡發（大型醫院藥庫有貨，窗口不一定有）
+    const opd = stockLoc.opd()
     const lotsOf = new Map<string, DrugLot[]>()
-    for (const l of db.drugLots) lotsOf.set(l.drugId, [...(lotsOf.get(l.drugId) ?? []), l])
+    for (const l of db.drugLots) if (l.locationId === opd) lotsOf.set(l.drugId, [...(lotsOf.get(l.drugId) ?? []), l])
     return db.drugs
       .filter((d) => {
         if (!q.includeInactive && !d.active) return false
         if (q.category && d.category !== q.category) return false
-        if (q.lowStockOnly && d.stock > d.safetyStock) return false
+        if (q.lowStockOnly && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) > stockLoc.safety(d, stockLoc.opd())) return false
         return matchesDrug(d, q.keyword ?? '')
       })
       .map((d) => {
@@ -252,12 +254,12 @@ export function savePreventItem(input: PreventItem): Promise<PreventItem> {
 }
 
 // ---------- 展示資料 ----------
-export function seedInfo(): { seededAt: string; stale: boolean; schema: number } {
-  return { seededAt: db.seededAt, stale: isSeedStale(), schema: SCHEMA_VERSION }
+export function seedInfo(): { seededAt: string; stale: boolean; schema: number; scale: HospitalScale; locations: string[] } {
+  return { seededAt: db.seededAt, stale: isSeedStale(), schema: SCHEMA_VERSION, scale: db.hospitalScale, locations: db.stockLocations.filter((l) => l.active).map((l) => l.name) }
 }
 
-/** 重置為今天的展示資料（登入狀態保留，因為使用者 id 在種子中固定） */
-export async function resetDemoData(): Promise<void> {
+/** 重置為今天的展示資料；可選醫院規模（不給就沿用目前的）。登入狀態保留，因為使用者 id 在種子中固定 */
+export async function resetDemoData(scale?: HospitalScale): Promise<void> {
   await query(() => undefined)
-  resetDatabase()
+  resetDatabase(scale)
 }

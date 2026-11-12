@@ -24,6 +24,9 @@ import type {
   NursingNote,
   OrderSet,
   Phrase,
+  HospitalScale,
+  StockLocation,
+  SafetyStock,
   Patient,
   PreventItem,
   PreventRecord,
@@ -88,30 +91,39 @@ export interface Database {
   orderSets: OrderSet[]
   /** 醫師個人片語 */
   phrases: Phrase[]
+  /** 醫院規模（重建時選） */
+  hospitalScale: HospitalScale
+  /** 庫存地點：小型一個、大型藥庫＋多個藥局 */
+  stockLocations: StockLocation[]
+  /** 各地點的安全庫存（沒設定就用藥品主檔的值） */
+  safetyStocks: SafetyStock[]
   auditLogs: AuditLog[]
   /** 流水號計數器，例：receipt:2024-05-01 */
   counters: Record<string, number>
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 40
+export const SCHEMA_VERSION = 41
 const STORAGE_KEY = 'his-demo-db'
 
-function freshSeed(): Database {
-  return { ...buildSeed(), schema: SCHEMA_VERSION }
+function freshSeed(scale: HospitalScale = 'small'): Database {
+  return { ...buildSeed({ scale }), schema: SCHEMA_VERSION }
 }
 
 function load(): Database {
+  // 資料版本升級要重建時，沿用原本選的醫院規模（使用者選了大型，升版後不該默默變回小型）
+  let scale: HospitalScale = 'small'
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as Database
       if (parsed.schema === SCHEMA_VERSION) return parsed
+      if (parsed.hospitalScale === 'large') scale = 'large'
     }
   } catch {
     // localStorage 不可用或資料損毀時改用新的展示資料
   }
-  return freshSeed()
+  return freshSeed(scale)
 }
 
 export let db: Database = load()
@@ -178,8 +190,9 @@ export function replaceDatabase(next: Database): void {
 }
 
 /** 重建為今日的展示資料 */
-export function resetDatabase(): void {
-  db = freshSeed()
+/** 重建展示資料；不指定規模就沿用目前的（每天自動重建也是） */
+export function resetDatabase(scale: HospitalScale = db.hospitalScale ?? 'small'): void {
+  db = freshSeed(scale)
   commit()
 }
 
