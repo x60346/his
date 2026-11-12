@@ -132,9 +132,12 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
       <template v-else-if="tr">
         <header class="flex flex-wrap items-start gap-2">
           <div class="min-w-0 flex-1">
-            <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ tr.no }}<UBadge :tone="TRANSFER_STATUS[tr.status].tone">{{ TRANSFER_STATUS[tr.status].label }}</UBadge></h2>
-            <p class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 請領<template v-if="tr.note">・{{ tr.note }}</template></p>
-            <p v-if="tr.issuedByName" class="text-xs text-slate-500">{{ tr.issuedByName }} {{ md(tr.issuedAt) }} 撥發</p>
+            <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ tr.no }}<UBadge v-if="tr.kind === 'return'" tone="gray">退回藥庫</UBadge><UBadge :tone="TRANSFER_STATUS[tr.status].tone">{{ TRANSFER_STATUS[tr.status].label }}</UBadge></h2>
+            <p v-if="tr.kind === 'return'" class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 退回・原因：{{ tr.returnReason }}</p>
+            <template v-else>
+              <p class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 請領<template v-if="tr.note">・{{ tr.note }}</template></p>
+              <p v-if="tr.issuedByName" class="text-xs text-slate-500">{{ tr.issuedByName }} {{ md(tr.issuedAt) }} 撥發</p>
+            </template>
             <p v-if="tr.receivedByName" class="text-xs text-emerald-700">{{ tr.receivedByName }} {{ md(tr.receivedAt) }} 簽收</p>
             <p v-if="tr.status === 'cancelled'" class="text-xs text-slate-500">{{ tr.cancelledByName }} 取消：{{ tr.cancelReason }}</p>
           </div>
@@ -146,9 +149,9 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
             <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr>
                 <th class="px-3 py-1.5 text-left font-medium">藥品</th>
-                <th class="px-2 text-right font-medium">請領</th>
+                <th class="px-2 text-right font-medium">{{ tr.kind === 'return' ? '退回' : '請領' }}</th>
                 <th v-if="tr.status === 'requested'" class="px-2 text-right font-medium">藥庫可用</th>
-                <th class="px-2 text-right font-medium">{{ tr.status === 'requested' ? '實撥' : '撥發' }}</th>
+                <th v-if="tr.kind !== 'return'" class="px-2 text-right font-medium">{{ tr.status === 'requested' ? '實撥' : '撥發' }}</th>
                 <th v-if="tr.status !== 'requested'" class="px-3 text-left font-medium">批號（效期）・{{ tr.status === 'issued' ? '實收' : '已收' }}</th>
               </tr>
             </thead>
@@ -160,7 +163,7 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
                 </td>
                 <td class="px-2 text-right">{{ l.qty }} <span class="text-xs text-slate-400">{{ l.unit }}</span></td>
                 <td v-if="tr.status === 'requested'" class="px-2 text-right text-slate-600">{{ l.available ?? '盤點中' }}</td>
-                <td class="whitespace-nowrap px-2 text-right">
+                <td v-if="tr.kind !== 'return'" class="whitespace-nowrap px-2 text-right">
                   <template v-if="tr.status === 'requested' && isPharmacist">
                     <input v-model.number="issueQty[l.id]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 實撥數量`" />
                     <div v-if="err(`issue-${l.id}`)" class="text-xs text-red-600">{{ err(`issue-${l.id}`) }}</div>

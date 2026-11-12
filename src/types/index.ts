@@ -927,6 +927,13 @@ export interface TransferOrder {
   id: string
   /** 單號：TR20261112-01 */
   no: string
+  /**
+   * return＝藥局退回藥庫（近效期、請領過多、停用…）：藥局逐批選、送出就扣（運送中），藥庫簽收才入。
+   * 沒有＝一般撥補（藥局請領 → 藥庫撥發 → 藥局簽收）
+   */
+  kind?: 'return'
+  /** 退回原因（退回藥庫必填） */
+  returnReason?: string
   fromLocationId: string
   toLocationId: string
   status: TransferStatus

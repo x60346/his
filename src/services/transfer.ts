@@ -6,13 +6,14 @@
 //   - 藥庫不夠可以少撥（0＝這次沒撥）；簽收可以少收（短少寫原因），不能多收
 //   - 門診藥局的補貨申請（窗口缺藥）在大型醫院由撥補滿足：請領時帶入，簽收進門診藥局才沖銷
 //   - 小型醫院只有一個藥局，沒有撥補（服務層擋下）
+//   - 反方向「退回藥庫」：藥局逐批選要退的（近效期、請領過多…），送出就扣（運送中），藥庫照一般簽收入帳；過期的也能退（送藥庫集中報廢）
 import type { TransferLine, TransferOrder } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
-import { stockStatus, suggestRestockQty, usableQty } from './stock-rules'
+import { isExpiringSoon, stockStatus, suggestRestockQty, usableQty } from './stock-rules'
 
 export interface TransferLineView extends TransferLine {
   drugName: string
@@ -261,6 +262,90 @@ export function cancelTransfer(id: string, reason: string): Promise<TransferView
     if (!why) failField('reason', '請寫取消原因')
     Object.assign(tr, { status: 'cancelled', cancelledBy: u.id, cancelledAt: now(), cancelReason: why })
     audit('取消撥補單', `${tr.no}（${why}）`)
+    return view(tr)
+  })
+}
+
+// ---------- 退回藥庫 ----------
+
+export interface ReturnCandidate {
+  lotId: string
+  drugId: string
+  drugName: string
+  unit: string
+  lotNo: string
+  expiry: string
+  qty: number
+  /** expired 已過期、expiring 近效期、overstock 這個藥局存太多（可用量超過安全庫存 3 倍） */
+  flag?: 'expired' | 'expiring' | 'overstock'
+}
+
+const RETURN_FLAG_ORDER = { expired: 0, expiring: 1, overstock: 2 } as const
+
+/** 這個藥局可以退回藥庫的批號（有庫存的）；過期、近效期、存太多的排前面。盤點中的藥不列（盲盤） */
+export function returnCandidates(fromLocationId: string): Promise<ReturnCandidate[]> {
+  return query(() => {
+    requireUser('pharmacist')
+    warehouse()
+    const from = stockLoc.usable(fromLocationId)
+    if (from.kind !== 'pharmacy') fail('退回藥庫要從藥局發起')
+    const t = today()
+    const out: ReturnCandidate[] = []
+    for (const lot of db.drugLots.filter((l) => l.locationId === from.id && l.qty > 0)) {
+      const d = find.drug(lot.drugId)
+      if (!d || stockLoc.counting(d.id, from.id)) continue
+      const usable = usableQty(stockLoc.lots(d.id, from.id), t)
+      const flag = lot.expiry < t ? 'expired' : isExpiringSoon(lot.expiry, t) ? 'expiring' : usable > stockLoc.safety(d, from.id) * 3 ? 'overstock' : undefined
+      out.push({ lotId: lot.id, drugId: d.id, drugName: d.name, unit: d.unit, lotNo: lot.lotNo, expiry: lot.expiry, qty: lot.qty, ...(flag ? { flag } : {}) })
+    }
+    const rank = (c: ReturnCandidate) => (c.flag ? RETURN_FLAG_ORDER[c.flag] : 9)
+    return out.sort((a, b) => rank(a) - rank(b) || a.drugName.localeCompare(b.drugName) || a.expiry.localeCompare(b.expiry))
+  })
+}
+
+/**
+ * 退回藥庫：逐批（lotId）給數量，送出就從藥局扣（transfer-out，指定批號；過期的也能退），單子直接是「運送中」，
+ * 藥庫用一般的簽收（receiveTransfer）入帳。同一種藥的幾個批號併成一行
+ */
+export function returnToWarehouse(input: { fromLocationId: string; reason: string; lines: { lotId: string; qty: number }[] }): Promise<TransferView> {
+  return mutate(() => {
+    const u = requireUser('pharmacist')
+    const wh = warehouse()
+    const from = stockLoc.usable(input.fromLocationId)
+    if (from.kind !== 'pharmacy') failField('fromLocationId', '退回藥庫要從藥局發起')
+    const errors: Record<string, string> = {}
+    if (!input.reason?.trim()) errors.reason = '請寫退回原因（例：近效期、請領過多）'
+    if (!input.lines?.length) errors.lines = '請至少選一個批號'
+    const seen = new Set<string>()
+    input.lines?.forEach((l, i) => {
+      const lot = db.drugLots.find((x) => x.id === l.lotId && x.locationId === from.id)
+      const d = lot && find.drug(lot.drugId)
+      if (!lot || !d) errors[`line-${i}`] = '這個批號不在這個藥局'
+      else if (seen.has(lot.id)) errors[`line-${i}`] = `${d.name} 批號 ${lot.lotNo} 重複了`
+      else if (stockLoc.counting(d.id, from.id)) errors[`line-${i}`] = `${d.name}盤點中，盤點完成前不能退`
+      else if (!Number.isInteger(l.qty) || l.qty <= 0) errors[`line-${i}`] = '數量需為正整數'
+      else if (l.qty > lot.qty) errors[`line-${i}`] = `這個批號只有 ${lot.qty}`
+      if (lot) seen.add(lot.id)
+    })
+    failFields(errors)
+    const no = `TR${today().replace(/-/g, '')}-${String(nextCounter(`transfer:${today()}`)).padStart(2, '0')}`
+    const byDrug = new Map<string, TransferLine>()
+    for (const l of input.lines) {
+      const lot = db.drugLots.find((x) => x.id === l.lotId)!
+      postStock({ kind: 'out', type: 'transfer-out', drugId: lot.drugId, locationId: from.id, qty: l.qty, lotId: lot.id, ref: no, reason: input.reason.trim() }, u.id)
+      const line = byDrug.get(lot.drugId) ?? { id: `L${byDrug.size + 1}`, drugId: lot.drugId, qty: 0, issuedQty: 0, lots: [] }
+      line.qty += l.qty
+      line.issuedQty! += l.qty
+      line.lots!.push({ lotNo: lot.lotNo, expiry: lot.expiry, qty: l.qty })
+      byDrug.set(lot.drugId, line)
+    }
+    const t = now()
+    const tr: TransferOrder = {
+      id: newId('TR'), no, kind: 'return', returnReason: input.reason.trim(), fromLocationId: from.id, toLocationId: wh.id, status: 'issued',
+      lines: [...byDrug.values()], requestedBy: u.id, requestedAt: t, issuedBy: u.id, issuedAt: t,
+    }
+    db.transfers.push(tr)
+    audit('退回藥庫', `${no} ${from.name} → ${wh.name}（${tr.lines.length} 項）：${tr.returnReason}`)
     return view(tr)
   })
 }

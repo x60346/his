@@ -3317,6 +3317,38 @@ try {
     }
     await I.setSafetyStock('M001', 'LOC-WH', 7777)
     ok((await I.listInventory({ locationId: 'LOC-WH' })).find((r) => r.id === 'M001').safetyStock === 7777 && (await I.listInventory({ locationId: 'LOC-OPD' })).find((r) => r.id === 'M001').safetyStock !== 7777, '各地點的安全庫存各自改（藥庫改了、門診藥局不變）')
+    // 退回藥庫：藥局逐批選、送出就扣（運送中），藥庫簽收入帳
+    {
+      const cands = await TRA.returnCandidates('LOC-OPD')
+      const T0 = T
+      ok(cands.length > 0 && cands.every((c) => dbm.db.drugLots.find((l) => l.id === c.lotId)?.locationId === 'LOC-OPD') && cands.findIndex((c) => !c.flag) >= cands.findLastIndex((c) => !!c.flag),
+        `退回候選：門診藥局有庫存的批號 ${cands.length} 個，過期／近效期／存太多的排前面（${cands.filter((c) => c.flag).map((c) => `${c.drugName} ${c.flag}`).slice(0, 3).join('、')}…）`)
+      await expectError(() => TRA.returnCandidates('LOC-WH'), '從藥庫發起退回')
+      const pick = cands.find((c) => c.qty >= 3 && c.expiry >= T0)
+      // 不留物件參照：下面會先呼叫一次失敗的 mutate（資料庫換成快照，舊參照就失效）
+      const lotNow = () => dbm.db.drugLots.find((l) => l.id === pick.lotId)
+      const lot = { drugId: pick.drugId, lotNo: pick.lotNo, expiry: pick.expiry }
+      try {
+        await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '', lines: [{ lotId: pick.lotId, qty: pick.qty + 1 }, { lotId: pick.lotId, qty: 1 }] })
+        ok(false, '退回欄位錯誤應被擋下')
+      } catch (e) {
+        ok(e.fields?.reason && e.fields?.['line-0'] && e.fields?.['line-1'], `退回欄位錯誤一次標出：${Object.values(e.fields ?? {}).join('／')}`)
+      }
+      const whLot = () => dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.drugId === lot.drugId && l.lotNo === lot.lotNo)?.qty ?? 0
+      const before = { opd: lotNow().qty, wh: whLot() }
+      const expired = cands.find((c) => c.flag === 'expired')
+      const lines = [{ lotId: pick.lotId, qty: 3 }, ...(expired ? [{ lotId: expired.lotId, qty: expired.qty }] : [])]
+      const rt = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines })
+      ok(rt.kind === 'return' && rt.status === 'issued' && rt.fromLocationId === 'LOC-OPD' && rt.toLocationId === 'LOC-WH' && lotNow().qty === before.opd - 3 && whLot() === before.wh && dbm.db.auditLogs[0].action === '退回藥庫',
+        `退回 ${rt.no}：送出就從門診藥局扣（指定批號 ${lot.lotNo}），運送中、藥庫還沒入${expired ? '；過期批號也能退' : ''}`)
+      const ln = rt.lines.find((l) => l.drugId === lot.drugId)
+      const recvd = Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
+      recvd[ln.id] = ln.lots.map((x, k) => (x.lotNo === lot.lotNo ? x.qty - 1 : x.qty))
+      await expectError(() => TRA.receiveTransfer(rt.id, { received: recvd }), '退回簽收短少沒寫原因')
+      const got = await TRA.receiveTransfer(rt.id, { received: recvd, shortReasons: { [ln.id]: '運送破損 1' } })
+      ok(got.status === 'received' && whLot() === before.wh + 2 && dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.lotNo === lot.lotNo).expiry === lot.expiry, '藥庫簽收：入藥庫同一批號、同效期（短少 1 寫原因）')
+      ok(ledgerBroken(dbm.db).length === 0, '退回後各地點帳本仍對得起來')
+    }
     const dashL = await api.dashboardApi.getDashboard()
     ok(dashL.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested').length && dashL.transferIssued === 0, '首頁待辦（大型）：撥補待撥發、待簽收')
     ok(!Object.values(api).some((m) => m && typeof m === 'object' && ('inTransit' in m || 'inTransitTo' in m)), '內部查詢（運送中數量）不經 Api 對外')
@@ -3324,6 +3356,7 @@ try {
     ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.length === 1, '再重建回小型')
     await as('ph01')
     await expectError(() => api.transferApi.requestTransfer({ toLocationId: 'LOC-PH', lines: [{ drugId: 'M001', qty: 1 }] }), '小型醫院（只有一個藥局）請領')
+    await expectError(() => api.transferApi.returnCandidates('LOC-PH'), '小型醫院（只有一個藥局）退回藥庫')
     ok((await api.dashboardApi.getDashboard()).transferRequested === undefined, '小型醫院首頁沒有撥補待辦')
     await as('clerk01')
   }
