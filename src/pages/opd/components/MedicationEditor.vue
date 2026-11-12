@@ -5,14 +5,16 @@
 //   - 給藥單位與調劑單位不同（Insulin 每次 10 U、調劑 1 PEN；眼藥水每次 1 滴、調劑 1 BTL）時
 //     無法換算，總量由醫師填寫
 //   - 過敏：顯示警示但不阻擋，最終由醫師判斷；庫存不足、高警訊藥品也標示出來
+//   - 「全部天數」一次改完（dose-rules.applyDaysToAll）：總量手動填的、無法換算的不自動改，標「請確認總量」
+import { computed, ref } from 'vue'
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
-import { UBadge, UEmpty, USearchSelect } from '@/components/ui'
-import { autoQty, checkDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning } from '@/services'
+import { UBadge, UButton, UEmpty, USearchSelect } from '@/components/ui'
+import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning } from '@/services'
 import { useUi } from '@/stores/ui'
 import type { Drug, Frequency, MedicationOrder } from '@/types'
 
 /** 畫面用的列：多一個「總量是否手動修改」旗標，送出前會移除 */
-export type MedRow = MedicationOrder & { _manual?: boolean }
+export type MedRow = MedicationOrder & { _manual?: boolean; _qtyStale?: boolean }
 
 const rows = defineModel<MedRow[]>({ required: true })
 const props = defineProps<{
@@ -49,10 +51,32 @@ function add(d: Drug) {
 
 function onQty(r: MedRow) {
   r._manual = true
+  r._qtyStale = false
 }
 function resetQty(r: MedRow) {
   r._manual = false
+  r._qtyStale = false
   recalc(r)
+}
+
+/** 單列改天數：能重算就重算；總量手動填的、無法換算的標「請確認總量」（和全部套用同一個規則） */
+function onDays(r: MedRow) {
+  if (!r._manual && convertible(r)) return recalc(r)
+  r._qtyStale = true
+}
+
+// ---------- 全部天數 ----------
+const allDays = ref<number | undefined>()
+const allDaysError = computed(() => (allDays.value === undefined || (allDays.value as unknown) === '' ? null : checkDays(allDays.value)))
+const daysInUse = computed(() => distinctDays(rows.value))
+function applyAll(days: number | undefined) {
+  if (days === undefined) return
+  const res = applyDaysToAll(rows.value, days, (id) => props.drugs.get(id), timesOf)
+  if ('error' in res) return ui.toast.warning(res.error)
+  rows.value = res.rows
+  allDays.value = days
+  const names = res.stale.map((id) => props.drugs.get(id)?.name ?? id)
+  ui.toast[names.length ? 'warning' : 'success'](`${res.rows.length} 種藥改為 ${days} 天${names.length ? `；${names.join('、')} 的總量請確認` : ''}`)
 }
 
 const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === drugId).map((w) => w.allergen)
@@ -69,6 +93,25 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
       :item-sub="(d) => `${d.generic}・${d.spec}・${d.indication}・庫存 ${d.stock}`"
       @select="add"
     />
+    <!-- 全部天數：兩種以上藥品才需要；天數不一致時提示，漏改一眼看得到 -->
+    <div v-if="!readonly && rows.length >= 2" class="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+      <span class="text-slate-600">全部改為</span>
+      <input
+        v-model.number="allDays"
+        type="number"
+        min="1"
+        :max="MAX_RX_DAYS"
+        aria-label="全部天數"
+        :class="['form-control w-16 px-2', allDaysError && 'form-control-error']"
+        @keydown.enter.prevent="!allDaysError && applyAll(allDays)"
+      />
+      <span class="text-slate-600">天</span>
+      <UButton size="sm" variant="secondary" :disabled="allDays === undefined || !!allDaysError" @click="applyAll(allDays)">套用</UButton>
+      <span class="text-xs text-slate-400">常用</span>
+      <button v-for="n in [3, 7, 14, 28]" :key="n" type="button" class="rounded border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-700 hover:border-brand-300 hover:text-brand-700" @click="applyAll(n)">{{ n }} 天</button>
+      <span v-if="allDaysError" class="text-xs text-red-600">{{ allDaysError }}</span>
+      <span v-else-if="daysInUse.length > 1" class="ml-auto text-xs font-medium text-amber-700">天數不一致：{{ daysInUse.join('、') }} 天</span>
+    </div>
     <UEmpty v-if="!rows.length" title="尚未開立藥品" />
     <div v-else class="overflow-x-auto rounded-md border border-slate-200">
       <table class="w-full text-sm">
@@ -92,6 +135,8 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
                 {{ drugs.get(r.drugId)?.spec }}
                 <UBadge v-if="drugs.get(r.drugId)?.highAlert" tone="purple">高警訊</UBadge>
                 <UBadge v-for="a in warningOf(r.drugId)" :key="a" tone="red"><AlertTriangle class="h-3 w-3" />病人對 {{ a }} 過敏</UBadge>
+                <!-- 放在藥名欄（永遠看得到）：窄螢幕時處方表橫向捲動，總量欄可能在畫面外 -->
+                <UBadge v-if="!readonly && r._qtyStale" tone="yellow">天數已改，請確認總量</UBadge>
                 <UBadge v-if="!readonly && (drugs.get(r.drugId)?.stock ?? 0) < r.qty" tone="yellow">庫存不足（存 {{ drugs.get(r.drugId)?.stock }}）</UBadge>
                 <!-- 劑量合理性：與服務層同一條規則 -->
                 <UBadge v-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'absurd'" tone="red">劑量不合理，請確認是否打錯</UBadge>
@@ -123,13 +168,13 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
                 :class="['form-control w-16 px-2', !readonly && checkDays(r.days) && 'form-control-error']"
                 :title="checkDays(r.days) ?? ''"
                 :disabled="readonly"
-                @input="recalc(r)"
+                @input="onDays(r)"
               />
               <div v-if="!readonly && checkDays(r.days)" class="mt-0.5 text-xs text-red-600">{{ checkDays(r.days) }}</div>
             </td>
             <td class="px-2 py-1.5">
               <div class="flex items-center gap-1">
-                <input v-model.number="r.qty" type="number" min="0" :class="['form-control w-16 px-2', r._manual && 'border-amber-400']" :disabled="readonly" @input="onQty(r)" />
+                <input v-model.number="r.qty" type="number" min="0" :class="['form-control w-16 px-2', (r._manual || r._qtyStale) && 'border-amber-400']" :disabled="readonly" @input="onQty(r)" />
                 <!-- 總量是「調劑單位」：幾錠、幾支、幾瓶 -->
                 <span class="text-xs text-slate-500">{{ drugs.get(r.drugId)?.unit }}</span>
                 <button v-if="r._manual && !readonly && convertible(r)" class="rounded p-1 text-amber-600 hover:bg-amber-50" title="已手動修改，按此恢復自動計算" @click="resetQty(r)">

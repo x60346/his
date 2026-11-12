@@ -1904,6 +1904,35 @@ try {
     ok(readFileSync('src/pages/pharmacy/components/DrugBagLabels.vue', 'utf8').includes('it.drugNameZh'), '藥袋印出中文名')
   }
 
+  // 處方天數一次改完：可換算的重算；手動總量、無法換算的保留並標「請確認」；天數不合法一筆都不改
+  console.log('\n[處方天數一次改完]')
+  {
+    const dr = await load('/src/services/dose-rules.ts')
+    const drugOf = (id) => dbm.db.drugs.find((d) => d.id === id)
+    const timesOf = (f) => dbm.db.frequencies.find((x) => x.code === f)?.timesPerDay ?? 1
+    const rows = [
+      { drugId: 'M001', dose: 1, freq: 'TID', days: 3, qty: 9 },
+      { drugId: 'M012', dose: 1, freq: 'QD', days: 3, qty: 5, _manual: true },
+      { drugId: 'M038', dose: 10, freq: 'HS', days: 3, qty: 1 },
+      { drugId: 'M015', dose: 1, freq: 'BID', days: 7, qty: 14 },
+    ]
+    const before = JSON.stringify(rows)
+    const res = dr.applyDaysToAll(rows, 7, drugOf, timesOf)
+    const byId = (id) => res.rows.find((x) => x.drugId === id)
+    ok(res.rows.every((x) => x.days === 7) && byId('M001').qty === 21 && !byId('M001')._qtyStale, '可換算的藥：天數改 7、總量重算為 21')
+    ok(byId('M012').qty === 5 && byId('M012')._qtyStale && byId('M038').qty === 1 && byId('M038')._qtyStale, '總量手動填的、無法換算的（Insulin）：總量保留，標「請確認總量」')
+    ok(JSON.stringify(res.stale.sort()) === '["M012","M038"]' && !byId('M015')._qtyStale && byId('M015').qty === 14, `本來就是 7 天的不動；需確認的是 ${res.stale.join('、')}`)
+    ok(JSON.stringify(rows) === before, '不改動傳入的資料（回傳新的列）')
+    const bad = dr.applyDaysToAll(rows, 31, drugOf, timesOf)
+    ok(bad.error && JSON.stringify(rows) === before, `天數 31 → 「${bad.error}」，一筆都不改`)
+    ok(dr.applyDaysToAll(rows, 0, drugOf, timesOf).error && dr.applyDaysToAll(rows, 2.5, drugOf, timesOf).error, '天數 0、小數也擋（和單筆同一個 checkDays）')
+    ok(JSON.stringify(dr.distinctDays(rows)) === '[3,7]' && dr.distinctDays(res.rows).length === 1, '天數不一致提示：3、7 天；套用後一致')
+    const { readFileSync } = await import('node:fs')
+    const ed = readFileSync('src/pages/opd/components/MedicationEditor.vue', 'utf8')
+    const opd = readFileSync('src/pages/opd/OpdPage.vue', 'utf8')
+    ok(ed.includes('applyDaysToAll(') && opd.includes('_qtyStale: _s'), '處方表用 applyDaysToAll；送出前移除畫面用的旗標')
+  }
+
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案
   console.log('\n[補貨申請（U25）]')
   {

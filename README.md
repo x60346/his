@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（571 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（579 項） |
 
 ### 展示帳號
 
@@ -147,6 +147,7 @@ scripts/smoke-flow.mjs   流程測試
 | FEFO 扣庫存、可用天數 | `services/stock-rules.ts` |
 | 庫存狀態標籤（缺貨、偏低、近效期、待報廢，可同時多項） | `stock-rules.stockFlags`：清單標籤、摘要卡片數字、點卡片篩選都用它 |
 | 盤點實際數量 | `stock-rules.checkStocktakeActual`：盤點對話框即時提示與服務層同一條 |
+| 處方天數一次改完 | `dose-rules.applyDaysToAll`：可換算的總量重算；總量手動填的、無法換算的（Insulin、眼藥水）保留並標「天數已改，請確認總量」；天數不合法一筆都不改 |
 | 藥品搜尋（開藥、住院醫囑、藥品庫存、主檔） | `drug-rules.matchesDrug`：代碼、英文藥名、學名、健保碼、中文名、別名、作用都比對——打「普拿疼」「降血壓」都找得到 |
 | 服用時機（藥袋、藥局處方表） | `drug-rules.timingText`：只有口服才印；頻率是睡前、需要時、立即的不印 |
 | 建議補貨量 | `stock-rules.suggestRestockQty`：（等候中的處方 − 現有 − 已申請未到貨）＋安全庫存＋14 天用量，進位到 10；對話框顯示算式，種子資料也用它 |

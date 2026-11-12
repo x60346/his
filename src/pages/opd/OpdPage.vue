@@ -81,7 +81,7 @@ function toDraft(e: Encounter | null | undefined): Draft {
   }
 }
 /** 送出前移除畫面專用欄位 */
-const strip = (d: Draft): EncounterDraft => ({ ...d, medications: d.medications.map(({ _manual: _m, ...m }) => m) })
+const strip = (d: Draft): EncounterDraft => ({ ...d, medications: d.medications.map(({ _manual: _m, _qtyStale: _s, ...m }) => m) })
 
 const draft = ref<Draft>(emptyDraft())
 const baseline = ref('')
