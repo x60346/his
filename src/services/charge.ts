@@ -2,9 +2,9 @@
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
 import type { Charge, ChargeLine, DiscountRule, PayMethod, Repayment } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
-import { now, today } from '@/utils/date'
+import { addDays, diffDays, now, today } from '@/utils/date'
 import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
-import { audit, fail, failField, must, mutate, query, requireUser, ServiceError } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 
 export interface ChargeListItem extends VisitView {
@@ -268,7 +268,11 @@ export function getChargeDetail(visitId: string, discountCode?: string): Promise
 }
 
 export interface DailyReport {
+  /** 報表期間（單日時 date = to） */
   date: string
+  to: string
+  /** 依日期小計（區間報表用；單日只有一列）：加總 = 各合計 */
+  byDay: { date: string; count: number; patientTotal: number; newDebt: number; repaid: number; collected: number }[]
   count: number
   voidedCount: number
   /** 應收合計：當日有效收據的金額（含記欠款的部分）。依科別、依費用類別都以這個為準 */
@@ -285,7 +289,7 @@ export interface DailyReport {
   /** 當日收回欠款明細 */
   repayments: { receiptNo: string; at: string; patientName: string; chartNo: string; amount: number; payMethod: PayMethod; originalReceiptNo: string; cashierName: string }[]
   byDept: { deptName: string; count: number; patientTotal: number; nhiPoints: number }[]
-  charges: (Charge & { patientName: string; chartNo: string; deptName: string })[]
+  charges: (Charge & { patientName: string; chartNo: string; deptName: string; cashierName: string })[]
   /** 作廢收據的金額合計（以前只有張數） */
   voidedTotal: number
   /** 依收費人員：交班時各自對自己的錢箱，所以是實際收到的錢；加總 = 實收 */
@@ -296,12 +300,26 @@ export interface DailyReport {
   discounts: { name: string; count: number; amount: number }[]
   discountTotal: number
   /** 當天看完診、還沒批價的病人（下班前漏收就會出現在這裡）；預估與批價試算同一個計算 */
-  unpaid: { visitId: string; patientName: string; chartNo: string; deptName: string; doctorName: string; estimate: number }[]
+  unpaid: { visitId: string; date: string; patientName: string; chartNo: string; deptName: string; doctorName: string; estimate: number }[]
 }
 
-export function dailyReport(date: string): Promise<DailyReport> {
+/** 區間報表最多幾天（月報表為上限；再長請分段匯出） */
+export const REPORT_MAX_DAYS = 31
+
+/**
+ * 日結報表；給 to 就是區間報表（含頭尾兩天）。所有合計都依同一個「是否在期間內」判斷：
+ * 收據看結帳日、收回欠款看收回日、未收款看就醫日。
+ */
+export function dailyReport(date: string, to: string = date): Promise<DailyReport> {
   return query(() => {
-    const all = db.charges.filter((c) => c.paidAt.startsWith(date))
+    const v = fieldErrors()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) v.add('from', '請選擇起始日期')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to ?? '')) v.add('to', '請選擇結束日期')
+    else if (to < date) v.add('to', '結束日期不能早於起始日期')
+    else if (diffDays(date, to) + 1 > REPORT_MAX_DAYS) v.add('to', `一次最多 ${REPORT_MAX_DAYS} 天，請分段查詢`)
+    v.done()
+    const inRange = (at: string) => at.slice(0, 10) >= date && at.slice(0, 10) <= to
+    const all = db.charges.filter((c) => inRange(c.paidAt))
     const valid = all.filter((c) => !c.voided)
     const byPayMethod: Record<PayMethod, number> = { cash: 0, card: 0, mobile: 0 }
     const dept = new Map<string, DailyReport['byDept'][number]>()
@@ -350,7 +368,7 @@ export function dailyReport(date: string): Promise<DailyReport> {
     const repayments: DailyReport['repayments'] = []
     for (const c of db.charges) {
       for (const rp of c.repayments ?? []) {
-        if (!rp.at.startsWith(date)) continue
+        if (!inRange(rp.at)) continue
         byPayMethod[rp.payMethod] += rp.amount
         const row = cashierRow(rp.cashierId)
         row.repayCount++
@@ -364,13 +382,25 @@ export function dailyReport(date: string): Promise<DailyReport> {
     const newDebt = valid.reduce((s, c) => s + (c.owed ?? 0), 0)
     const repaid = repayments.reduce((s, x) => s + x.amount, 0)
     const unpaid = db.visits
-      .filter((v) => v.date === date && v.status === 'consulted')
+      .filter((v) => inRange(v.date) && v.status === 'consulted')
+      .sort((a, b) => a.date.localeCompare(b.date))
       .map((v) => {
         const vv = visitView(v)
-        return { visitId: v.id, patientName: vv.patientName, chartNo: vv.chartNo, deptName: vv.deptName, doctorName: vv.doctorName, estimate: buildPreview(v.id).patientTotal }
+        return { visitId: v.id, date: v.date, patientName: vv.patientName, chartNo: vv.chartNo, deptName: vv.deptName, doctorName: vv.doctorName, estimate: buildPreview(v.id).patientTotal }
       })
+    // 依日期小計：每一天都列（沒有收費的日子是 0），月報表一眼看出哪天沒開或漏結
+    const byDay: DailyReport['byDay'] = []
+    for (let d = date; d <= to; d = addDays(d, 1)) {
+      const dayValid = valid.filter((c) => c.paidAt.startsWith(d))
+      const total = dayValid.reduce((s, c) => s + c.patientTotal, 0)
+      const debt = dayValid.reduce((s, c) => s + (c.owed ?? 0), 0)
+      const back = repayments.filter((x) => x.at.startsWith(d)).reduce((s, x) => s + x.amount, 0)
+      byDay.push({ date: d, count: dayValid.length, patientTotal: total, newDebt: debt, repaid: back, collected: total - debt + back })
+    }
     return {
       date,
+      to,
+      byDay,
       count: valid.length,
       voidedCount: all.length - valid.length,
       voidedTotal: all.filter((c) => c.voided).reduce((s, c) => s + c.patientTotal, 0),
@@ -390,7 +420,7 @@ export function dailyReport(date: string): Promise<DailyReport> {
       charges: all
         .map((c) => {
           const p = find.patient(c.patientId)
-          return { ...c, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', deptName: nameOf.dept(find.visit(c.visitId)?.deptId) }
+          return { ...c, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', deptName: nameOf.dept(find.visit(c.visitId)?.deptId), cashierName: nameOf.user(c.cashierId) }
         })
         .sort((a, b) => a.receiptNo.localeCompare(b.receiptNo)),
     }

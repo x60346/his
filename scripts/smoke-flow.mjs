@@ -1882,6 +1882,53 @@ try {
     ok(!/checkedInAt[^\n]{0,40}(sort|find)\(/.test(page) && !/(sort|find)\([^\n]{0,60}checkedInAt/.test(page), '看診頁不自己依報到排「下一位」（規則在 nextInQueue）')
   }
 
+  // 收費報表：日期區間、依日期小計、匯出 CSV
+  console.log('\n[收費報表區間與匯出]')
+  {
+    const { addDays } = await load('/src/utils/date.ts')
+    const C = api.chargeApi
+    await as('clerk01')
+    const from = addDays(T, -6)
+    const r = await C.dailyReport(from, T)
+    const days = []
+    for (let d = from; d <= T; d = addDays(d, 1)) days.push(await C.dailyReport(d))
+    const sum = (k) => days.reduce((a, x) => a + x[k], 0)
+    ok(r.byDay.length === 7 && r.byDay.map((d) => d.date).join() === days.map((d) => d.date).join(), '7 天區間：依日期每天一列（沒收費的日子也列出）')
+    ok(['count', 'patientTotal', 'newDebt', 'repaid', 'collected', 'nhiPoints', 'voidedCount'].every((k) => r[k] === sum(k)),
+      `區間合計 = 各單日報表相加（收據 ${r.count} 張、實收 ${r.collected}）`)
+    ok(r.byDay.every((d, i) => d.collected === days[i].collected && d.count === days[i].count), '依日期小計 = 該日的日結報表')
+    ok(r.byDay.reduce((a, d) => a + d.collected, 0) === r.collected, '依日期小計加總 = 實收合計')
+    ok(r.byCashier.reduce((a, c) => a + c.collected, 0) === r.collected && Object.values(r.byPayMethod).reduce((a, b) => a + b, 0) === r.collected, '區間的收費人員別、付款方式別加總也等於實收')
+    ok(r.unpaid.length === days.reduce((a, x) => a + x.unpaid.length, 0), `未收款名單含期間內每一天（${r.unpaid.length} 位，帶就醫日）`)
+    const single = await C.dailyReport(T)
+    ok(single.date === T && single.to === T && single.byDay.length === 1, '只給一天：照舊是日結報表')
+    for (const [a, b, msg] of [[T, addDays(T, -1), '結束日期早於起始日期'], [addDays(T, -31), T, '超過 31 天']]) {
+      try {
+        await C.dailyReport(a, b)
+        ok(false, `${msg}應被擋下`)
+      } catch (e) {
+        ok(e.field === 'to', `${msg} → 「${e.message}」（標在結束日期）`)
+      }
+    }
+    ok(!!(await C.dailyReport(addDays(T, -30), T)), '剛好 31 天可以查')
+
+    const X = await load('/src/services/report-csv.ts')
+    ok(X.csvCell('a,b') === '"a,b"' && X.csvCell('說"好"') === '"說""好"""' && X.csvCell('第一行\n第二行') === '"第一行\n第二行"', 'CSV 欄位：逗號、引號、換行要加引號（引號重複一次）')
+    ok(X.csvCell('=1+1') === "'=1+1" && X.csvCell('@SUM(A1)') === "'@SUM(A1)" && X.csvCell('-5') === "'-5" && X.csvCell(-5) === '-5' && X.csvCell(undefined) === '', '公式開頭的文字加 \' 防 CSV 注入；數字照原樣')
+    const csv = X.dailyReportCsv(r)
+    const lines = csv.slice(1).split('\r\n')
+    ok(csv.startsWith('\uFEFF') && csv.includes('\r\n'), 'CSV 開頭有 BOM（Excel 才不會亂碼）、換行用 CRLF')
+    const detail = lines.filter((l) => l.startsWith('收費,') || l.startsWith('收回欠款,'))
+    ok(detail.length === r.charges.length + r.repayments.length, `明細列數 = 收據 ${r.charges.length} ＋ 收回欠款 ${r.repayments.length}`)
+    const validSum = detail.filter((l) => l.startsWith('收費,') && l.includes(',有效,')).reduce((a, l) => a + Number(l.split(',')[8]), 0)
+    ok(validSum === r.patientTotal && lines.includes(`實收合計,${r.collected}`), `CSV 有效收據金額加總 = 應收合計 ${r.patientTotal}；合計列有實收 ${r.collected}`)
+    ok(lines.filter((l) => /^\d{4}-\d{2}-\d{2},/.test(l)).length === 7, 'CSV 附依日期小計（區間才有）')
+    ok(!X.dailyReportCsv(single).includes('日期,收據張數') && X.reportFileName(single) === `日結_${T}.csv` && X.reportFileName(r) === `收費報表_${from}_${T}.csv`, '單日不附日期小計；檔名區分日結與區間')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/charge/components/DailyReport.vue', 'utf8')
+    ok(page.includes('dailyReportCsv(') && !page.includes('\\uFEFF') && !/join\(',/.test(page), '報表頁不自己組 CSV（用 dailyReportCsv，與畫面同一份報表）')
+  }
+
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
   console.log('\n[藥袋法定欄位]')
   {

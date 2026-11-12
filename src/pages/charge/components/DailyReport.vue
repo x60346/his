@@ -1,26 +1,63 @@
 <script setup lang="ts">
-// 日結報表：櫃台下班前對帳用。數字全部來自服務層 dailyReport。
+// 日結報表：櫃台下班前對帳用；選一段期間就是月報表。數字全部來自服務層 dailyReport，
+// 匯出的 CSV 由 dailyReportCsv 從同一份報表產生（畫面、列印、匯出三者數字一致）。
 import { HOSPITAL } from '@/utils/hospital'
 import { computed, nextTick, ref } from 'vue'
-import { Ban, Coins, FileText, Printer, Stethoscope } from 'lucide-vue-next'
+import { Ban, Coins, Download, FileText, Printer, Stethoscope } from 'lucide-vue-next'
 import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
-import { chargeApi } from '@/services'
+import { chargeApi, dailyReportCsv, reportFileName } from '@/services'
 import type { DailyReport } from '@/services/charge'
 import { useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
-import { now, toRoc, today } from '@/utils/date'
+import { addDays, now, toRoc, today } from '@/utils/date'
 import { useAuth } from '@/stores/auth'
 import { money, payMethodLabel } from '@/utils/labels'
 import type { PayMethod } from '@/types'
 
-const date = ref(today())
-const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
-const { data: r, loading } = useQuery(() => chargeApi.dailyReport(date.value), [date])
+const from = ref(today())
+const to = ref(today())
+const todayStr = followToday(to) // 原本看今天的，跨日時自動換到新的一天
+followToday(from)
+// 使用者改起始日：單日報表（結束日＝原起始日）時結束日跟著移；改到結束日之後也跟著移。
+// 只放在輸入框的事件裡，不用 watch——「本月」這類按鈕同時改起訖，watch 會誤以為是單日而把結束日拉回去
+function setFrom(f: string | number | undefined) {
+  const old = from.value
+  from.value = String(f ?? '')
+  if (to.value === old || to.value < from.value) to.value = from.value
+}
+// 期間對不對（起訖順序、最多幾天）由服務層判斷，錯誤顯示在日期旁
+const { data: r, loading, error } = useQuery(() => chargeApi.dailyReport(from.value, to.value), [from, to])
+const isRange = computed(() => !!r.value && r.value.date !== r.value.to)
+const firstOfMonth = (d: string) => `${d.slice(0, 8)}01`
+const presets = computed(() => {
+  const lastMonthEnd = addDays(firstOfMonth(todayStr.value), -1)
+  return [
+    { label: '今天', from: todayStr.value, to: todayStr.value },
+    { label: '本月', from: firstOfMonth(todayStr.value), to: todayStr.value },
+    { label: '上月', from: firstOfMonth(lastMonthEnd), to: lastMonthEnd },
+  ]
+})
+function usePreset(p: { from: string; to: string }) {
+  from.value = p.from
+  to.value = p.to
+}
+
+// 匯出：內容與檔名由服務層的純函式產生，頁面只負責觸發下載
+function exportCsv() {
+  if (!r.value) return
+  const url = URL.createObjectURL(new Blob([dailyReportCsv(r.value)], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = reportFileName(r.value)
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 type Row = DailyReport['charges'][number]
-const columns: Column<Row>[] = [
+const columns = computed<Column<Row>[]>(() => [
   { key: 'receiptNo', label: '收據號碼' },
-  { key: 'paidAt', label: '時間', format: (c) => c.paidAt.slice(11) },
+  // 區間報表要看得出是哪一天
+  { key: 'paidAt', label: '時間', format: (c) => (isRange.value ? `${c.paidAt.slice(5, 10).replace('-', '/')} ${c.paidAt.slice(11)}` : c.paidAt.slice(11)) },
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
   { key: 'deptName', label: '科別' },
@@ -28,7 +65,7 @@ const columns: Column<Row>[] = [
   { key: 'patientTotal', label: '金額', align: 'right', format: (c) => c.patientTotal.toLocaleString() },
   { key: 'owed', label: '欠款', align: 'right', format: (c) => (c.owed ? c.owed.toLocaleString() : '') },
   { key: 'nhiPoints', label: '申報點數', align: 'right', format: (c) => c.nhiPoints.toLocaleString() },
-]
+])
 const methods: PayMethod[] = ['cash', 'card', 'mobile']
 const feeTypes = [
   { key: 'reg', label: '掛號費' },
@@ -38,16 +75,16 @@ const feeTypes = [
   { key: 'discount', label: '優免減免' },
 ] as const
 type RepayRow = DailyReport['repayments'][number]
-const repayColumns: Column<RepayRow>[] = [
+const repayColumns = computed<Column<RepayRow>[]>(() => [
   { key: 'receiptNo', label: '收據號碼' },
-  { key: 'at', label: '時間', format: (x) => x.at.slice(11) },
+  { key: 'at', label: '時間', format: (x) => (isRange.value ? `${x.at.slice(5, 10).replace('-', '/')} ${x.at.slice(11)}` : x.at.slice(11)) },
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
   { key: 'originalReceiptNo', label: '原收據' },
   { key: 'payMethod', label: '付款', format: (x) => payMethodLabel[x.payMethod] },
   { key: 'cashierName', label: '收費人員' },
   { key: 'amount', label: '金額', align: 'right', format: (x) => x.amount.toLocaleString() },
-]
+])
 // 有欠款或收回時，「實收」和「應收」不同，提示怎麼算出來的
 const collectedHint = computed(() => {
   const x = r.value
@@ -72,18 +109,26 @@ const print = async () => {
   <div class="print-area space-y-4">
     <!-- 只在列印時出現的表頭（畫面上已有日期選擇器，不需要） -->
     <header class="hidden border-b-2 border-slate-800 pb-2 print:block">
-      <h1 class="text-center text-lg font-bold">{{ HOSPITAL.name }}　門診日結報表</h1>
+      <h1 class="text-center text-lg font-bold">{{ HOSPITAL.name }}　門診{{ isRange ? '收費' : '日結' }}報表</h1>
       <div class="mt-1 flex justify-between text-xs">
-        <span>報表日期：{{ toRoc(date) }}</span>
+        <span>報表{{ isRange ? '期間' : '日期' }}：{{ toRoc(from) }}<template v-if="isRange"> ～ {{ toRoc(to) }}</template></span>
         <span>列印：{{ printedAt ? toRoc(printedAt.slice(0, 10)) + printedAt.slice(10) : '' }}・{{ auth.user?.name }}</span>
       </div>
     </header>
-    <div class="no-print flex items-end gap-3">
-      <div class="w-44"><UInput v-model="date" label="報表日期" type="date" :max="todayStr" /></div>
-      <UButton variant="secondary" :icon="Printer" @click="print">列印</UButton>
+    <div class="no-print flex flex-wrap items-end gap-3">
+      <div class="w-44"><UInput :model-value="from" label="起始日期" type="date" :max="todayStr" @update:model-value="setFrom" /></div>
+      <div class="w-44"><UInput v-model="to" label="結束日期" type="date" :max="todayStr" /></div>
+      <div class="flex gap-1">
+        <UButton v-for="p in presets" :key="p.label" size="sm" :variant="from === p.from && to === p.to ? 'primary' : 'ghost'" @click="usePreset(p)">{{ p.label }}</UButton>
+      </div>
+      <div class="ml-auto flex gap-2">
+        <UButton variant="secondary" :icon="Printer" :disabled="!r || !!error" @click="print">列印</UButton>
+        <UButton variant="secondary" :icon="Download" :disabled="!r || !!error" @click="exportCsv">匯出 CSV</UButton>
+      </div>
     </div>
+    <p v-if="error" class="no-print text-sm text-red-600" role="alert">{{ error }}</p>
 
-    <template v-if="r">
+    <template v-if="r && !error">
       <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <!-- 實收＝錢箱和刷卡機實際收到的；有記欠款或收回欠款時才和應收不同 -->
         <UStatCard label="實收合計" :value="money(r.collected)" :hint="collectedHint" :icon="Coins" tone="emerald" />
@@ -98,6 +143,7 @@ const print = async () => {
         <template #actions><span class="text-xs text-slate-500">看完診尚未批價</span></template>
         <ul class="tabular divide-y divide-slate-100 text-sm">
           <li v-for="u in r.unpaid" :key="u.visitId" class="flex gap-3 px-4 py-1.5">
+            <span v-if="isRange" class="tabular w-12 text-slate-500">{{ u.date.slice(5).replace('-', '/') }}</span>
             <span class="w-16 text-slate-500">{{ u.chartNo }}</span>
             <span class="w-20 font-medium text-slate-800">{{ u.patientName }}</span>
             <span class="flex-1 text-slate-600">{{ u.deptName }} {{ u.doctorName }}</span>
@@ -105,7 +151,34 @@ const print = async () => {
           </li>
         </ul>
       </UCard>
-      <p v-else class="text-sm text-emerald-700">當日看完診的病人都已批價。</p>
+      <p v-else class="text-sm text-emerald-700">{{ isRange ? '期間內' : '當日' }}看完診的病人都已批價。</p>
+
+      <!-- 區間報表：每天一列（沒收費的日子也列出 0，看得出哪天沒開或漏結）；加總 = 上面的合計 -->
+      <UCard v-if="isRange" title="依日期" :padded="false">
+        <table class="tabular w-full text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500">
+            <tr><th class="px-4 py-2 text-left">日期</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">實收</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="d in r.byDay" :key="d.date" :class="['border-t border-slate-100', !d.count && !d.repaid && 'text-slate-400']">
+              <td class="px-4 py-1.5">{{ d.date.slice(5).replace('-', '/') }}</td>
+              <td class="px-4 py-1.5 text-right">{{ d.count }}</td>
+              <td class="px-4 py-1.5 text-right">{{ d.patientTotal.toLocaleString() }}</td>
+              <td class="px-4 py-1.5 text-right">{{ d.newDebt ? d.newDebt.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right">{{ d.repaid ? d.repaid.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right font-medium">{{ d.collected.toLocaleString() }}</td>
+            </tr>
+            <tr class="border-t-2 border-slate-300 font-semibold">
+              <td class="px-4 py-1.5">合計</td>
+              <td class="px-4 py-1.5 text-right">{{ r.count }}</td>
+              <td class="px-4 py-1.5 text-right">{{ r.patientTotal.toLocaleString() }}</td>
+              <td class="px-4 py-1.5 text-right">{{ r.newDebt ? r.newDebt.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right">{{ r.repaid ? r.repaid.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right">{{ r.collected.toLocaleString() }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </UCard>
 
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <UCard title="依費用類別" subtitle="取自收據當時的明細">
@@ -168,7 +241,7 @@ const print = async () => {
         <UTable :columns="columns" :rows="r.charges" :row-key="(c) => c.id" :loading="loading" dense empty-text="當日沒有收據" :row-class="(c) => (c.voided ? 'text-slate-400 line-through' : '')" />
       </UCard>
 
-      <UCard v-if="r.repayments.length" title="收回欠款" :subtitle="`${r.repayments.length} 筆・${money(r.repaid)}（原本欠在之前的收據，錢算在今天）`" :padded="false">
+      <UCard v-if="r.repayments.length" title="收回欠款" :subtitle="`${r.repayments.length} 筆・${money(r.repaid)}（原本欠在之前的收據，錢算在收回那天）`" :padded="false">
         <UTable :columns="repayColumns" :rows="r.repayments" :row-key="(x) => x.receiptNo" dense />
       </UCard>
     </template>
