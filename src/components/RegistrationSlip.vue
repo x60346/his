@@ -2,6 +2,7 @@
 // 掛號單（對話框預覽＋列印）：掛完號交給病人，上面寫著去哪一間、第幾號、大概要付多少。
 // 寬 80 mm（櫃台熱感應出單機的寬度）；外層 print-area，列印時只印這一張（見 style.css）。
 // 病歷號條碼：掃描器＝打字＋Enter，批價、掛號的搜尋框掃了就直接選到這位病人。
+import { HOSPITAL } from '@/utils/hospital'
 import { computed, nextTick, ref } from 'vue'
 import { Printer } from 'lucide-vue-next'
 import { UButton, UDialog } from '@/components/ui'
@@ -32,7 +33,7 @@ async function print() {
   <UDialog v-model="open" title="掛號單" size="sm">
     <div v-if="visit" class="print-area mx-auto w-[80mm] max-w-full bg-white p-3 font-sans text-[13px] leading-snug text-black">
       <header class="border-b border-dashed border-black pb-1.5 text-center">
-        <div class="text-base font-bold">HIS 展示醫院</div>
+        <div class="text-base font-bold">{{ HOSPITAL.name }}</div>
         <div class="text-xs">門診掛號單（展示用）</div>
       </header>
 

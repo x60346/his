@@ -107,6 +107,9 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     if (!(input.defaultDose > 0)) v.add('defaultDose', '預設劑量需大於 0')
     if (!db.frequencies.some((f) => f.code === input.defaultFreq)) v.add('defaultFreq', '請選擇預設頻率')
     if (!codes.routes.some((r) => r.code === input.defaultRoute)) v.add('defaultRoute', '請選擇預設途徑')
+    // 藥袋必須印出作用與警語（藥師法）：主檔沒填，藥袋就不合規
+    if (!input.indication?.trim()) v.add('indication', '請輸入作用或適應症（會印在藥袋上）')
+    if (!input.warning?.trim()) v.add('warning', '請輸入警語或副作用（會印在藥袋上）')
     v.done()
     // 規則：欄位都正確後才檢查
     if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
@@ -123,6 +126,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       nhiPrice: input.nhiPrice, selfPrice: input.selfPrice, safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
       highAlert: !!input.highAlert, doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
+      indication: input.indication.trim(), warning: input.warning.trim(),
       // 庫存不是主檔欄位，只能透過進貨、發藥、盤點的異動改變。
       // 維護主檔時一律沿用目前庫存（新藥從 0 開始），忽略傳入的 stock——否則改個藥名就能順手把庫存改掉，帳就對不起來了
       stock: old?.stock ?? 0,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 日結報表：櫃台下班前對帳用。數字全部來自服務層 dailyReport。
+import { HOSPITAL } from '@/utils/hospital'
 import { computed, nextTick, ref } from 'vue'
 import { Ban, Coins, FileText, Printer, Stethoscope } from 'lucide-vue-next'
 import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
@@ -70,7 +71,7 @@ const print = async () => {
   <div class="print-area space-y-4">
     <!-- 只在列印時出現的表頭（畫面上已有日期選擇器，不需要） -->
     <header class="hidden border-b-2 border-slate-800 pb-2 print:block">
-      <h1 class="text-center text-lg font-bold">HIS 展示醫院　門診日結報表</h1>
+      <h1 class="text-center text-lg font-bold">{{ HOSPITAL.name }}　門診日結報表</h1>
       <div class="mt-1 flex justify-between text-xs">
         <span>報表日期：{{ toRoc(date) }}</span>
         <span>列印：{{ printedAt ? toRoc(printedAt.slice(0, 10)) + printedAt.slice(10) : '' }}・{{ auth.user?.name }}</span>

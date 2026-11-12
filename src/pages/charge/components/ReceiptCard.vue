@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 收據：畫面顯示與列印共用。外層加上 print-area，列印時只印這一塊（見 style.css 的 @media print）。
+import { HOSPITAL } from '@/utils/hospital'
 import { computed } from 'vue'
 import type { ReceiptView } from '@/services/charge'
 import { toRoc } from '@/utils/date'
@@ -16,7 +17,7 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
       <span class="rotate-[-18deg] rounded border-4 border-red-500 px-4 py-1 text-4xl font-bold text-red-500/70">作廢</span>
     </div>
     <header class="mb-4 border-b border-dashed border-slate-300 pb-3 text-center">
-      <div class="text-lg font-bold">HIS 展示醫院　門診收據</div>
+      <div class="text-lg font-bold">{{ HOSPITAL.name }}　門診收據</div>
       <div class="text-xs text-slate-500">本收據為展示用途，非正式收據</div>
     </header>
 

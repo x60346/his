@@ -87,18 +87,19 @@ async function submit() {
             <p v-if="action.fieldErrors.value[f.key]" class="mt-1 text-xs text-red-600">{{ action.fieldErrors.value[f.key] }}</p>
             <p v-else-if="f.hint" class="mt-1 text-xs text-slate-500">{{ f.hint }}</p>
           </div>
+          <!-- 寬欄位包一層 div 跨兩欄：UInput／USelect 的 class 會落在內層 input（inheritAttrs:false），放它們身上排不了版 -->
+          <div v-else-if="f.type === 'select'" :class="f.wide && 'col-span-2'">
           <USelect
-            v-else-if="f.type === 'select'"
             v-model="form[f.key]"
             :label="f.label"
             :options="f.options ?? []"
             :required="f.required"
             :hint="f.hint"
             :error="action.fieldErrors.value[f.key]"
-            :class="f.wide && 'col-span-2'"
           />
+          </div>
+          <div v-else :class="f.wide && 'col-span-2'">
           <UInput
-            v-else
             v-model="form[f.key]"
             :label="f.label"
             :type="f.type === 'number' ? 'number' : 'text'"
@@ -107,8 +108,8 @@ async function submit() {
             :disabled="f.lockOnEdit && !isNew"
             :hint="f.lockOnEdit && !isNew ? '建立後不可修改' : f.type === 'list' ? `${f.hint ?? ''}以「、」分隔` : f.hint"
             :error="action.fieldErrors.value[f.key]"
-            :class="f.wide && 'col-span-2'"
           />
+          </div>
         </template>
       </div>
       <template #footer>

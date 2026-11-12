@@ -4,7 +4,7 @@
 import type { Dispense, DispenseStatus, Drug } from '@/types'
 import { db } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './inventory'
@@ -28,6 +28,9 @@ export interface DispenseItem {
   /** 可用庫存（未過期批號）——過期的藥在架上也不能發 */
   stock: number
   highAlert: boolean
+  /** 作用或適應症、警語或副作用（藥袋用） */
+  indication: string
+  warning: string
   shortage: boolean
   /** 這種藥有待到貨的補貨申請：申請量、尚欠、何時申請、這張單是否已在等待名單上 */
   restock?: { qty: number; outstanding: number; requestedAt: string; includesThis: boolean }
@@ -42,6 +45,12 @@ export interface DispenseView extends Dispense, PatientBrief {
   diagnoses: string[]
   /** 慢箋第幾次調劑（一般看診沒有） */
   refillSeq?: number
+  /**
+   * 藥袋上的調劑藥師：核對過的印核對的藥師；還沒核對就先印（藥師常邊調劑邊印藥袋）印目前登入的藥師——他就是要調劑的人
+   */
+  pharmacistName: string
+  /** 調劑日期：核對日；還沒核對就是今天 */
+  dispenseDate: string
 }
 
 function dispenseView(d: Dispense): DispenseView {
@@ -65,6 +74,8 @@ function dispenseView(d: Dispense): DispenseView {
       qty: m.qty,
       stock: usable,
       highAlert: drug?.highAlert ?? false,
+      indication: drug?.indication ?? '',
+      warning: drug?.warning ?? '',
       shortage: d.status !== 'dispensed' && usable < m.qty,
       ...(req ? { restock: { qty: req.qty, outstanding: Math.max(0, req.qty - req.receivedQty), requestedAt: req.requestedAt, includesThis: req.dispenseIds.includes(d.id) } } : {}),
     }
@@ -80,6 +91,8 @@ function dispenseView(d: Dispense): DispenseView {
     allergyWarnings: checkAllergies(p?.allergies ?? [], drugs),
     diagnoses: e.diagnoses.map((x) => `${x.icd} ${x.name}`),
     refillSeq: find.visit(d.visitId)?.refillSeq,
+    pharmacistName: d.verifiedBy ? nameOf.user(d.verifiedBy) : sessionUser()?.roles.includes('pharmacist') ? sessionUser()!.name : '',
+    dispenseDate: d.verifiedAt?.slice(0, 10) ?? today(),
   }
 }
 

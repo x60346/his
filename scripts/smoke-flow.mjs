@@ -1542,7 +1542,7 @@ try {
 
     // I1：同名藥要確認、價格必須大於 0
     {
-      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, active: true }
+      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '測試用', warning: '測試用', active: true }
       const m001 = dbm.db.drugs.find((d) => d.id === 'M001')
       await expectError(() => M.saveDrug({ ...base, name: '  acetaminophen   500MG ' }), '新增與 M001 同名的藥（大小寫、空白不同）未確認')
       await expectError(() => M.saveDrug({ ...base, name: freeDrug.name }), `新增與停用中的 ${freeDrug.id} 同名的藥未確認`)
@@ -1801,6 +1801,38 @@ try {
     await api.opdApi.startConsult(c.id)
     ok(dbm.db.visits.find((v) => v.id === c.id).status === 'in-consult' && !dbm.db.auditLogs[0].detail.includes('同時看診'), '前面的人過號（或完成）後叫號，不再提醒')
     await api.opdApi.skipPatient(c.id)
+  }
+
+  // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
+  console.log('\n[藥袋法定欄位]')
+  {
+    const missing = dbm.db.drugs.filter((d) => !d.indication?.trim() || !d.warning?.trim())
+    ok(missing.length === 0, `${dbm.db.drugs.length} 種藥都有作用與警語（缺 ${missing.map((d) => d.id).join('、') || 0}）`)
+    await as('admin')
+    try {
+      await api.masterApi.saveDrug({ name: '測試新藥 10mg', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: ' ', warning: '', active: true })
+      ok(false, '新增藥品沒填作用、警語應被擋下')
+    } catch (e) {
+      ok(e.fields?.indication && e.fields?.warning, `新增藥品沒填作用、警語 → 兩欄一次標出（${Object.values(e.fields ?? {}).join('；')}）`)
+    }
+    await as('ph01')
+    const ph = dbm.db.users.find((u) => u.username === 'ph01')
+    const verified = dbm.db.dispenses.find((d) => d.verifiedBy && d.verifiedAt)
+    const vv = await api.pharmacyApi.getDispense(verified.id)
+    ok(vv.pharmacistName === dbm.db.users.find((u) => u.id === verified.verifiedBy).name && vv.dispenseDate === verified.verifiedAt.slice(0, 10),
+      `已核對的單：調劑藥師＝核對的人（${vv.pharmacistName}）、調劑日＝核對日`)
+    const pend = dbm.db.dispenses.find((d) => d.status === 'pending')
+    const pv = await api.pharmacyApi.getDispense(pend.id)
+    ok(pv.pharmacistName === ph.name && pv.dispenseDate === T, `還沒核對就先印：調劑藥師＝目前登入的藥師（${pv.pharmacistName}）、調劑日＝今天`)
+    const it = pv.items[0]
+    const drug = dbm.db.drugs.find((d) => d.id === it.drugId)
+    ok(it.indication === drug.indication && it.warning === drug.warning && ['M', 'F'].includes(pv.gender) && pv.age >= 0, `藥袋資料帶出 ${it.drugName}：作用「${it.indication}」、警語、病人性別年齡`)
+    // 藥袋元件真的有印出這些欄位（避免服務層有給、畫面沒印）
+    const { readFileSync } = await import('node:fs')
+    const bag = readFileSync('src/pages/pharmacy/components/DrugBagLabels.vue', 'utf8')
+    const need = ['it.indication', 'it.warning', 'd.gender', 'd.age', 'd.pharmacistName', 'd.dispenseDate', 'HOSPITAL.address', 'HOSPITAL.phone', 'HOSPITAL.name', 'it.qty', 'it.dose', 'it.drugName', 'd.patientName']
+    const lack = need.filter((k) => !bag.includes(k))
+    ok(lack.length === 0, `藥袋元件印出全部法定欄位（缺 ${lack.join('、') || 0}）`)
   }
 
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案

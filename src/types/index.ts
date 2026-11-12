@@ -353,6 +353,10 @@ export interface Drug {
   defaultRoute: string
   /** 是否為高警訊藥品 */
   highAlert: boolean
+  /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
+  indication: string
+  /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
+  warning: string
   /**
    * 給藥單位（每次用多少），與調劑單位 unit（藥局發多少）不同時才填。
    * 例：Insulin 每次 10 U，但調劑 1 PEN；眼藥水每次 1 滴，調劑 1 BTL。
