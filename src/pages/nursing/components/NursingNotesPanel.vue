@@ -5,6 +5,8 @@ import { computed, reactive, watch } from 'vue'
 import { UButton, UInput, UQueryState, UTextarea } from '@/components/ui'
 import { nursingApi, type AdmissionView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
+import { usePhrases } from '@/composables/usePhrases'
+import PhraseHint from '@/components/PhraseHint.vue'
 
 const props = defineProps<{ admission: AdmissionView }>()
 
@@ -21,6 +23,9 @@ const focusPresets = ['體溫過高', '急性疼痛', '跌倒高危險群', '皮
 const blank = () => ({ focus: '', data: '', action: '', response: '' })
 const form = reactive(blank())
 watch(() => props.admission.id, () => Object.assign(form, blank()))
+
+// 片語：D／A／R 輸入「.簡碼」再按空白鍵展開（護理師個人的片語）
+const phrase = usePhrases()
 
 const save = useAction(nursingApi.addNursingNote, { success: '已新增護理紀錄' })
 async function submit() {
@@ -44,10 +49,11 @@ async function respond(noteId: string) {
       </div>
       <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
         <UInput v-model="form.focus" label="F 焦點" required :error="save.fieldErrors.value.focus" class="md:col-span-2" />
-        <UTextarea v-model="form.data" label="D 資料（主客觀資料）" :rows="2" :error="save.fieldErrors.value.data" />
-        <UTextarea v-model="form.action" label="A 措施" :rows="2" />
-        <UTextarea v-model="form.response" label="R 反應（可稍後補記）" :rows="2" class="md:col-span-2" />
+        <UTextarea v-model="form.data" label="D 資料（主客觀資料）" :rows="2" :error="save.fieldErrors.value.data" @keydown="phrase.onKey($event, (v) => (form.data = v))" />
+        <UTextarea v-model="form.action" label="A 措施" :rows="2" @keydown="phrase.onKey($event, (v) => (form.action = v))" />
+        <div class="md:col-span-2"><UTextarea v-model="form.response" label="R 反應（可稍後補記）" :rows="2" @keydown="phrase.onKey($event, (v) => (form.response = v))" /></div>
       </div>
+      <PhraseHint class="mt-1" :phrases="phrase.phrases.value" />
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" @click="submit">儲存護理紀錄</UButton></div>
     </div>
 

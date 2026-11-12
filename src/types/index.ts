@@ -252,10 +252,12 @@ export interface OrderSet {
 }
 
 /** 片語：醫師個人的常用文字。在病歷欄位輸入「.簡碼」再按空白鍵或 Tab 展開 */
+/** 片語：個人的常用文字（醫師、護理師各自一份），屬於登入帳號 */
 export interface Phrase {
   id: string
-  doctorId: string
-  /** 簡碼：英數字 1–10 碼，存小寫；同一位醫師不重複 */
+  /** 擁有者（使用者帳號 id） */
+  userId: string
+  /** 簡碼：英數字 1–10 碼，存小寫；同一個人不重複 */
   code: string
   text: string
   createdAt: string

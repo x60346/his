@@ -1118,7 +1118,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { doctorId: 'DR03', name: '胃食道逆流', diagnoses: setDx('K21.9'), medications: [setMed('M022', 1, 'QD', 14)], procedures: [], plan: '睡前三小時不進食' },
   ].map((s) => ({ scope: 'personal' as const, ...s, id: id('OS'), createdAt: setAt, updatedAt: setAt, updatedBy: s.doctorId }))
 
-  // 片語：醫師個人的常用文字（固定 id、不抽亂數，不影響其他資料）
+  // 片語：個人的常用文字，醫師與護理師各自一份（固定 id、不抽亂數，不影響其他資料）
   const phrases: Phrase[] = (
     [
       ['DR01', 'uri', '喉嚨痛、流鼻水、輕微咳嗽，無發燒，無呼吸困難。'],
@@ -1127,8 +1127,16 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ['DR02', 'dm', '第二型糖尿病，規則服藥，飲食控制中。'],
       ['DR02', 'htn', '高血壓，規則服藥，居家血壓大致控制良好。'],
       ['DR03', 'gerd', '胸口灼熱、胃酸逆流，飯後及平躺時加劇。'],
+      // 住院用（病程紀錄、出院病摘）
+      ['DR02', 'stable', '生命徵象穩定，意識清楚，無新的不適主訴。'],
+      ['DR02', 'cont', '續目前治療，追蹤檢驗數據，評估出院時程。'],
+      ['DR02', 'opdfu', '一週後內科門診追蹤；如有發燒、呼吸喘、胸痛或意識改變，請立即返診。'],
+      // 護理師（護理紀錄、交班）
+      ['U201', 'fall', '已執行跌倒風險評估，衛教病人及家屬下床需有人陪同，床欄已拉起，呼叫鈴放在手邊。'],
+      ['U201', 'fever', '依醫囑給予退燒藥，冰枕使用，鼓勵多喝水，一小時後複測體溫。'],
+      ['U201', 'vs', '生命徵象穩定，持續監測。'],
     ] as const
-  ).map(([doctorId, code, text], i) => ({ id: `PH-SEED-${i + 1}`, doctorId, code, text, createdAt: setAt, updatedAt: setAt }))
+  ).map(([owner, code, text], i) => ({ id: `PH-SEED-${i + 1}`, userId: owner.startsWith('U') ? owner : doctorUser(owner), code, text, createdAt: setAt, updatedAt: setAt }))
 
   // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
   // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒

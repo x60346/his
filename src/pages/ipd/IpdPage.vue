@@ -10,6 +10,8 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
 import ReasonDialog from '@/components/ReasonDialog.vue'
+import PhraseHint from '@/components/PhraseHint.vue'
+import { usePhrases } from '@/composables/usePhrases'
 import RequestTransferDialog from './components/RequestTransferDialog.vue'
 import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
 import type { IncomingTransfer } from '@/services/admission'
@@ -138,6 +140,9 @@ function openCancel() {
   cancelReason.value = ''
   cancelOpen.value = true
 }
+
+// ---------- 片語：病程紀錄、出院病摘輸入「.簡碼」再按空白鍵展開（和門診同一份個人片語） ----------
+const phrase = usePhrases()
 
 // ---------- 病程紀錄 ----------
 const { data: notes } = useQuery(async () => (admissionId.value ? ipdApi.listProgressNotes(admissionId.value) : []), [admissionId])
@@ -274,12 +279,13 @@ async function submitNote() {
               <template v-if="ds">上次儲存：{{ ds.writtenAt }}・{{ adm.summaryDoctorName }}</template>
             </p>
             <div class="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-3">
-              <UTextarea v-model="dsForm.diagnosis" label="出院診斷" :rows="2" :error="saveDs.fieldErrors.value.diagnosis" />
+              <UTextarea v-model="dsForm.diagnosis" label="出院診斷" :rows="2" :error="saveDs.fieldErrors.value.diagnosis" @keydown="phrase.onKey($event, (v) => (dsForm.diagnosis = v))" />
               <USelect v-model="dsForm.dischargeType" label="出院轉歸" placeholder="請選擇" :options="dischargeTypes" :error="saveDs.fieldErrors.value.dischargeType" />
             </div>
-            <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" />
-            <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" />
-            <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" />
+            <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" @keydown="phrase.onKey($event, (v) => (dsForm.course = v))" />
+            <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" @keydown="phrase.onKey($event, (v) => (dsForm.condition = v))" />
+            <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" @keydown="phrase.onKey($event, (v) => (dsForm.followUp = v))" />
+            <PhraseHint :phrases="phrase.phrases.value" />
             <div class="flex justify-end gap-2">
               <UButton variant="secondary" :loading="saveDs.pending.value" @click="onSaveDs(false)">儲存草稿</UButton>
               <UButton :icon="LogOut" :loading="saveDs.pending.value" @click="onSaveDs(true)">簽署並准予出院</UButton>
@@ -292,11 +298,12 @@ async function submitNote() {
           <div class="rounded-md border border-slate-200 bg-slate-50 p-3">
             <div class="mb-2 text-sm font-semibold text-slate-700">新增今日病程（SOAP）</div>
             <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <UTextarea v-model="note.subjective" label="S 主觀" :rows="2" />
-              <UTextarea v-model="note.objective" label="O 客觀" :rows="2" />
-              <UTextarea v-model="note.assessment" label="A 評估" :rows="2" />
-              <UTextarea v-model="note.plan" label="P 計畫" :rows="2" />
+              <UTextarea v-model="note.subjective" label="S 主觀" :rows="2" @keydown="phrase.onKey($event, (v) => (note.subjective = v))" />
+              <UTextarea v-model="note.objective" label="O 客觀" :rows="2" @keydown="phrase.onKey($event, (v) => (note.objective = v))" />
+              <UTextarea v-model="note.assessment" label="A 評估" :rows="2" @keydown="phrase.onKey($event, (v) => (note.assessment = v))" />
+              <UTextarea v-model="note.plan" label="P 計畫" :rows="2" @keydown="phrase.onKey($event, (v) => (note.plan = v))" />
             </div>
+            <PhraseHint class="mt-1" :phrases="phrase.phrases.value" />
             <div class="mt-2 text-right"><UButton size="sm" :loading="addNote.pending.value" @click="submitNote">儲存病程紀錄</UButton></div>
           </div>
           <article v-for="n in notes" :key="n.id" class="rounded-md border border-slate-200 p-3 text-sm">

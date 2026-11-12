@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 我的片語：新增、修改、刪除。格式與重複由服務層檢查（phrase-rules），錯誤標在欄位上。
-// 看診時在 S／O／A／P 輸入「.簡碼」再按空白鍵或 Tab 就展開（看診頁的 onPhraseKey）。
+// 在門診 SOAP、病程紀錄、出院病摘、護理紀錄、交班輸入「.簡碼」再按空白鍵或 Tab 就展開（composables/usePhrases）。
 import { ref, watch } from 'vue'
 import { Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { UButton, UDialog, UEmpty, UInput, UTextarea } from '@/components/ui'
@@ -41,7 +41,7 @@ async function onDelete(p: Phrase) {
 
 <template>
   <UDialog v-model="open" title="我的片語" size="md">
-    <p class="mb-3 text-xs text-slate-500">在 S／O／A／P 欄位輸入「.簡碼」再按<b>空白鍵</b>或 <b>Tab</b>，就會換成片語內容。片語只有自己看得到。</p>
+    <p class="mb-3 text-xs text-slate-500">在病歷、紀錄的文字欄位輸入「.簡碼」再按<b>空白鍵</b>或 <b>Tab</b>，就會換成片語內容。片語只有自己看得到。</p>
     <form v-if="editing" class="mb-4 space-y-3 rounded-md border border-brand-200 bg-brand-50/40 p-3" @submit.prevent="onSave">
       <UInput v-model="form.code" label="簡碼" required placeholder="例：htn（英文或數字，最多 10 碼）" :error="save.fieldErrors.value.code" />
       <UTextarea v-model="form.text" label="內容" required :rows="3" :error="save.fieldErrors.value.text" />

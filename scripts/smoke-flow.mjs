@@ -2037,12 +2037,15 @@ try {
     ok(JSON.stringify(R.checkPhrase({ code: '', text: '' })) === JSON.stringify({ code: '請輸入簡碼', text: '請輸入片語內容' }) && R.checkPhrase({ code: 'a-b', text: 'x' }).code && R.checkPhrase({ code: 'abcdefghijk', text: 'x' }).code && !Object.keys(R.checkPhrase({ code: '.HTN', text: 'x' })).length,
       '簡碼與內容一次標出；只能英數、最多 10 碼；「.HTN」視為 htn')
     const PH = api.phraseApi
+    await as('clerk01')
+    await expectError(() => PH.listPhrases(), '櫃台查看片語')
     await as('nurse01')
-    await expectError(() => PH.listPhrases(), '護理師查看片語')
+    const nurseOwn = await PH.listPhrases()
+    ok(nurseOwn.length >= 3 && nurseOwn.every((p) => p.userId === 'U201') && nurseOwn.some((p) => p.code === 'fall'), `護理師也有自己的片語（${nurseOwn.map((p) => '.' + p.code).join('、')}），看不到醫師的`)
     await as('dr01')
-    const dr01 = dbm.db.users.find((u) => u.username === 'dr01').doctorId
+    const dr01 = dbm.db.users.find((u) => u.username === 'dr01').id
     const mine = await PH.listPhrases()
-    ok(mine.length >= 3 && mine.every((p) => p.doctorId === dr01), `只看得到自己的片語（${mine.map((p) => '.' + p.code).join('、')}）`)
+    ok(mine.length >= 3 && mine.every((p) => p.userId === dr01), `只看得到自己的片語（${mine.map((p) => '.' + p.code).join('、')}）`)
     try {
       await PH.savePhrase({ code: '', text: '' })
       ok(false, '空白片語應被擋下')
@@ -2066,6 +2069,12 @@ try {
     await as('dr01')
     await PH.deletePhrase(np.id)
     ok(!(await PH.listPhrases()).some((p) => p.id === np.id), '刪除自己的片語')
+    {
+      // 片語展開只有一份（usePhrases）：門診、住院病程與病摘、護理紀錄、交班都用它，頁面不自己呼叫 expandPhrase
+      const { readFileSync } = await import('node:fs')
+      const used = ['src/pages/opd/OpdPage.vue', 'src/pages/ipd/IpdPage.vue', 'src/pages/nursing/components/NursingNotesPanel.vue', 'src/pages/nursing/components/HandoverPanel.vue'].map((p) => [p, readFileSync(p, 'utf8')])
+      ok(used.every(([, t]) => t.includes('usePhrases') && t.includes('phrase.onKey') && !t.includes('expandPhrase(')), '片語可用在門診 SOAP、住院病程與出院病摘、護理紀錄、交班，展開只有一份（usePhrases）')
+    }
 
     // 科室組套：內科（陳映如 dr02、黃柏翰 dr03）共用「糖尿病追蹤」；家醫科 dr01 看不到
     const O = api.orderSetApi
@@ -2103,7 +2112,8 @@ try {
     const bar = readFileSync('src/pages/opd/components/OrderSetBar.vue', 'utf8')
     const opd = readFileSync('src/pages/opd/OpdPage.vue', 'utf8')
     ok(!/doctorId|deptId ===|deptId !==/.test(bar), '組套列不自己判斷誰能看、能改（服務層 canUse）')
-    ok(opd.includes('expandPhrase(') && opd.includes('isComposing') && !/startsWith\('\.'\)/.test(opd), '看診頁用 expandPhrase 展開、輸入法選字時不攔空白鍵')
+    const usePh = readFileSync('src/composables/usePhrases.ts', 'utf8')
+    ok(usePh.includes('expandPhrase(') && usePh.includes('isComposing') && opd.includes('usePhrases') && !/startsWith\('\.'\)/.test(opd), '片語用 expandPhrase 展開（usePhrases）、輸入法選字時不攔空白鍵')
     await as('clerk01')
   }
 
