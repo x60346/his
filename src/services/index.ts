@@ -34,7 +34,8 @@ export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
 export const adminApi = overNetwork(admin)
 export const orderSetApi = overNetwork(orderset)
-export type { OrderSetView, ExpandedOrderSet } from './orderset'
+export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
+export type { ExpandedEncounter } from './opd'
 
 export { ServiceError } from './http'
 export { dbVersion, storageIssue, storageMode } from '@/mock/db'

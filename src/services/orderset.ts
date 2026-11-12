@@ -5,7 +5,7 @@ import type { Diagnosis, MedicationOrder, OrderSet, ProcedureOrder } from '@/typ
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
-import { find } from './views'
+import { find, pickUsable } from './views'
 
 function myDoctorId(): string {
   const u = requireUser('doctor')
@@ -94,40 +94,26 @@ export function deleteOrderSet(id: string): Promise<void> {
   })
 }
 
-export interface ExpandedOrderSet {
-  name: string
+/** 要帶進本次處方的內容（組套、同前次共用）：只有目前還能開立的項目，停用的列在 skipped */
+export interface ExpandedOrders {
   diagnoses: Diagnosis[]
   medications: MedicationOrder[]
   procedures: ProcedureOrder[]
   subjective?: string
+  assessment?: string
   plan?: string
   /** 已停用、沒有帶入的項目名稱 */
   skipped: string[]
+}
+
+export interface ExpandedOrderSet extends ExpandedOrders {
+  name: string
 }
 
 /** 套用前展開：只回傳目前還能開立的項目，停用的列在 skipped（頁面告訴醫師哪些沒帶入） */
 export function expandOrderSet(id: string): Promise<ExpandedOrderSet> {
   return query(() => {
     const s = mine(id)
-    const skipped: string[] = []
-    const medications = s.medications.filter((m) => {
-      const d = find.drug(m.drugId)
-      if (d?.active) return true
-      skipped.push(d?.name ?? m.drugId)
-      return false
-    })
-    const procedures = s.procedures.filter((p) => {
-      const pr = find.procedure(p.procId)
-      if (pr?.active) return true
-      skipped.push(pr?.name ?? p.procId)
-      return false
-    })
-    const diagnoses = s.diagnoses.filter((d) => {
-      const c = db.icdCodes.find((x) => x.code === d.icd)
-      if (c && c.active !== false) return true
-      skipped.push(`診斷 ${d.icd}`)
-      return false
-    })
-    return { name: s.name, diagnoses: structuredClone(diagnoses), medications: structuredClone(medications), procedures: structuredClone(procedures), subjective: s.subjective, plan: s.plan, skipped }
+    return { name: s.name, ...pickUsable(s), subjective: s.subjective, plan: s.plan }
   })
 }

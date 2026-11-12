@@ -7,7 +7,8 @@ import { autoQty, doseUnitOf } from './billing'
 import { checkDays, doseLevel, doseNote } from './dose-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { audit, fail, must, mutate, query, requireUser } from './http'
-import { find, nameOf, usable, visitView, type VisitView } from './views'
+import { find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
+import type { ExpandedOrders } from './orderset'
 
 export interface QueueItem extends VisitView {
   encounterStatus?: Encounter['status']
@@ -169,12 +170,47 @@ export function allergyWarnings(patientId: string, drugIds: string[]): Promise<A
   })
 }
 
+export interface ExpandedEncounter extends ExpandedOrders {
+  /** 實際帶入的那次看診（慢箋調劑會換成原處方那次） */
+  date: string
+  doctorName: string
+  /** 前次是慢箋調劑時，實際帶入的是 refillFrom 那天的原處方看診 */
+  refillFrom?: string
+}
+
+/**
+ * 「同前次」：把某次看診的內容展開成可以帶進本次的項目。
+ * - 停用的藥、處置、診斷碼濾掉並列出（和套用組套同一個 pickUsable）
+ * - 只帶 A 評估、P 計畫；S 主訴、O 客觀、生命徵象是本次的事實，不能沿用上次的
+ * - 慢箋調劑那筆不是醫師看診（沒有評估、計畫），改帶它的原處方那次看診
+ * - 只能帶同一位病人的病歷（forPatientId），避免帶錯人
+ */
+export function expandEncounter(encounterId: string, forPatientId: string): Promise<ExpandedEncounter> {
+  return query(() => {
+    requireUser('doctor')
+    let e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
+    if (e.patientId !== forPatientId) fail('這不是本位病人的病歷', 'FORBIDDEN')
+    const refillOf = find.visit(e.visitId)?.refillOf
+    const refillFrom = refillOf ? e.date : undefined
+    if (refillOf) e = must(db.encounters.find((x) => x.id === refillOf), '原處方病歷')
+    return {
+      ...pickUsable(e),
+      assessment: e.assessment,
+      plan: e.plan,
+      date: e.date,
+      doctorName: nameOf.doctor(e.doctorId),
+      refillFrom,
+    }
+  })
+}
+
 export interface HistoryItem extends Encounter {
   /** 慢箋第幾次調劑（不是看診）；一般看診沒有 */
   refillSeq?: number
   doctorName: string
   deptName: string
   medicationNames: string[]
+  procedureNames: string[]
 }
 
 /** 歷史病歷（已完成的），新的在前；看診畫面用來參考與複製前次處方 */
@@ -189,6 +225,7 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
         doctorName: nameOf.doctor(e.doctorId),
         deptName: nameOf.dept(e.deptId),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),
+        procedureNames: e.procedures.map((p) => find.procedure(p.procId)?.name ?? p.procId),
       })),
   )
 }

@@ -1933,6 +1933,57 @@ try {
     ok(ed.includes('applyDaysToAll(') && opd.includes('_qtyStale: _s'), '處方表用 applyDaysToAll；送出前移除畫面用的旗標')
   }
 
+  // 同前次：帶診斷、藥品、處置、A、P；S、O、生命徵象不帶；停用的濾掉（和組套同一個 pickUsable）；慢箋調劑改帶原處方
+  console.log('\n[同前次]')
+  {
+    const db = dbm.db
+    const isRefill = (e) => !!db.visits.find((v) => v.id === e.visitId)?.refillOf
+    const e0 = db.encounters.find((e) => e.status === 'completed' && !isRefill(e) && e.medications.length >= 2)
+    const saved = JSON.stringify(e0)
+    const proc = db.procedures.find((p) => p.active && p.id !== 'P001')
+    Object.assign(e0, { subjective: '咳嗽三天', objective: '咽喉紅', assessment: '上呼吸道感染', plan: '多喝水，三天後回診', vitals: { temp: 38.2 }, procedures: [{ procId: proc.id, qty: 1, selfPay: false }] })
+    const off = db.drugs.find((d) => d.id === e0.medications[0].drugId)
+    off.active = false
+    await as('nurse01')
+    await expectError(() => api.opdApi.expandEncounter(e0.id, e0.patientId), '護理師展開前次病歷（權限）')
+    await as('dr01')
+    const x = await api.opdApi.expandEncounter(e0.id, e0.patientId)
+    ok(x.diagnoses.length === e0.diagnoses.length && x.procedures.length === 1 && x.procedures[0].procId === proc.id, `帶入診斷 ${x.diagnoses.length} 個、處置 ${proc.name}`)
+    ok(x.medications.length === e0.medications.length - 1 && !x.medications.some((m) => m.drugId === off.id) && x.skipped.includes(off.name), `停用的 ${off.name} 濾掉並列出（未帶入：${x.skipped.join('、')}）`)
+    ok(x.assessment === '上呼吸道感染' && x.plan === '多喝水，三天後回診', '帶入 A 評估、P 計畫')
+    ok(!('subjective' in x) && !('objective' in x) && !('vitals' in x), 'S 主訴、O 客觀、生命徵象不帶（本次的事實不能沿用上次的）')
+    x.medications[0].dose = 99
+    ok(e0.medications.every((m) => m.dose !== 99), '回傳的是複本，改它不會改到舊病歷')
+    const other = db.patients.find((p) => p.id !== e0.patientId)
+    await expectError(() => api.opdApi.expandEncounter(e0.id, other.id), '把別的病人的病歷帶進本次')
+    off.active = true
+    Object.assign(e0, JSON.parse(saved))
+    // 慢箋調劑那筆不是看診（沒有評估、計畫）：改帶原處方那次
+    let rv = db.visits.find((v) => v.refillOf && db.encounters.some((e) => e.visitId === v.id))
+    ok(!!rv, `種子有慢箋調劑紀錄可測（${rv ? rv.date : '沒有'}）`)
+    if (rv) {
+      const re = db.encounters.find((e) => e.visitId === rv.id)
+      const orig = db.encounters.find((e) => e.id === rv.refillOf)
+      const keepA = orig.assessment
+      orig.assessment = '慢性病控制穩定'
+      const y = await api.opdApi.expandEncounter(re.id, re.patientId)
+      ok(y.refillFrom === re.date && y.date === orig.date && y.assessment === '慢性病控制穩定', `前次是慢箋調劑（${re.date}）→ 帶入 ${orig.date} 原處方看診的內容`)
+      orig.assessment = keepA
+    }
+    // 頁面只呈現：停用判斷在服務層（pickUsable），合併規則只有 mergeIntoDraft 一份
+    const { readFileSync, readdirSync } = await import('node:fs')
+    const opdDir = 'src/pages/opd'
+    const files = [...readdirSync(opdDir).map((n) => `${opdDir}/${n}`), ...readdirSync(`${opdDir}/components`).map((n) => `${opdDir}/components/${n}`)].filter((p) => p.endsWith('.vue'))
+    const activeChecks = files.filter((p) => /\.active\b/.test(readFileSync(p, 'utf8')))
+    ok(!activeChecks.length, `門診頁面不自己判斷停用${activeChecks.length ? '：' + activeChecks.join('、') : ''}`)
+    const page = readFileSync(`${opdDir}/OpdPage.vue`, 'utf8')
+    const merges = (page.match(/draft\.value\.medications\.push\(/g) ?? []).length
+    ok(merges === 1 && /function applySet[\s\S]{0,300}mergeIntoDraft\(/.test(page) && /function copyFrom[\s\S]{0,400}mergeIntoDraft\(/.test(page), '組套、同前次、只帶處方共用 mergeIntoDraft（處方只有一處加藥）')
+    const os = readFileSync('src/services/orderset.ts', 'utf8')
+    ok(os.includes('pickUsable(') && !/find\.drug\([^)]*\)\?\.active/.test(os.slice(os.indexOf('export function expandOrderSet'))), '組套展開與同前次共用 pickUsable')
+    await as('clerk01')
+  }
+
   // 優免：只減掛號費與自費項目，部分負擔不減；需原因的要填；停用的不能用；日結有優免合計
   console.log('\n[優免]')
   {

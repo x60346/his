@@ -16,7 +16,7 @@ import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, ServiceError, type ExpandedOrderSet } from '@/services'
+import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -260,46 +260,58 @@ function goNext() {
   if (nextWaiting.value) selectVisit(nextWaiting.value)
 }
 
-// ---------- 歷史病歷：複製處方 ----------
-function copyFrom(h: HistoryItem) {
-  let added = 0
-  for (const m of h.medications) {
-    if (draft.value.medications.some((x) => x.drugId === m.drugId)) continue
-    // 可換算的藥依目前頻率重算總量；無法換算的（Insulin、眼藥水）沿用上次的總量並標示為手動
+// ---------- 帶入既有內容（組套、同前次、只帶處方）：合併規則只有這一份 ----------
+// 不覆蓋醫師已經寫的：藥品、處置重複的略過；診斷、S／A／P 只填還空白的欄位。
+// 來源已由服務層濾掉停用的項目（pickUsable），沒帶入的列在 skipped，一併告訴醫師。
+// 可換算的藥依目前頻率重算總量；無法換算的（Insulin、眼藥水）沿用原本的總量並標示為手動。
+function mergeIntoDraft(src: ExpandedOrders, title: string, only?: 'medications') {
+  let meds = 0
+  let procs = 0
+  const filled: string[] = []
+  for (const m of src.medications) {
+    if (draft.value.medications.some((y) => y.drugId === m.drugId)) continue
     const q = autoQtyOf(m)
-    draft.value.medications.push({ ...clonePlain(m), _manual: q === null, qty: q ?? m.qty })
-    added++
+    draft.value.medications.push({ ...m, _manual: q === null, qty: q ?? m.qty })
+    meds++
   }
-  if (!draft.value.diagnoses.length) draft.value.diagnoses = clonePlain(h.diagnoses)
-  ui.toast.success(added ? `已複製 ${added} 項藥品（重複的略過）` : '處方中已有相同藥品，未新增')
+  if (only !== 'medications') {
+    for (const p of src.procedures) {
+      if (draft.value.procedures.some((y) => y.procId === p.procId)) continue
+      draft.value.procedures.push({ ...p })
+      procs++
+    }
+    if (!draft.value.diagnoses.length && src.diagnoses.length) {
+      draft.value.diagnoses = src.diagnoses
+      filled.push('診斷')
+    }
+    for (const [k, label] of [['subjective', 'S 主訴'], ['assessment', 'A 評估'], ['plan', 'P 計畫']] as const) {
+      const text = src[k]?.trim()
+      if (text && !draft.value[k].trim()) {
+        draft.value[k] = text
+        filled.push(label)
+      }
+    }
+  }
+  const parts = [meds && `${meds} 種藥`, procs && `${procs} 項處置`, ...filled].filter(Boolean).join('、') || '沒有新的項目（重複的略過）'
+  const skipped = src.skipped.length ? `；${src.skipped.join('、')} 已停用，未帶入` : ''
+  ;(src.skipped.length ? ui.toast.warning : ui.toast.success)(`${title}：${parts}${skipped}`)
   goSection('orders')
 }
 
-// ---------- 套用組套：合併進目前處方，不覆蓋 ----------
-// 規則和「複製處方」一致：重複的略過、診斷只在本次還沒有時帶入；主訴、計畫只填空白的欄位。
-// 慢性病案件（04／08）天數用預設的 28 天；總量依「劑量 × 頻率 × 天數」重算（和手動開藥同一個 autoQty）。
+// 同前次：診斷、藥品、處置、A、P（S、O、生命徵象是本次的事實，服務層不給）；只帶處方：只帶藥品
+const expandEncounter = useAction(opdApi.expandEncounter)
+async function copyFrom(h: HistoryItem, only?: 'medications') {
+  if (!visit.value) return
+  const x = await expandEncounter.run(h.id, visit.value.patientId)
+  if (!x) return
+  const from = x.refillFrom ? `（${x.refillFrom} 是慢箋調劑，帶入 ${x.date} 原處方）` : ''
+  mergeIntoDraft(x, (only ? '已帶入處方' : '已帶入前次') + from, only)
+}
+
+// 套用組套：慢性病案件（04／08）天數用預設的 28 天，其餘照組套
 function applySet(x: ExpandedOrderSet) {
-  let meds = 0
-  let procsAdded = 0
-  for (const m of x.medications) {
-    if (draft.value.medications.some((y) => y.drugId === m.drugId)) continue
-    const days = defaultDays.value === 28 ? 28 : m.days
-    const q = autoQtyOf({ ...m, days })
-    draft.value.medications.push({ ...m, days, _manual: q === null, qty: q ?? m.qty })
-    meds++
-  }
-  for (const p of x.procedures) {
-    if (draft.value.procedures.some((y) => y.procId === p.procId)) continue
-    draft.value.procedures.push({ ...p })
-    procsAdded++
-  }
-  if (!draft.value.diagnoses.length) draft.value.diagnoses = clonePlain(x.diagnoses)
-  if (!draft.value.subjective.trim() && x.subjective) draft.value.subjective = x.subjective
-  if (!draft.value.plan.trim() && x.plan) draft.value.plan = x.plan
-  const parts = [meds && `${meds} 種藥`, procsAdded && `${procsAdded} 項處置`].filter(Boolean).join('、') || '沒有新的項目（重複的略過）'
-  const skipped = x.skipped.length ? `；${x.skipped.join('、')} 已停用，未帶入` : ''
-  ;(x.skipped.length ? ui.toast.warning : ui.toast.success)(`已套用「${x.name}」：${parts}${skipped}`)
-  goSection('orders')
+  const medications = x.medications.map((m) => ({ ...m, days: defaultDays.value === 28 ? 28 : m.days }))
+  mergeIntoDraft({ ...x, medications }, `已套用「${x.name}」`)
 }
 
 const defaultDays = computed(() => (visit.value && ['04', '08'].includes(visit.value.caseType) ? 28 : 3))
@@ -471,10 +483,14 @@ const lastOpen = ref(true)
               </button>
               <div v-if="lastOpen" class="space-y-1 border-t border-slate-200 px-3 py-2">
                 <div><span class="text-xs text-slate-500">診斷</span> {{ lastVisit.diagnoses.map((d) => `${d.icd} ${d.name}`).join('、') || '—' }}</div>
+                <div v-if="lastVisit.procedureNames.length"><span class="text-xs text-slate-500">處置</span> {{ lastVisit.procedureNames.join('、') }}</div>
                 <div class="flex items-start gap-2">
                   <span class="text-xs text-slate-500">處方</span>
                   <span class="min-w-0 flex-1">{{ lastVisit.medicationNames.join('、') || '無' }}</span>
-                  <UButton v-if="editable && lastVisit.medications.length" size="sm" variant="secondary" @click="copyFrom(lastVisit)">複製處方</UButton>
+                  <span v-if="editable" class="flex shrink-0 gap-1">
+                    <UButton size="sm" variant="secondary" :loading="expandEncounter.pending.value" @click="copyFrom(lastVisit)">同前次</UButton>
+                    <UButton v-if="lastVisit.medications.length" size="sm" variant="ghost" :loading="expandEncounter.pending.value" @click="copyFrom(lastVisit, 'medications')">只帶處方</UButton>
+                  </span>
                 </div>
               </div>
             </div>
@@ -527,7 +543,7 @@ const lastOpen = ref(true)
             </section>
           </div>
 
-          <HistoryList v-if="tab === 'history'" :items="history ?? []" :drugs="drugs" :readonly="!editable" @copy="copyFrom" />
+          <HistoryList v-if="tab === 'history'" :items="history ?? []" :drugs="drugs" :readonly="!editable" :busy="expandEncounter.pending.value" @copy="copyFrom" />
         </div>
       </UCard>
 

@@ -1,6 +1,6 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
-import type { Admission, Bed, ClinicSession, Patient, Visit } from '@/types'
+import type { Admission, Bed, ClinicSession, Diagnosis, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
@@ -44,6 +44,24 @@ export const usable = {
     if (c.active === false) fail(`診斷碼 ${c.code} ${c.name} 已停用`)
     return c
   },
+}
+
+/**
+ * 把一批舊的診斷／藥品／處置帶進新處方之前，濾掉已停用的（組套、同前次共用同一份判斷）。
+ * 和 usable.* 同一個標準，只是不丟錯：停用的列在 skipped，讓頁面告訴醫師哪些沒帶入。
+ */
+export function pickUsable(src: { diagnoses: Diagnosis[]; medications: MedicationOrder[]; procedures: ProcedureOrder[] }) {
+  const skipped: string[] = []
+  const keep = <X>(items: X[], ok: (x: X) => boolean, label: (x: X) => string) =>
+    structuredClone(items).filter((x) => {
+      if (ok(x)) return true
+      skipped.push(label(x))
+      return false
+    })
+  const medications = keep(src.medications, (m) => !!find.drug(m.drugId)?.active, (m) => find.drug(m.drugId)?.name ?? m.drugId)
+  const procedures = keep(src.procedures, (p) => !!find.procedure(p.procId)?.active, (p) => find.procedure(p.procId)?.name ?? p.procId)
+  const diagnoses = keep(src.diagnoses, (d) => { const c = db.icdCodes.find((x) => x.code === d.icd); return !!c && c.active !== false }, (d) => `診斷 ${d.icd}`)
+  return { diagnoses, medications, procedures, skipped }
 }
 
 export const nameOf = {
