@@ -2094,6 +2094,57 @@ try {
     ok(billingSrc.includes('drugPriceOn(d, visit.date)') && !/\bd\.(nhiPrice|selfPrice)\b/.test(billingSrc), '批價只用 drugPriceOn(藥, 看診日) 取價，不直接讀主檔價格')
   }
 
+  // 開藥時的庫存提示用「可用量」（未過期批號），不是帳上總量；處方箋有效期只提醒、不擋
+  console.log('\n[可用庫存與處方箋有效期]')
+  {
+    const { addDays } = await load('/src/utils/date.ts')
+    const SR = await load('/src/services/stock-rules.ts')
+    await as('dr01')
+    const rows = await api.masterApi.listDrugs({ includeInactive: true })
+    const bad = rows.filter((d) => d.usable !== SR.usableQty(dbm.db.drugLots.filter((l) => l.drugId === d.id), T))
+    ok(rows.length > 0 && !bad.length, `藥品清單的可用量 = 未過期批號總和（和藥局發藥同一個 usableQty）${bad.length ? '：' + bad.map((d) => d.id).join('、') : ''}`)
+    // 造一批過期品：帳上總量變多，可用量不變——開藥提示不能被它灌水
+    const d0 = dbm.db.drugs.find((d) => d.id === 'M001')
+    const before = rows.find((d) => d.id === 'M001')
+    dbm.db.drugLots.push({ id: 'LOT-EXPIRED-TEST', drugId: 'M001', lotNo: 'EXP-T', expiry: addDays(T, -1), qty: 500, receivedAt: `${addDays(T, -400)} 09:00` })
+    d0.stock += 500
+    const after = (await api.masterApi.listDrugs({ keyword: 'Acetaminophen' })).find((d) => d.id === 'M001')
+    ok(after.stock === before.stock + 500 && after.usable === before.usable, `過期 500 顆：帳上 ${after.stock}，可用仍是 ${after.usable}（開藥提示用可用量）`)
+    dbm.db.drugLots = dbm.db.drugLots.filter((l) => l.id !== 'LOT-EXPIRED-TEST')
+    dbm.db.drugs.find((d) => d.id === 'M001').stock -= 500
+    const { readFileSync } = await import('node:fs')
+    const med = readFileSync('src/pages/opd/components/MedicationEditor.vue', 'utf8')
+    const ipdDlg = readFileSync('src/pages/ipd/components/OrderDialog.vue', 'utf8')
+    ok(!/\.stock\b/.test(med) && !/\.stock\b/.test(ipdDlg) && med.includes('.usable'), '門診處方表、住院醫囑不用帳上總量（stock）判斷庫存')
+
+    // 處方箋有效期：看診日起 3 日（含當天）
+    const RX = await load('/src/services/rx-rules.ts')
+    ok(RX.rxValidUntil('2026-11-10') === '2026-11-12' && !RX.rxExpired('2026-11-10', '2026-11-12 23:59') && RX.rxExpired('2026-11-10', '2026-11-13'), '11/10 開立：有效至 11/12，11/13 起逾期')
+    ok(RX.rxValidUntil('2026-02-27') === '2026-03-01' && RX.rxValidUntil('2026-12-31') === '2027-01-02', '有效期跨月、跨年')
+    await as('ph01')
+    const P = api.pharmacyApi
+    const pend = dbm.db.dispenses.find((d) => d.status === 'pending' && d.createdAt.startsWith(T))
+    ok(!!pend, '今天有待調劑的單')
+    const fresh = await P.getDispense(pend.id)
+    ok(!fresh.rxExpired && fresh.rxValidUntil === addDays(fresh.date, 2), '今天開立的處方：未逾期')
+    const enc = dbm.db.encounters.find((e) => e.id === pend.encounterId)
+    const keepDate = enc.date
+    enc.date = addDays(T, -5)
+    const old = await P.getDispense(pend.id)
+    ok(old.rxExpired && old.rxValidUntil === addDays(T, -3), `5 天前看診的處方：逾期（有效至 ${old.rxValidUntil}）`)
+    const listed = (await P.listDispenses({ date: T })).find((x) => x.id === pend.id)
+    ok(listed?.rxExpired === true, '藥局清單上標出逾期')
+    await P.verifyDispense(pend.id)
+    const p = dbm.db.patients.find((x) => x.id === pend.patientId)
+    const done = await P.dispense(pend.id, { birthMMDD: p.birthDate.slice(5).replace('-', '') })
+    ok(done.status === 'dispensed' && dbm.db.auditLogs[0].action === '發藥' && dbm.db.auditLogs[0].detail.includes('逾有效期'), `逾期處方不擋：照常發藥，稽核記下「${dbm.db.auditLogs[0].detail}」`)
+    ok((await P.getDispense(pend.id)).rxExpired, '已發的單：依發藥那天判斷，紀錄上看得出是逾期後才發')
+    dbm.db.encounters.find((e) => e.id === pend.encounterId).date = keepDate
+    const page = readFileSync('src/pages/pharmacy/PharmacyPage.vue', 'utf8')
+    ok(page.includes('x.rxExpired') && !/ageDays\(x\)\s*>=/.test(page), '藥局頁的逾期標示用服務層的 rxExpired，不自己寫天數門檻')
+    await as('clerk01')
+  }
+
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
   console.log('\n[藥袋法定欄位]')
   {

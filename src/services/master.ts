@@ -1,12 +1,13 @@
 // 主檔（參考資料）查詢與維護：科別、醫師、身分、藥品、醫令、ICD、頻率，以及展示資料重置。
 // 帳號、科別醫師的維護在 admin.ts（有較多連動規則）。
-import type { Department, Doctor, Drug, Frequency, IcdCode, Identity, PreventItem, PriceChange, Procedure } from '@/types'
+import type { Department, Doctor, Drug, DrugLot, Frequency, IcdCode, Identity, PreventItem, PriceChange, Procedure } from '@/types'
 import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
 import { applyPriceChange, describeDrugs, drugPriceOn, matchesDrug, needsSameNameCheck, nextPriceChange, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
 import { now, today } from '@/utils/date'
+import { usableQty } from './stock-rules'
 
 // ---------- 唯讀代碼（不會在系統中修改） ----------
 export const staticCodes = {
@@ -44,11 +45,18 @@ export interface DrugQuery {
 /** 清單上的藥：nhiPrice、selfPrice 是「今天」的價格（主檔編輯表單也從這裡帶值）；nextPrice 是已排定還沒生效的調價 */
 export interface DrugView extends Drug {
   nextPrice?: PriceChange
+  /**
+   * 可開立、可發的量：未過期批號的總和（和藥局發藥、庫存頁同一個 usableQty）。
+   * stock 是帳上總量（含已過期、待報廢的），開藥時拿它判斷「庫存夠不夠」會被過期品灌水
+   */
+  usable: number
 }
 
 export function listDrugs(q: DrugQuery = {}): Promise<DrugView[]> {
   return query(() => {
     const t = today()
+    const lotsOf = new Map<string, DrugLot[]>()
+    for (const l of db.drugLots) lotsOf.set(l.drugId, [...(lotsOf.get(l.drugId) ?? []), l])
     return db.drugs
       .filter((d) => {
         if (!q.includeInactive && !d.active) return false
@@ -58,7 +66,7 @@ export function listDrugs(q: DrugQuery = {}): Promise<DrugView[]> {
       })
       .map((d) => {
         const next = nextPriceChange(d, t)
-        return { ...d, ...drugPriceOn(d, t), ...(next ? { nextPrice: next } : {}) }
+        return { ...d, ...drugPriceOn(d, t), usable: usableQty(lotsOf.get(d.id) ?? [], t), ...(next ? { nextPrice: next } : {}) }
       })
   })
 }

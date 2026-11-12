@@ -45,8 +45,8 @@ function onSearchEnter() {
 // 前幾日開立、還沒領的單（服務層排在當天的後面）。領藥號每天重編，要標日期才分得出是哪一天的「3 號」
 const createdDay = (x: { createdAt: string }) => x.createdAt.slice(0, 10)
 const isCarried = (x: { createdAt: string; status: DispenseStatus }) => x.status !== 'dispensed' && createdDay(x) < date.value
-/** 一般處方箋 3 日內有效：滿 3 天提醒（不擋，是否需重新看診由藥師判斷） */
-const ageDays = (x: { createdAt: string }) => diffDays(createdDay(x), todayStr.value)
+// 「開立幾天」從看診（開處方）那天算，和有效期同一個起點（rx-rules）
+const ageDays = (x: { date: string }) => diffDays(x.date, todayStr.value)
 
 const selectedId = ref<string>()
 useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
@@ -126,7 +126,8 @@ const print = () => window.print()
             <span class="min-w-0 flex-1">
               <span class="block font-medium text-slate-800">{{ x.patientName }}</span>
               <span class="block truncate text-xs text-slate-500">{{ x.deptName }}・{{ x.items.length }} 項藥品</span>
-              <UBadge v-if="x.status !== 'dispensed' && ageDays(x) >= 3" tone="yellow" class="mt-0.5">已開立 {{ ageDays(x) }} 天</UBadge>
+              <!-- 逾期與否由服務層依看診日判斷（rx-rules）；頁面不自己用天數門檻 -->
+              <UBadge v-if="x.status !== 'dispensed' && x.rxExpired" tone="yellow" class="mt-0.5">處方逾期・已開立 {{ ageDays(x) }} 天</UBadge>
             </span>
             <span class="flex flex-col items-end gap-1">
               <AlertTriangle v-if="x.allergyWarnings.length" class="h-4 w-4 text-red-500" aria-label="過敏警示" />
@@ -147,6 +148,14 @@ const print = () => window.print()
         <UStatusBadge :map="dispenseStatus" :value="d.status" />
       </PatientBanner>
 
+      <!-- 處方箋逾有效期：只提醒、不擋（規則 rx-rules）；發藥時稽核會記下 -->
+      <div v-if="d.rxExpired" class="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+        <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+        <div>
+          <div class="font-semibold">處方箋已逾有效期（{{ d.date.slice(5).replace('-', '/') }} 開立，有效至 {{ d.rxValidUntil.slice(5).replace('-', '/') }}）</div>
+          <div>請確認病人目前狀況，必要時請醫師重新開立；系統不擋發藥，發藥紀錄會註明逾期。</div>
+        </div>
+      </div>
       <!-- 多重把關：醫師開藥時已提醒過，藥師這一關再顯示一次 -->
       <div v-if="d.allergyWarnings.length" class="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
         <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />

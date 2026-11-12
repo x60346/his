@@ -9,6 +9,7 @@ import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './inventory'
 import { usableQty } from './stock-rules'
+import { rxExpired, rxValidUntil } from './rx-rules'
 import { timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief } from './views'
 
@@ -57,6 +58,10 @@ export interface DispenseView extends Dispense, PatientBrief {
   pharmacistName: string
   /** 調劑日期：核對日；還沒核對就是今天 */
   dispenseDate: string
+  /** 處方箋有效期最後一天（看診日起 3 日，見 rx-rules） */
+  rxValidUntil: string
+  /** 已逾有效期：還沒發的看今天，已發的看發藥那天（紀錄上看得出是逾期後才發的）。只提醒、不擋 */
+  rxExpired: boolean
 }
 
 function dispenseView(d: Dispense): DispenseView {
@@ -102,6 +107,8 @@ function dispenseView(d: Dispense): DispenseView {
     refillSeq: find.visit(d.visitId)?.refillSeq,
     pharmacistName: d.verifiedBy ? nameOf.user(d.verifiedBy) : sessionUser()?.roles.includes('pharmacist') ? sessionUser()!.name : '',
     dispenseDate: d.verifiedAt?.slice(0, 10) ?? today(),
+    rxValidUntil: rxValidUntil(e.date),
+    rxExpired: rxExpired(e.date, d.dispensedAt ?? today()),
   }
 }
 
@@ -189,7 +196,9 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     d.dispensedBy = ph.id
     d.dispensedAt = now()
     must(find.visit(d.visitId), '掛號紀錄').status = 'dispensed'
-    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）`)
+    // 逾期處方不擋，但發出去要留紀錄：日後查得到是藥師知情下發的
+    const late = view.rxExpired ? `（處方已逾有效期：${view.date} 開立、有效至 ${view.rxValidUntil}）` : ''
+    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）${late}`)
     return dispenseView(d)
   })
 }

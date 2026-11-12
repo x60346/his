@@ -9,16 +9,16 @@
 import { computed, ref } from 'vue'
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UButton, UEmpty, USearchSelect } from '@/components/ui'
-import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning } from '@/services'
+import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning, type DrugView } from '@/services'
 import { useUi } from '@/stores/ui'
-import type { Drug, Frequency, MedicationOrder } from '@/types'
+import type { Frequency, MedicationOrder } from '@/types'
 
 /** 畫面用的列：多一個「總量是否手動修改」旗標，送出前會移除 */
 export type MedRow = MedicationOrder & { _manual?: boolean; _qtyStale?: boolean }
 
 const rows = defineModel<MedRow[]>({ required: true })
 const props = defineProps<{
-  drugs: Map<string, Drug>
+  drugs: Map<string, DrugView>
   freqs: Frequency[]
   warnings: AllergyWarning[]
   defaultDays: number
@@ -42,7 +42,7 @@ function recalc(r: MedRow) {
   if (q !== null) r.qty = q
 }
 
-function add(d: Drug) {
+function add(d: DrugView) {
   if (rows.value.some((r) => r.drugId === d.id)) return ui.toast.warning(`${d.name} 已在處方中`)
   const q = autoQty(d, d.defaultDose, timesOf(d.defaultFreq), props.defaultDays)
   // 無法換算的藥：總量預設 1（支、瓶），標示為手動，請醫師確認
@@ -90,7 +90,7 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
       :search="(kw) => masterApi.listDrugs({ keyword: kw })"
       :item-key="(d) => d.id"
       :item-label="(d) => `${d.name}　${d.nameZh}${d.highAlert ? '　⚠ 高警訊' : ''}`"
-      :item-sub="(d) => `${d.generic}・${d.spec}・${d.indication}・庫存 ${d.stock}`"
+      :item-sub="(d) => `${d.generic}・${d.spec}・${d.indication}・可用 ${d.usable}`"
       @select="add"
     />
     <!-- 全部天數：兩種以上藥品才需要；天數不一致時提示，漏改一眼看得到 -->
@@ -137,7 +137,8 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
                 <UBadge v-for="a in warningOf(r.drugId)" :key="a" tone="red"><AlertTriangle class="h-3 w-3" />病人對 {{ a }} 過敏</UBadge>
                 <!-- 放在藥名欄（永遠看得到）：窄螢幕時處方表橫向捲動，總量欄可能在畫面外 -->
                 <UBadge v-if="!readonly && r._qtyStale" tone="yellow">天數已改，請確認總量</UBadge>
-                <UBadge v-if="!readonly && (drugs.get(r.drugId)?.stock ?? 0) < r.qty" tone="yellow">庫存不足（存 {{ drugs.get(r.drugId)?.stock }}）</UBadge>
+                <!-- 用可用量（未過期批號），不用帳上總量：過期品發不出去，算進來會讓醫師以為夠 -->
+                <UBadge v-if="!readonly && (drugs.get(r.drugId)?.usable ?? 0) < r.qty" tone="yellow">庫存不足（可用 {{ drugs.get(r.drugId)?.usable ?? 0 }}）</UBadge>
                 <!-- 劑量合理性：與服務層同一條規則 -->
                 <UBadge v-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'absurd'" tone="red">劑量不合理，請確認是否打錯</UBadge>
                 <UBadge v-else-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'high'" tone="yellow">劑量偏高（常用 {{ drugs.get(r.drugId)!.defaultDose }}）</UBadge>

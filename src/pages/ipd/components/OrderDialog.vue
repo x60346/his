@@ -157,7 +157,7 @@ ${doseNote(drug, input.dose ?? 0)}。
           :search="(kw) => masterApi.listDrugs({ keyword: kw })"
           :item-key="(d) => d.id"
           :item-label="(d) => `${d.name}　${d.nameZh}${d.highAlert ? '　⚠ 高警訊' : ''}`"
-          :item-sub="(d) => `${d.category}・${d.spec}・${d.indication}・庫存 ${d.stock}`"
+          :item-sub="(d) => `${d.category}・${d.spec}・${d.indication}・可用 ${d.usable}`"
           :clear-on-select="false"
           @select="pickDrug"
         />
