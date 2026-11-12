@@ -17,6 +17,7 @@ import * as dashboard from './dashboard'
 import * as inventory from './inventory'
 import * as admin from './admin'
 import * as orderset from './orderset'
+import * as phrase from './phrase'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -34,6 +35,7 @@ export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
 export const adminApi = overNetwork(admin)
 export const orderSetApi = overNetwork(orderset)
+export const phraseApi = overNetwork(phrase)
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
 
@@ -54,6 +56,7 @@ export * from './idle-rules'
 export * from './password-rules'
 export * from './role-rules'
 export * from './report-csv'
+export * from './phrase-rules'
 export { REPORT_MAX_DAYS } from './charge'
 export type { VisitView, AdmissionView, PatientBrief } from './views'
 export type { RefillView } from './booking'

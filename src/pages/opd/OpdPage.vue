@@ -16,7 +16,8 @@ import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import PhraseManager from './components/PhraseManager.vue'
+import { autoQty, doseLevel, doseNote, expandPhrase, masterApi, nextInQueue, opdApi, patientApi, phraseApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -329,6 +330,22 @@ function applySet(x: ExpandedOrderSet) {
   mergeIntoDraft({ ...x, medications }, `已套用「${x.name}」`)
 }
 
+// ---------- 片語：在 S／O／A／P 輸入「.簡碼」再按空白鍵或 Tab 展開（規則在 expandPhrase，頁面只處理按鍵與游標）----------
+const { data: phrases } = useQuery(async () => (auth.user?.role === 'doctor' ? phraseApi.listPhrases() : []))
+const phraseOpen = ref(false)
+type TextField = 'subjective' | 'objective' | 'assessment' | 'plan'
+function onPhraseKey(e: KeyboardEvent, field: TextField) {
+  // 中文輸入法選字時按空白是在選字（isComposing），不能攔；有修飾鍵（Shift+Tab 回上一欄）也不攔
+  if ((e.key !== ' ' && e.key !== 'Tab') || e.isComposing || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return
+  const el = e.target as HTMLTextAreaElement
+  if (el.selectionStart !== el.selectionEnd) return
+  const r = expandPhrase(el.value, el.selectionStart, phrases.value ?? [])
+  if (!r) return // 不是片語：照常輸入空白、Tab 照常跳下一欄
+  e.preventDefault()
+  draft.value[field] = r.text
+  nextTick(() => el.setSelectionRange(r.cursor, r.cursor))
+}
+
 const defaultDays = computed(() => (visit.value && ['04', '08'].includes(visit.value.caseType) ? 28 : 3))
 const { data: preventItems } = useQuery(() => preventApi.listPreventItems())
 
@@ -527,20 +544,25 @@ const lastOpen = ref(true)
             </div>
             <!-- S／O：欄數依區塊實際寬度（不用 md: 看視窗） -->
             <section :ref="setSection('so')" class="scroll-mt-12 grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-3">
-              <UTextarea v-model="draft.subjective" label="S 主訴（病人主觀描述）" :rows="4" :disabled="!editable" />
-              <UTextarea v-model="draft.objective" label="O 客觀檢查" :rows="4" :disabled="!editable" />
+              <UTextarea v-model="draft.subjective" label="S 主訴（病人主觀描述）" :rows="4" :disabled="!editable" @keydown="onPhraseKey($event, 'subjective')" />
+              <UTextarea v-model="draft.objective" label="O 客觀檢查" :rows="4" :disabled="!editable" @keydown="onPhraseKey($event, 'objective')" />
             </section>
+            <p v-if="editable" class="-mt-3 text-xs text-slate-500">
+              片語：輸入「.簡碼」再按空白鍵展開<template v-if="phrases?.length">（{{ phrases.slice(0, 3).map((p) => '.' + p.code).join('、') }}{{ phrases.length > 3 ? '…' : '' }}）</template>
+              <button type="button" class="ml-1 text-brand-600 hover:underline" @click="phraseOpen = true">管理片語</button>
+            </p>
+            <PhraseManager v-model="phraseOpen" />
 
             <!-- A：評估與診斷放在一起 -->
             <section :ref="setSection('dx')" class="scroll-mt-12 space-y-2 border-t border-slate-100 pt-4">
-              <UTextarea v-model="draft.assessment" label="A 評估" :rows="2" :disabled="!editable" />
+              <UTextarea v-model="draft.assessment" label="A 評估" :rows="2" :disabled="!editable" @keydown="onPhraseKey($event, 'assessment')" />
               <h3 class="text-sm font-semibold text-slate-700">診斷</h3>
               <DiagnosisEditor v-model="draft.diagnoses" :readonly="!editable" />
             </section>
 
             <!-- P：計畫與醫令放在一起 -->
             <section :ref="setSection('orders')" class="scroll-mt-12 space-y-5 border-t border-slate-100 pt-4">
-            <UTextarea v-model="draft.plan" label="P 計畫" :rows="2" :disabled="!editable" />
+            <UTextarea v-model="draft.plan" label="P 計畫" :rows="2" :disabled="!editable" @keydown="onPhraseKey($event, 'plan')" />
             <OrderSetBar v-if="editable" :draft="draft" @apply="applySet" />
             <section>
               <h3 class="mb-2 text-sm font-semibold text-slate-700">藥品</h3>

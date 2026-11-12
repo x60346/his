@@ -233,13 +233,31 @@ export type EncounterStatus = 'draft' | 'completed'
  */
 export interface OrderSet {
   id: string
+  /** 建立的醫師；個人組套只有他看得到 */
   doctorId: string
+  /** personal：醫師個人；dept：科室共用（同科在職醫師都能套用、修改、刪除） */
+  scope: 'personal' | 'dept'
+  /** 科室組套所屬科別（建立者當時的科別） */
+  deptId?: string
+  /** 最後修改的醫師（科室組套大家都能改，要看得出是誰改的） */
+  updatedBy?: string
   name: string
   diagnoses: Diagnosis[]
   medications: MedicationOrder[]
   procedures: ProcedureOrder[]
   subjective?: string
   plan?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 片語：醫師個人的常用文字。在病歷欄位輸入「.簡碼」再按空白鍵或 Tab 展開 */
+export interface Phrase {
+  id: string
+  doctorId: string
+  /** 簡碼：英數字 1–10 碼，存小寫；同一位醫師不重複 */
+  code: string
+  text: string
   createdAt: string
   updatedAt: string
 }

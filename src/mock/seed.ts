@@ -15,6 +15,7 @@ import type {
   MedicationOrder,
   NursingNote,
   OrderSet,
+  Phrase,
   Patient,
   Period,
   PreventRecord,
@@ -894,7 +895,7 @@ export function buildSeed(): Database {
     }
   }
 
-  // 醫師個人組套：每位門診醫師兩三組常用處方，展示時打開就有東西可套用
+  // 組套：每位門診醫師兩三組個人常用處方；內科的「糖尿病追蹤」是科室共用（陳映如、黃柏翰都看得到、都能改）
   const setMed = (drugId: string, dose: number, freq: string, days: number) => {
     const d = drugMap.get(drugId)!
     return { drugId, dose, freq, route: d.defaultRoute, days, qty: autoQty(d, dose, freqTimes(freq), days) ?? 1, selfPay: false }
@@ -905,10 +906,22 @@ export function buildSeed(): Database {
     { doctorId: 'DR01', name: '上呼吸道感染', diagnoses: setDx('J06.9'), medications: [setMed('M001', 1, 'TID', 3), setMed('M007', 1, 'HS', 3), setMed('M010', 1, 'TID', 3)], procedures: [], subjective: '喉嚨痛、流鼻水', plan: '症狀治療，多喝水休息' },
     { doctorId: 'DR01', name: '高血壓追蹤', diagnoses: setDx('I10'), medications: [setMed('M012', 1, 'QD', 28)], procedures: [], plan: '持續用藥，居家量血壓' },
     { doctorId: 'DR01', name: '腸胃炎', diagnoses: setDx('A09'), medications: [setMed('M025', 1, 'TID', 3), setMed('M026', 1, 'PRN', 3)], procedures: [], plan: '清淡飲食、補充水分' },
-    { doctorId: 'DR02', name: '糖尿病追蹤', diagnoses: setDx('E11.9'), medications: [setMed('M015', 1, 'BID', 28)], procedures: [{ procId: 'P004', qty: 1, selfPay: false }, { procId: 'P005', qty: 1, selfPay: false }], plan: '飲食控制，三個月後追蹤 HbA1c' },
+    { doctorId: 'DR02', scope: 'dept' as const, deptId: 'D02', name: '糖尿病追蹤', diagnoses: setDx('E11.9'), medications: [setMed('M015', 1, 'BID', 28)], procedures: [{ procId: 'P004', qty: 1, selfPay: false }, { procId: 'P005', qty: 1, selfPay: false }], plan: '飲食控制，三個月後追蹤 HbA1c' },
     { doctorId: 'DR02', name: '高血脂', diagnoses: setDx('E78.5'), medications: [setMed('M018', 1, 'HS', 28)], procedures: [{ procId: 'P006', qty: 1, selfPay: false }] },
     { doctorId: 'DR03', name: '胃食道逆流', diagnoses: setDx('K21.9'), medications: [setMed('M022', 1, 'QD', 14)], procedures: [], plan: '睡前三小時不進食' },
-  ].map((s) => ({ ...s, id: id('OS'), createdAt: setAt, updatedAt: setAt }))
+  ].map((s) => ({ scope: 'personal' as const, ...s, id: id('OS'), createdAt: setAt, updatedAt: setAt, updatedBy: s.doctorId }))
+
+  // 片語：醫師個人的常用文字（固定 id、不抽亂數，不影響其他資料）
+  const phrases: Phrase[] = (
+    [
+      ['DR01', 'uri', '喉嚨痛、流鼻水、輕微咳嗽，無發燒，無呼吸困難。'],
+      ['DR01', 'wnl', '理學檢查無特殊異常。'],
+      ['DR01', 'fu', '一週後回診；若發燒超過三天、呼吸喘或症狀加劇，請立即返診。'],
+      ['DR02', 'dm', '第二型糖尿病，規則服藥，飲食控制中。'],
+      ['DR02', 'htn', '高血壓，規則服藥，居家血壓大致控制良好。'],
+      ['DR03', 'gerd', '胸口灼熱、胃酸逆流，飯後及平躺時加劇。'],
+    ] as const
+  ).map(([doctorId, code, text], i) => ({ id: `PH-SEED-${i + 1}`, doctorId, code, text, createdAt: setAt, updatedAt: setAt }))
 
   // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
   // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒
@@ -981,6 +994,7 @@ export function buildSeed(): Database {
     stockTxns,
     restockRequests,
     orderSets,
+    phrases,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

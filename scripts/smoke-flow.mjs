@@ -1929,6 +1929,90 @@ try {
     ok(page.includes('dailyReportCsv(') && !page.includes('\\uFEFF') && !/join\(',/.test(page), '報表頁不自己組 CSV（用 dailyReportCsv，與畫面同一份報表）')
   }
 
+  // 片語（醫師個人、.簡碼 展開）與科室共用組套（同科醫師都能用、能改）
+  console.log('\n[片語與科室組套]')
+  {
+    const R = await load('/src/services/phrase-rules.ts')
+    const P = [{ code: 'htn', text: '高血壓控制良好。' }]
+    const ex = (t, c = t.length) => R.expandPhrase(t, c, P)
+    ok(ex('.htn')?.text === '高血壓控制良好。' && ex('.htn').cursor === 8, '「.htn」展開成片語，游標停在片語後面')
+    ok(ex('病史：.HTN')?.text === '病史：高血壓控制良好。' && ex('血壓 .htn')?.text === '血壓 高血壓控制良好。', '前面是中文標點或空白也能展開；簡碼不分大小寫')
+    const mid = R.expandPhrase('A .htn B', 6, P)
+    ok(mid?.text === 'A 高血壓控制良好。 B' && mid.cursor === 10, '在文字中間展開，後面的字保留')
+    ok(ex('3.5mg') === null && ex('abc.htn') === null && ex('.xyz') === null && ex('htn') === null, '「3.5mg」「abc.htn」不算片語；找不到的簡碼不動（醫師打的字不會消失）')
+    ok(JSON.stringify(R.checkPhrase({ code: '', text: '' })) === JSON.stringify({ code: '請輸入簡碼', text: '請輸入片語內容' }) && R.checkPhrase({ code: 'a-b', text: 'x' }).code && R.checkPhrase({ code: 'abcdefghijk', text: 'x' }).code && !Object.keys(R.checkPhrase({ code: '.HTN', text: 'x' })).length,
+      '簡碼與內容一次標出；只能英數、最多 10 碼；「.HTN」視為 htn')
+    const PH = api.phraseApi
+    await as('nurse01')
+    await expectError(() => PH.listPhrases(), '護理師查看片語')
+    await as('dr01')
+    const dr01 = dbm.db.users.find((u) => u.username === 'dr01').doctorId
+    const mine = await PH.listPhrases()
+    ok(mine.length >= 3 && mine.every((p) => p.doctorId === dr01), `只看得到自己的片語（${mine.map((p) => '.' + p.code).join('、')}）`)
+    try {
+      await PH.savePhrase({ code: '', text: '' })
+      ok(false, '空白片語應被擋下')
+    } catch (e) {
+      ok(e.fields?.code && e.fields?.text, '空白片語：簡碼、內容一次標出')
+    }
+    const np = await PH.savePhrase({ code: '.CC', text: '  咳嗽三天  ' })
+    ok(np.code === 'cc' && np.text === '咳嗽三天' && dbm.db.auditLogs[0].action === '新增片語', '新增片語：簡碼存小寫、內容去頭尾空白、寫入稽核')
+    try {
+      await PH.savePhrase({ code: 'WNL', text: '重複' })
+      ok(false, '重複簡碼應被擋下')
+    } catch (e) {
+      ok(e.field === 'code' && e.message.includes('.wnl'), `重複簡碼（不分大小寫）→ 「${e.message}」`)
+    }
+    const ed = await PH.savePhrase({ id: np.id, code: 'cc', text: '咳嗽一週' })
+    ok(ed.id === np.id && (await PH.listPhrases()).filter((p) => p.code === 'cc').length === 1, '修改片語（同簡碼不算重複）')
+    await as('dr02')
+    ok(!(await PH.listPhrases()).some((p) => p.id === np.id), '別的醫師看不到我的片語')
+    await expectError(() => PH.savePhrase({ id: np.id, code: 'cc', text: '改別人的' }), '修改別的醫師的片語')
+    await expectError(() => PH.deletePhrase(np.id), '刪除別的醫師的片語')
+    await as('dr01')
+    await PH.deletePhrase(np.id)
+    ok(!(await PH.listPhrases()).some((p) => p.id === np.id), '刪除自己的片語')
+
+    // 科室組套：內科（陳映如 dr02、黃柏翰 dr03）共用「糖尿病追蹤」；家醫科 dr01 看不到
+    const O = api.orderSetApi
+    const deptSet = dbm.db.orderSets.find((x) => x.scope === 'dept' && x.name === '糖尿病追蹤')
+    ok(!!deptSet && deptSet.deptId === 'D02', '種子：內科共用組套「糖尿病追蹤」')
+    ok(!(await O.listOrderSets()).some((x) => x.id === deptSet.id), '家醫科醫師看不到內科的科室組套')
+    await expectError(() => O.expandOrderSet(deptSet.id), '家醫科醫師套用內科組套')
+    await as('dr03')
+    const list3 = await O.listOrderSets()
+    const seen = list3.find((x) => x.id === deptSet.id)
+    ok(!!seen && seen.deptName === '內科' && seen.updatedByName === '陳映如', '同科的黃柏翰看得到陳映如建立的科室組套（標出最後修改人）')
+    const firstDept = list3.findIndex((x) => x.scope === 'dept')
+    ok(firstDept === -1 || list3.slice(firstDept).every((x) => x.scope === 'dept'), '選單：個人組套在前、科室組套在後')
+    ok((await O.expandOrderSet(deptSet.id)).medications.length > 0, '同科醫師可以套用')
+    const input = { name: '糖尿病追蹤', diagnoses: deptSet.diagnoses, medications: deptSet.medications.slice(0, 1), procedures: [], scope: 'dept' }
+    try {
+      await O.saveOrderSet(input)
+      ok(false, '同名科室組套應先確認')
+    } catch (e) {
+      ok(e.code === 'CONFLICT' && e.field === 'name' && e.message.includes('內科科室組套') && e.message.includes('陳映如'), `存同名科室組套 → 「${e.message}」`)
+    }
+    const over = await O.saveOrderSet({ ...input, overwrite: true, plan: '黃醫師改過' })
+    ok(over.id === deptSet.id && over.updatedBy === 'DR03' && dbm.db.auditLogs[0].detail.includes('內科科室組套'), '同科醫師確認後覆蓋科室組套：記下最後修改人、稽核標明科室組套')
+    const own = await O.saveOrderSet({ ...input, scope: 'personal', name: '糖尿病追蹤' })
+    ok(own.scope === 'personal' && own.id !== deptSet.id, '個人組套可以和科室組套同名（各自的範圍）')
+    await as('dr02')
+    const again = (await O.listOrderSets()).find((x) => x.id === deptSet.id)
+    ok(again?.updatedByName === '黃柏翰' && again.plan === '黃醫師改過' && !(await O.listOrderSets()).some((x) => x.id === own.id), '陳映如看到黃柏翰改過的版本；看不到黃柏翰的個人組套')
+    await as('dr03')
+    await O.deleteOrderSet(own.id)
+    await O.deleteOrderSet(deptSet.id)
+    await as('dr02')
+    ok(!(await O.listOrderSets()).some((x) => x.id === deptSet.id), '同科醫師刪除科室組套後，大家都看不到了')
+    const { readFileSync } = await import('node:fs')
+    const bar = readFileSync('src/pages/opd/components/OrderSetBar.vue', 'utf8')
+    const opd = readFileSync('src/pages/opd/OpdPage.vue', 'utf8')
+    ok(!/doctorId|deptId ===|deptId !==/.test(bar), '組套列不自己判斷誰能看、能改（服務層 canUse）')
+    ok(opd.includes('expandPhrase(') && opd.includes('isComposing') && !/startsWith\('\.'\)/.test(opd), '看診頁用 expandPhrase 展開、輸入法選字時不攔空白鍵')
+    await as('clerk01')
+  }
+
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
   console.log('\n[藥袋法定欄位]')
   {

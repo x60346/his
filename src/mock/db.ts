@@ -23,6 +23,7 @@ import type {
   MarRecord,
   NursingNote,
   OrderSet,
+  Phrase,
   Patient,
   PreventItem,
   PreventRecord,
@@ -83,15 +84,17 @@ export interface Database {
   handovers: HandoverNote[]
   preventItems: PreventItem[]
   preventRecords: PreventRecord[]
-  /** 醫師個人組套（常用處方） */
+  /** 組套（常用處方）：醫師個人或科室共用 */
   orderSets: OrderSet[]
+  /** 醫師個人片語 */
+  phrases: Phrase[]
   auditLogs: AuditLog[]
   /** 流水號計數器，例：receipt:2024-05-01 */
   counters: Record<string, number>
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 38
+export const SCHEMA_VERSION = 39
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(): Database {
