@@ -188,7 +188,7 @@ const print = () => window.print()
                 <div v-if="it.drugNameZh" class="text-xs text-slate-600">{{ it.drugNameZh }}</div>
                 <div class="flex items-center gap-1 text-xs text-slate-500">{{ it.spec }}<UBadge v-if="it.highAlert" tone="purple">高警訊</UBadge></div>
               </td>
-              <td class="px-3 py-2 text-slate-700">{{ it.dose }} {{ it.doseUnit }}・{{ it.freq }}・{{ it.route }}<span v-if="it.timingShort" :class="['ml-1 rounded px-1 text-xs', it.timingShort === '飯前飯後皆可' ? 'text-slate-500' : 'bg-amber-100 font-medium text-amber-800']">{{ it.timingShort }}</span></td>
+              <td class="px-3 py-2 text-slate-700">{{ it.dose }} {{ it.doseUnit }}・{{ it.freq }}・{{ it.route }}<span v-if="it.timingShort" :class="['ml-1 rounded px-1 text-xs', it.timingShort === '飯前飯後皆可' ? 'text-slate-500' : 'bg-amber-100 font-medium text-amber-800']">{{ it.timingShort }}</span><span v-if="it.timingByDoctor" class="ml-1 rounded bg-sky-100 px-1 text-xs font-medium text-sky-800" title="醫師為這張處方指定的服用時機，和藥品主檔不同">醫師指定</span></td>
               <td class="px-3 py-2 text-right">{{ it.days }}</td>
               <td class="px-3 py-2 text-right font-semibold">{{ it.qty }}</td>
               <td :class="['px-3 py-2 text-right', it.shortage ? 'font-semibold text-red-600' : 'text-slate-500']">

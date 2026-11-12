@@ -6,7 +6,7 @@ import type { Diagnosis, MedicationOrder, OrderSet, ProcedureOrder } from '@/typ
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
-import { find, nameOf, pickUsable } from './views'
+import { cleanRxTimings, find, nameOf, pickUsable } from './views'
 
 function me(): { doctorId: string; deptId: string } {
   const u = requireUser('doctor')
@@ -98,9 +98,11 @@ export function saveOrderSet(input: OrderSetInput): Promise<OrderSetView> {
       fail(`已有名為「${name}」的${scopeText(existing)}${who}`, 'CONFLICT', 'name')
     }
     const t = now()
+    const medications = structuredClone(input.medications)
+    cleanRxTimings(medications)
     const content = {
       diagnoses: structuredClone(input.diagnoses),
-      medications: structuredClone(input.medications),
+      medications,
       procedures: structuredClone(input.procedures),
       subjective: input.subjective?.trim() || undefined,
       plan: input.plan?.trim() || undefined,

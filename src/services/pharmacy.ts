@@ -10,7 +10,7 @@ import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
 import { dispenseBlocker, rxExpired, rxValidUntil } from './rx-rules'
-import { timingText } from './drug-rules'
+import { effectiveTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 
 export interface DispenseItem {
@@ -35,6 +35,8 @@ export interface DispenseItem {
   /** 服用時機（藥袋用完整句、處方表用短字；不必印為空字串）——規則見 drug-rules.timingText */
   timingText: string
   timingShort: string
+  /** 時機是醫師為這筆處方指定的（和主檔不同）：處方表標「醫師指定」，藥師才知道是刻意的、不是主檔錯了 */
+  timingByDoctor?: boolean
   /** 作用或適應症、警語或副作用（藥袋用） */
   indication: string
   warning: string
@@ -92,8 +94,9 @@ function dispenseView(d: Dispense): DispenseView {
       stock: stockLoc.counting(m.drugId, stockLoc.opd()) ? 0 : usable,
       ...(stockLoc.counting(m.drugId, stockLoc.opd()) ? { counting: stockLoc.counting(m.drugId, stockLoc.opd()) } : {}),
       highAlert: drug?.highAlert ?? false,
-      timingText: timingText(drug?.timing, m.freq, m.route),
-      timingShort: timingText(drug?.timing, m.freq, m.route, true),
+      timingText: timingText(effectiveTiming(drug?.timing, m.timing), m.freq, m.route),
+      timingShort: timingText(effectiveTiming(drug?.timing, m.timing), m.freq, m.route, true),
+      ...(m.timing && timingApplies(m.freq, m.route) ? { timingByDoctor: true } : {}),
       indication: drug?.indication ?? '',
       warning: drug?.warning ?? '',
       shortage: d.status !== 'dispensed' && usable < m.qty,

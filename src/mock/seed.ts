@@ -16,6 +16,7 @@ import type {
   NursingNote,
   OrderSet,
   Drug,
+  DrugTiming,
   Phrase,
   TransferOrder,
   UdDispense,
@@ -43,6 +44,7 @@ import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
 import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rules'
 import { udPerDose } from '@/services/ud-rules'
+import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import * as codes from './codes'
 import type { Database } from './db'
@@ -67,7 +69,8 @@ interface Scenario {
   o: string
   a: string
   p: string
-  meds: [drugId: string, dose: number, freq: string, days: number][]
+  /** 第 5 欄：醫師為這張處方指定的服用時機（示範用，沒有＝照主檔） */
+  meds: [drugId: string, dose: number, freq: string, days: number, timing?: DrugTiming][]
   procs?: string[]
   caseType?: string
 }
@@ -86,8 +89,8 @@ const scenarios: Scenario[] = [
     meds: [['M012', 1, 'QD', 28], ['M018', 1, 'HS', 28]], caseType: '04',
   },
   {
-    dept: 'D02', icd: ['E11.9', 'I10'], s: '糖尿病追蹤，飲食控制中，偶有口渴。', o: 'AC sugar 142 mg/dL。', a: '第二型糖尿病，血糖控制略高', p: '調整 Metformin，衛教飲食，追蹤 HbA1c。',
-    meds: [['M015', 1, 'BID', 28], ['M016', 1, 'QD', 28], ['M013', 1, 'QD', 28]], procs: ['P004', 'P005'], caseType: '04',
+    dept: 'D02', icd: ['E11.9', 'I10'], s: '糖尿病追蹤，飲食控制中，偶有口渴。', o: 'AC sugar 142 mg/dL。', a: '第二型糖尿病，血糖控制略高', p: '調整 Metformin：隨餐服用仍胃脹，改飯後。衛教飲食，追蹤 HbA1c。',
+    meds: [['M015', 1, 'BID', 28, 'PC'], ['M016', 1, 'QD', 28], ['M013', 1, 'QD', 28]], procs: ['P004', 'P005'], caseType: '04',
   },
   {
     dept: 'D02', icd: ['K21.9'], s: '胸口灼熱感、飯後胃酸逆流兩週。', o: '上腹部輕壓痛。', a: '胃食道逆流', p: '制酸劑治療，避免睡前進食。',
@@ -336,9 +339,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const conflicts = new Set(checkAllergies(pt.allergies, sc.meds.map(([id]) => drugMap.get(id)!)).map((w) => w.drugId))
     const safeMeds = sc.meds.filter(([id]) => !conflicts.has(id))
     if (conflicts.size && !safeMeds.some(([id]) => id === 'M001')) safeMeds.push(['M001', 1, 'TID', sc.meds[0][3]])
-    const meds: MedicationOrder[] = safeMeds.map(([drugId, dose, freq, days]) => {
+    const meds: MedicationOrder[] = safeMeds.map(([drugId, dose, freq, days, timing]) => {
       const d = drugMap.get(drugId)!
-      return { drugId, dose, freq, route: d.defaultRoute, days, qty: autoQty(d, dose, freqTimes(freq), days) ?? 1, selfPay: false }
+      return { drugId, dose, freq, route: d.defaultRoute, days, qty: autoQty(d, dose, freqTimes(freq), days) ?? 1, selfPay: false, ...(timing ? { timing } : {}) }
     })
     const procs: ProcedureOrder[] = (sc.procs ?? []).map((procId) => ({ procId, qty: 1, selfPay: false }))
     const adult = pt.birthDate < addDays(T, -365 * 12)
@@ -655,13 +658,13 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   interface IpdScenario {
     dept: string; doctor: string; dx: string; reason: string; diet: string
-    meds: [drugId: string, dose: number, freq: string, route: string][]
+    meds: [drugId: string, dose: number, freq: string, route: string, timing?: DrugTiming][]
     prn?: [drugId: string, dose: number, route: string][]
     nursing: string[]
   }
   const ipdScenarios: IpdScenario[] = [
     { dept: 'D02', doctor: 'DR02', dx: 'J18.9 肺炎', reason: '發燒咳嗽、血氧偏低', diet: '普通飲食', meds: [['M036', 1, 'Q12H', 'IV'], ['M037', 1, 'QD', 'IV'], ['M010', 1, 'TID', 'PO']], prn: [['M001', 1, 'PO']], nursing: ['Vital signs Q4H', '監測血氧，SpO2 < 92% 給予氧氣'] },
-    { dept: 'D02', doctor: 'DR03', dx: 'E11.65 糖尿病伴高血糖', reason: '血糖控制不佳', diet: '糖尿病飲食 1800 kcal', meds: [['M015', 1, 'BID', 'PO'], ['M038', 10, 'HS', 'SC']], nursing: ['AC/HS 血糖監測', '糖尿病衛教'] },
+    { dept: 'D02', doctor: 'DR03', dx: 'E11.65 糖尿病伴高血糖', reason: '血糖控制不佳', diet: '糖尿病飲食 1800 kcal', meds: [['M015', 1, 'BID', 'PO', 'PC'], ['M038', 10, 'HS', 'SC']], nursing: ['AC/HS 血糖監測', '糖尿病衛教'] },
     { dept: 'D03', doctor: 'DR04', dx: 'K35.80 急性闌尾炎', reason: '右下腹痛，安排手術', diet: '禁食', meds: [['M036', 1, 'Q12H', 'IV'], ['M037', 1, 'QD', 'IV']], prn: [['M039', 1, 'IM']], nursing: ['術後傷口護理', 'Vital signs Q4H'] },
     { dept: 'D06', doctor: 'DR07', dx: 'S52.501A 右橈骨遠端骨折', reason: '跌倒骨折，安排復位固定', diet: '普通飲食', meds: [['M030', 1, 'BID', 'PO'], ['M022', 1, 'QD', 'PO']], prn: [['M031', 1, 'PO']], nursing: ['患肢抬高、觀察末梢循環'] },
     { dept: 'D02', doctor: 'DR02', dx: 'I63.9 腦梗塞', reason: '右側肢體無力', diet: '吞嚥困難軟質飲食', meds: [['M019', 1, 'QD', 'PO'], ['M018', 1, 'HS', 'PO'], ['M012', 1, 'QD', 'PO']], nursing: ['神經學評估 Q4H', '預防跌倒', '翻身 Q2H'] },
@@ -680,8 +683,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const handovers: HandoverNote[] = []
   const genMar = (order: IpdOrder, date: string) => {
     const f = codes.frequencies.find((x) => x.code === order.freq)
-    if (!f || !f.times.length) return
-    for (const t of f.times) {
+    if (!f) return
+    for (const t of marTimes(f.code, f.times, order.timing, order.route)) {
       const scheduledAt = `${date} ${t}`
       if (scheduledAt < order.startAt) continue
       // 最近 90 分鐘內到期的保留未執行：真實病房總有幾筆「正要給、還沒給」，護理站才看得到逾時提醒
@@ -712,10 +715,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
     const startAt = adm.admittedAt!
     const docUser = sc.doctor
-    sc.meds.forEach(([drugId, dose, freq, route]) => {
+    sc.meds.forEach(([drugId, dose, freq, route, rxTiming]) => {
       const d = drugMap.get(drugId)!
       const o: IpdOrder = {
         id: id('IO'), admissionId: adm.id, type: 'long', category: 'medication', drugId, content: d.name, dose, freq, route,
+        // 和 ipd.addOrder 一樣：開立時把有效時機存在醫囑上
+        ...(timingApplies(freq, route) ? { timing: effectiveTiming(d.timing, rxTiming), ...(rxTiming ? { timingSet: true } : {}) } : {}),
         startAt, status: 'active', doctorId: docUser, createdAt: startAt,
       }
       ipdOrders.push(o)

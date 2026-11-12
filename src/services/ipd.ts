@@ -1,11 +1,12 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
-import type { DischargeSummary, IpdOrder, MarRecord, ProgressNote } from '@/types'
+import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
+import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
@@ -22,7 +23,8 @@ export function ensureMar(admissionId: string, date: string): boolean {
   let added = false
   const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long')
   for (const o of orders) {
-    const times = find.freq(o.freq ?? '')?.times ?? []
+    // 給藥時間依服用時機對齊用餐（drug-rules.marTimes）；時機是開立時存在醫囑上的，不跟著主檔變
+    const times = marTimes(o.freq ?? '', find.freq(o.freq ?? '')?.times ?? [], o.timing, o.route)
     for (const t of times) {
       const at = `${date} ${t}`
       if (at < o.startAt || (o.stopAt && at >= o.stopAt)) continue
@@ -40,6 +42,8 @@ export interface OrderView extends IpdOrder {
   doctorName: string
   highAlert: boolean
   freqLabel: string
+  /** 服用時機短字（飯前、飯後…）；不適用為空字串 */
+  timingShort: string
   /** 劑量單位：醫囑上的劑量必須帶單位，「1」不知道是 1 瓶還是 1 克 */
   unit: string
 }
@@ -53,6 +57,7 @@ export const orderView = (o: IpdOrder): OrderView => {
     doctorName: nameOf.doctor(o.doctorId),
     highAlert: drug?.highAlert ?? false,
     freqLabel: o.freq ? find.freq(o.freq)?.label ?? o.freq : '',
+    timingShort: o.category === 'medication' && o.type === 'long' ? timingText(o.timing, o.freq ?? '', o.route ?? '', true) : '',
     unit: drug ? doseUnitOf(drug) : '',
   }
 }
@@ -67,6 +72,8 @@ export function listOrders(admissionId: string): Promise<OrderView[]> {
 }
 
 export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route'> & {
+  /** 醫師指定的服用時機（空＝照主檔）；開立時會把有效時機存在醫囑上 */
+  timing?: DrugTiming | ''
   /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
   allowDuplicate?: boolean
   /** 劑量偏高時，醫師確認無誤 */
@@ -89,6 +96,7 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     const a = activeAdmission(input.admissionId)
     const t = now()
     let content = input.content.trim()
+    let timing: Pick<IpdOrder, 'timing' | 'timingSet'> = {}
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
@@ -105,6 +113,10 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
         fail(`病人已有執行中的 ${drug.name}（${dup.map((o) => `每次 ${o.dose} ${doseUnitOf(drug)} ${o.freq}`).join('、')}），如確定要再開一筆請確認`, 'CONFLICT')
       }
       content = content || drug.name
+      // 服用時機：開立時決定、存在醫囑上（排程依它排）。只有長期、適用的（口服、非睡前／需要時）才有
+      const rx = normalizeRxTiming(drug.timing, { timing: input.timing, freq: input.freq, route: input.route ?? '' })
+      if (rx === 'invalid') failField('timing', '服用時機不正確')
+      timing = input.type === 'long' && timingApplies(input.freq, input.route) ? { timing: effectiveTiming(drug.timing, rx), ...(rx ? { timingSet: true } : {}) } : {}
     } else if (input.category === 'procedure') {
       const proc = usable.procedure(input.procId ?? '')
       content = content || proc.name
@@ -113,9 +125,10 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, ...fields } = input
     const o: IpdOrder = {
       ...fields,
+      ...timing,
       content,
       id: newId('IO'),
       startAt: t,
@@ -169,6 +182,8 @@ export interface MarView extends MarRecord {
   unit: string
   route?: string
   freq?: string
+  /** 服用時機短字（飯前、飯後…）：護理師看得出為什麼排 07:00 而不是 09:00 */
+  timingShort: string
   /** 長期排程或臨時（STAT）給藥 */
   orderType: IpdOrder['type']
   highAlert: boolean
@@ -193,6 +208,7 @@ export function marViews(admissionId: string, date: string): MarView[] {
         unit: d ? doseUnitOf(d) : '',
         route: o?.route,
         freq: o?.freq,
+        timingShort: o?.type === 'long' && o.timing && o.timing !== 'ANY' ? timingText(o.timing, o.freq ?? '', o.route ?? '', true) : '',
         orderType: o?.type ?? 'long',
         highAlert: d?.highAlert ?? false,
         nurseName: nameOf.user(m.nurseId),

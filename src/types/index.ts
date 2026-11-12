@@ -215,6 +215,8 @@ export interface MedicationOrder {
   qty: number
   selfPay: boolean
   note?: string
+  /** 醫師為這筆處方指定的服用時機；沒有＝照藥品主檔（只存和主檔不同、而且適用的，見 drug-rules.normalizeRxTiming） */
+  timing?: DrugTiming
 }
 
 /** 處置 / 檢驗 / 影像醫令 */
@@ -578,6 +580,13 @@ export interface IpdOrder {
   dose?: number
   freq?: string
   route?: string
+  /**
+   * 服用時機：開立時就把「當時的有效時機」存在醫囑上（給藥排程依它排時間）。
+   * 不跟著主檔變：主檔改了，已排的 07:00 和新算的 08:00 會同時存在，病人多一劑。要改時機就停掉重開
+   */
+  timing?: DrugTiming
+  /** 時機是醫師指定的（不是照主檔）：藥局、護理站標「醫師指定」 */
+  timingSet?: boolean
   startAt: string
   stopAt?: string
   status: 'active' | 'stopped' | 'done'

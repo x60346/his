@@ -7,7 +7,7 @@ import { autoQty, doseUnitOf } from './billing'
 import { checkDays, doseLevel, doseNote } from './dose-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { audit, fail, must, mutate, query, requireUser } from './http'
-import { find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
+import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
 import type { ExpandedOrders } from './orderset'
 
 export interface QueueItem extends VisitView {
@@ -141,6 +141,7 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
         m.qty = q
       }
     }
+    cleanRxTimings(e.medications)
     for (const p of e.procedures) usable.procedure(p.procId)
     for (const d of e.diagnoses) usable.icd(d.icd)
     if (e.refillTimes > 0 && v.caseType !== '04' && v.caseType !== '08') fail('連續處方箋需為慢性病案件（04）')

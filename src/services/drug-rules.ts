@@ -54,8 +54,62 @@ const FREQ_SAYS_WHEN = ['HS', 'PRN', 'STAT']
  * 「飯前飯後皆可」也印：以前全部印「飯後」，突然不印病人反而會問。
  */
 export function timingText(timing: DrugTiming | undefined, freq: string, route: string, short = false): string {
-  if (route !== 'PO' || FREQ_SAYS_WHEN.includes(freq)) return ''
+  if (!timingApplies(freq, route)) return ''
   return (short ? TIMING_SHORT : TIMING_LABEL)[timing ?? 'ANY']
+}
+
+/** 這個頻率與途徑有沒有「飯前飯後」可言：口服、而且頻率本身沒說明時機。醫師開藥列的時機選單也看這條 */
+export function timingApplies(freq: string | undefined, route: string | undefined): boolean {
+  return route === 'PO' && !!freq && !FREQ_SAYS_WHEN.includes(freq)
+}
+
+// ---------- 單一處方改服用時機 ----------
+// 醫師可以為這一筆處方指定時機（例：這位病人的 Metformin 改飯後，因為飯前吃胃不舒服）。
+// 門診處方只存「指定」（沒存＝照主檔）：組套、同前次會複製處方，若連主檔值一起存，主檔之後改了，複製出去的還是舊值。
+
+/** 這筆處方實際的服用時機：醫師指定優先，否則照主檔 */
+export function effectiveTiming(drugTiming: DrugTiming | undefined, rxTiming: DrugTiming | undefined): DrugTiming {
+  return rxTiming ?? drugTiming ?? 'ANY'
+}
+
+/**
+ * 存檔前整理醫師指定的時機：不適用（非口服、睡前／需要時／立即）或和主檔一樣的就不存——
+ * 存了也印不出來、或只是把主檔值凍結住。回傳要存的值（undefined＝不存）；不認得的值回傳 'invalid'
+ */
+export function normalizeRxTiming(drugTiming: DrugTiming | undefined, rx: { timing?: DrugTiming | ''; freq: string; route: string }): DrugTiming | undefined | 'invalid' {
+  if (!rx.timing) return undefined
+  if (!DRUG_TIMINGS.includes(rx.timing)) return 'invalid'
+  if (!timingApplies(rx.freq, rx.route) || rx.timing === (drugTiming ?? 'ANY')) return undefined
+  return rx.timing
+}
+
+// ---------- 住院給藥時間 ----------
+// 以前一律照頻率的固定時間（TID＝09:00、13:00、17:00），飯前藥排在 09:00，病人早就吃完早餐了。
+// 現在「一天幾次」的頻率（QD／BID／TID／QID）對齊病房的用餐時間；間隔型（Q6H、Q8H、Q12H）是為了血中濃度，照固定間隔；
+// 睡前、需要時、立即本身就說明了時機。非口服不分飯前飯後。
+
+/** 病房用餐時間（全院一套） */
+export const WARD_MEALS = { breakfast: '07:30', lunch: '12:00', dinner: '17:30' } as const
+const BEDTIME = '21:00'
+/** 各時機對應早、午、晚三餐的給藥時間 */
+const MEAL_SLOTS: Partial<Record<DrugTiming, [string, string, string]>> = {
+  AC: ['07:00', '11:30', '17:00'], // 餐前 30 分鐘
+  PC: ['08:00', '12:30', '18:00'], // 餐後 30 分鐘
+  WITH: [WARD_MEALS.breakfast, WARD_MEALS.lunch, WARD_MEALS.dinner],
+  EMPTY: ['06:30', '11:00', '16:30'], // 餐前 1 小時
+}
+/** 一天幾次的頻率用哪幾餐：BID 早晚、QID 第 4 次在睡前 */
+const MEAL_FREQ: Record<string, ('b' | 'l' | 'd' | 'hs')[]> = { QD: ['b'], BID: ['b', 'd'], TID: ['b', 'l', 'd'], QID: ['b', 'l', 'd', 'hs'] }
+
+/**
+ * 住院長期給藥醫囑一天的給藥時間（HH:mm）。fixedTimes 是頻率主檔的固定時間（飯前飯後皆可、間隔型、非口服用它）。
+ * 開立醫囑產生排程（ipd.ensureMar）與展示資料（seed）都用這一份。
+ */
+export function marTimes(freq: string, fixedTimes: readonly string[], timing: DrugTiming | undefined, route: string | undefined): string[] {
+  const slots = timing ? MEAL_SLOTS[timing] : undefined
+  const meals = MEAL_FREQ[freq]
+  if (!slots || !meals || !timingApplies(freq, route)) return [...fixedTimes]
+  return meals.map((m) => (m === 'hs' ? BEDTIME : slots[{ b: 0, l: 1, d: 2 }[m]]))
 }
 
 // ---------- 藥品搜尋 ----------

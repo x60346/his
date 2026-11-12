@@ -3,13 +3,14 @@
 //   給藥 → 藥品、劑量、頻率、途徑；處置檢驗 → 醫令項目；飲食、護理 → 文字
 // 送出時「依類別組裝」要送的欄位，而不是把整個表單丟出去——
 // 否則切換類別後殘留的欄位（例如先選了藥又改成飲食）會被一起送出。
+// 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
 import { computed, reactive, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { doseLevel, doseNote, doseUnitOf, ipdApi, masterApi, opdApi, type AdmissionView } from '@/services'
+import { doseLevel, doseNote, doseUnitOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
-import type { Drug, IpdOrderCategory, Procedure } from '@/types'
+import type { Drug, DrugTiming, IpdOrderCategory, Procedure } from '@/types'
 
 const open = defineModel<boolean>({ default: false })
 const props = defineProps<{ admission?: AdmissionView }>()
@@ -30,12 +31,14 @@ const form = reactive({
   dose: 1 as number | undefined,
   freq: 'QD' as string | number | undefined,
   route: 'PO' as string | number | undefined,
+  /** 空＝照主檔 */
+  timing: '' as string | number | undefined,
   proc: null as Procedure | null,
   content: '',
 })
 
 watch(open, (v) => {
-  if (v) Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', proc: null, content: '' })
+  if (v) Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
 })
 // 檢驗、處置通常是臨時醫囑；飲食、護理通常是長期醫囑
 watch(() => form.category, (c) => {
@@ -52,10 +55,26 @@ watch(() => form.type, (t) => {
 })
 const routeOptions = masterApi.staticCodes.routes.map((r) => ({ label: `${r.code}　${r.name}`, value: r.code }))
 
+/** 長期給藥、口服、非睡前／需要時：才有服用時機可選 */
+const showTiming = computed(() => !!form.drug && form.type === 'long' && timingApplies(String(form.freq), String(form.route)))
+const timingOptions = computed(() => {
+  const master = form.drug?.timing ?? 'ANY'
+  return [{ label: `照主檔（${TIMING_SHORT[master]}）`, value: '' }, ...DRUG_TIMINGS.filter((t) => t !== master).map((t) => ({ label: TIMING_SHORT[t], value: t }))]
+})
+/** 每天的給藥時間預覽（長期、有固定時間的） */
+const schedulePreview = computed(() => {
+  if (!form.drug || form.type !== 'long') return []
+  const f = (freqList.value ?? []).find((x) => x.code === form.freq)
+  if (!f) return []
+  const rx = showTiming.value && form.timing ? (String(form.timing) as DrugTiming) : undefined
+  return marTimes(f.code, f.times, effectiveTiming(form.drug.timing, rx), String(form.route))
+})
+
 function pickDrug(d: Drug) {
   form.drug = d
   form.dose = d.defaultDose
   form.route = d.defaultRoute
+  form.timing = ''
   if (form.type === 'long') form.freq = d.defaultFreq === 'PRN' ? 'PRN' : d.defaultFreq
 }
 
@@ -67,7 +86,7 @@ function buildInput(): OrderInput | string {
     case 'medication':
       if (!form.drug) return '請選擇藥品'
       if (!form.dose || form.dose <= 0) return '請輸入劑量'
-      return { ...base, content: '', drugId: form.drug.id, dose: form.dose, freq: String(form.freq), route: String(form.route) }
+      return { ...base, content: '', drugId: form.drug.id, dose: form.dose, freq: String(form.freq), route: String(form.route), ...(showTiming.value && form.timing ? { timing: String(form.timing) as DrugTiming } : {}) }
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
       return { ...base, content: '', procId: form.proc.id }
@@ -177,7 +196,13 @@ ${doseNote(drug, input.dose ?? 0)}。
           <USelect v-model="form.freq" label="頻率" :options="freqOptions" />
           <USelect v-model="form.route" label="途徑" :options="routeOptions" />
         </div>
-        <p v-if="form.type === 'long' && form.freq !== 'PRN'" class="text-xs text-slate-500">長期給藥醫囑開立後，系統會依頻率產生今天與明天的給藥排程，護理站即可看到。</p>
+        <div v-if="showTiming" class="grid grid-cols-3 gap-3">
+          <USelect v-model="form.timing" label="服用時機" :options="timingOptions" :error="save.fieldErrors.value.timing" />
+        </div>
+        <p v-if="form.type === 'long' && form.freq !== 'PRN'" class="text-xs text-slate-500">
+          長期給藥醫囑開立後，系統會依頻率產生今天與明天的給藥排程，護理站即可看到。
+          <template v-if="schedulePreview.length"><br />每天給藥時間：<b class="tabular text-slate-700">{{ schedulePreview.join('、') }}</b><template v-if="showTiming">（依服用時機對齊病房用餐時間）</template></template>
+        </p>
         <p v-if="form.freq === 'PRN'" class="text-xs text-slate-500">PRN（需要時）不產生固定排程，由護理師依病人狀況給藥並記錄原因。</p>
       </template>
 

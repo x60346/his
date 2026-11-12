@@ -7,6 +7,7 @@ import { outstandingOf, type BillingLookup } from './billing'
 import { fail, must } from './http'
 import { openQuery } from './nursing-rules'
 import { checkInProblem } from './queue-rules'
+import { normalizeRxTiming } from './drug-rules'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -64,6 +65,20 @@ export function pickUsable(src: { diagnoses: Diagnosis[]; medications: Medicatio
   const procedures = keep(src.procedures, (p) => !!find.procedure(p.procId)?.active, (p) => find.procedure(p.procId)?.name ?? p.procId)
   const diagnoses = keep(src.diagnoses, (d) => { const c = db.icdCodes.find((x) => x.code === d.icd); return !!c && c.active !== false }, (d) => `診斷 ${d.icd}`)
   return { diagnoses, medications, procedures, skipped }
+}
+
+/**
+ * 存處方（完成看診、存組套）前整理醫師指定的服用時機：不適用、和主檔一樣的拿掉，不認得的擋下。
+ * 規則在 drug-rules.normalizeRxTiming；這裡只負責改資料。
+ */
+export function cleanRxTimings(meds: MedicationOrder[]): void {
+  for (const m of meds) {
+    const d = find.drug(m.drugId)
+    const t = normalizeRxTiming(d?.timing, m)
+    if (t === 'invalid') fail(`${d?.name ?? m.drugId} 的服用時機不正確`)
+    if (t) m.timing = t
+    else delete m.timing
+  }
 }
 
 /**

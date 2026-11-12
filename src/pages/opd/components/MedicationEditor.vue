@@ -6,12 +6,13 @@
 //     無法換算，總量由醫師填寫
 //   - 過敏：顯示警示但不阻擋，最終由醫師判斷；庫存不足、高警訊藥品也標示出來
 //   - 「全部天數」一次改完（dose-rules.applyDaysToAll）：總量手動填的、無法換算的不自動改，標「請確認總量」
+//   - 服用時機：預設照藥品主檔，可為這張處方另外指定（只有口服、頻率不是睡前／需要時／立即才有選單——和藥袋同一條 timingApplies）
 import { computed, ref } from 'vue'
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UButton, UEmpty, USearchSelect } from '@/components/ui'
-import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, MAX_RX_DAYS, masterApi, type AllergyWarning, type DrugView } from '@/services'
+import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, DRUG_TIMINGS, MAX_RX_DAYS, masterApi, timingApplies, TIMING_SHORT, type AllergyWarning, type DrugView } from '@/services'
 import { useUi } from '@/stores/ui'
-import type { Frequency, MedicationOrder } from '@/types'
+import type { DrugTiming, Frequency, MedicationOrder } from '@/types'
 
 /** 畫面用的列：多一個「總量是否手動修改」旗標，送出前會移除 */
 export type MedRow = MedicationOrder & { _manual?: boolean; _qtyStale?: boolean }
@@ -79,6 +80,15 @@ function applyAll(days: number | undefined) {
   ui.toast[names.length ? 'warning' : 'success'](`${res.rows.length} 種藥改為 ${days} 天${names.length ? `；${names.join('、')} 的總量請確認` : ''}`)
 }
 
+/** 時機選單：空值＝照主檔（選項上寫出主檔是什麼，醫師不必去查） */
+const masterTiming = (r: MedRow) => TIMING_SHORT[props.drugs.get(r.drugId)?.timing ?? 'ANY']
+function setTiming(r: MedRow, v: string) {
+  const t = v as DrugTiming | ''
+  // 選回和主檔一樣的也等於「照主檔」，不存（服務層同樣會整理）
+  if (!t || t === (props.drugs.get(r.drugId)?.timing ?? 'ANY')) delete r.timing
+  else r.timing = t
+}
+
 const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === drugId).map((w) => w.allergen)
 </script>
 
@@ -119,7 +129,7 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
           <tr>
             <th class="px-2 py-2 text-left">藥品</th>
             <th class="px-2 py-2 text-left">劑量</th>
-            <th class="px-2 py-2 text-left">頻率</th>
+            <th class="px-2 py-2 text-left">頻率／時機</th>
             <th class="px-2 py-2 text-left">途徑</th>
             <th class="px-2 py-2 text-left">天數</th>
             <th class="px-2 py-2 text-left">總量</th>
@@ -153,6 +163,17 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
             <td class="px-2 py-1.5">
               <select v-model="r.freq" class="form-control w-24 px-2" :disabled="readonly" @change="recalc(r)">
                 <option v-for="f in freqs" :key="f.code" :value="f.code">{{ f.code }}</option>
+              </select>
+              <select
+                v-if="timingApplies(r.freq, r.route)"
+                :value="r.timing ?? ''"
+                aria-label="服用時機"
+                :class="['form-control mt-1 w-24 px-1 text-xs', r.timing && 'border-sky-400 text-sky-800']"
+                :disabled="readonly"
+                @change="setTiming(r, ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="">{{ masterTiming(r) }}（主檔）</option>
+                <option v-for="t in DRUG_TIMINGS.filter((x) => x !== (drugs.get(r.drugId)?.timing ?? 'ANY'))" :key="t" :value="t">{{ TIMING_SHORT[t] }}</option>
               </select>
             </td>
             <td class="px-2 py-1.5">

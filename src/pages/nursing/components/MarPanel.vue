@@ -204,7 +204,7 @@ async function complete(o: OrderView) {
               :key="m.id"
               :class="['flex items-center gap-3 px-3 py-2 text-sm', urgencyOf(m) === 'overdue' && 'bg-red-50/60', m.status !== 'pending' && 'text-slate-500']"
             >
-              <span :class="['tabular w-12 text-base font-semibold', urgencyOf(m) === 'overdue' ? 'text-red-700' : 'text-slate-700']">{{ m.scheduledAt.slice(11) }}</span>
+              <span :class="['tabular w-12 text-base font-semibold', urgencyOf(m) === 'overdue' ? 'text-red-700' : 'text-slate-700']">{{ m.scheduledAt.slice(11) }}<span v-if="m.timingShort" class="block text-[11px] font-normal text-amber-700" title="依服用時機對齊病房用餐時間">{{ m.timingShort }}</span></span>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5 font-medium text-slate-800">
                   {{ m.content }}

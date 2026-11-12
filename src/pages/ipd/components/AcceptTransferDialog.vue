@@ -80,7 +80,7 @@ async function onDecline() {
                 <div :class="['font-medium', stops[o.id] ? 'line-through' : 'text-slate-800']">
                   {{ o.content }}<UBadge v-if="o.highAlert" tone="purple" class="ml-1">高警訊</UBadge>
                 </div>
-                <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freqLabel }}・{{ o.route }}</div>
+                <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freqLabel }}・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template></div>
               </div>
               <span class="text-xs text-slate-500">{{ o.startAt.slice(5, 10) }} {{ o.doctorName }}</span>
               <UBadge :tone="stops[o.id] ? 'red' : 'green'">{{ stops[o.id] ? '停止' : '延續' }}</UBadge>

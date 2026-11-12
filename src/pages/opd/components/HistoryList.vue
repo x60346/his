@@ -3,7 +3,7 @@
 // 「同此次」帶診斷、藥品、處置、A、P；「只帶處方」只帶藥品。合併規則在看診頁的 mergeIntoDraft，這裡只送出事件。
 import { Copy } from 'lucide-vue-next'
 import { UButton, UEmpty } from '@/components/ui'
-import { doseUnitOf } from '@/services'
+import { doseUnitOf, TIMING_SHORT } from '@/services'
 import type { HistoryItem } from '@/services/opd'
 import type { Drug } from '@/types'
 
@@ -33,7 +33,7 @@ defineEmits<{ copy: [item: HistoryItem, only?: 'medications'] }>()
       <div v-if="h.procedures.length" class="text-slate-700"><span class="text-slate-500">處置：</span>{{ h.procedureNames.join('、') }}</div>
       <ul v-if="h.medications.length" class="mt-1.5 space-y-0.5 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
         <li v-for="m in h.medications" :key="m.drugId" class="tabular">
-          {{ drugs.get(m.drugId)?.name ?? m.drugId }}　{{ m.dose }} {{ drugs.get(m.drugId) ? doseUnitOf(drugs.get(m.drugId)!) : '' }} {{ m.freq }} {{ m.route }} × {{ m.days }} 天（{{ m.qty }}）
+          {{ drugs.get(m.drugId)?.name ?? m.drugId }}　{{ m.dose }} {{ drugs.get(m.drugId) ? doseUnitOf(drugs.get(m.drugId)!) : '' }} {{ m.freq }}<template v-if="m.timing">（{{ TIMING_SHORT[m.timing] }}）</template> {{ m.route }} × {{ m.days }} 天（{{ m.qty }}）
         </li>
       </ul>
     </li>

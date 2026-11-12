@@ -2614,6 +2614,96 @@ try {
     ok(bag.includes('it.timingText') && !bag.includes("'飯後服用'"), '藥袋元件用服務層算好的時機，不再自己寫死「飯後服用」')
   }
 
+  // 單一處方改服用時機：門診只存「和主檔不同、適用的」指定；住院開立時把有效時機存在醫囑上
+  console.log('\n[單一處方改服用時機]')
+  {
+    const dr = await load('/src/services/drug-rules.ts')
+    const { addDays } = await load('/src/utils/date.ts')
+    const n = (drugTiming, rx) => dr.normalizeRxTiming(drugTiming, rx)
+    ok(dr.effectiveTiming('WITH', 'PC') === 'PC' && dr.effectiveTiming('WITH', undefined) === 'WITH' && dr.effectiveTiming(undefined, undefined) === 'ANY', '有效時機：醫師指定優先，否則照主檔')
+    ok(n('WITH', { timing: 'PC', freq: 'BID', route: 'PO' }) === 'PC' && n('WITH', { timing: 'WITH', freq: 'BID', route: 'PO' }) === undefined && n('WITH', { timing: '', freq: 'BID', route: 'PO' }) === undefined,
+      '存檔整理：和主檔不同的才存；選回主檔、空值都不存')
+    ok(n('PC', { timing: 'AC', freq: 'HS', route: 'PO' }) === undefined && n('ANY', { timing: 'PC', freq: 'Q8H', route: 'IV' }) === undefined && n('PC', { timing: 'XX', freq: 'QD', route: 'PO' }) === 'invalid',
+      '不適用（睡前、非口服）不存；不認得的值回報錯誤')
+
+    // 組套存檔走同一份整理（cleanRxTimings）；套用時原樣帶出
+    await as('dr01')
+    const med = (drugId, freq, route, timing) => ({ drugId, dose: 1, freq, route, days: 3, qty: 3, selfPay: false, ...(timing ? { timing } : {}) })
+    const set = await api.orderSetApi.saveOrderSet({ name: '時機測試', diagnoses: [{ icd: 'J00', name: '急性鼻咽炎（感冒）', primary: true }], procedures: [],
+      medications: [med('M015', 'BID', 'PO', 'PC'), med('M022', 'QD', 'PO', 'AC'), med('M007', 'HS', 'PO', 'AC'), med('M002', 'TID', 'PO', 'ANY')] })
+    const tm = Object.fromEntries(set.medications.map((m) => [m.drugId, m.timing ?? '主檔']))
+    ok(tm.M015 === 'PC' && tm.M022 === '主檔' && tm.M007 === '主檔' && tm.M002 === 'ANY', `組套只存有意義的指定（${Object.entries(tm).map(([k, v]) => `${k}：${v}`).join('、')}）`)
+    await expectError(() => api.orderSetApi.saveOrderSet({ name: '時機錯誤', diagnoses: [], procedures: [], medications: [med('M015', 'BID', 'PO', 'XX')] }), '存不認得的服用時機')
+    const ex = await api.orderSetApi.expandOrderSet(set.id)
+    ok(ex.medications.find((m) => m.drugId === 'M015').timing === 'PC', '套用組套帶出醫師指定的時機')
+    await api.orderSetApi.deleteOrderSet(set.id)
+    const { readFileSync } = await import('node:fs')
+    ok(/cleanRxTimings\(e\.medications\)/.test(readFileSync('src/services/opd.ts', 'utf8')), '完成看診也走同一份整理（cleanRxTimings）')
+
+    // 種子：糖尿病追蹤的 Metformin 醫師改飯後 → 藥局處方表、藥袋照指定印
+    await as('ph01')
+    const rxEnc = dbm.db.encounters.find((e) => e.medications.some((m) => m.drugId === 'M015' && m.timing === 'PC') && dbm.db.dispenses.some((d) => d.encounterId === e.id))
+    ok(!!rxEnc, '示範資料有醫師指定時機的處方（Metformin 隨餐 → 飯後）')
+    const rxView = await api.pharmacyApi.getDispense(dbm.db.dispenses.find((d) => d.encounterId === rxEnc.id).id)
+    const met = rxView.items.find((it) => it.drugId === 'M015')
+    const other = rxView.items.find((it) => it.drugId !== 'M015')
+    ok(met.timingText === '飯後服用' && met.timingShort === '飯後' && met.timingByDoctor === true && other && !other.timingByDoctor,
+      `調劑單：Metformin 印「${met.timingText}」並標醫師指定；同張其他藥照主檔（${other?.drugName}：${other?.timingShort || '不印'}）`)
+
+    // 住院排程：一天幾次的對齊用餐，間隔型、非口服照固定時間
+    const mt = (freq, timing, route = 'PO') => dr.marTimes(freq, dbm.db.frequencies.find((f) => f.code === freq).times, timing, route).join(',')
+    ok(mt('TID', 'AC') === '07:00,11:30,17:00' && mt('TID', 'PC') === '08:00,12:30,18:00' && mt('TID', 'WITH') === '07:30,12:00,17:30' && mt('QD', 'EMPTY') === '06:30',
+      `TID 飯前 ${mt('TID', 'AC')}、飯後 ${mt('TID', 'PC')}、隨餐 ${mt('TID', 'WITH')}；QD 空腹 ${mt('QD', 'EMPTY')}`)
+    ok(mt('BID', 'PC') === '08:00,18:00' && mt('QID', 'AC') === '07:00,11:30,17:00,21:00', 'BID 早晚兩餐；QID 第 4 次在睡前 21:00')
+    ok(mt('TID', 'ANY') === '09:00,13:00,17:00' && mt('Q8H', 'AC') === '06:00,14:00,22:00' && mt('Q12H', 'PC') === '09:00,21:00' && mt('TID', 'PC', 'IV') === '09:00,13:00,17:00' && mt('HS', 'AC') === '21:00',
+      '飯前飯後皆可、間隔型（Q8H、Q12H）、非口服、睡前照頻率的固定時間')
+
+    const adm = dbm.db.admissions.find((a) => a.status === 'admitted')
+    await as('dr02')
+    const tomorrow = addDays(T, 1)
+    const marOf = (o) => dbm.db.mar.filter((m) => m.orderId === o.id && m.scheduledAt.startsWith(tomorrow)).map((m) => m.scheduledAt.slice(11)).sort().join(',')
+    const add = (drugId, freq, route, timing) => api.ipdApi.addOrder({ admissionId: adm.id, type: 'long', category: 'medication', drugId, content: '', dose: 1, freq, route, allowDuplicate: true, ...(timing !== undefined ? { timing } : {}) })
+    const ome = await add('M022', 'QD', 'PO')
+    const metO = await add('M015', 'TID', 'PO', 'PC')
+    const iv = await add('M036', 'Q12H', 'IV', 'PC')
+    const hs = await add('M007', 'HS', 'PO', 'AC')
+    ok(ome.timing === 'AC' && !ome.timingSet && marOf(ome) === '07:00' && ome.timingShort === '飯前', `照主檔：Omeprazole 存「飯前」在醫囑上，明天 ${marOf(ome)} 給（以前 09:00）`)
+    ok(metO.timing === 'PC' && metO.timingSet === true && marOf(metO) === '08:00,12:30,18:00', `醫師指定飯後：Metformin TID 排 ${marOf(metO)}，標醫師指定`)
+    ok(iv.timing === undefined && marOf(iv) === '09:00,21:00' && hs.timing === undefined && marOf(hs) === '21:00', '非口服、睡前不存時機（傳入的被忽略），照固定時間')
+    await expectError(() => add('M015', 'TID', 'PO', 'XX'), '住院醫囑不認得的服用時機')
+    const marV = (await api.ipdApi.listMar(adm.id, tomorrow)).filter((m) => m.orderId === ome.id || m.orderId === iv.id)
+    ok(marV.find((m) => m.orderId === ome.id).timingShort === '飯前' && marV.find((m) => m.orderId === iv.id).timingShort === '', '護理站給藥列標「飯前」（說明為什麼是 07:00）；IV 不標')
+
+    // 主檔之後改時機：已開的醫囑不跟著變，不會多出一劑
+    const omeDrug = dbm.db.drugs.find((d) => d.id === 'M022')
+    omeDrug.timing = 'PC'
+    const day2 = addDays(T, 2)
+    await api.ipdApi.listMar(adm.id, day2)
+    const day2Times = dbm.db.mar.filter((m) => m.orderId === ome.id && m.scheduledAt.startsWith(day2)).map((m) => m.scheduledAt.slice(11))
+    ok(day2Times.join(',') === '07:00' && marOf(ome) === '07:00', `主檔改成飯後後，已開的醫囑仍 ${day2Times.join(',')} 一劑（時機存在醫囑上，沒有多排 08:00）`)
+    omeDrug.timing = 'AC'
+    for (const o of [ome, metO, iv, hs]) await api.ipdApi.stopOrder(o.id)
+
+    // 示範資料：住院的給藥時間也用同一份規則；糖尿病病人的 Metformin 醫師指定飯後
+    const seedMet = dbm.db.ipdOrders.find((o) => o.drugId === 'M015' && o.timingSet && o.status === 'active')
+    ok(seedMet && seedMet.timing === 'PC' && dbm.db.mar.filter((m) => m.orderId === seedMet.id && m.scheduledAt.startsWith(T)).map((m) => m.scheduledAt.slice(11)).join(',') === '08:00,18:00',
+      '示範住院醫囑：Metformin BID 醫師指定飯後，排 08:00、18:00')
+    const seedOk = dbm.db.ipdOrders.filter((o) => o.category === 'medication' && o.type === 'long' && o.freq !== 'PRN' && o.createdAt < T && !o.timingSet)
+    const bad = seedOk.filter((o) => {
+      const f = dbm.db.frequencies.find((x) => x.code === o.freq)
+      const want = dr.marTimes(o.freq, f.times, o.timing, o.route)
+      return dbm.db.mar.filter((m) => m.orderId === o.id && m.scheduledAt.startsWith(T)).some((m) => !want.includes(m.scheduledAt.slice(11)))
+    })
+    if (bad.length) console.log(bad.map((o) => [o.id, o.drugId, o.freq, o.route, o.timing, o.createdAt, dbm.db.mar.filter((m) => m.orderId === o.id && m.scheduledAt.startsWith(T)).map((m) => m.scheduledAt.slice(11)).join(',')].join(' ')).join(' | '))
+    ok(bad.length === 0, `示範資料 ${seedOk.length} 筆長期給藥醫囑的排程都符合 marTimes`)
+    const srcSeed = readFileSync('src/mock/seed.ts', 'utf8')
+    const srcIpd = readFileSync('src/services/ipd.ts', 'utf8')
+    ok(srcSeed.includes('marTimes(') && srcIpd.includes('marTimes(') && !/for \(const t of f\.times\)/.test(srcSeed) && !/for \(const t of times\)[\s\S]{0,20}\?\.times/.test(srcIpd),
+      '排程只有一份規則：服務層與種子都呼叫 marTimes，沒有另外照頻率固定時間排')
+    const pages = ['src/pages/opd/components/MedicationEditor.vue', 'src/pages/ipd/components/OrderDialog.vue'].map((f) => readFileSync(f, 'utf8'))
+    ok(pages.every((t) => t.includes('timingApplies(')) && !pages.some((t) => /'HS', 'PRN'|\['HS'/.test(t)), '開藥畫面的時機選單用 timingApplies 判斷，不自己列睡前／需要時')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {

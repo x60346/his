@@ -244,7 +244,7 @@ async function submitNote() {
                       {{ o.content }}
                       <UBadge v-if="o.highAlert && o.status === 'active'" tone="purple" class="ml-1">高警訊</UBadge>
                     </div>
-                    <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}</div>
+                    <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template><span v-if="o.timingSet" class="ml-1 rounded bg-sky-100 px-1 text-sky-800">醫師指定</span></div>
                   </div>
                   <div class="tabular text-right text-xs">
                     <div>{{ o.startAt.slice(5) }} 開立</div>
