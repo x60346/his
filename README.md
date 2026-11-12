@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（552 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（561 項） |
 
 ### 展示帳號
 
@@ -147,6 +147,7 @@ scripts/smoke-flow.mjs   流程測試
 | FEFO 扣庫存、可用天數 | `services/stock-rules.ts` |
 | 庫存狀態標籤（缺貨、偏低、近效期、待報廢，可同時多項） | `stock-rules.stockFlags`：清單標籤、摘要卡片數字、點卡片篩選都用它 |
 | 盤點實際數量 | `stock-rules.checkStocktakeActual`：盤點對話框即時提示與服務層同一條 |
+| 服用時機（藥袋、藥局處方表） | `drug-rules.timingText`：只有口服才印；頻率是睡前、需要時、立即的不印 |
 | 建議補貨量 | `stock-rules.suggestRestockQty`：（等候中的處方 − 現有 − 已申請未到貨）＋安全庫存＋14 天用量，進位到 10；對話框顯示算式，種子資料也用它 |
 | 預防保健欄位格式（血壓、血糖…）與 BMI | `prevent-rules.FIELD_FORMATS`、`calcBmi`：BMI 由身高體重算，不讓人填 |
 | 藥品同名判斷 | `services/drug-rules.ts`（`sameNameDrugs`、`needsSameNameCheck`） |
@@ -301,7 +302,7 @@ scripts/smoke-flow.mjs   流程測試
 - **只印 `.print-area`**：無關的元素 `display: none`（不佔空間）；列印區塊的上層（版面、捲動區、對話框）用 `:has(.print-area)` 改回一般排版，拿掉 `fixed`、`overflow`、限高。以前用 `visibility: hidden` 加絕對定位，藥袋超過一頁就被截掉、收據外框被拉到頁尾。
 - **內容多就自然分頁**：日結報表 60 筆印成 3 頁；藥袋每張固定高度（`print:h-[134mm]`，兩欄兩列，A4 一頁 4 張），不會一張跨兩頁（實測 3／8／9／15 張分別印成 1／2／3／4 頁）。
 - **紙本要能追溯**：日結報表的表頭印出報表日期、**列印時間與列印人**——同一天印兩次數字不同時，查得出哪張是何時誰印的。列印時間在按下「列印」那一刻取值。
-- **藥袋**（`pharmacy/components/DrugBagLabels.vue`）：藥師法規定的欄位都印——藥局名稱地址電話（`utils/hospital.ts`，收據、掛號單、日結共用）、病人姓名性別年齡、藥名規格、用法劑量、天數總量、**作用、注意事項**（藥品主檔必填，管理員新增藥品沒填會被擋）、處方醫師、**調劑藥師**（核對的人；還沒核對就先印的話是目前登入的藥師）、調劑日。一張 1/4 A4，用最長的警語實際列印過，4 張一頁、沒有被裁掉。
+- **藥袋**（`pharmacy/components/DrugBagLabels.vue`）：藥師法規定的欄位都印——藥局名稱地址電話（`utils/hospital.ts`，收據、掛號單、日結共用）、病人姓名性別年齡、藥名規格、用法劑量、天數總量、**作用、注意事項**（藥品主檔必填，管理員新增藥品沒填會被擋）、**服用時機**（藥品主檔欄位：飯前、飯後、隨餐、空腹、皆可，`drug-rules.timingText`；以前一律印「飯後」，Omeprazole、Levothyroxine 都印錯）、處方醫師、**調劑藥師**（核對的人；還沒核對就先印的話是目前登入的藥師）、調劑日。一張 1/4 A4，用最長的警語實際列印過，4 張一頁、沒有被裁掉。
 - **掛號單**（`components/RegistrationSlip.vue`）：80 mm 寬（櫃台出單機），印診間與位置、看診號、就醫序號、預估應收，和病歷號的 Code 39 條碼（`utils/code39.ts`，SVG）。條碼掃描器就是「打字＋Enter」，批價、掛號的搜尋框掃了就直接選到這位病人；條碼畫出來後再反向解碼驗證過。
 - **用真的列印驗證**：頁數是用無頭 Chrome 的 `Page.printToPDF` 實際產生 PDF 算出來的，不是看預覽畫面估的。
 

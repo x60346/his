@@ -4,7 +4,7 @@ import type {
   BillingSettings,
   Department,
   Doctor,
-  Drug,
+  Drug, DrugTiming,
   Frequency,
   IcdCode,
   Identity,
@@ -161,7 +161,7 @@ const drug = (
   defaultRoute: string,
   highAlert = false,
   doseUnit?: string,
-): Omit<Drug, 'indication' | 'warning'> => ({
+): Omit<Drug, 'indication' | 'warning' | 'timing'> => ({
   id, nhiCode, name, generic, spec, unit, category, nhiPrice, selfPrice, stock,
   safetyStock: Math.max(50, Math.round(stock * 0.15)), defaultDose, defaultFreq, defaultRoute, highAlert, active: true,
   ...(doseUnit ? { doseUnit } : {}),
@@ -257,7 +257,24 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M040: ['補充鉀離子', '須稀釋後緩慢點滴；注射處疼痛請告知醫護人員'],
 }
 
-export const drugs: Drug[] = drugBase.map((d) => ({ ...d, indication: labelInfo[d.id][0], warning: labelInfo[d.id][1] }))
+/**
+ * 口服藥的服用時機（沒列的是飯前飯後皆可；非口服一律 ANY）。
+ * 飯前：氫離子幫浦阻斷劑要在進食刺激胃酸前作用、促進腸胃蠕動藥要在飯前吃；空腹：甲狀腺素與食物併服吸收變差；
+ * 隨餐：Metformin 減少腸胃不適、Glimepiride 吃了不吃飯會低血糖；飯後：止痛消炎藥、阿斯匹靈減少胃部刺激。
+ */
+const timingOf: Record<string, DrugTiming> = {
+  M002: 'PC', M009: 'PC', M010: 'PC', M019: 'PC', M024: 'PC', M030: 'PC',
+  M022: 'AC', M025: 'AC',
+  M015: 'WITH', M016: 'WITH',
+  M027: 'EMPTY',
+}
+
+export const drugs: Drug[] = drugBase.map((d) => ({
+  ...d,
+  indication: labelInfo[d.id][0],
+  warning: labelInfo[d.id][1],
+  timing: d.category === '口服' ? timingOf[d.id] ?? 'ANY' : 'ANY',
+}))
 
 export const procedures: Procedure[] = [
   { id: 'P001', code: '00109C', name: '一般門診診察費', category: '診察', points: 352, selfPrice: 400, active: true },

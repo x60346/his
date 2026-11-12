@@ -10,13 +10,6 @@ import { toRoc } from '@/utils/date'
 defineProps<{ d: DispenseView }>()
 
 const routeName = (code: string) => masterApi.staticCodes.routes.find((r) => r.code === code)?.name ?? code
-/** 口服藥常見的服用時機提示（展示用簡化規則） */
-const timing = (freq: string, route: string) => {
-  if (route !== 'PO') return ''
-  // 頻率名稱本身已經說明時機（睡前、需要時、立即），不再重複
-  if (['HS', 'PRN', 'STAT'].includes(freq)) return ''
-  return '飯後服用'
-}
 </script>
 
 <template>
@@ -38,7 +31,9 @@ const timing = (freq: string, route: string) => {
       <div class="text-xs text-slate-600">{{ it.spec }}</div>
       <div class="mt-2 rounded bg-slate-100 px-2 py-1.5 text-base">
         {{ routeName(it.route) }}・{{ it.freqLabel }}・每次 {{ it.dose }} {{ it.doseUnit }}
-        <span v-if="timing(it.freq, it.route)" class="ml-1 font-bold">（{{ timing(it.freq, it.route) }}）</span>
+        <!-- 服用時機來自藥品主檔（服務層算好）；以前這裡一律印「飯後服用」 -->
+        <!-- 自成一行：接在用法後面，長的（早餐前 30–60 分鐘空腹服用）會在詞中間斷行 -->
+        <div v-if="it.timingText" class="font-bold">{{ it.timingText }}</div>
       </div>
       <div class="tabular mt-1 text-xs">共 {{ it.days }} 天份，總量 {{ it.qty }} {{ it.unit }}</div>
       <div class="mt-2 text-sm"><b>作用：</b>{{ it.indication }}</div>

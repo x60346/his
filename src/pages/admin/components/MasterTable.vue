@@ -18,6 +18,8 @@ export interface FieldDef {
   hint?: string
   /** 佔兩欄 */
   wide?: boolean
+  /** 依表單其他欄位決定要不要顯示（例：服用時機只有口服藥才有） */
+  showIf?: (form: Record<string, any>) => boolean
 }
 
 const props = defineProps<{
@@ -81,7 +83,7 @@ async function submit() {
 
     <UDialog v-model="open" @submit="submit" :title="`${isNew ? '新增' : '編輯'}${title}`" size="lg">
       <div class="grid grid-cols-2 gap-3">
-        <template v-for="f in fields" :key="f.key">
+        <template v-for="f in fields.filter((x) => !x.showIf || x.showIf(form))" :key="f.key">
           <div v-if="f.type === 'checkbox'" :class="f.wide && 'col-span-2'">
             <UCheckbox v-model="form[f.key]" :label="f.label" />
             <p v-if="action.fieldErrors.value[f.key]" class="mt-1 text-xs text-red-600">{{ action.fieldErrors.value[f.key] }}</p>

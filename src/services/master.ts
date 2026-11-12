@@ -5,7 +5,7 @@ import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
-import { describeDrugs, needsSameNameCheck, sameNameDrugs } from './drug-rules'
+import { describeDrugs, needsSameNameCheck, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
 
 // ---------- 唯讀代碼（不會在系統中修改） ----------
 export const staticCodes = {
@@ -110,6 +110,8 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     // 藥袋必須印出作用與警語（藥師法）：主檔沒填，藥袋就不合規
     if (!input.indication?.trim()) v.add('indication', '請輸入作用或適應症（會印在藥袋上）')
     if (!input.warning?.trim()) v.add('warning', '請輸入警語或副作用（會印在藥袋上）')
+    // 口服藥要選服用時機（飯前、飯後、隨餐、空腹、皆可）；其他劑型沒有飯前飯後之分
+    if (input.category === '口服' && !DRUG_TIMINGS.includes(input.timing)) v.add('timing', '請選擇服用時機（會印在藥袋上）')
     v.done()
     // 規則：欄位都正確後才檢查
     if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
@@ -127,6 +129,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
       highAlert: !!input.highAlert, doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
       indication: input.indication.trim(), warning: input.warning.trim(),
+      timing: input.category === '口服' ? input.timing : 'ANY',
       // 庫存不是主檔欄位，只能透過進貨、發藥、盤點的異動改變。
       // 維護主檔時一律沿用目前庫存（新藥從 0 開始），忽略傳入的 stock——否則改個藥名就能順手把庫存改掉，帳就對不起來了
       stock: old?.stock ?? 0,

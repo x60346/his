@@ -9,6 +9,7 @@ import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './inventory'
 import { usableQty } from './stock-rules'
+import { timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief } from './views'
 
 export interface DispenseItem {
@@ -28,6 +29,9 @@ export interface DispenseItem {
   /** 可用庫存（未過期批號）——過期的藥在架上也不能發 */
   stock: number
   highAlert: boolean
+  /** 服用時機（藥袋用完整句、處方表用短字；不必印為空字串）——規則見 drug-rules.timingText */
+  timingText: string
+  timingShort: string
   /** 作用或適應症、警語或副作用（藥袋用） */
   indication: string
   warning: string
@@ -74,6 +78,8 @@ function dispenseView(d: Dispense): DispenseView {
       qty: m.qty,
       stock: usable,
       highAlert: drug?.highAlert ?? false,
+      timingText: timingText(drug?.timing, m.freq, m.route),
+      timingShort: timingText(drug?.timing, m.freq, m.route, true),
       indication: drug?.indication ?? '',
       warning: drug?.warning ?? '',
       shortage: d.status !== 'dispensed' && usable < m.qty,

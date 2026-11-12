@@ -1542,7 +1542,7 @@ try {
 
     // I1：同名藥要確認、價格必須大於 0
     {
-      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '測試用', warning: '測試用', active: true }
+      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '測試用', warning: '測試用', timing: 'PC', active: true }
       const m001 = dbm.db.drugs.find((d) => d.id === 'M001')
       await expectError(() => M.saveDrug({ ...base, name: '  acetaminophen   500MG ' }), '新增與 M001 同名的藥（大小寫、空白不同）未確認')
       await expectError(() => M.saveDrug({ ...base, name: freeDrug.name }), `新增與停用中的 ${freeDrug.id} 同名的藥未確認`)
@@ -1810,7 +1810,7 @@ try {
     ok(missing.length === 0, `${dbm.db.drugs.length} 種藥都有作用與警語（缺 ${missing.map((d) => d.id).join('、') || 0}）`)
     await as('admin')
     try {
-      await api.masterApi.saveDrug({ name: '測試新藥 10mg', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: ' ', warning: '', active: true })
+      await api.masterApi.saveDrug({ name: '測試新藥 10mg', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: ' ', warning: '', timing: 'PC', active: true })
       ok(false, '新增藥品沒填作用、警語應被擋下')
     } catch (e) {
       ok(e.fields?.indication && e.fields?.warning, `新增藥品沒填作用、警語 → 兩欄一次標出（${Object.values(e.fields ?? {}).join('；')}）`)
@@ -1833,6 +1833,39 @@ try {
     const need = ['it.indication', 'it.warning', 'd.gender', 'd.age', 'd.pharmacistName', 'd.dispenseDate', 'HOSPITAL.address', 'HOSPITAL.phone', 'HOSPITAL.name', 'it.qty', 'it.dose', 'it.drugName', 'd.patientName']
     const lack = need.filter((k) => !bag.includes(k))
     ok(lack.length === 0, `藥袋元件印出全部法定欄位（缺 ${lack.join('、') || 0}）`)
+  }
+
+  // 服用時機：藥品主檔欄位（以前藥袋一律印「飯後服用」）
+  console.log('\n[服用時機]')
+  {
+    const dr = await load('/src/services/drug-rules.ts')
+    const tt = dr.timingText
+    ok(tt('AC', 'QD', 'PO') === '飯前 30 分鐘服用' && tt('EMPTY', 'QD', 'PO') === '早餐前 30–60 分鐘空腹服用' && tt('WITH', 'BID', 'PO') === '隨餐服用' && tt('PC', 'TID', 'PO') === '飯後服用' && tt('ANY', 'QD', 'PO') === '飯前飯後皆可',
+      '五種時機的藥袋文字')
+    ok(tt('AC', 'HS', 'PO') === '' && tt('PC', 'PRN', 'PO') === '' && tt('PC', 'STAT', 'PO') === '', '頻率已說明時機（睡前、需要時、立即）不再加註')
+    ok(tt('PC', 'TID', 'EXT') === '' && tt('ANY', 'HS', 'SC') === '', '非口服不印')
+    const byId = (id) => dbm.db.drugs.find((d) => d.id === id)
+    const oral = dbm.db.drugs.filter((d) => d.category === '口服')
+    ok(oral.every((d) => dr.DRUG_TIMINGS.includes(d.timing)) && dbm.db.drugs.filter((d) => d.category !== '口服').every((d) => d.timing === 'ANY'), `${oral.length} 種口服藥都有服用時機；非口服一律「皆可」`)
+    ok(byId('M022').timing === 'AC' && byId('M027').timing === 'EMPTY' && byId('M015').timing === 'WITH' && byId('M002').timing === 'PC',
+      'Omeprazole 飯前、Levothyroxine 空腹、Metformin 隨餐、Ibuprofen 飯後（以前全部印飯後）')
+    await as('admin')
+    try {
+      await api.masterApi.saveDrug({ ...byId('M012'), timing: '' })
+      ok(false, '口服藥沒選服用時機應被擋下')
+    } catch (e) {
+      ok(e.fields?.timing || e.field === 'timing', `口服藥沒選服用時機 → 「${e.fields?.timing ?? e.message}」`)
+    }
+    const gel = await api.masterApi.saveDrug({ ...byId('M032'), timing: 'AC' })
+    ok(gel.timing === 'ANY', '外用藥存成「皆可」（傳入的飯前被忽略）')
+    await as('ph01')
+    const omeDisp = dbm.db.dispenses.find((d) => d.status !== 'dispensed' && dbm.db.encounters.find((e) => e.id === d.encounterId).medications.length)
+    const v = await api.pharmacyApi.getDispense(omeDisp.id)
+    ok(v.items.every((it) => it.timingText === tt(byId(it.drugId).timing, it.freq, it.route) && it.timingShort === tt(byId(it.drugId).timing, it.freq, it.route, true)),
+      `調劑單帶出服用時機（${v.items.map((it) => `${it.drugName}：${it.timingShort || '不印'}`).join('、')}）`)
+    const { readFileSync } = await import('node:fs')
+    const bag = readFileSync('src/pages/pharmacy/components/DrugBagLabels.vue', 'utf8')
+    ok(bag.includes('it.timingText') && !bag.includes("'飯後服用'"), '藥袋元件用服務層算好的時機，不再自己寫死「飯後服用」')
   }
 
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案

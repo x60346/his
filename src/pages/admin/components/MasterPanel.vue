@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { UTabs, type Column } from '@/components/ui'
 import MasterTable, { type FieldDef } from './MasterTable.vue'
-import { masterApi, preventApi, ServiceError } from '@/services'
+import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, TIMING_LABEL } from '@/services'
 import { useUi } from '@/stores/ui'
 import { Cancelled, useQuery } from '@/composables/useService'
 import type { Drug, IcdCode, PreventItem, Procedure } from '@/types'
@@ -62,13 +62,14 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'defaultDose', label: '預設劑量', type: 'number' },
   { key: 'defaultFreq', label: '預設頻率', type: 'select', options: (freqs.value ?? []).map((f) => ({ label: `${f.code} ${f.label}`, value: f.code })) },
   { key: 'defaultRoute', label: '預設途徑', type: 'select', options: masterApi.staticCodes.routes.map((r) => ({ label: `${r.code} ${r.name}`, value: r.code })) },
+  { key: 'timing', label: '服用時機（印在藥袋）', type: 'select', required: true, options: DRUG_TIMINGS.map((t) => ({ label: TIMING_LABEL[t], value: t })), showIf: (f) => f.category === '口服' },
   { key: 'indication', label: '作用或適應症（印在藥袋）', required: true, wide: true, hint: '給病人看的白話，例：降血壓' },
   { key: 'warning', label: '警語或副作用（印在藥袋）', required: true, wide: true, hint: '例：可能頭暈、腳踝水腫；起身請放慢' },
   { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
 // 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
-const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '', warning: '', active: true })
+const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, timing: '', indication: '', warning: '', active: true })
 
 // ---------- 醫令 ----------
 const procColumns: Column<Procedure>[] = [

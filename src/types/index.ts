@@ -333,6 +333,9 @@ export interface Dispense {
 
 export type DrugCategory = '口服' | '外用' | '注射' | '吸入' | '眼用'
 
+/** 服用時機：AC 飯前、PC 飯後、WITH 隨餐、EMPTY 空腹、ANY 飯前飯後皆可（說明見 drug-rules.ts 的 TIMING_LABEL） */
+export type DrugTiming = 'AC' | 'PC' | 'WITH' | 'EMPTY' | 'ANY'
+
 export interface Drug {
   id: string
   /** 健保藥品代碼 */
@@ -357,6 +360,8 @@ export interface Drug {
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
   warning: string
+  /** 服用時機（口服藥必填；其他劑型沒有飯前飯後之分，一律 ANY） */
+  timing: DrugTiming
   /**
    * 給藥單位（每次用多少），與調劑單位 unit（藥局發多少）不同時才填。
    * 例：Insulin 每次 10 U，但調劑 1 PEN；眼藥水每次 1 滴，調劑 1 BTL。
