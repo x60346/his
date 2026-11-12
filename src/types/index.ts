@@ -511,6 +511,34 @@ export interface Admission {
    * 選用欄位：舊資料沒有它表示從未變更。已開立的醫囑不受影響——醫囑記的是「當時誰開的」。
    */
   attendingHistory?: { from: string; to: string; at: string; by: string; reason: string }[]
+  /** 轉科紀錄（只增不改）：原科申請 → 新科接受／婉拒，或原科撤回。同一時間最多一筆 pending */
+  deptTransfers?: DeptTransfer[]
+}
+
+/**
+ * 轉科：原科主治申請（目標科別，可指定接手醫師）→ 新科醫師接受（成為主治；逐筆決定醫囑延續或停止；可一併轉床）或婉拒。
+ * 申請期間病人仍歸原科：不能變更主治、不能簽准予出院
+ */
+export interface DeptTransfer {
+  id: string
+  fromDeptId: string
+  fromDoctorId: string
+  toDeptId: string
+  /** 指定接手的醫師；沒指定＝新科任一位醫師都能接 */
+  toDoctorId?: string
+  reason: string
+  requestedBy: string
+  requestedAt: string
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled'
+  decidedBy?: string
+  decidedAt?: string
+  /** 婉拒、撤回的原因 */
+  decisionNote?: string
+  /** 接受時：成為主治的醫師、停止了哪些醫囑、從哪床轉到哪床（沒轉床就沒有） */
+  acceptedDoctorId?: string
+  stoppedOrderIds?: string[]
+  fromBedId?: string
+  toBedId?: string
 }
 
 /** 出院病摘 */

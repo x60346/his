@@ -4,12 +4,15 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { LogOut, Plus, Square } from 'lucide-vue-next'
+import { ArrowRightLeft, LogOut, Plus, Square } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
 import ReasonDialog from '@/components/ReasonDialog.vue'
+import RequestTransferDialog from './components/RequestTransferDialog.vue'
+import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
+import type { IncomingTransfer } from '@/services/admission'
 import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
@@ -36,6 +39,20 @@ const adm = computed(() => admitted.value?.find((a) => a.id === admissionId.valu
 watch(adm, (a) => {
   if (!a && admissionId.value && admitted.value) admissionId.value = undefined
 })
+
+// ---------- 轉科 ----------
+// 轉入：新科醫師在清單上方看到「轉入申請」，接受後病人出現在自己的清單
+const { data: incoming } = useQuery(async () => (isAdmin ? [] : admissionApi.listIncomingTransfers()))
+const accepting = ref<IncomingTransfer>()
+const acceptOpen = computed({ get: () => !!accepting.value, set: (v) => !v && (accepting.value = undefined) })
+// 轉出：原科醫師申請、撤回；申請中、被婉拒都在病人資訊列顯示
+const requestOpen = ref(false)
+const transfer = computed(() => adm.value?.lastTransfer)
+const cancelTransfer = useAction(admissionApi.cancelDeptTransfer, { success: '已撤回轉科申請' })
+async function onCancelTransfer() {
+  const a = adm.value
+  if (a && (await ui.confirm({ title: '撤回轉科申請', message: `撤回「轉${a.lastTransfer?.toDeptName}」的申請？病人繼續由您負責。`, okText: '撤回' }))) cancelTransfer.run(a.id)
+}
 
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
@@ -143,6 +160,17 @@ async function submitNote() {
       <div v-if="isAdmin" class="border-b border-slate-100 p-3">
         <USelect v-model="doctorFilter" :options="[{ label: '全部醫師', value: '' }, ...(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))]" />
       </div>
+      <div v-if="incoming?.length" class="border-b border-amber-200 bg-amber-50 p-2">
+        <div class="px-1 pb-1 text-xs font-semibold text-amber-900">轉入申請（{{ incoming.length }}）</div>
+        <button v-for="it in incoming" :key="it.admission.id" class="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-amber-100" @click="accepting = it">
+          <div class="flex items-center gap-2">
+            <span class="tabular rounded bg-white px-1.5 text-xs font-medium text-slate-700">{{ it.admission.bed?.bedNo }}</span>
+            <span class="font-medium text-slate-800">{{ it.admission.patientName }}</span>
+            <span class="ml-auto text-xs text-amber-800">{{ it.transfer.fromDeptName }} → 本科</span>
+          </div>
+          <div class="truncate text-xs text-slate-600">{{ it.transfer.reason }}</div>
+        </button>
+      </div>
       <UQueryState :loading="loading" :ready="myPatients.length > 0" empty-title="目前沒有住院病人">
         <ul class="max-h-[calc(100vh-12rem)] divide-y divide-slate-100 overflow-y-auto">
           <li v-for="a in myPatients" :key="a.id">
@@ -150,6 +178,7 @@ async function submitNote() {
               <div class="flex items-center gap-2">
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
                 <span class="font-medium text-slate-800">{{ a.patientName }}</span>
+                <UBadge v-if="a.lastTransfer?.status === 'pending'" tone="blue" :title="`已申請轉${a.lastTransfer.toDeptName}`">轉科中</UBadge>
                 <UBadge v-if="a.openQueries" tone="yellow" class="ml-auto" :title="`護理師有 ${a.openQueries} 筆醫囑疑問待回覆`">疑問 {{ a.openQueries }}</UBadge>
                 <UBadge v-if="a.dischargeReady" tone="green" :class="!a.openQueries && 'ml-auto'">准出院</UBadge>
                 <span :class="['text-xs text-slate-500', !a.dischargeReady && !a.openQueries && 'ml-auto']">第 {{ a.days }} 天</span>
@@ -165,8 +194,17 @@ async function submitNote() {
     <div v-else data-detail class="min-w-0 space-y-3">
       <PatientBanner :patient="adm">
         <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
-        <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天</span>
+        <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.deptName }}</span>
+        <UButton v-if="!isAdmin && transfer?.status !== 'pending' && !adm.dischargeReady" size="sm" variant="secondary" class="ml-auto" :icon="ArrowRightLeft" @click="requestOpen = true">申請轉科</UButton>
       </PatientBanner>
+      <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
+        <ArrowRightLeft class="h-4 w-4" />
+        <span class="min-w-0 flex-1">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5) }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
+        <UButton v-if="!isAdmin" size="sm" variant="secondary" :loading="cancelTransfer.pending.value" @click="onCancelTransfer">撤回申請</UButton>
+      </div>
+      <div v-else-if="transfer?.status === 'declined'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
+        轉 {{ transfer.toDeptName }} 的申請被婉拒（{{ transfer.decidedByName }} {{ transfer.decidedAt?.slice(5) }}）：{{ transfer.decisionNote }}
+      </div>
       <div class="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
         <span class="text-slate-500">入院診斷</span><span class="text-slate-800">{{ adm.diagnosis }}</span>
         <template v-if="latestVital">
@@ -285,6 +323,8 @@ async function submitNote() {
       @confirm="confirmReply"
     />
     <OrderDialog v-model="orderOpen" :admission="adm" />
+    <RequestTransferDialog v-model="requestOpen" :admission="adm" />
+    <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">
       <div class="space-y-3 text-sm">
         <p class="text-slate-600">取消後住院中心不能辦理出院，病摘內容保留為草稿，可修改後再簽署。</p>

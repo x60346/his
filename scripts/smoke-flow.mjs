@@ -1777,11 +1777,11 @@ try {
     }
     await expectError(() => api.admissionApi.changeAttending(adm.id, fromId, '測試'), '改成目前的主治醫師')
     await expectError(() => api.admissionApi.changeAttending(adm.id, otherDept.id, '測試'), '改成其他科的醫師')
-    // B7：訊息不能指向不存在的功能——系統沒有轉科，要說「未提供」，不能叫人「請辦理轉科」
+    // B7：訊息不能指向不存在的功能——跨科要說去哪裡辦（轉科在「住院醫囑」申請），而且那個功能真的存在
     try {
       await api.admissionApi.changeAttending(adm.id, otherDept.id, '測試')
     } catch (e) {
-      ok(e.message.includes('未提供') && !e.message.includes('請辦理轉科'), `跨科變更主治的訊息明說沒有轉科功能（「${e.message}」）`)
+      ok(e.message.includes('申請轉科') && typeof api.admissionApi.requestDeptTransfer === 'function', `跨科變更主治：訊息指向實際存在的轉科功能（「${e.message}」）`)
     }
     const r = await api.admissionApi.changeAttending(adm.id, to.id, '醫師休假')
     const saved = dbm.db.admissions.find((a) => a.id === adm.id)
@@ -2951,6 +2951,83 @@ try {
       ok(!sameTime, `${label} 重建：今天沒有一大群人擠在同一個掛號時間`)
     }
     setClock(14, 30)
+  }
+
+  console.log('\n[轉科]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const A = api.admissionApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const stroke = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63.9'))
+    const fromDoc = stroke.doctorId
+    ok(stroke.deptTransfers?.[0]?.status === 'pending' && stroke.deptTransfers[0].toDeptId === 'D08', '展示資料：腦梗塞的病人已申請轉復健科（待接受）')
+    await as('dr09')
+    const dash = await api.dashboardApi.getDashboard()
+    let inc = await A.listIncomingTransfers()
+    ok(dash.transferIncoming === 1 && inc.length === 1 && inc[0].admission.id === stroke.id && inc[0].orders.length > 0 && inc[0].orders.every((o) => o.type === 'long' && o.status === 'active'),
+      `復健科醫師：首頁待辦「轉入申請 ${dash.transferIncoming}」、清單帶著 ${inc[0]?.orders.length} 筆執行中的長期醫囑`)
+    await as('dr04')
+    ok((await A.listIncomingTransfers()).length === 0 && (await api.dashboardApi.getDashboard()).transferIncoming === 0, '其他科醫師看不到這筆轉入申請')
+    await expectError(() => A.declineDeptTransfer(stroke.id, '不收'), '外科醫師婉拒轉復健科的申請')
+    await as(userOf(fromDoc))
+    await expectError(() => A.changeAttending(stroke.id, 'DR03', '交班'), '轉科申請中變更主治')
+    await expectError(() => api.ipdApi.saveDischargeSummary(stroke.id, { diagnosis: 'x', course: 'x', condition: 'x', followUp: 'x', dischargeType: '治癒出院' }, true), '轉科申請中簽准予出院')
+    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D03', reason: '再申請一次' }), '已有申請中的轉科又申請')
+    // 婉拒
+    await as('dr09')
+    try {
+      await A.declineDeptTransfer(stroke.id, '')
+      ok(false, '婉拒沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', `婉拒沒寫原因 → 「${e.message}」`)
+    }
+    let v = await A.declineDeptTransfer(stroke.id, '目前病床已滿，請下週再轉')
+    ok(v.lastTransfer?.status === 'declined' && v.lastTransfer.decisionNote.includes('病床已滿') && v.doctorId === fromDoc && v.deptId === 'D02', '婉拒：病人留在原科，原科看得到婉拒原因')
+    // 重新申請：欄位檢查一次標出
+    await as(userOf(fromDoc))
+    try {
+      await A.requestDeptTransfer(stroke.id, { toDeptId: 'D02', toDoctorId: 'DR04', reason: '' })
+      ok(false, '申請欄位錯誤應被擋下')
+    } catch (e) {
+      ok(e.fields?.toDeptId && e.fields?.reason && e.fields?.toDoctorId, `申請轉科欄位錯誤一次標出：${Object.values(e.fields ?? {}).join('／')}`)
+    }
+    await as('dr04')
+    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', reason: '外科代申請' }), '別科醫師替這位病人申請轉科')
+    await as(userOf(fromDoc))
+    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科' })
+    v = await A.cancelDeptTransfer(stroke.id)
+    ok(v.lastTransfer?.status === 'cancelled', '原科可以撤回申請')
+    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科' })
+    // 接受：只能對畫面上看到的醫囑做決定
+    await as('dr09')
+    inc = await A.listIncomingTransfers()
+    const item = inc.find((x) => x.admission.id === stroke.id)
+    ok(item?.transfer.toDoctorName && item.transfer.reason.includes('急性期'), `指定 ${item?.transfer.toDoctorName} 接手：他的清單上有這筆`)
+    await as(userOf(fromDoc))
+    const late = await api.ipdApi.addOrder({ admissionId: stroke.id, type: 'long', category: 'nursing', content: '測試：下床活動需陪同' })
+    await as('dr09')
+    const shown = item.orders.map((o) => o.id)
+    const med = item.orders.find((o) => o.category === 'medication' && db().mar.some((m) => m.orderId === o.id && m.status === 'pending' && m.udLineId))
+    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: shown, stopOrderIds: [] }), '原科剛又開的醫囑新主治沒看過就接受')
+    const bed = db().beds.find((b) => b.status === 'empty' && b.ward !== db().beds.find((x) => x.id === stroke.bedId).ward)
+    const oldBed = stroke.bedId
+    v = await A.acceptDeptTransfer(stroke.id, { shownOrderIds: [...shown, late.id], stopOrderIds: [med.id, late.id], bedId: bed.id })
+    const a2 = db().admissions.find((a) => a.id === stroke.id)
+    const x = a2.deptTransfers.at(-1)
+    ok(v.deptId === 'D08' && v.doctorId === 'DR09' && a2.attendingHistory.at(-1).reason.startsWith('轉科：內科 → 復健科') && x.status === 'accepted' && db().auditLogs[0].action === '接受轉科',
+      '接受：科別、主治改為復健科與接手醫師；主治變更紀錄註明轉科；寫入稽核')
+    const kept = shown.filter((id) => id !== med.id)
+    ok(db().ipdOrders.find((o) => o.id === med.id).status === 'stopped' && kept.every((id) => db().ipdOrders.find((o) => o.id === id).status === 'active') && !db().mar.some((m) => m.orderId === med.id && m.status === 'pending'),
+      `醫囑：停止勾選的 2 筆（排程一併刪除），其餘 ${kept.length} 筆延續（仍記原開立者）`)
+    ok(v.bed?.id === bed.id && db().beds.find((b) => b.id === oldBed).status === 'cleaning' && x.fromBedId === oldBed && x.toBedId === bed.id, `一併轉床：${db().beds.find((b) => b.id === oldBed).bedNo} → ${bed.bedNo}（原床清潔中）`)
+    await as('ph01')
+    ok((await api.udApi.getUdWork()).returns.some((r) => r.admissionId === stroke.id && r.causes.includes('醫囑停止')), '停止的給藥醫囑已調劑沒給的，自動列入待退藥')
+    await as('nurse01')
+    ok((await api.nursingApi.listNursingOrders(stroke.id)).flatMap((g) => g.orders).some((o) => o.id === med.id && o.needsAck), '護理站：轉科停止的醫囑要核對')
+    await as('dr09')
+    ok((await api.dashboardApi.getDashboard()).transferIncoming === 0 && (await A.listAdmissions({ status: ['admitted'] })).some((a) => a.id === stroke.id && a.doctorId === 'DR09'), '接受後：待辦清空，病人出現在新主治的住院病人清單')
+    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: [], stopOrderIds: [] }), '已接受的轉科再接受一次')
   }
 
   console.log('\n[住院調劑（UD）]')

@@ -1,12 +1,14 @@
 // 住院中心：預約、報到配床、轉床、出院、病床狀態。
 // 狀態：reserved →（報到）admitted →（出院）discharged；預約可取消為 cancelled。
 // 病床：empty → occupied（報到）→ cleaning（出院或轉出）→ empty（清潔完成）。
-import type { Admission, AdmissionStatus, Bed, BedStatus } from '@/types'
+import type { Admission, AdmissionStatus, Bed, BedStatus, DeptTransfer } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { admissionView, find, nameOf, patientBrief, type AdmissionView, type PatientBrief } from './views'
+import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
 import { needsAck } from './nursing-rules'
+import { orderView, type OrderView } from './ipd'
+import { stopOrderRecord } from './order-ops'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -142,10 +144,10 @@ export function transferBed(admissionId: string, bedId: string): Promise<Admissi
 }
 
 /**
- * 訊息不能指向不存在的功能：本系統沒有轉科，要明說
- * （以前寫「跨科請辦理轉科」，使用者會到處找轉科按鈕）。對話框提示與服務層錯誤共用這一句。
+ * 跨科不是「變更主治」，是轉科：要說清楚去哪裡辦（以前寫「跨科請辦理轉科」卻沒有轉科功能，使用者會到處找按鈕）。
+ * 對話框提示與服務層錯誤共用這一句。
  */
-export const NO_TRANSFER_NOTE = '跨科轉科（換科別、主治與病房）本展示系統未提供'
+export const NO_TRANSFER_NOTE = '跨科請由主治醫師在「住院醫囑」申請轉科，新科醫師接受後生效'
 
 /** 可以接手的主治醫師：同一科、在職、不是目前的主治（跨科是「轉科」，牽涉科別與床位，不在此處理） */
 function attendingCandidates(a: Admission) {
@@ -166,6 +168,7 @@ export function changeAttending(admissionId: string, doctorId: string, reason: s
     const u = requireUser('clerk', 'nurse', 'doctor')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted' && a.status !== 'reserved') fail('只有住院中或預約住院的病人可以變更主治醫師', 'CONFLICT')
+    if (openDeptTransfer(a)) fail(`轉科申請中（轉${nameOf.dept(openDeptTransfer(a)!.toDeptId)}），新科接受後由新科醫師擔任主治；要改由原科其他醫師負責請先撤回申請`, 'CONFLICT')
     const to = find.doctor(doctorId)
     const v = fieldErrors()
     if (!to) v.add('doctorId', '請選擇新的主治醫師')
@@ -232,6 +235,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     if (a.status !== 'admitted') fail('只有住院中的病人可以辦理出院', 'CONFLICT')
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
+    if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
     const t = now()
     const check = dischargeCheckOf(a, t)
     const unfinished = check.overdueMar.length + check.pendingStat.length
@@ -276,5 +280,155 @@ export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied
     }
     bed.status = status
     return bed
+  })
+}
+
+// ---------- 轉科 ----------
+// 原科主治申請 → 新科醫師接受（成為主治，逐筆決定醫囑延續或停止，可一併轉床）或婉拒；原科可撤回。
+// 申請期間病人仍歸原科（醫囑照常由原科開、停），所以接受時要對「接受那一刻畫面上看到的醫囑」做決定。
+
+function admittedForTransfer(admissionId: string): Admission {
+  const a = must(find.admission(admissionId), '住院紀錄')
+  if (a.status !== 'admitted') fail('只有住院中的病人可以轉科', 'CONFLICT')
+  return a
+}
+
+/** 原科（主治或同科醫師）才能申請、撤回 */
+function requireFromDept(a: Admission) {
+  const u = requireUser('doctor')
+  const me = find.doctor(u.doctorId ?? '')
+  if (!me || me.deptId !== a.deptId) fail(`只有${nameOf.dept(a.deptId)}的醫師可以申請或撤回這位病人的轉科`, 'FORBIDDEN')
+  return { u, me: me! }
+}
+
+/** 新科醫師（有指定接手醫師時只有他）才能接受、婉拒 */
+function requireReceiver(x: DeptTransfer) {
+  const u = requireUser('doctor')
+  const me = find.doctor(u.doctorId ?? '')
+  if (!me || me.deptId !== x.toDeptId) fail(`只有${nameOf.dept(x.toDeptId)}的醫師可以接受或婉拒這筆轉科`, 'FORBIDDEN')
+  if (x.toDoctorId && x.toDoctorId !== me!.id) fail(`這筆轉科指定由 ${nameOf.doctor(x.toDoctorId)} 接手`, 'FORBIDDEN')
+  return { u, me: me! }
+}
+
+/** 申請轉科：目標科別、可指定接手醫師、原因 */
+export function requestDeptTransfer(admissionId: string, input: { toDeptId: string; toDoctorId?: string; reason: string }): Promise<AdmissionView> {
+  return mutate(() => {
+    const a = admittedForTransfer(admissionId)
+    const { u } = requireFromDept(a)
+    if (openDeptTransfer(a)) fail('已有一筆轉科申請還沒處理', 'CONFLICT')
+    if (a.dischargeSummary?.signedAt) fail('已准予出院，不能申請轉科（要轉科請先取消准予出院）', 'CONFLICT')
+    const v = fieldErrors()
+    const dept = find.dept(input.toDeptId ?? '')
+    if (!dept || !dept.active) v.add('toDeptId', '請選擇要轉入的科別')
+    else if (dept.id === a.deptId) v.add('toDeptId', '與目前科別相同；同科換醫師請用「變更主治醫師」')
+    else if (!db.doctors.some((d) => d.active && d.deptId === dept.id)) v.add('toDeptId', `${dept.name}目前沒有在職醫師可以接手`)
+    if (input.toDoctorId) {
+      const d = find.doctor(input.toDoctorId)
+      if (!d || !d.active || d.deptId !== input.toDeptId) v.add('toDoctorId', '指定的醫師不是該科在職醫師')
+    }
+    if (!input.reason?.trim()) v.add('reason', '請填寫轉科原因')
+    v.done()
+    const x: DeptTransfer = {
+      id: newId('DT'), fromDeptId: a.deptId, fromDoctorId: a.doctorId, toDeptId: dept!.id,
+      ...(input.toDoctorId ? { toDoctorId: input.toDoctorId } : {}),
+      reason: input.reason.trim(), requestedBy: u.id, requestedAt: now(), status: 'pending',
+    }
+    a.deptTransfers = [...(a.deptTransfers ?? []), x]
+    audit('申請轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：${nameOf.dept(a.deptId)} → ${dept!.name}${x.toDoctorId ? `（指定 ${nameOf.doctor(x.toDoctorId)}）` : ''}：${x.reason}`)
+    return admissionView(a)
+  })
+}
+
+/** 撤回轉科申請（原科） */
+export function cancelDeptTransfer(admissionId: string, note = ''): Promise<AdmissionView> {
+  return mutate(() => {
+    const a = admittedForTransfer(admissionId)
+    const { u } = requireFromDept(a)
+    const x = openDeptTransfer(a)
+    if (!x) fail('沒有申請中的轉科', 'CONFLICT')
+    Object.assign(x!, { status: 'cancelled', decidedBy: u.id, decidedAt: now(), ...(note.trim() ? { decisionNote: note.trim() } : {}) })
+    audit('撤回轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：轉${nameOf.dept(x!.toDeptId)}`)
+    return admissionView(a)
+  })
+}
+
+/** 婉拒轉科（新科，要寫原因）：病人留在原科，原科醫師在病人清單看得到 */
+export function declineDeptTransfer(admissionId: string, reason: string): Promise<AdmissionView> {
+  return mutate(() => {
+    const a = admittedForTransfer(admissionId)
+    const x = openDeptTransfer(a)
+    if (!x) fail('沒有申請中的轉科', 'CONFLICT')
+    const { u } = requireReceiver(x!)
+    if (!reason?.trim()) failField('reason', '請填寫婉拒原因（原科醫師會看到）')
+    Object.assign(x!, { status: 'declined', decidedBy: u.id, decidedAt: now(), decisionNote: reason.trim() })
+    audit('婉拒轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：${reason.trim()}`)
+    return admissionView(a)
+  })
+}
+
+export interface IncomingTransfer {
+  admission: AdmissionView
+  transfer: DeptTransferView
+  /** 執行中的長期醫囑：新主治逐筆決定延續或停止 */
+  orders: OrderView[]
+}
+
+/** 轉入我科、等我接的轉科申請（醫師的「住院醫囑」與首頁待辦）；帶著執行中的長期醫囑，接受時對同一份做決定 */
+export function listIncomingTransfers(): Promise<IncomingTransfer[]> {
+  return query(() => {
+    const u = requireUser('doctor')
+    const me = find.doctor(u.doctorId ?? '')
+    if (!me) return []
+    return db.admissions
+      .filter((a) => a.status === 'admitted')
+      .map((a) => ({ a, x: openDeptTransfer(a) }))
+      .filter(({ x }) => x && x.toDeptId === me.deptId && (!x.toDoctorId || x.toDoctorId === me.id))
+      .sort((p, q) => p.x!.requestedAt.localeCompare(q.x!.requestedAt))
+      .map(({ a, x }) => ({
+        admission: admissionView(a),
+        transfer: deptTransferView(x!),
+        orders: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'long' && o.status === 'active').map(orderView),
+      }))
+  })
+}
+
+/**
+ * 接受轉科：我成為主治、科別改為我科；stopOrderIds 的醫囑停止（其餘延續，仍記原開立者）；bedId 有給就一併轉床。
+ * shownOrderIds＝接受畫面上列出的執行中長期醫囑：原科在這之後又開的，新主治沒看過，不能默默延續——要重新整理再接受。
+ */
+export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: string[]; stopOrderIds: string[]; bedId?: string }): Promise<AdmissionView> {
+  return mutate(() => {
+    const a = admittedForTransfer(admissionId)
+    const x = openDeptTransfer(a)
+    if (!x) fail('沒有申請中的轉科（可能已被撤回）', 'CONFLICT')
+    const { u, me } = requireReceiver(x!)
+    const active = db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'long' && o.status === 'active')
+    const shown = new Set(input.shownOrderIds ?? [])
+    const unseen = active.filter((o) => !shown.has(o.id))
+    if (unseen.length) fail(`原科剛又開了 ${unseen.length} 筆醫囑（${unseen.map((o) => o.content).join('、')}），請重新整理後再決定`, 'CONFLICT')
+    const stops = [...new Set(input.stopOrderIds ?? [])].map((id) => {
+      const o = active.find((y) => y.id === id)
+      if (!o) fail('要停止的醫囑不是這位病人執行中的長期醫囑（可能已被停止）', 'CONFLICT')
+      return o!
+    })
+    const t = now()
+    for (const o of stops) stopOrderRecord(o, u.id, t)
+    let bedNote = ''
+    if (input.bedId && input.bedId !== a.bedId) {
+      const fromBed = a.bedId
+      const from = find.bed(fromBed ?? '')?.bedNo
+      releaseBed(fromBed)
+      const bed = takeBed(input.bedId, a.id)
+      a.bedId = bed.id
+      Object.assign(x!, { fromBedId: fromBed, toBedId: bed.id })
+      bedNote = `；轉床 ${from} → ${bed.bedNo}`
+    }
+    const reason = `轉科：${nameOf.dept(a.deptId)} → ${nameOf.dept(me.deptId)}（${x!.reason}）`
+    a.attendingHistory = [...(a.attendingHistory ?? []), { from: a.doctorId, to: me.id, at: t, by: u.id, reason }]
+    Object.assign(x!, { status: 'accepted', decidedBy: u.id, decidedAt: t, acceptedDoctorId: me.id, stoppedOrderIds: stops.map((o) => o.id) })
+    a.deptId = me.deptId
+    a.doctorId = me.id
+    audit('接受轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：${reason}；醫囑延續 ${active.length - stops.length}、停止 ${stops.length}${bedNote}`)
+    return admissionView(a)
   })
 }

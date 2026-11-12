@@ -3,7 +3,7 @@ import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { query, sessionRole, sessionUser } from './http'
 import { openQuery } from './nursing-rules'
-import { nameOf, stockLoc } from './views'
+import { nameOf, openDeptTransfer, stockLoc } from './views'
 import { usableQty } from './stock-rules'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
@@ -25,6 +25,8 @@ export interface DashboardStats {
   purchaseOrdered: number
   /** 醫師：我（主治）的住院病人有幾筆醫囑疑問待回覆 */
   orderQueries?: number
+  /** 醫師：轉入我科、等我接的轉科申請 */
+  transferIncoming?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、待退藥點收的項數 */
   udExtra: number
   udReturns: number
@@ -85,7 +87,14 @@ export function getDashboard(): Promise<DashboardStats> {
         const me = sessionUser()
         if (sessionRole() !== 'doctor' || !me?.doctorId) return {}
         const mine = new Set(db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId).map((a) => a.id))
-        return { orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length }
+        const myDept = db.doctors.find((d) => d.id === me.doctorId)?.deptId
+        return {
+          orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length,
+          transferIncoming: db.admissions.filter((a) => {
+            const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined
+            return x && x.toDeptId === myDept && (!x.toDoctorId || x.toDoctorId === me.doctorId)
+          }).length,
+        }
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       ...(db.stockLocations.length > 1

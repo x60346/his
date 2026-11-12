@@ -1,6 +1,6 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
-import type { Admission, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
+import type { Admission, DeptTransfer, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
@@ -186,7 +186,31 @@ export interface AdmissionView extends Admission, PatientBrief {
   summaryDoctorName?: string
   /** 待醫師回覆的醫囑疑問數 */
   openQueries: number
+  /** 最近一筆轉科申請（申請中、或剛被婉拒／接受／撤回的那筆）；從未申請過沒有 */
+  lastTransfer?: DeptTransferView
 }
+
+export interface DeptTransferView extends DeptTransfer {
+  fromDeptName: string
+  toDeptName: string
+  fromDoctorName: string
+  toDoctorName?: string
+  requestedByName: string
+  decidedByName?: string
+}
+
+/** 申請中的轉科（同一時間最多一筆） */
+export const openDeptTransfer = (a: Pick<Admission, 'deptTransfers'>) => a.deptTransfers?.find((x) => x.status === 'pending')
+
+export const deptTransferView = (x: DeptTransfer): DeptTransferView => ({
+  ...x,
+  fromDeptName: nameOf.dept(x.fromDeptId),
+  toDeptName: nameOf.dept(x.toDeptId),
+  fromDoctorName: nameOf.doctor(x.fromDoctorId),
+  ...(x.toDoctorId ? { toDoctorName: nameOf.doctor(x.toDoctorId) } : {}),
+  requestedByName: nameOf.user(x.requestedBy),
+  ...(x.decidedBy ? { decidedByName: nameOf.user(x.decidedBy) } : {}),
+})
 
 export function admissionView(a: Admission): AdmissionView {
   const end = a.dischargedAt ?? today()
@@ -201,6 +225,7 @@ export function admissionView(a: Admission): AdmissionView {
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
     // 護理師提出、待醫師回覆的醫囑疑問（醫師的住院病人清單標出來）
     openQueries: db.ipdOrders.filter((o) => o.admissionId === a.id && !!openQuery(o)).length,
+    ...(a.deptTransfers?.length ? { lastTransfer: deptTransferView(a.deptTransfers[a.deptTransfers.length - 1]) } : {}),
   }
 }
 

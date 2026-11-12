@@ -6,8 +6,9 @@ import { addDays, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
-import { find, nameOf, usable } from './views'
+import { find, nameOf, openDeptTransfer, usable } from './views'
 import { openQuery } from './nursing-rules'
+import { stopOrderRecord } from './order-ops'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -150,13 +151,8 @@ export function stopOrder(orderId: string): Promise<OrderView> {
     const user = requireUser('doctor')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (o.status !== 'active') fail('此醫囑已停止或完成')
-    const t = now()
-    o.status = 'stopped'
-    o.stopAt = t
-    db.mar = db.mar.filter((m) => !(m.orderId === o.id && m.status === 'pending'))
     // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）
-    const q = openQuery(o)
-    if (q) Object.assign(q, { replyBy: user.id, replyAt: t, reply: '已停止此醫囑', resolution: 'stopped' })
+    const q = stopOrderRecord(o, user.id, now())
     audit('停止住院醫囑', `${o.content}${q ? `（回覆護理師疑問：${q.reason}）` : ''}`)
     return orderView(o)
   })
@@ -255,6 +251,7 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     const user = requireUser('doctor')
     const a = activeAdmission(admissionId)
     if (a.dischargeSummary?.signedAt) fail('已准予出院，要修改病摘請先取消准予出院', 'CONFLICT')
+    if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
     else if (![input.diagnosis, input.course, input.condition, input.followUp].some((x) => x.trim())) fail('病摘是空白的，不需要儲存')
     const t = now()

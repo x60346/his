@@ -794,6 +794,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 轉科申請中（腦梗塞那位，內科 → 復健科）：急性期穩定，昨天主治申請轉復健科；
+  // 復健科醫師（dr09）首頁待辦「轉入申請」、住院醫囑頁上方就有東西可以接受或婉拒。不抽亂數
+  {
+    const stroke = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63.9'))
+    if (stroke) {
+      stroke.deptTransfers = [{
+        id: 'DT-SEED-1', fromDeptId: stroke.deptId, fromDoctorId: stroke.doctorId, toDeptId: 'D08',
+        reason: '急性期已穩定，右側肢體無力，轉復健科接續住院復健', requestedBy: doctorUser(stroke.doctorId),
+        requestedAt: `${addDays(T, -1)} 16:20`, status: 'pending',
+      }]
+    }
+  }
+
   // 已出院（歷史）
   for (let k = 0; k < 4; k++) {
     const pt = patients[int(0, 23)]
