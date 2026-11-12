@@ -17,7 +17,7 @@ const props = defineProps<{ visit?: VisitView }>()
 const auth = useAuth()
 
 // 預估應收：與掛號頁同一個 estimateFee（實際掛進去的身分、案件分類）
-const { data: estimate } = useQuery(async () => (open.value && props.visit ? bookingApi.estimateFee(props.visit.identityCode, props.visit.caseType) : undefined), [open, () => props.visit?.id])
+const { data: estimate } = useQuery(async () => (open.value && props.visit ? bookingApi.estimateFee(props.visit.identityCode, props.visit.caseType, false, props.visit.date) : undefined), [open, () => props.visit?.id])
 const { data: items } = useQuery(async () => (open.value && props.visit?.preventItems.length ? preventApi.listPreventItems() : []), [open, () => props.visit?.id])
 const preventNames = computed(() => (props.visit?.preventItems ?? []).map((c) => items.value?.find((i) => i.code === c)?.name ?? c))
 

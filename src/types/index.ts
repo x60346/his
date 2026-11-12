@@ -1,5 +1,14 @@
 // HIS 展示系統的領域型別。所有 mock 資料表與服務層都以此為契約。
 
+/** 某天起生效的變動（藥價、醫令點數、掛號費、部分負擔）：規則見 services/dated-rules.ts */
+export interface DatedChange {
+  /** 這天（含）起生效 YYYY-MM-DD */
+  from: string
+  /** 設定的人（使用者 id）與時間 */
+  by?: string
+  at?: string
+}
+
 export type Gender = 'M' | 'F'
 export type Period = 'AM' | 'PM' | 'NIGHT'
 export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk'
@@ -48,8 +57,10 @@ export interface Doctor {
 export interface Identity {
   code: string
   name: string
-  /** 掛號費（元） */
+  /** 掛號費（元）：最早的值；之後的調整在 feeChanges。某天的掛號費一律用 billing.regFeeOn(身分, 日期) 查 */
   regFee: number
+  /** 掛號費調整：from 這天起的掛號費（依看診日，規則見 dated-rules） */
+  feeChanges?: (DatedChange & { regFee: number })[]
   /** 是否免除基本與藥品部分負擔 */
   copayExempt: boolean
   /** 是否為自費身分（不走健保） */
@@ -60,13 +71,18 @@ export interface Identity {
  * 收費參數：規則（怎麼算）寫在 billing.ts 的純函式，參數（算多少）放在這裡由管理員維護。
  * 藥品部分負擔：健保藥費 ≤ drugCopayFreeUpTo 免收；超過後每 drugCopayStep 元加收 drugCopayPerStep 元，上限 drugCopayMax。
  */
-export interface BillingSettings {
+export interface CopayValues {
   /** 門診基本部分負擔（元） */
   basicCopay: number
   drugCopayFreeUpTo: number
   drugCopayStep: number
   drugCopayPerStep: number
   drugCopayMax: number
+}
+
+/** 部分負擔參數：欄位是最早的值；之後的調整在 changes（某天起整組參數），某天的值用 billing.copayOn(設定, 日期) 查 */
+export interface BillingSettings extends CopayValues {
+  changes?: (DatedChange & CopayValues)[]
   updatedAt?: string
   updatedBy?: string
 }
@@ -385,13 +401,9 @@ export type DrugCategory = '口服' | '外用' | '注射' | '吸入' | '眼用'
 export type DrugTiming = 'AC' | 'PC' | 'WITH' | 'EMPTY' | 'ANY'
 
 /** 藥價調整：from 這天（含）起的價格。健保署公告調價通常是事先公布、某日生效 */
-export interface PriceChange {
-  from: string
+export interface PriceChange extends DatedChange {
   nhiPrice: number
   selfPrice: number
-  /** 設定的人（使用者 id）與時間 */
-  by?: string
-  at?: string
 }
 
 export interface Drug {
@@ -442,10 +454,12 @@ export interface Procedure {
   code: string
   name: string
   category: ProcedureCategory
-  /** 健保點數 */
+  /** 健保點數：最早的值；之後的調整在 priceChanges。某天的點數一律用 billing.procPriceOn(醫令, 日期) 查 */
   points: number
   /** 自費價（元） */
   selfPrice: number
+  /** 點數／自費價調整：from 這天起（依看診日，規則見 dated-rules） */
+  priceChanges?: (DatedChange & { points: number; selfPrice: number })[]
   active: boolean
 }
 

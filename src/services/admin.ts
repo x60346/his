@@ -4,11 +4,12 @@
 //   - 不能停用自己、不能拿掉自己的管理員角色、系統至少要留一個啟用的管理員（否則沒人能再管）
 //   - 有資料在用的東西只能停用、不能刪除；停用前先檢查「已經在用它的資料」
 //   - 稽核紀錄只能查，沒有任何修改或刪除的 API
-import type { BillingSettings, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
+import type { BillingSettings, CopayValues, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser, failFields } from './http'
-import { checkDiscountRule, discountSummary } from './billing'
+import { checkDiscountRule, copayOn, COPAY_KEYS, discountSummary, pickCopay, regFeeOn } from './billing'
+import { applyChange, checkFrom, nextChange } from './dated-rules'
 import { passwordProblem } from './password-rules'
 import { rolesProblem } from './role-rules'
 import { toSafeUser, type SafeUser } from './auth'
@@ -289,18 +290,33 @@ export function importData(json: string): Promise<{ users: number; sessionKept: 
 
 // ---------- 收費設定 ----------
 // 規則（怎麼算）在 billing.ts；這裡維護參數（算多少）。
-// 已收費的收據存的是「當時算好的明細」，參數改了也不會變；只有「還沒收費」的會用新參數計算。
+// 已收費的收據存的是「當時算好的明細」，參數改了也不會變。
+// 調整一律「某天起」生效（dated-rules，和藥價、醫令點數同一套）：批價看看診日，調整前看診、還沒批價的照舊價。
 
-export const getBillingSettings = (): Promise<BillingSettings> => query(() => db.billingSettings)
+/** 畫面上的收費設定：欄位是「今天」的值；next 是已排定、還沒生效的調整 */
+export interface BillingSettingsView extends BillingSettings {
+  next?: CopayValues & { from: string }
+}
+function getBillingSettingsNow(): BillingSettingsView {
+  const t = today()
+  const next = nextChange(db.billingSettings.changes, t)
+  return { ...db.billingSettings, ...copayOn(db.billingSettings, t), ...(next ? { next: { ...copayOn(db.billingSettings, next.from), from: next.from } } : {}) }
+}
+export const getBillingSettings = (): Promise<BillingSettingsView> => query(getBillingSettingsNow)
 
-/** 目前「已看完診、還沒收費」的掛號數：調整收費參數會影響它們 */
-const pendingChargeCount = () => db.visits.filter((v) => v.status === 'consulted').length
+/** 會受「from 起」的調整影響的待批價掛號：看完診還沒收費、看診日 ≥ from（之前看診的照舊價） */
+const pendingChargeCount = (from: string) => db.visits.filter((v) => v.status === 'consulted' && v.date >= from).length
 
-export function saveBillingSettings(input: BillingSettings): Promise<{ settings: BillingSettings; affectedPending: number }> {
+/** from：這天起生效（空白＝今天，不能早於今天） */
+export function saveBillingSettings(input: CopayValues & { from?: string }): Promise<{ settings: BillingSettingsView; affectedPending: number; from: string }> {
   return mutate(() => {
     const u = requireUser('admin')
-    const keys: (keyof BillingSettings)[] = ['basicCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax']
+    const keys = COPAY_KEYS
+    const t = today()
+    const from = input.from?.trim() || t
     const v = fieldErrors()
+    const fromProblem = checkFrom(from, t)
+    if (fromProblem) v.add('from', fromProblem)
     for (const k of keys) {
       const n = input[k] as number
       if (!Number.isInteger(n) || n < 0 || n > 10000) v.add(k, '需為 0–10000 的整數')
@@ -308,30 +324,41 @@ export function saveBillingSettings(input: BillingSettings): Promise<{ settings:
     if (input.drugCopayStep < 1) v.add('drugCopayStep', '級距至少 1 元（不能為 0，否則無法計算）')
     if (input.drugCopayMax < input.drugCopayPerStep) v.add('drugCopayMax', '上限不能小於每級加收金額')
     v.done()
-    const old = { ...db.billingSettings }
-    db.billingSettings = {
-      basicCopay: input.basicCopay, drugCopayFreeUpTo: input.drugCopayFreeUpTo, drugCopayStep: input.drugCopayStep,
-      drugCopayPerStep: input.drugCopayPerStep, drugCopayMax: input.drugCopayMax, updatedAt: now(), updatedBy: u.id,
-    }
-    const changed = keys.filter((k) => old[k] !== db.billingSettings[k]).map((k) => `${k} ${old[k]}→${db.billingSettings[k]}`)
-    audit('修改收費設定', changed.join('、') || '無變更')
-    return { settings: db.billingSettings, affectedPending: pendingChargeCount() }
+    const s = db.billingSettings
+    const before = copayOn(s, from)
+    const values = pickCopay(input)
+    const changes = applyChange<CopayValues>(s, s.changes, { ...values, from, by: u.id, at: now() }, keys)
+    db.billingSettings = { ...pickCopay(s), ...(changes.length ? { changes } : {}), updatedAt: now(), updatedBy: u.id }
+    const after = copayOn(db.billingSettings, from)
+    const changed = keys.filter((k) => before[k] !== after[k]).map((k) => `${k} ${before[k]}→${after[k]}`)
+    audit('修改收費設定', changed.length ? `${from} 起：${changed.join('、')}` : '無變更')
+    return { settings: getBillingSettingsNow(), affectedPending: changed.length ? pendingChargeCount(from) : 0, from }
   })
 }
 
-export function saveIdentity(input: Identity): Promise<{ identity: Identity; affectedPending: number }> {
+/** feeFrom：掛號費這天起生效（空白＝今天，不能早於今天）；名稱、免部分負擔、自費身分是分類，立即生效 */
+export function saveIdentity(input: Identity & { feeFrom?: string }): Promise<{ identity: Identity; affectedPending: number }> {
   return mutate(() => {
-    requireUser('admin')
+    const u = requireUser('admin')
+    const t = today()
+    const feeFrom = input.feeFrom?.trim() || t
     // 身分代碼對應健保規定，只能調整參數，不能新增或改代碼
     const idt = must(db.identities.find((x) => x.code === input.code), '就醫身分')
     const v = fieldErrors()
     if (!input.name.trim()) v.add('name', '請輸入名稱')
     if (!Number.isInteger(input.regFee) || input.regFee < 0 || input.regFee > 2000) v.add('regFee', '掛號費需為 0–2000 的整數')
+    const fromProblem = checkFrom(feeFrom, t)
+    if (fromProblem) v.add('feeFrom', fromProblem)
     v.done()
-    const before = `${idt.regFee}`
-    Object.assign(idt, { name: input.name.trim(), regFee: input.regFee, copayExempt: !!input.copayExempt, selfPay: !!input.selfPay })
-    audit('修改就醫身分', `${idt.code} ${idt.name} 掛號費 ${before}→${idt.regFee}`)
-    return { identity: idt, affectedPending: pendingChargeCount() }
+    const before = regFeeOn(idt, feeFrom)
+    const changes = applyChange({ regFee: idt.regFee }, idt.feeChanges, { from: feeFrom, regFee: input.regFee, by: u.id, at: now() }, ['regFee'])
+    Object.assign(idt, { name: input.name.trim(), copayExempt: !!input.copayExempt, selfPay: !!input.selfPay })
+    if (changes.length) idt.feeChanges = changes
+    else delete idt.feeChanges
+    const after = regFeeOn(idt, feeFrom)
+    audit('修改就醫身分', `${idt.code} ${idt.name}${before !== after ? ` 掛號費 ${feeFrom} 起 ${before}→${after}` : ''}`)
+    // 分類（免部分負擔、自費）立即生效，影響所有待批價；只改掛號費時只影響 feeFrom 以後看診的
+    return { identity: idt, affectedPending: pendingChargeCount(before !== after ? feeFrom : '0000-00-00') }
   })
 }
 

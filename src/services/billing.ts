@@ -7,13 +7,35 @@
 //      （免部分負擔身分、慢性病連續處方調劑免收）
 //   4. 診察費、健保藥費、健保醫令列為健保申報點數；自費項目由病患全額自付
 //   5. 自費身分：所有項目以自費價計算，不申報健保
-import type { BillingSettings, Charge, ChargeLine, DiscountRule, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
+//   6. 價格一律看「看診日」：藥價、醫令點數、掛號費、部分負擔都可以排定某天起生效（dated-rules），
+//      調整前看診、調整後才批價的，收看診那天的價格
+import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
 import { drugPriceOn } from './drug-rules'
+import { valueOn } from './dated-rules'
+
+// ---------- 某天的價格（依看診日） ----------
+export const COPAY_KEYS = ['basicCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
+
+/** 只取部分負擔參數（不帶 changes、修改人） */
+export const pickCopay = (s: CopayValues): CopayValues => ({ basicCopay: s.basicCopay, drugCopayFreeUpTo: s.drugCopayFreeUpTo, drugCopayStep: s.drugCopayStep, drugCopayPerStep: s.drugCopayPerStep, drugCopayMax: s.drugCopayMax })
+
+/** 醫令某天的點數與自費價 */
+export function procPriceOn(p: Pick<Procedure, 'points' | 'selfPrice' | 'priceChanges'>, date: string): { points: number; selfPrice: number } {
+  return valueOn({ points: p.points, selfPrice: p.selfPrice }, p.priceChanges, date, ['points', 'selfPrice'])
+}
+/** 就醫身分某天的掛號費 */
+export function regFeeOn(i: Pick<Identity, 'regFee' | 'feeChanges'>, date: string): number {
+  return valueOn({ regFee: i.regFee }, i.feeChanges, date, ['regFee']).regFee
+}
+/** 某天的部分負擔參數 */
+export function copayOn(s: BillingSettings, date: string): CopayValues {
+  return valueOn<CopayValues>(s, s.changes, date, COPAY_KEYS)
+}
 
 export const CONSULT_PROC_ID = 'P001'
 
 /** 藥品部分負擔（純函式）：收費設定頁的即時試算也用它，畫面與批價永遠算出同一個數字 */
-export function drugCopay(nhiDrugTotal: number, s: BillingSettings): number {
+export function drugCopay(nhiDrugTotal: number, s: CopayValues): number {
   if (nhiDrugTotal <= s.drugCopayFreeUpTo) return 0
   return Math.min(s.drugCopayMax, Math.ceil((nhiDrugTotal - s.drugCopayFreeUpTo) / s.drugCopayStep) * s.drugCopayPerStep)
 }
@@ -31,26 +53,28 @@ const round = (n: number) => Math.round(n * 10) / 10
 // 掛號費、診察費、基本部分負擔只看「身分＋案件分類」，掛號時就算得出來；藥品部分負擔、自費項目要看診後才知道。
 // 掛號頁的預估（fixedCharges）與批價（calcChargeLines）呼叫同一組函式，兩邊的數字不會各算各的。
 
-function regLine(identity: Identity): ChargeLine {
-  return { kind: 'reg', name: `掛號費（${identity.name}）`, qty: 1, unitPrice: identity.regFee, amount: identity.regFee, patientPay: true }
+function regLine(identity: Identity, date: string): ChargeLine {
+  const fee = regFeeOn(identity, date)
+  return { kind: 'reg', name: `掛號費（${identity.name}）`, qty: 1, unitPrice: fee, amount: fee, patientPay: true }
 }
 
-function consultLine(identity: Identity, consult: Procedure | undefined): ChargeLine | undefined {
+function consultLine(identity: Identity, consult: Procedure | undefined, date: string): ChargeLine | undefined {
   if (!consult) return undefined
+  const price = procPriceOn(consult, date)
   return identity.selfPay
-    ? { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.selfPrice, amount: consult.selfPrice, patientPay: true }
-    : { kind: 'consult', name: consult.name, qty: 1, unitPrice: consult.points, amount: consult.points, patientPay: false }
+    ? { kind: 'consult', name: consult.name, qty: 1, unitPrice: price.selfPrice, amount: price.selfPrice, patientPay: true }
+    : { kind: 'consult', name: consult.name, qty: 1, unitPrice: price.points, amount: price.points, patientPay: false }
 }
 
 /** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收 */
-function basicCopayLine(identity: Identity, caseType: string, s: BillingSettings): ChargeLine | undefined {
+function basicCopayLine(identity: Identity, caseType: string, s: CopayValues): ChargeLine | undefined {
   if (identity.selfPay || identity.copayExempt || caseType === 'A3') return undefined
   return { kind: 'copay-basic', name: '門診基本部分負擔', qty: 1, unitPrice: s.basicCopay, amount: s.basicCopay, patientPay: true }
 }
 
-/** 掛號時就確定的收費項目（掛號頁預估用）；批價時這幾行與它完全相同，再加上看診內容的項目 */
-export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>): ChargeLine[] {
-  return [regLine(identity), consultLine(identity, lk.procedure(CONSULT_PROC_ID)), basicCopayLine(identity, caseType, lk.settings)].filter((l): l is ChargeLine => !!l)
+/** 掛號時就確定的收費項目（掛號頁預估用，date＝看診日）；批價時這幾行與它完全相同，再加上看診內容的項目 */
+export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>, date: string): ChargeLine[] {
+  return [regLine(identity, date), consultLine(identity, lk.procedure(CONSULT_PROC_ID), date), basicCopayLine(identity, caseType, copayOn(lk.settings, date))].filter((l): l is ChargeLine => !!l)
 }
 
 export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup): ChargeLine[] {
@@ -59,9 +83,11 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
 
   // 慢箋領藥（refillOf）不看診：沒有掛號費、診察費、基本部分負擔，只有藥（藥品部分負擔 08 案件本來就免）
   const refill = !!visit.refillOf
+  const date = visit.date
+  const copay = copayOn(lk.settings, date)
   if (!refill) {
-    lines.push(regLine(lk.identity))
-    const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID))
+    lines.push(regLine(lk.identity, date))
+    const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID), date)
     if (consult) lines.push(consult)
   }
 
@@ -70,7 +96,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     const d = lk.drug(m.drugId)
     if (!d) continue
     // 依看診日的價格（調價日前看診、調價後才批價，仍收看診那天的價格）
-    const price = drugPriceOn(d, visit.date)
+    const price = drugPriceOn(d, date)
     if (selfPayVisit || m.selfPay) {
       lines.push({ kind: 'self', name: `${d.name}（自費）`, qty: m.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * m.qty), patientPay: true })
     } else {
@@ -83,18 +109,19 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
   for (const p of enc.procedures) {
     const proc = lk.procedure(p.procId)
     if (!proc) continue
+    const price = procPriceOn(proc, date)
     // 健保點數為 0 的項目（證明書等）一律自費
-    if (selfPayVisit || p.selfPay || proc.points === 0) {
-      lines.push({ kind: 'self', name: `${proc.name}（自費）`, qty: p.qty, unitPrice: proc.selfPrice, amount: proc.selfPrice * p.qty, patientPay: true })
+    if (selfPayVisit || p.selfPay || price.points === 0) {
+      lines.push({ kind: 'self', name: `${proc.name}（自費）`, qty: p.qty, unitPrice: price.selfPrice, amount: price.selfPrice * p.qty, patientPay: true })
     } else {
-      lines.push({ kind: 'procedure', name: proc.name, qty: p.qty, unitPrice: proc.points, amount: proc.points * p.qty, patientPay: false })
+      lines.push({ kind: 'procedure', name: proc.name, qty: p.qty, unitPrice: price.points, amount: price.points * p.qty, patientPay: false })
     }
   }
 
-  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, lk.settings)
+  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay)
   if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
-    const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, lk.settings)
+    const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, copay)
     if (dc > 0) {
       lines.push({ kind: 'copay-drug', name: '藥品部分負擔', qty: 1, unitPrice: dc, amount: dc, patientPay: true })
     }

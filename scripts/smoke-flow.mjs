@@ -1625,7 +1625,7 @@ try {
     const rc1 = await api.chargeApi.getReceipt(charge.id)
     ok(rc1.patientTotal === rc0.patientTotal && JSON.stringify(rc1.lines) === JSON.stringify(rc0.lines), `調高掛號費與部分負擔後，已開立的收據 ${charge.receiptNo} 金額不變（${rc1.patientTotal} 元）`)
     const pendingV = dbm.db.visits.find((v) => v.status === 'consulted' && v.identityCode === '01' && v.caseType !== 'A3')
-    ok(sv.affectedPending === dbm.db.visits.filter((v) => v.status === 'consulted').length, `儲存時回報受影響的待批價 ${sv.affectedPending} 筆`)
+    ok(sv.affectedPending === dbm.db.visits.filter((v) => v.status === 'consulted' && v.date >= T).length, `儲存時回報受影響的待批價 ${sv.affectedPending} 筆（今天起看診的；之前看診的照舊價）`)
     if (pendingV) {
       const p2 = await api.chargeApi.previewCharge(pendingV.id)
       ok(p2.lines.some((l) => l.kind === 'reg' && l.amount === 200) && p2.lines.some((l) => l.kind === 'copay-basic' && l.amount === 100), '尚未收費的批價以新參數計算（掛號費 200、基本部分負擔 100）')
@@ -2202,7 +2202,7 @@ try {
     await as('clerk01')
     const { readFileSync } = await import('node:fs')
     const billingSrc = readFileSync('src/services/billing.ts', 'utf8')
-    ok(billingSrc.includes('drugPriceOn(d, visit.date)') && !/\bd\.(nhiPrice|selfPrice)\b/.test(billingSrc), '批價只用 drugPriceOn(藥, 看診日) 取價，不直接讀主檔價格')
+    ok(billingSrc.includes('const date = visit.date') && billingSrc.includes('drugPriceOn(d, date)') && !/\bd\.(nhiPrice|selfPrice)\b/.test(billingSrc), '批價只用 drugPriceOn(藥, 看診日) 取價，不直接讀主檔價格')
   }
 
   // 開藥時的庫存提示用「可用量」（未過期批號），不是帳上總量；處方箋有效期只提醒、不擋
@@ -2702,6 +2702,82 @@ try {
       '排程只有一份規則：服務層與種子都呼叫 marTimes，沒有另外照頻率固定時間排')
     const pages = ['src/pages/opd/components/MedicationEditor.vue', 'src/pages/ipd/components/OrderDialog.vue'].map((f) => readFileSync(f, 'utf8'))
     ok(pages.every((t) => t.includes('timingApplies(')) && !pages.some((t) => /'HS', 'PRN'|\['HS'/.test(t)), '開藥畫面的時機選單用 timingApplies 判斷，不自己列睡前／需要時')
+  }
+
+  // 醫令點數、掛號費、部分負擔的生效日：和藥價同一套（dated-rules），批價看看診日
+  console.log('\n[醫令點數・掛號費・部分負擔生效日]')
+  {
+    const D = await load('/src/services/dated-rules.ts')
+    const billing = await load('/src/services/billing.ts')
+    const { addDays } = await load('/src/utils/date.ts')
+    const keys = ['v']
+    const ch = [{ from: '2026-12-01', v: 2 }, { from: '2027-01-01', v: 3 }]
+    ok(D.valueOn({ v: 1 }, ch, '2026-11-30', keys).v === 1 && D.valueOn({ v: 1 }, ch, '2026-12-01', keys).v === 2 && D.valueOn({ v: 1 }, ch, '2027-02-01', keys).v === 3, '某天的值：生效日 ≤ 那天的最後一筆，之前是原值')
+    ok(D.nextChange(ch, '2026-12-01').from === '2027-01-01' && D.nextChange(ch, '2027-01-01') === undefined, '下一筆已排定的調整')
+    ok(D.applyChange({ v: 1 }, ch, { from: '2026-12-01', v: 1 }, keys).map((c) => c.from).join() === '2027-01-01' && D.applyChange({ v: 1 }, [{ from: '2026-12-01', v: 2 }], { from: '2026-11-20', v: 2 }, keys).map((c) => c.from).join() === '2026-11-20',
+      '改回原值＝取消那天的調整；提前一筆相同的值，後面那筆變成多餘也拿掉')
+    ok(D.checkFrom(addDays(T, -1), T) && D.checkFrom('', T) && D.checkFrom(T, T) === null, '生效日：不能早於今天、不能空白')
+
+    await as('admin')
+    const M = api.masterApi
+    const A = api.adminApi
+    const tomorrow = addDays(T, 1)
+    const yesterday = addDays(T, -1)
+
+    // 醫令：明天起調點數
+    const p001 = dbm.db.procedures.find((x) => x.id === 'P001')
+    const pts0 = p001.points
+    await expectError(() => M.saveProcedure({ ...p001, points: pts0 + 50, priceFrom: yesterday }), '醫令點數生效日早於今天')
+    await M.saveProcedure({ ...p001, points: pts0 + 50, priceFrom: tomorrow })
+    const p1 = dbm.db.procedures.find((x) => x.id === 'P001')
+    const lv = (await M.listProcedures({ includeInactive: true })).find((x) => x.id === 'P001')
+    ok(p1.points === pts0 && p1.priceChanges?.length === 1 && lv.points === pts0 && lv.nextPrice?.points === pts0 + 50 && lv.nextPrice.from === tomorrow,
+      `診察費明天起 ${pts0}→${pts0 + 50} 點：主檔原值不動、記一筆調整；清單顯示今天 ${lv.points} 點與「${tomorrow.slice(5)} 起 ${lv.nextPrice?.points}」`)
+    ok(billing.procPriceOn(p1, T).points === pts0 && billing.procPriceOn(p1, tomorrow).points === pts0 + 50, '醫令某天的點數：今天舊、明天新')
+    const np = await M.saveProcedure({ code: 'TEST-D1', name: '生效日測試醫令', category: '處置', points: 30, selfPrice: 60, active: true, priceFrom: addDays(T, 5) })
+    ok(np.points === 30 && !np.priceChanges, '新增醫令：點數就是原值（生效日不適用）')
+
+    // 掛號費：明天起；今天的預估不變，明天診次的預估用新的
+    const id01 = dbm.db.identities.find((i) => i.code === '01')
+    const fee0 = id01.regFee
+    await expectError(() => A.saveIdentity({ ...id01, regFee: fee0 + 50, feeFrom: yesterday }), '掛號費生效日早於今天')
+    const ri = await A.saveIdentity({ ...id01, regFee: fee0 + 50, feeFrom: tomorrow })
+    const iv = (await M.listIdentities()).find((i) => i.code === '01')
+    ok(ri.affectedPending === 0 && iv.regFee === fee0 && iv.nextFee?.regFee === fee0 + 50, `掛號費明天起 ${fee0}→${fee0 + 50}：清單今天仍 ${iv.regFee}、標明天起；還沒有人受影響（0 筆待批價）`)
+    await as('clerk01')
+    const regOf = (est) => est.lines.find((l) => l.kind === 'reg').amount
+    const estToday = await api.bookingApi.estimateFee('01', '01')
+    const estTomorrow = await api.bookingApi.estimateFee('01', '01', false, tomorrow)
+    ok(regOf(estToday) === fee0 && regOf(estTomorrow) === fee0 + 50, `掛號頁預估依看診日：今天 ${regOf(estToday)}、明天的診次 ${regOf(estTomorrow)}`)
+
+    // 部分負擔：今天起調整；昨天看診、還沒批價的照舊（以前會被改價）
+    await as('admin')
+    const s0 = await A.getBillingSettings()
+    const sv = await A.saveBillingSettings({ ...s0, basicCopay: s0.basicCopay + 20 })
+    const sNow = await A.getBillingSettings()
+    ok(sv.from === T && sNow.basicCopay === s0.basicCopay + 20 && !sNow.next, `部分負擔今天起 ${s0.basicCopay}→${sNow.basicCopay}`)
+    const lk = { identity: { ...dbm.db.identities.find((i) => i.code === '01') }, settings: dbm.db.billingSettings, drug: (x) => dbm.db.drugs.find((d) => d.id === x), procedure: (x) => dbm.db.procedures.find((d) => d.id === x) }
+    const enc = { medications: [], procedures: [] }
+    const basicOf = (date) => billing.calcChargeLines({ date, caseType: '01' }, enc, lk).find((l) => l.kind === 'copay-basic').amount
+    ok(basicOf(yesterday) === s0.basicCopay && basicOf(T) === s0.basicCopay + 20, `批價依看診日：昨天看診 ${basicOf(yesterday)} 元（照舊）、今天看診 ${basicOf(T)} 元`)
+    const pend = dbm.db.visits.filter((v) => v.status === 'consulted')
+    ok(sv.affectedPending === pend.filter((v) => v.date >= T).length, `回報受影響的待批價 ${sv.affectedPending} 筆（只算今天起看診的，共 ${pend.length} 筆待批價）`)
+    const regLine = billing.calcChargeLines({ date: tomorrow, caseType: '01' }, enc, lk).find((l) => l.kind === 'reg')
+    const consult = billing.calcChargeLines({ date: tomorrow, caseType: '01' }, enc, lk).find((l) => l.kind === 'consult')
+    ok(regLine.amount === fee0 + 50 && consult.amount === pts0 + 50, '明天看診：掛號費、診察費都用明天起的新值')
+
+    // 取消：把那天的值改回原值，不留紀錄
+    await A.saveBillingSettings({ ...s0 })
+    await A.saveIdentity({ ...id01, regFee: fee0, feeFrom: tomorrow })
+    await M.saveProcedure({ ...p1, points: pts0, priceFrom: tomorrow })
+    ok(!dbm.db.billingSettings.changes && !dbm.db.identities.find((i) => i.code === '01').feeChanges && !dbm.db.procedures.find((x) => x.id === 'P001').priceChanges,
+      '改回原值＝取消排定的調整，三種都不留多餘紀錄')
+    ok(dbm.db.auditLogs.some((l) => l.action === '修改就醫身分' && l.detail.includes(`${tomorrow} 起`)) && dbm.db.auditLogs.some((l) => l.action === '修改醫令主檔' && l.detail.includes(`${tomorrow} 起`)),
+      '稽核記下哪天起、從多少改成多少')
+    const { readFileSync } = await import('node:fs')
+    const bsrc = readFileSync('src/services/billing.ts', 'utf8')
+    ok(!/identity\.regFee|consult\.(points|selfPrice)|proc\.(points|selfPrice)|lk\.settings\.basicCopay/.test(bsrc) && bsrc.includes('regFeeOn(identity, date)') && bsrc.includes('procPriceOn(proc, date)'),
+      '批價不直接讀主檔的掛號費、點數、部分負擔，一律依看診日查')
   }
 
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則

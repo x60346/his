@@ -4,10 +4,10 @@
 import { computed, ref } from 'vue'
 import { UTabs, type Column } from '@/components/ui'
 import MasterTable, { type FieldDef } from './MasterTable.vue'
-import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, matchesDrug, TIMING_LABEL, type DrugView } from '@/services'
+import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, matchesDrug, TIMING_LABEL, type DrugView, type ProcedureView } from '@/services'
 import { useUi } from '@/stores/ui'
 import { Cancelled, useQuery } from '@/composables/useService'
-import type { IcdCode, PreventItem, Procedure } from '@/types'
+import type { IcdCode, PreventItem } from '@/types'
 
 const tab = ref('drugs')
 const { data: drugs, loading: l1 } = useQuery(() => masterApi.listDrugs({ includeInactive: true }))
@@ -78,7 +78,7 @@ const drugFields = computed<FieldDef[]>(() => [
 const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, timing: '', indication: '', warning: '', active: true })
 
 // ---------- 醫令 ----------
-const procColumns: Column<Procedure>[] = [
+const procColumns: Column<ProcedureView>[] = [
   { key: 'code', label: '代碼', width: '7rem' },
   { key: 'name', label: '名稱' },
   { key: 'category', label: '類別', width: '5rem' },
@@ -91,6 +91,8 @@ const procFields: FieldDef[] = [
   { key: 'category', label: '類別', type: 'select', required: true, options: ['診察', '檢驗', '影像', '處置', '復健'] },
   { key: 'points', label: '健保點數', type: 'number', hint: '0 表示一律自費（例：診斷書）' },
   { key: 'selfPrice', label: '自費價（元）', type: 'number' },
+  // 修改既有醫令才有：點數、自費價「從哪天起」生效（和藥價同一套，批價依看診日）
+  { key: 'priceFrom', label: '價格生效日（空白＝今天）', type: 'date', wide: true, showIf: (f) => !!f.id, hint: '健保支付標準調整通常事先公告：填生效日即可，當天起看診的才用新點數。要取消已排定的調整，把那天的價格改回原價' },
   { key: 'active', label: '使用中', type: 'checkbox' },
 ]
 const blankProc = () => ({ code: '', name: '', category: '處置', points: 0, selfPrice: 0, active: true })
@@ -171,7 +173,14 @@ const tabs = computed(() => [
       :search-keys="['code', 'name']"
       :blank="blankProc"
       :save="(f) => masterApi.saveProcedure(f as never)"
-    />
+    >
+      <template v-for="k in (['points', 'selfPrice'] as const)" :key="k" #[`cell-${k}`]="{ row }">
+        {{ row[k] }}
+        <div v-if="row.nextPrice && row.nextPrice[k] !== row[k]" class="whitespace-nowrap text-xs text-amber-700" :title="`已排定 ${row.nextPrice.from} 起調整`">
+          {{ row.nextPrice.from.slice(5).replace('-', '/') }} 起 {{ row.nextPrice[k] }}
+        </div>
+      </template>
+    </MasterTable>
     <MasterTable
       v-else-if="tab === 'icd'"
       title="診斷碼"

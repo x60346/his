@@ -6,6 +6,8 @@ import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains, stockLoc } from './views'
 import { applyPriceChange, describeDrugs, drugPriceOn, matchesDrug, needsSameNameCheck, nextPriceChange, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
+import { applyChange, checkFrom, nextChange } from './dated-rules'
+import { procPriceOn, regFeeOn } from './billing'
 import { now, today } from '@/utils/date'
 import { usableQty } from './stock-rules'
 
@@ -23,7 +25,18 @@ export const staticCodes = {
 export const listDepartments = (all = false): Promise<Department[]> => query(() => db.departments.filter((d) => all || d.active))
 export const listDoctors = (deptId?: string, all = false): Promise<Doctor[]> =>
   query(() => db.doctors.filter((d) => (all || d.active) && (!deptId || d.deptId === deptId)))
-export const listIdentities = (): Promise<Identity[]> => query(() => db.identities)
+/** 清單上的身分：regFee 是「今天」的掛號費（掛號頁、編輯表單都用它）；nextFee 是已排定還沒生效的調整 */
+export interface IdentityView extends Identity {
+  nextFee?: { from: string; regFee: number }
+}
+export const listIdentities = (): Promise<IdentityView[]> =>
+  query(() => {
+    const t = today()
+    return db.identities.map((i) => {
+      const next = nextChange(i.feeChanges, t)
+      return { ...i, regFee: regFeeOn(i, t), ...(next ? { nextFee: { from: next.from, regFee: next.regFee } } : {}) }
+    })
+  })
 export const listFrequencies = (): Promise<Frequency[]> => query(() => db.frequencies)
 
 export function searchIcd(keyword: string, limit = 20): Promise<IcdCode[]> {
@@ -73,15 +86,26 @@ export function listDrugs(q: DrugQuery = {}): Promise<DrugView[]> {
   })
 }
 
-export function listProcedures(q: { keyword?: string; category?: Procedure['category']; includeInactive?: boolean } = {}): Promise<Procedure[]> {
-  return query(() =>
-    db.procedures.filter((p) => {
-      if (!q.includeInactive && !p.active) return false
-      if (q.category && p.category !== q.category) return false
-      const kw = q.keyword?.trim()
-      return !kw || contains(p.name, kw) || contains(p.code, kw)
-    }),
-  )
+/** 清單上的醫令：points、selfPrice 是「今天」的價格（開立畫面、主檔編輯表單都從這裡帶值）；nextPrice 是已排定還沒生效的調整 */
+export interface ProcedureView extends Procedure {
+  nextPrice?: { from: string; points: number; selfPrice: number }
+}
+
+export function listProcedures(q: { keyword?: string; category?: Procedure['category']; includeInactive?: boolean } = {}): Promise<ProcedureView[]> {
+  return query(() => {
+    const t = today()
+    return db.procedures
+      .filter((p) => {
+        if (!q.includeInactive && !p.active) return false
+        if (q.category && p.category !== q.category) return false
+        const kw = q.keyword?.trim()
+        return !kw || contains(p.name, kw) || contains(p.code, kw)
+      })
+      .map((p) => {
+        const next = nextChange(p.priceChanges, t)
+        return { ...p, ...procPriceOn(p, t), ...(next ? { nextPrice: { from: next.from, points: next.points, selfPrice: next.selfPrice } } : {}) }
+      })
+  })
 }
 
 // ---------- 維護（管理員） ----------
@@ -132,8 +156,8 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     // 價格必須大於 0：批價會把 0 元的健保藥照 0 元申報、病人也付 0 元（醫令有「0 點改收自費」，藥品沒有）
     if (!(input.nhiPrice > 0)) v.add('nhiPrice', '健保價需大於 0')
     if (!(input.selfPrice > 0)) v.add('selfPrice', '自費價需大於 0')
-    if (old && !/^\d{4}-\d{2}-\d{2}$/.test(priceFrom)) v.add('priceFrom', '請選擇生效日')
-    else if (old && priceFrom < t) v.add('priceFrom', '生效日不能早於今天（已看診、還沒批價的病人會被改價）')
+    const fromProblem = old && checkFrom(priceFrom, t)
+    if (fromProblem) v.add('priceFrom', fromProblem)
     if (!Number.isInteger(input.safetyStock) || input.safetyStock < 0) v.add('safetyStock', '安全庫存需為 0 以上的整數')
     if (!(input.defaultDose > 0)) v.add('defaultDose', '預設劑量需大於 0')
     if (!db.frequencies.some((f) => f.code === input.defaultFreq)) v.add('defaultFreq', '請選擇預設頻率')
@@ -189,11 +213,19 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
   })
 }
 
-export function saveProcedure(input: Omit<Procedure, 'id'> & { id?: string }): Promise<Procedure> {
+/**
+ * 新增或修改醫令。修改時 points、selfPrice 是「priceFrom 這天起」的價格（空白＝今天，不能早於今天）：
+ * 原值不動，記成一筆調整，批價依看診日查 procPriceOn——和藥價同一套（dated-rules）
+ */
+export type ProcedureInput = Omit<Procedure, 'id' | 'priceChanges'> & { id?: string; priceFrom?: string }
+
+export function saveProcedure(input: ProcedureInput): Promise<Procedure> {
   return mutate(() => {
-    requireUser('admin')
+    const user = requireUser('admin')
     const old = input.id ? db.procedures.find((x) => x.id === input.id) : undefined
     if (input.id && !old) fail('找不到醫令', 'NOT_FOUND')
+    const t = today()
+    const priceFrom = input.priceFrom?.trim() || t
     const code = input.code.trim().toUpperCase()
     const v = fieldErrors()
     if (!code) v.add('code', '請輸入醫令代碼')
@@ -201,11 +233,25 @@ export function saveProcedure(input: Omit<Procedure, 'id'> & { id?: string }): P
     if (!['診察', '檢驗', '影像', '處置', '復健'].includes(input.category)) v.add('category', '請選擇類別')
     if (!Number.isInteger(input.points) || input.points < 0) v.add('points', '健保點數需為 0 以上的整數')
     if (!(input.selfPrice >= 0)) v.add('selfPrice', '自費價不可為負數')
+    const fromProblem = old && checkFrom(priceFrom, t)
+    if (fromProblem) v.add('priceFrom', fromProblem)
     v.done()
     if (db.procedures.some((p) => p.code === code && p.id !== input.id)) failField('code', '醫令代碼重複', 'CONFLICT')
     if (old && old.id === 'P001' && !input.active) failField('active', '一般門診診察費是每次看診必收的項目，不能停用')
-    const saved: Procedure = { id: old?.id ?? nextCode('P', db.procedures.map((p) => p.id), 3), code, name: input.name.trim(), category: input.category, points: input.points, selfPrice: input.selfPrice, active: input.active }
-    audit(old ? '修改醫令主檔' : '新增醫令', `${code} ${saved.name}`)
+    const changes = old && applyChange({ points: old.points, selfPrice: old.selfPrice }, old.priceChanges, { from: priceFrom, points: input.points, selfPrice: input.selfPrice, by: user.id, at: now() }, ['points', 'selfPrice'])
+    const saved: Procedure = {
+      id: old?.id ?? nextCode('P', db.procedures.map((p) => p.id), 3), code, name: input.name.trim(), category: input.category,
+      // 原值不動；修改的價格記成「priceFrom 起」的調整
+      points: old ? old.points : input.points, selfPrice: old ? old.selfPrice : input.selfPrice,
+      ...(changes && changes.length ? { priceChanges: changes } : {}),
+      active: input.active,
+    }
+    const before = old && procPriceOn(old, priceFrom)
+    const after = old && procPriceOn(saved, priceFrom)
+    const priceNote = before && after && (before.points !== after.points || before.selfPrice !== after.selfPrice)
+      ? `（${priceFrom} 起：點數 ${before.points}→${after.points}、自費 ${before.selfPrice}→${after.selfPrice}）`
+      : ''
+    audit(old ? '修改醫令主檔' : '新增醫令', `${code} ${saved.name}${priceNote}`)
     return upsert(db.procedures, saved)
   })
 }

@@ -172,11 +172,12 @@ export interface FeeEstimate {
  * 掛號時預估應收：只含掛號當下就確定的項目，藥品部分負擔、自費項目要看診後才知道。
  * 計算與批價共用 billing.fixedCharges，兩邊數字一致。收錢仍在批價（掛號不收費）。
  */
-export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false): Promise<FeeEstimate> {
+/** date：看診日（掛號頁選的診次日期；空白＝今天）——掛號費、部分負擔有排定調整時，看診那天的價格才對 */
+export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false, date?: string): Promise<FeeEstimate> {
   return query(() => {
     const caseType = effectiveCaseType(inputCaseType, withPrevent)
     const lk = billingLookup(identityCode)
-    const lines = fixedCharges(lk.identity, caseType, lk).filter((l) => l.patientPay)
+    const lines = fixedCharges(lk.identity, caseType, lk, date || today()).filter((l) => l.patientPay)
     const copayNote = lk.identity.selfPay ? '自費身分' : lk.identity.copayExempt ? `${lk.identity.name}免部分負擔` : caseType === 'A3' ? '預防保健免部分負擔' : undefined
     return { lines, total: lines.reduce((s, l) => s + l.amount, 0), copayNote }
   })

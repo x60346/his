@@ -146,8 +146,8 @@ function togglePrevent(code: string, on: boolean) {
 // ---------- 預估應收（掛號不收費；讓櫃台答得出「今天要多少錢」）----------
 // 只含掛號當下就確定的項目；計算與批價共用 billing.fixedCharges，所以和批價時的數字一致
 const { data: estimate } = useQuery(
-  () => bookingApi.estimateFee(String(identityCode.value), String(caseType.value), preventItems.value.length > 0),
-  [identityCode, caseType, () => preventItems.value.length],
+  () => bookingApi.estimateFee(String(identityCode.value), String(caseType.value), preventItems.value.length > 0, selectedSession.value?.date),
+  [identityCode, caseType, () => preventItems.value.length, () => selectedSession.value?.date],
 )
 const feeText = (e: { lines: { kind: string; amount: number }[] }) =>
   e.lines.map((l) => `${{ reg: '掛號費', consult: '診察費', 'copay-basic': '基本部分負擔' }[l.kind] ?? l.kind} ${l.amount}`).join('＋')
@@ -162,7 +162,7 @@ function openSlip(v: VisitView) {
   slipOpen.value = true
 }
 // 掛號完成卡片上的預估：用實際掛進去的身分與案件分類（可能已轉成 A3）
-const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType) : undefined), [lastResult])
+const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType, false, lastResult.value.date) : undefined), [lastResult])
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
 const canRegister = computed(() => !!patient.value && !!selectedSession.value)
 
