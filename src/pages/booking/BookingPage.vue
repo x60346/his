@@ -166,6 +166,14 @@ const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingA
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
 const canRegister = computed(() => !!patient.value && !!selectedSession.value)
 
+// ---------- 報到：人到了才算。現場掛號預設「同時報到」；電話、網路預約的取消勾選，到院時再按「報到」----------
+// 醫師的「下一位」只先叫已報到的（nextInQueue）；能不能報到（只限今天、候診中）由服務層判斷
+const checkInNow = ref(true)
+const sessionIsToday = computed(() => selectedSession.value?.date === today())
+watch(sessionId, () => (checkInNow.value = true))
+const checkIn = useAction(bookingApi.checkIn, { success: (v) => `${v.patientName} 已報到（${v.deptName} 第 ${v.seqNo} 號）` })
+
+
 // ---------- 改期：病人來電要換時間。退舊掛新在服務層同一筆交易完成（新診次掛不上就全部不動）----------
 const rescheduling = ref<VisitView>()
 const reschedule = useAction(bookingApi.rescheduleVisit, { success: (v) => `已改期：${v.patientName} ${v.date} ${v.deptName} 第 ${v.seqNo} 號` })
@@ -196,11 +204,14 @@ async function submit() {
     identityCode: String(identityCode.value),
     caseType: String(caseType.value),
     preventItems: preventItems.value,
+    checkIn: sessionIsToday.value && checkInNow.value,
   })
   if (v) {
     lastResult.value = v
     // 掛完清掉病人，準備服務下一位；診次保留（櫃台常連續掛同一診）
     patient.value = null
+    // 「同時報到」回到預設：上一位是電話預約取消了勾選，下一位現場病人不能跟著變成未報到
+    checkInNow.value = true
   }
 }
 
@@ -240,7 +251,8 @@ const columns: Column<VisitView>[] = [
   { key: 'identityName', label: '身分' },
   { key: 'cardSeq', label: '就醫序號', format: (v) => (v.refillOf ? '—' : v.cardSeq) },
   { key: 'status', label: '狀態' },
-  { key: 'createdAt', label: '掛號時間', format: (v) => v.createdAt.slice(11) },
+  // 前幾天預約的要帶日期：只寫時間的話，「15:32」看起來像今天下午才掛（還沒到的時間）
+  { key: 'createdAt', label: '掛號時間', format: (v) => (v.createdAt.startsWith(v.date) ? v.createdAt.slice(11) : `${v.createdAt.slice(5, 10).replace('-', '/')} 預約`) },
   { key: 'actions', label: '', align: 'right' },
 ]
 
@@ -327,6 +339,8 @@ function openIdentity(v: VisitView) {
               <!-- 病人來電取消或換時間：直接在這裡處理，不必到下方清單換日期再找人 -->
               <div v-for="u in upcoming" :key="u.id" :class="['flex items-center gap-2 py-0.5', rescheduling?.id === u.id && 'font-medium text-amber-800']">
                 <span class="min-w-0 flex-1">{{ u.date.slice(5).replace('-', '/') }}（{{ weekdayLabel(u.date) }}）{{ periodLabel[u.period] }} {{ u.deptName }} {{ u.doctorName }} 第 {{ u.seqNo }} 號</span>
+                <span v-if="u.checkedInAt && u.date === today()" class="shrink-0 text-emerald-700">已報到</span>
+                <button v-else-if="u.canCheckIn" type="button" class="shrink-0 font-medium text-emerald-700 hover:underline" :disabled="checkIn.pending.value" @click="checkIn.run(u.id)">報到</button>
                 <button type="button" class="shrink-0 text-brand-600 hover:underline" @click="startReschedule(u)">改期</button>
                 <button type="button" class="shrink-0 text-red-600 hover:underline" @click="onCancel(u)">退掛</button>
               </div>
@@ -367,10 +381,11 @@ function openIdentity(v: VisitView) {
                     <span class="tabular">已掛 {{ s.booked }} / {{ s.limit }}・候診 {{ s.waiting }}</span>
                   </div>
                   <!-- 目前看到幾號：病人問「現在看到幾號」時，看卡片就答得出來 -->
-                  <div v-if="s.current || s.skipped" class="tabular mt-0.5 flex gap-2 text-xs">
+                  <div v-if="s.current || s.skipped || s.notArrived" class="tabular mt-0.5 flex gap-2 text-xs">
                     <span v-if="s.current?.inConsult" class="font-medium text-blue-700">看診中 {{ s.current.seqNo }} 號</span>
                     <span v-else-if="s.current" class="text-slate-500">已看到 {{ s.current.seqNo }} 號</span>
                     <span v-if="s.skipped" class="text-amber-700">過號 {{ s.skipped }}</span>
+                    <span v-if="s.notArrived" class="text-slate-500">未報到 {{ s.notArrived }}</span>
                   </div>
                 </button>
                 <button
@@ -430,6 +445,10 @@ function openIdentity(v: VisitView) {
               <!-- 自費身分沒有「部分負擔」，藥費全額自付 -->
               <div class="mt-0.5 text-xs text-slate-400">{{ estimate.copayNote === '自費身分' ? '藥費等項目' : '藥品部分負擔、自費項目' }}看診後才確定；看診後至批價櫃台結帳</div>
             </div>
+            <div v-if="sessionIsToday && !rescheduling" class="text-sm">
+              <UCheckbox v-model="checkInNow">病人已在櫃台（掛號同時報到）</UCheckbox>
+              <p v-if="!checkInNow" class="mt-0.5 text-xs text-amber-700">電話或網路預約：病人到院時，在下方清單或病人卡上按「報到」，醫師才會叫到他。</p>
+            </div>
             <UButton block :icon="Ticket" :disabled="!canRegister || (!!rescheduling && sessionId === rescheduling.sessionId)" :loading="register.pending.value || reschedule.pending.value" @click="submit">{{ rescheduling ? '改期到此診' : '掛號' }}</UButton>
           </div>
         </UCard>
@@ -444,6 +463,7 @@ function openIdentity(v: VisitView) {
             <div>{{ lastResult.date }} {{ periodLabel[lastResult.period] }}</div>
             <div>{{ lastResult.deptName }} {{ lastResult.doctorName }}・{{ lastResult.roomNo }} 診<template v-if="lastResult.roomLocation">（{{ lastResult.roomLocation }}）</template></div>
             <div class="tabular text-xs text-slate-600">就醫序號 {{ lastResult.cardSeq }}</div>
+            <div v-if="lastResult.date === today()" :class="['text-xs', lastResult.checkedInAt ? 'text-emerald-700' : 'text-amber-700']">{{ lastResult.checkedInAt ? '已報到' : '尚未報到：到院時請報到' }}</div>
             <div v-if="lastEstimate" class="mt-1 text-xs text-slate-600">預估應收 <b class="tabular">{{ lastEstimate.total }}</b> 元起（看診後批價結帳）</div>
           </div>
           <UButton class="ml-auto self-center" size="sm" variant="secondary" :icon="Printer" @click="openSlip(lastResult)">列印掛號單</UButton>
@@ -459,8 +479,14 @@ function openIdentity(v: VisitView) {
       </template>
       <div class="px-4"><UTabs v-model="statusTab" :tabs="tabs" /></div>
       <UTable :columns="columns" :rows="filtered" :row-key="(v) => v.id" :loading="visitsLoading" dense empty-text="沒有符合的掛號">
-        <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
+        <template #cell-status="{ row }">
+          <span class="inline-flex items-center gap-1">
+            <UStatusBadge :map="visitStatus" :value="row.status" />
+            <UBadge v-if="row.canCheckIn">未報到</UBadge>
+          </span>
+        </template>
         <template #cell-actions="{ row }">
+          <UButton v-if="row.canCheckIn" size="sm" variant="secondary" :loading="checkIn.pending.value" @click="checkIn.run(row.id)">報到</UButton>
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
           <UButton v-if="row.status === 'registered' && !row.refillOf" size="sm" variant="ghost" @click="openSlip(row)">補印</UButton>
           <UButton v-if="row.status === 'registered' || (row.refillOf && row.status === 'consulted')" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>

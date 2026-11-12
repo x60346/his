@@ -66,7 +66,8 @@ try {
   const open = (list) => list.find((s) => !s.full && !s.closed)
   const session = open(sessions) ?? open(await api.scheduleApi.listSessions({ date: (await load('/src/utils/date.ts')).addDays(T, 1) }))
   const patient = dbm.db.patients.find((p) => p.allergies.length === 0 && !dbm.db.visits.some((v) => v.sessionId === session.id && v.patientId === p.id))
-  const visit = await api.bookingApi.register({ patientId: patient.id, sessionId: session.id, identityCode: '01', caseType: '01' })
+  // 現場掛號：病人在櫃台，掛號同時報到（掛到明天的就不能報到，叫號前另外處理）
+  const visit = await api.bookingApi.register({ patientId: patient.id, sessionId: session.id, identityCode: '01', caseType: '01', checkIn: session.date === T })
   ok(visit.status === 'registered', `${patient.name} 掛 ${session.deptName} ${session.doctorName}，看診號 ${visit.seqNo}`)
   await expectError(() => api.bookingApi.register({ patientId: patient.id, sessionId: session.id, identityCode: '01', caseType: '01' }), '重複掛同一診')
 
@@ -1770,7 +1771,7 @@ try {
   // 同一位醫師同時兩位看診中：叫號時先擋下、確認後才能叫（病人去檢查時先看下一位是正常的，要防的是忘了按完成）
   console.log('\n[同時看診]')
   {
-    const regsOf = (docId) => dbm.db.visits.filter((v) => v.date === T && v.doctorId === docId && v.status === 'registered' && !v.refillOf)
+    const regsOf = (docId) => dbm.db.visits.filter((v) => v.date === T && v.doctorId === docId && v.status === 'registered' && !v.refillOf && v.checkedInAt)
     const docs = dbm.db.users.filter((u) => u.active && u.roles.includes('doctor') && u.doctorId && !dbm.db.visits.some((v) => v.date === T && v.doctorId === u.doctorId && v.status === 'in-consult'))
     const docA = docs.find((u) => regsOf(u.doctorId).length >= 3)
     const docB = docs.find((u) => u !== docA && regsOf(u.doctorId).length >= 1)
@@ -1801,6 +1802,84 @@ try {
     await api.opdApi.startConsult(c.id)
     ok(dbm.db.visits.find((v) => v.id === c.id).status === 'in-consult' && !dbm.db.auditLogs[0].detail.includes('同時看診'), '前面的人過號（或完成）後叫號，不再提醒')
     await api.opdApi.skipPatient(c.id)
+  }
+
+  // 報到：現場掛號同時報到、預約的到院才報到；「下一位」先叫已報到的；叫未報到的要確認
+  console.log('\n[報到]')
+  {
+    // 不存 dbm.db：交易失敗會把整個資料庫換成快照，先前拿到的參照就不是現在的資料
+    const { addDays } = await load('/src/utils/date.ts')
+    const q = await load('/src/services/queue-rules.ts')
+    const Q = (arr) => arr.map(([seqNo, inn, skipped]) => ({ id: `v${seqNo}`, seqNo, status: 'registered', checkedInAt: inn ? 'x' : undefined, skippedAt: skipped ? 'x' : undefined }))
+    ok(q.nextInQueue(Q([[1, false], [2, true], [3, true]]))?.seqNo === 2, '預約 1 號還沒到：下一位是已報到的 2 號')
+    ok(q.nextInQueue(Q([[1, false], [2, true, true]]))?.seqNo === 1, '沒有已報到的人時，先叫未報到的 1 號（叫號時再確認），過號的排最後')
+    ok(q.nextInQueue(Q([[2, true, true], [3, true, true]]))?.seqNo === 2, '只剩過號的人時仍叫得到（這一診看得完）')
+
+    // 種子：叫過號的都有報到時間，而且在掛號之後、叫號之前；今天下午家醫科有一位預約還沒到
+    const called = dbm.db.visits.filter((v) => v.calledAt && !v.refillOf)
+    const badOrder = called.filter((v) => !v.checkedInAt || v.checkedInAt < v.createdAt || v.checkedInAt > v.calledAt)
+    ok(called.length > 0 && !badOrder.length, `種子：叫過號的 ${called.length} 筆都有報到時間，且 掛號 ≤ 報到 ≤ 叫號${badOrder.length ? '：' + badOrder.slice(0, 3).map((v) => v.id).join('、') : ''}`)
+    ok(!dbm.db.visits.some((v) => v.checkedInAt && v.date > T), '種子：未來的預約都還沒報到')
+    const noShow = dbm.db.visits.find((v) => v.date === T && v.status === 'registered' && !v.checkedInAt && v.createdAt < T && v.deptId === 'D01')
+    ok(!!noShow, `種子：今天有預約未到的病人（${noShow ? `第 ${noShow.seqNo} 號` : '沒有'}）`)
+    const noShowSession = noShow && (await api.scheduleApi.listSessions({ date: T })).find((x) => x.id === noShow.sessionId)
+    ok(noShowSession?.notArrived >= 1, `診次卡顯示「未報到」人數（${noShowSession?.notArrived}）`)
+    const future = (await api.scheduleApi.listSessions({ date: addDays(T, 3) })).filter((x) => x.booked > 0)
+    ok(future.every((x) => x.notArrived === 0), '未來的診次不算「未報到」（本來就還沒到）')
+
+    // 報到
+    const B = api.bookingApi
+    await as('dr01')
+    await expectError(() => B.checkIn(noShow.id), '醫師按報到（權限：櫃台、護理）')
+    await as('clerk01')
+    const fut = dbm.db.visits.find((v) => v.date > T && v.status === 'registered')
+    await expectError(() => B.checkIn(fut.id), '預約下週的掛號今天報到')
+    const freeS = (await api.scheduleApi.listSessions({ date: addDays(T, 2) })).find((x) => x.bookable)
+    const someone = dbm.db.patients.find((p) => !dbm.db.visits.some((v) => v.sessionId === freeS.id && v.patientId === p.id))
+    try {
+      await B.register({ patientId: someone.id, sessionId: freeS.id, identityCode: '01', caseType: '01', checkIn: true })
+      ok(false, '掛後天的門診同時報到應被擋下')
+    } catch (e) {
+      ok(e.field === 'checkIn', `掛後天的門診勾「同時報到」→ 「${e.message}」`)
+    }
+    const doctorOf = dbm.db.users.find((u) => u.doctorId === noShow.doctorId)
+    await as(doctorOf.username)
+    try {
+      await api.opdApi.startConsult(noShow.id)
+      ok(false, '叫未報到的病人應先確認')
+    } catch (e) {
+      ok(e.code === 'CONFLICT' && e.field === 'checkIn' && dbm.db.visits.find((v) => v.id === noShow.id).status === 'registered', `叫未報到的病人 → 「${e.message}」，狀態不變`)
+    }
+    await as('clerk01')
+    const r = await B.checkIn(noShow.id)
+    ok(!!r.checkedInAt && dbm.db.auditLogs[0].action === '報到', `報到：記下時間 ${r.checkedInAt.slice(11)}、寫入稽核`)
+    await expectError(() => B.checkIn(noShow.id), '重複報到')
+    const refillV = dbm.db.visits.find((v) => v.refillOf && v.status === 'consulted')
+    if (refillV) await expectError(() => B.checkIn(refillV.id), '慢箋領藥報到（不看診）')
+    // 醫師確認後叫未報到的人：叫得到，稽核記下「未報到」
+    const other = dbm.db.visits.find((v) => v.date === T && v.status === 'registered' && !v.checkedInAt && !v.refillOf)
+    if (other) {
+      await as(dbm.db.users.find((u) => u.doctorId === other.doctorId).username)
+      await api.opdApi.startConsult(other.id, { allowNotCheckedIn: true, allowParallel: true })
+      ok(dbm.db.visits.find((v) => v.id === other.id).status === 'in-consult' && dbm.db.auditLogs[0].detail.includes('未報到'), `確認後叫未報到的病人，稽核記下「${dbm.db.auditLogs[0].detail}」`)
+      await api.opdApi.skipPatient(other.id)
+    } else ok(true, '（今天沒有其他未報到的人可測確認叫號）')
+    await as('clerk01')
+    // 今天現場掛號同時報到；已報到的人當場改掛今天別的診，不必再報到
+    const todayS = (await api.scheduleApi.listSessions({ date: T })).filter((x) => x.bookable)
+    const walkIn = dbm.db.patients.find((p) => !dbm.db.visits.some((v) => v.date === T && v.patientId === p.id))
+    const w = await B.register({ patientId: walkIn.id, sessionId: todayS[0].id, identityCode: '01', caseType: '01', checkIn: true })
+    ok(!!w.checkedInAt && dbm.db.auditLogs[0].detail.includes('已報到'), '現場掛號勾「同時報到」：掛號即報到')
+    const moved = await B.rescheduleVisit(w.id, { sessionId: todayS[1].id, identityCode: '01', caseType: '01' })
+    ok(!!moved.checkedInAt, '已報到的人改掛今天別的診，仍是已報到')
+    const later = await B.register({ patientId: walkIn.id, sessionId: freeS.id, identityCode: '01', caseType: '01' })
+    ok(!later.checkedInAt, '預約後天的門診：還沒報到')
+    await B.cancelVisit(later.id)
+    await B.cancelVisit(moved.id)
+    // 頁面只呈現：叫號順序在 nextInQueue，頁面不自己用報到時間排序
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/opd/OpdPage.vue', 'utf8')
+    ok(!/checkedInAt[^\n]{0,40}(sort|find)\(/.test(page) && !/(sort|find)\([^\n]{0,60}checkedInAt/.test(page), '看診頁不自己依報到排「下一位」（規則在 nextInQueue）')
   }
 
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
@@ -2217,7 +2296,7 @@ try {
       if (hh === 9) ok(seen.length >= 1 && seen.length < 6 && !todayV.some((v) => ['charged', 'dispensed'].includes(v.status) && db.charges.find((c) => c.visitId === v.id).paidAt > now), `09:00：前幾位看完（${seen.length} 位），其餘還在候診`)
       if (hh === 14) {
         const st = (s) => todayV.filter((v) => v.status === s).length
-        ok(st('dispensed') === 2 && st('charged') === 2 && st('consulted') === 2 && pmRegs.every((v) => v.createdAt >= `${Td} 13:00`), `14:30：完整的今日情境（已領藥 2、已批價 2、待批價 2），下午診 13:00 起掛號`)
+        ok(st('dispensed') === 2 && st('charged') === 2 && st('consulted') === 2 && pmRegs.every((v) => v.createdAt < Td || v.createdAt >= `${Td} 13:00`), `14:30：完整的今日情境（已領藥 2、已批價 2、待批價 2），下午診 13:00 起掛號`)
       }
       ok(!sameTime, `${label} 重建：今天沒有一大群人擠在同一個掛號時間`)
     }

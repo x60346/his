@@ -51,6 +51,8 @@ export interface SessionView extends ClinicSession {
   current?: { seqNo: number; inConsult: boolean }
   /** 過號、還在候診的人數 */
   skipped: number
+  /** 今天已預約、還沒報到的人數 */
+  notArrived: number
   /** 已看完（含已批價、已領藥） */
   done: number
   full: boolean
@@ -73,6 +75,8 @@ function sessionView(s: ClinicSession): SessionView {
     waiting: vs.filter((v) => v.status === 'registered').length,
     current: currentNumber(vs),
     skipped: vs.filter((v) => v.status === 'registered' && v.skippedAt).length,
+    // 只有今天的才有「未到」的意思；未來的預約本來就還沒報到
+    notArrived: s.date === today() ? vs.filter((v) => v.status === 'registered' && !v.checkedInAt).length : 0,
     done: vs.filter((v) => ['consulted', 'charged', 'dispensed'].includes(v.status)).length,
     full: booked >= s.limit,
     closed: isSessionClosed(s),

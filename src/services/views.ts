@@ -5,6 +5,7 @@ import { db } from '@/mock/db'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
 import { fail, must } from './http'
+import { checkInProblem } from './queue-rules'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -120,6 +121,8 @@ export interface VisitView extends Visit, PatientBrief {
   roomNo: string
   /** 診間位置（掛號單用） */
   roomLocation: string
+  /** 現在可以報到（今天、候診中、還沒報到；規則 checkInProblem，服務層 checkIn 用同一條） */
+  canCheckIn: boolean
 }
 
 export function visitView(v: Visit): VisitView {
@@ -133,6 +136,7 @@ export function visitView(v: Visit): VisitView {
     period: s?.period ?? 'AM',
     roomNo: s?.roomNo ?? '',
     roomLocation: s ? (find.room(s.roomNo)?.location ?? '') : '',
+    canCheckIn: !checkInProblem(v, today()),
   }
 }
 

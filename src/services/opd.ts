@@ -44,7 +44,7 @@ function editableEncounter(encounterId: string): Encounter {
  * 同一位醫師今天還有別的「看診中」病人時先擋下（CONFLICT，field = 'parallel'），畫面確認後帶 allowParallel 重送：
  * 病人去照 X 光、等報告時先看下一位是正常的，所以不硬擋；要防的是「忘了按完成」——前一位的病歷停在草稿，批價永遠等不到他。
  */
-export function startConsult(visitId: string, opts: { allowParallel?: boolean } = {}): Promise<Encounter> {
+export function startConsult(visitId: string, opts: { allowParallel?: boolean; allowNotCheckedIn?: boolean } = {}): Promise<Encounter> {
   return mutate(() => {
     const user = requireUser('doctor')
     const v = must(find.visit(visitId), '掛號紀錄')
@@ -52,6 +52,10 @@ export function startConsult(visitId: string, opts: { allowParallel?: boolean } 
     if (v.refillOf) fail('慢箋領藥不需看診', 'CONFLICT')
     if (LOCKED.includes(v.status)) fail('此次就醫已批價，只能檢視', 'CONFLICT')
     if (user.role === 'doctor' && user.doctorId !== v.doctorId) fail('這不是您的病人', 'FORBIDDEN')
+
+    // 還沒報到：病人可能根本還沒到。不硬擋（櫃台忘了按、病人直接走進診間都有），確認後才叫，稽核留紀錄
+    const notCheckedIn = v.status === 'registered' && !v.checkedInAt
+    if (notCheckedIn && !opts.allowNotCheckedIn) fail(`第 ${v.seqNo} 號 ${find.patient(v.patientId)?.name} 尚未報到`, 'CONFLICT', 'checkIn')
 
     const others = db.visits.filter((x) => x.id !== v.id && x.doctorId === v.doctorId && x.date === v.date && x.status === 'in-consult')
     const othersText = others.map((x) => `第 ${x.seqNo} 號 ${find.patient(x.patientId)?.name}（${x.calledAt?.slice(11) ?? '—'} 叫號）`).join('、')
@@ -71,7 +75,7 @@ export function startConsult(visitId: string, opts: { allowParallel?: boolean } 
     v.status = 'in-consult'
     v.calledAt ??= now()
     delete v.skippedAt // 過號的人回來、重新叫號，就不再是過號
-    audit('開始看診', `${find.patient(v.patientId)?.name} #${v.seqNo}${others.length ? `（同時看診：${othersText} 仍在看診中）` : ''}`)
+    audit('開始看診', `${find.patient(v.patientId)?.name} #${v.seqNo}${notCheckedIn ? '（未報到，醫師確認後叫號）' : ''}${others.length ? `（同時看診：${othersText} 仍在看診中）` : ''}`)
     return e
   })
 }

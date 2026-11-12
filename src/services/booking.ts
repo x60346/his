@@ -3,11 +3,12 @@ import type { ChargeLine, Encounter, Visit, VisitStatus } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
-import { audit, fail, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
 import { fixedCharges } from './billing'
+import { checkInProblem } from './queue-rules'
 import { refillState, supersededBy, supplyDays, type RefillFill, type RefillState } from './refill-rules'
 
 export interface VisitQuery {
@@ -48,6 +49,8 @@ export interface RegisterInput {
   identityCode: string
   caseType: string
   preventItems?: string[]
+  /** 病人已在櫃台（現場掛號）：掛號同時報到。只能用在今天的診次 */
+  checkIn?: boolean
 }
 
 /**
@@ -68,6 +71,9 @@ function createVisit(input: RegisterInput): Visit {
   const active = db.visits.filter((v) => v.sessionId === session.id && v.status !== 'cancelled')
   if (active.length >= session.limit) fail('此診已額滿', 'CONFLICT')
   if (active.some((v) => v.patientId === patient.id)) fail(`${patient.name} 已掛過此診`, 'CONFLICT')
+
+  // 報到是「人到了」：預約下週的掛號不可能今天就報到
+  if (input.checkIn && session.date !== today()) failField('checkIn', '只有今天的門診可以同時報到')
 
   // 預防保健項目：掛號頁只列出「可做」的讓人勾，但那是畫面的事；服務層一樣要判斷，
   // 否則直接呼叫 API 就能掛一個不符資格的項目，還會因此以 A3 案件申報
@@ -94,6 +100,7 @@ function createVisit(input: RegisterInput): Visit {
     firstVisit: !db.visits.some((x) => x.patientId === patient.id && x.status !== 'cancelled'),
     preventItems,
     createdAt: now(),
+    ...(input.checkIn ? { checkedInAt: now() } : {}),
   }
   db.visits.push(v)
   return v
@@ -105,7 +112,7 @@ export function register(input: RegisterInput): Promise<VisitView> {
     const v = createVisit(input)
     const p = find.patient(v.patientId)!
     const s = find.session(v.sessionId)!
-    audit('掛號', `${p.chartNo} ${p.name} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}`)
+    audit('掛號', `${p.chartNo} ${p.name} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}${v.checkedInAt ? '（已報到）' : ''}`)
     return visitView(v)
   })
 }
@@ -123,10 +130,27 @@ export function rescheduleVisit(visitId: string, input: Omit<RegisterInput, 'pat
     if (old.sessionId === input.sessionId) fail('新診次與原本的相同', 'CONFLICT')
     // 先退掉舊的，再掛新的：初診判斷才不會把自己算進去
     old.status = 'cancelled'
-    const v = createVisit({ ...input, patientId: old.patientId })
+    // 已經報到的人當場改掛今天別的診（例如換醫師）：人還在，不必再報到一次
+    const v = createVisit({ ...input, patientId: old.patientId, checkIn: !!old.checkedInAt && find.session(input.sessionId)?.date === today() })
     const s = find.session(v.sessionId)!
     old.cancelReason = `改期至 ${s.date} ${periodLabel[s.period]} ${nameOf.dept(s.deptId)} ${nameOf.doctor(s.doctorId)} 第 ${v.seqNo} 號`
     audit('改期', `${find.patient(v.patientId)?.name}：${old.date} #${old.seqNo} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}`)
+    return visitView(v)
+  })
+}
+
+/**
+ * 報到：預約的病人到院了。只能報到今天、還在候診的掛號（慢箋領藥不看診，沒有報到）。
+ * 報到後醫師的「下一位」才會叫到他（nextInQueue）。
+ */
+export function checkIn(visitId: string): Promise<VisitView> {
+  return mutate(() => {
+    requireUser('clerk', 'nurse')
+    const v = must(find.visit(visitId), '掛號紀錄')
+    const problem = checkInProblem(v, today())
+    if (problem) fail(`${find.patient(v.patientId)?.name}：${problem.message}`, 'CONFLICT')
+    v.checkedInAt = now()
+    audit('報到', `${find.patient(v.patientId)?.name} ${v.date} #${v.seqNo}`)
     return visitView(v)
   })
 }

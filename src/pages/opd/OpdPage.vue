@@ -140,26 +140,41 @@ const { data: warnings } = useQuery(
 
 // ---------- 動作 ----------
 /**
- * 叫號：這位醫師還有別人在看診中時，服務層先擋下（field = 'parallel'），這裡問醫師要不要回去完成那一位。
- * 「仍要叫號」才帶 allowParallel 重送（病人去檢查、等報告時先看下一位）；「回到第 N 號」直接選回那位病人。
+ * 叫號：服務層可能先擋下要醫師確認的情況（CONFLICT，field 標明是哪一種），確認後帶對應的 allowX 重送。
+ * 兩種可能接連出現（未報到、又有人還在看診中），所以用迴圈：每確認一種就加一個旗標再送一次。
+ *   - checkIn：病人還沒報到，可能根本還沒到——「仍要叫號」（直接走進診間、櫃台忘了按）
+ *   - parallel：這位醫師還有別人在看診中——「仍要叫號」（病人去檢查、等報告）或「回到第 N 號」
  */
 const start = useAction(async (id: string) => {
-  try {
-    return await opdApi.startConsult(id)
-  } catch (e) {
-    if (!(e instanceof ServiceError && e.code === 'CONFLICT' && e.field === 'parallel')) throw e
-    const other = queue.value?.find((x) => x.status === 'in-consult' && x.id !== id)
-    const ok = await ui.confirm({
-      title: '上一位還在看診中',
-      message: `${e.message}。\n\n病人去做檢查、等報告時，可以先看下一位；否則請先回去完成他，免得病歷停在草稿、批價等不到人。`,
-      okText: '仍要叫號',
-      cancelText: other ? `回到第 ${other.seqNo} 號` : '取消',
-    })
-    if (!ok) {
-      if (other) await selectVisit(other)
-      throw new Cancelled()
+  const opts: { allowParallel?: boolean; allowNotCheckedIn?: boolean } = {}
+  for (;;) {
+    try {
+      return await opdApi.startConsult(id, opts)
+    } catch (e) {
+      if (!(e instanceof ServiceError && e.code === 'CONFLICT')) throw e
+      if (e.field === 'checkIn' && !opts.allowNotCheckedIn) {
+        const ok = await ui.confirm({
+          title: '病人尚未報到',
+          message: `${e.message}，可能還沒到院。\n\n病人已經在診間（例如櫃台還沒幫他報到）才叫號；否則請先看已報到的病人。`,
+          okText: '仍要叫號',
+        })
+        if (!ok) throw new Cancelled()
+        opts.allowNotCheckedIn = true
+      } else if (e.field === 'parallel' && !opts.allowParallel) {
+        const other = queue.value?.find((x) => x.status === 'in-consult' && x.id !== id)
+        const ok = await ui.confirm({
+          title: '上一位還在看診中',
+          message: `${e.message}。\n\n病人去做檢查、等報告時，可以先看下一位；否則請先回去完成他，免得病歷停在草稿、批價等不到人。`,
+          okText: '仍要叫號',
+          cancelText: other ? `回到第 ${other.seqNo} 號` : '取消',
+        })
+        if (!ok) {
+          if (other) await selectVisit(other)
+          throw new Cancelled()
+        }
+        opts.allowParallel = true
+      } else throw e
     }
-    return opdApi.startConsult(id, { allowParallel: true })
   }
 })
 async function callPatient() {
@@ -400,6 +415,7 @@ const lastOpen = ref(true)
               <span class="block text-xs text-slate-500">{{ periodLabel[v.period] }}・{{ v.gender === 'M' ? '男' : '女' }} {{ ageText(v.birthDate) }}<template v-if="v.firstVisit">・初診</template></span>
             </span>
             <UBadge v-if="v.status === 'registered' && v.skippedAt" tone="yellow">過號</UBadge>
+            <UBadge v-else-if="v.canCheckIn">未報到</UBadge>
             <UStatusBadge v-else :map="visitStatus" :value="v.status" />
             <!-- 同時有兩位以上看診中：提醒醫師還有人沒結束（去檢查、等報告的病人，或忘了按完成的） -->
             <UBadge v-if="v.status === 'in-consult' && counts.inConsult > 1" tone="yellow">同時看診</UBadge>
@@ -445,7 +461,7 @@ const lastOpen = ref(true)
 
       <!-- 尚未叫號 -->
       <UCard v-if="visit.status === 'registered'">
-        <UEmpty :icon="Megaphone" :title="`第 ${visit.seqNo} 號 ${visit.patientName} ${visit.skippedAt ? '已過號' : '候診中'}`" description="叫號後開始記錄病歷">
+        <UEmpty :icon="Megaphone" :title="`第 ${visit.seqNo} 號 ${visit.patientName} ${visit.skippedAt ? '已過號' : visit.canCheckIn ? '尚未報到' : '候診中'}`" description="叫號後開始記錄病歷">
           <div class="flex gap-2">
             <UButton :icon="Megaphone" :loading="start.pending.value" @click="callPatient">叫號・開始看診</UButton>
           </div>

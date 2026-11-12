@@ -1,7 +1,7 @@
 // 門診候診順序（純函式）：看診頁的「下一位」與測試共用。
 import type { Visit } from '@/types'
 
-type QueueItem = Pick<Visit, 'id' | 'seqNo' | 'status' | 'skippedAt'>
+type QueueItem = Pick<Visit, 'id' | 'seqNo' | 'status' | 'skippedAt' | 'checkedInAt'>
 
 /**
  * 這一診「目前看到幾號」：
@@ -18,7 +18,22 @@ export function currentNumber(visits: Pick<Visit, 'seqNo' | 'status' | 'calledAt
 }
 
 /**
- * 下一位：先叫「沒有過號」的候診者（號碼小的先）；只剩過號的人時，才從過號者裡挑號碼最小的，讓這一診能看完。
+ * 能不能報到（服務層 checkIn 擋下時的原因；清單上的「報到」按鈕用 VisitView.canCheckIn，同一條規則）。
+ * 回傳 undefined 表示可以報到。
+ */
+export function checkInProblem(v: Pick<Visit, 'status' | 'date' | 'refillOf' | 'checkedInAt'>, today: string): { message: string } | undefined {
+  if (v.refillOf) return { message: '慢箋領藥不需看診，不必報到' }
+  if (v.status !== 'registered') return { message: '只有候診中的掛號可以報到' }
+  if (v.date !== today) return { message: `這是 ${v.date} 的掛號，當天到院才能報到` }
+  if (v.checkedInAt) return { message: `已於 ${v.checkedInAt.slice(11)} 報到` }
+  return undefined
+}
+
+/**
+ * 下一位：先叫「已報到、沒有過號」的候診者（號碼小的先）；再來是還沒報到的（醫師叫號時會再確認一次）；
+ * 都沒有才輪到過號的。預約 1 號還沒到，就先看已經在等的 2 號——以前只看號碼，醫師一直叫到不在場的人。
+ *
+ * 過號的部分：先叫「沒有過號」的候診者（號碼小的先）；只剩過號的人時，才從過號者裡挑號碼最小的，讓這一診能看完。
  * 以前過號只是退回候診，「下一位」取最小號——過號的人下一輪又被排成下一位，醫師一直叫到不在場的人。
  * 過號的人回來時，醫師直接在清單上點他叫號即可（多數診所是「過號請洽櫃台」，回來再叫）。
  *
@@ -27,5 +42,5 @@ export function currentNumber(visits: Pick<Visit, 'seqNo' | 'status' | 'calledAt
  */
 export function nextInQueue<T extends QueueItem>(queue: T[], currentId?: string): T | undefined {
   const waiting = queue.filter((v) => v.status === 'registered' && v.id !== currentId)
-  return waiting.find((v) => !v.skippedAt) ?? waiting[0]
+  return waiting.find((v) => v.checkedInAt && !v.skippedAt) ?? waiting.find((v) => !v.skippedAt) ?? waiting[0]
 }

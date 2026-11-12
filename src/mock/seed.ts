@@ -478,7 +478,11 @@ export function buildSeed(): Database {
     if (status === 'dispensed' && !reached(flow.disp)) status = 'charged'
     if (status === 'charged' && !reached(flow.paid)) status = 'consulted'
     if (status === 'consulted' && !reached(flow.done)) status = 'registered'
-    const v = makeVisit(pt, session, status, reached(reg) ? reg : pastBooking(), sc.caseType ?? '01')
+    // 下午家醫科有一位前兩天預約、還沒到的病人（報到示範：醫師的「下一位」先跳過他）。
+    // 不另外抽亂數：時間沒到的照舊走 pastBooking()，抽的次數和以前一樣，後面的資料才不會全部改變
+    const noShow = pi === 15 && period === 'PM' && dept === 'D01'
+    const createdAt = reached(reg) ? (noShow ? `${addDays(T, -2)} 10:15` : reg) : pastBooking()
+    const v = makeVisit(pt, session, status, createdAt, sc.caseType ?? '01')
     if (status === 'consulted' || status === 'charged' || status === 'dispensed') {
       const e = makeEncounter(v, sc, flow)
       if (status !== 'consulted') {
@@ -942,6 +946,18 @@ export function buildSeed(): Database {
   })
   // 領藥號：同一天依開單（批價）時間
   renumber(dispenses, (d) => visitById.get(d.visitId)!.date, (d) => d.createdAt, (d) => d.id, (d, n) => (d.pickupNo = n))
+
+  // 報到時間（不抽亂數）：叫過號的，在叫號前 15 分鐘報到（現場掛號的就是掛號那一刻）；
+  // 今天還在候診的：當天現場掛的已報到，事先預約的還沒到（還沒到他的掛號時段，或是上面那位預約未到的）
+  for (const v of visits) {
+    if (v.refillOf || v.status === 'cancelled') continue
+    if (v.calledAt) {
+      const before = addMinutes(v.calledAt, -15)
+      v.checkedInAt = v.createdAt > before ? v.createdAt : before
+    } else if (v.date === T && v.createdAt.startsWith(T)) {
+      v.checkedInAt = v.createdAt
+    }
+  }
 
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
