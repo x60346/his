@@ -37,6 +37,7 @@ const typeView: Record<StockTxnType, { label: string; tone: 'gray' | 'green' | '
   dispense: { label: '發藥', tone: 'blue' },
   'transfer-out': { label: '撥出', tone: 'gray' },
   'transfer-in': { label: '撥入', tone: 'green' },
+  return: { label: '退藥', tone: 'green' },
   adjust: { label: '盤點調整', tone: 'yellow' },
 }
 const lotState = (l: DrugLot) => (l.expiry < today() ? { label: '已過期', tone: 'red' as const } : isExpiringSoon(l.expiry, today()) ? { label: '即將到期', tone: 'yellow' as const } : null)

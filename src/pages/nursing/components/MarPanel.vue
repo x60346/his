@@ -211,7 +211,9 @@ async function complete(o: OrderView) {
                   <UBadge v-if="m.highAlert" tone="purple">高警訊</UBadge>
                   <UBadge v-if="m.orderType === 'stat'" tone="blue">STAT</UBadge>
                   <UBadge v-if="m.queried" tone="yellow" :title="`疑問：${m.queried}`">待醫師回覆</UBadge>
+                  <UBadge v-if="m.awaitingUd" tone="gray" title="住院藥局還沒調劑這一劑，藥還沒到病房">待藥局調劑</UBadge>
                 </div>
+                <div v-if="m.awaitingUd && urgencyOf(m) !== 'upcoming'" class="text-xs text-slate-600">藥局還沒調劑這一劑：請聯絡住院藥局補調劑（暫停、拒絕照常可記）</div>
                 <div v-if="m.queried" class="text-xs text-amber-800">護理師疑問：{{ m.queried }}（給藥暫停）</div>
                 <div class="tabular text-xs text-slate-500">{{ dose(m) }}<template v-if="m.freq">・{{ m.freq }}</template></div>
                 <div v-if="m.note" class="text-xs text-slate-600">原因：{{ m.note }}</div>
@@ -220,8 +222,8 @@ async function complete(o: OrderView) {
               <template v-if="m.status === 'pending'">
                 <UBadge :tone="urgencyView[urgencyOf(m)!].tone">{{ urgencyView[urgencyOf(m)!].label }}</UBadge>
                 <div class="flex gap-1">
-                  <UButton size="sm" variant="success" :icon="Check" :disabled="urgencyOf(m) === 'upcoming'" :title="urgencyOf(m) === 'upcoming' ? '尚未到給藥時間' : ''" @click="give(m)">給藥</UButton>
-                  <UButton v-if="urgencyOf(m) !== 'upcoming' && !m.queried" size="sm" variant="ghost" :icon="History" title="先給藥、後登打：記錄實際給藥時間" @click="openBackdate(m)">補登</UButton>
+                  <UButton size="sm" variant="success" :icon="Check" :disabled="urgencyOf(m) === 'upcoming' || m.awaitingUd" :title="urgencyOf(m) === 'upcoming' ? '尚未到給藥時間' : m.awaitingUd ? '藥局尚未調劑' : ''" @click="give(m)">給藥</UButton>
+                  <UButton v-if="urgencyOf(m) !== 'upcoming' && !m.queried && !m.awaitingUd" size="sm" variant="ghost" :icon="History" title="先給藥、後登打：記錄實際給藥時間" @click="openBackdate(m)">補登</UButton>
                   <UButton size="sm" variant="secondary" :icon="Pause" @click="reasonFor = { kind: 'held', mar: m }">暫停</UButton>
                   <UButton size="sm" variant="ghost" :icon="CircleSlash" @click="reasonFor = { kind: 'refused', mar: m }">拒絕</UButton>
                 </div>

@@ -165,6 +165,8 @@ export function stopOrder(orderId: string): Promise<OrderView> {
 export interface MarView extends MarRecord {
   /** 醫囑有疑問、待醫師回覆：給藥暫停（緊急時寫原因強制） */
   queried?: string
+  /** 長期排程、藥局還沒調劑（藥還沒到病房）：不能給，要請住院藥局補調劑 */
+  awaitingUd?: boolean
   content: string
   dose?: number
   unit: string
@@ -188,6 +190,7 @@ export function marViews(admissionId: string, date: string): MarView[] {
       return {
         ...m,
         ...(q && m.status === 'pending' ? { queried: q.reason } : {}),
+        ...(m.status === 'pending' && o?.type === 'long' && !m.udLineId ? { awaitingUd: true } : {}),
         content: o?.content ?? '',
         dose: o?.dose,
         unit: d ? doseUnitOf(d) : '',

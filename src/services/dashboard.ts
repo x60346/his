@@ -7,6 +7,7 @@ import { nameOf, stockLoc } from './views'
 import { usableQty } from './stock-rules'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
+import { pendingReturn, udCandidate } from './ud-work'
 
 export interface DashboardStats {
   date: string
@@ -24,6 +25,9 @@ export interface DashboardStats {
   purchaseOrdered: number
   /** 醫師：我（主治）的住院病人有幾筆醫囑疑問待回覆 */
   orderQueries?: number
+  /** 住院藥局：今天還沒調劑的劑量（補調劑）、待退藥點收的項數 */
+  udExtra: number
+  udReturns: number
   /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
   transferRequested?: number
   transferIssued?: number
@@ -73,6 +77,8 @@ export function getDashboard(): Promise<DashboardStats> {
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
+      udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
+      udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).marIds.length > 0).length,
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
       ...(() => {

@@ -591,6 +591,54 @@ export interface MarRecord {
   recordedAt?: string
   nurseId?: string
   note?: string
+  /**
+   * 住院藥局調劑（UD）的哪一筆發的這一劑。排程給藥要有才能給（藥還沒到病房）；
+   * PRN、STAT 用病房常備，給藥時直接扣，沒有這個欄位
+   */
+  udLineId?: string
+}
+
+/**
+ * 住院調劑（Unit Dose）：藥師每天下午調次日整天的劑量；當天新開的醫囑「補調劑」今天剩下的。
+ * 一次調劑＝藥師按一次「調劑」：每位病人、每筆醫囑一行，扣住院藥局的庫存。
+ */
+export interface UdDispense {
+  id: string
+  /** 調劑單號 UD20261112-01 */
+  no: string
+  locationId: string
+  /** daily 每日調劑（次日）；extra 補調劑（今天剩下的、新開的醫囑） */
+  kind: 'daily' | 'extra'
+  dispensedBy: string
+  dispensedAt: string
+  lines: UdLine[]
+}
+
+export interface UdLine {
+  id: string
+  admissionId: string
+  orderId: string
+  drugId: string
+  /** 這一行發的是哪幾劑（給藥排程） */
+  marIds: string[]
+  /** 發出的量（調劑單位）；無法換算的藥由藥師填，0＝床邊已有、這次不發 */
+  qty: number
+  /** 每劑幾個調劑單位：可換算時才有（沒給的劑量依這個退）；無法換算的（胰島素筆、眼藥水）沒有，也不退 */
+  perDose?: number
+  /** 扣庫存的那筆異動（qty 0 沒有）：退藥時退回同幾個批號 */
+  txnId?: string
+  /** 退藥點收紀錄：每次點收結清哪幾劑、應退、實收（短少要寫原因） */
+  returns?: UdReturn[]
+}
+
+export interface UdReturn {
+  at: string
+  by: string
+  marIds: string[]
+  expected: number
+  qty: number
+  reason?: string
+  txnIds: string[]
 }
 
 export interface VitalRecord {
@@ -711,7 +759,7 @@ export interface DrugLot {
   receivedAt: string
 }
 
-export type StockTxnType = 'opening' | 'receive' | 'dispense' | 'adjust' | 'transfer-out' | 'transfer-in'
+export type StockTxnType = 'opening' | 'receive' | 'dispense' | 'adjust' | 'transfer-out' | 'transfer-in' | 'return'
 
 /**
  * 醫院規模（重建展示資料時選，不隨時切換）：
@@ -729,6 +777,8 @@ export interface StockLocation {
   receivesPurchase: boolean
   /** 門診發藥從這裡扣（醫師開藥看的「可用量」也是這裡的） */
   dispensesOpd: boolean
+  /** 住院調劑（UD）與病房常備（PRN、STAT 給藥）從這裡扣（大型＝住院藥局；小型＝唯一的藥局） */
+  dispensesIpd: boolean
   active: boolean
 }
 

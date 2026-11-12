@@ -2,7 +2,7 @@
 import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import {
-  Activity, BedDouble, ClipboardList, HeartPulse, LayoutDashboard, Palette, Pill, Receipt, Settings, ShieldCheck, Stethoscope,
+  Activity, BedDouble, ClipboardList, HeartPulse, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
   UserPlus, Users,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
@@ -35,6 +35,7 @@ export const appRoutes: RouteRecordRaw[] = [
 
   { path: 'admission', name: 'admission', component: () => import('@/pages/admission/AdmissionPage.vue'), meta: { title: '住院中心', icon: BedDouble, group: '住院', roles: ['clerk', 'nurse'] } },
   { path: 'ipd', name: 'ipd', component: () => import('@/pages/ipd/IpdPage.vue'), meta: { title: '住院醫囑', icon: ClipboardList, group: '住院', roles: ['doctor'] } },
+  { path: 'ud', name: 'ud', component: () => import('@/pages/ud/UdPage.vue'), meta: { title: '住院藥局', icon: PillBottle, group: '住院', roles: ['pharmacist'] } },
   { path: 'nursing', name: 'nursing', component: () => import('@/pages/nursing/NursingPage.vue'), meta: { title: '護理站', icon: HeartPulse, group: '住院', roles: ['nurse'] } },
 
   { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },

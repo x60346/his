@@ -30,6 +30,7 @@ import type {
   StocktakeSheet,
   PurchaseOrder,
   TransferOrder,
+  UdDispense,
   Patient,
   PreventItem,
   PreventRecord,
@@ -110,13 +111,15 @@ export interface Database {
   purchaseOrders: PurchaseOrder[]
   /** 撥補單（大型醫院） */
   transfers: TransferOrder[]
+  /** 住院調劑（UD） */
+  udDispenses: UdDispense[]
   auditLogs: AuditLog[]
   /** 流水號計數器，例：receipt:2024-05-01 */
   counters: Record<string, number>
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 44
+export const SCHEMA_VERSION = 45
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

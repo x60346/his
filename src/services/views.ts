@@ -73,6 +73,8 @@ export function pickUsable(src: { diagnoses: Diagnosis[]; medications: Medicatio
 export const stockLoc = {
   /** 門診發藥的藥局：醫師開藥看的「可用量」、藥局發藥扣的都是這裡 */
   opd: () => (db.stockLocations.find((l) => l.dispensesOpd && l.active) ?? db.stockLocations[0]).id,
+  /** 住院調劑（UD）、病房常備扣的地點：大型＝住院藥局；小型＝唯一的藥局 */
+  ipd: () => (db.stockLocations.find((l) => l.dispensesIpd && l.active) ?? db.stockLocations.find((l) => l.dispensesOpd && l.active) ?? db.stockLocations[0]).id,
   /** 採購到貨入庫的地點 */
   receiving: () => (db.stockLocations.find((l) => l.receivesPurchase && l.active) ?? db.stockLocations[0]).id,
   /** 指定的地點（沒指定＝門診藥局）；不存在或停用就擋 */

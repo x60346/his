@@ -4,11 +4,12 @@
 // postStock 本身不檢查登入與角色（它是給進貨、發藥、盤點過帳這些已經檢查過權限的服務呼叫的）。
 // 以前它從 inventory.ts 匯出，overNetwork(inventory) 就把它一起對外了——任何頁面都能直接改庫存。
 // 流程測試會檢查：各 Api 不得有 postStock、index.ts 不得匯出這個模組。
-import type { DrugLot, RestockRequest, RestockStatus, StockTxn, StockTxnType } from '@/types'
+import type { DrugLot, IpdOrder, RestockRequest, RestockStatus, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { fail, failField, fieldErrors, must } from './http'
 import { allocateFefo, usableQty } from './stock-rules'
+import { udPerDose } from './ud-rules'
 import { find, stockLoc } from './views'
 
 export type Post =
@@ -94,4 +95,17 @@ export function offsetRestock(drugId: string, txn: StockTxn, userId: string): { 
   const outstanding = outstandingOf(req)
   if (!outstanding) Object.assign(req, { status: 'fulfilled', closedAt: txn.at, closedBy: userId })
   return { id: req.id, status: req.status, outstanding }
+}
+
+// ---------- 病房常備（住院 PRN、STAT 給藥） ----------
+
+/**
+ * PRN、STAT 給藥用病房常備藥（屬住院藥局管）：給藥時直接扣住院藥局，不等藥局調劑——需要時就要給。
+ * 無法逐劑換算的（整瓶、整支在病房）不扣，回傳 undefined。庫存不足照樣擋：帳上沒有，病房櫃裡多半也沒有
+ */
+export function wardStockOut(o: IpdOrder, admitNo: string, userId: string): StockTxn | undefined {
+  const drug = must(find.drug(o.drugId ?? ''), '藥品')
+  const per = udPerDose(drug, o.dose)
+  if (!per) return undefined
+  return postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: stockLoc.ipd(), qty: per, ref: `病房常備 ${admitNo}` }, userId)
 }

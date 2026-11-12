@@ -18,6 +18,8 @@ import type {
   Drug,
   Phrase,
   TransferOrder,
+  UdDispense,
+  UdLine,
   PurchaseOrder,
   SafetyStock,
   StockLocation,
@@ -40,6 +42,7 @@ import { autoQty, calcChargeLines, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
 import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rules'
+import { udPerDose } from '@/services/ud-rules'
 import { makeIdNo } from '@/utils/validators'
 import * as codes from './codes'
 import type { Database } from './db'
@@ -830,6 +833,22 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   void doctorUser
 
+  // ---------- 住院調劑（UD）：昨天 15:00 已調好今天整天的劑量（不抽亂數） ----------
+  // 今天的排程（已給的、待給的）都由這一次調劑送到病房；明天的還沒調——藥師下午打開「住院藥局」就有每日調劑可做。
+  // 扣庫存的異動在下面重播帳本時一起產生（和門診發藥同一套 FEFO），txnId 那時才填
+  const udAt = `${addDays(T, -1)} 15:00`
+  const udLines: UdLine[] = []
+  for (const o of ipdOrders.filter((x) => x.category === 'medication' && x.type === 'long' && x.status === 'active' && x.freq !== 'PRN' && x.startAt < udAt)) {
+    const ms = mar.filter((m) => m.orderId === o.id && m.scheduledAt.startsWith(T))
+    if (!ms.length) continue
+    const per = udPerDose(drugMap.get(o.drugId!)!, o.dose)
+    const line: UdLine = { id: `UDL-SEED-${udLines.length + 1}`, admissionId: o.admissionId, orderId: o.id, drugId: o.drugId!, marIds: ms.map((m) => m.id), qty: per ? per * ms.length : 1, ...(per ? { perDose: per } : {}) }
+    for (const m of ms) m.udLineId = line.id
+    udLines.push(line)
+  }
+  const udNo = `UD${addDays(T, -1).replace(/-/g, '')}-01`
+  const udDispenses: UdDispense[] = udLines.length ? [{ id: 'UD-SEED-1', no: udNo, locationId: '', kind: 'daily', dispensedBy: 'U301', dispensedAt: udAt, lines: udLines }] : []
+
   // ---------- 藥品庫存帳 ----------
   // 用「重播」產生：期初 → 進貨 → 每日發藥，依時間順序、用與服務層相同的 FEFO 規則扣批號。
   // 這樣產生的帳，結存、批號、異動一定對得起來；最後的庫存約等於 codes 裡設定的目標值。
@@ -841,14 +860,16 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 大型的門診藥局快不夠發時，先從藥庫撥一批過來（依 FEFO、帶著批號效期）——最後全院總量和小型一模一樣
   const stockLocations: StockLocation[] =
     scale === 'small'
-      ? [{ id: 'LOC-PH', name: '藥局', kind: 'pharmacy', receivesPurchase: true, dispensesOpd: true, active: true }]
+      ? [{ id: 'LOC-PH', name: '藥局', kind: 'pharmacy', receivesPurchase: true, dispensesOpd: true, dispensesIpd: true, active: true }]
       : [
-          { id: 'LOC-WH', name: '藥庫', kind: 'warehouse', receivesPurchase: true, dispensesOpd: false, active: true },
-          { id: 'LOC-OPD', name: '門診藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: true, active: true },
-          { id: 'LOC-IPD', name: '住院藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: false, active: true },
+          { id: 'LOC-WH', name: '藥庫', kind: 'warehouse', receivesPurchase: true, dispensesOpd: false, dispensesIpd: false, active: true },
+          { id: 'LOC-OPD', name: '門診藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: true, dispensesIpd: false, active: true },
+          { id: 'LOC-IPD', name: '住院藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: false, dispensesIpd: true, active: true },
         ]
   const recvLoc = stockLocations.find((l) => l.receivesPurchase)!.id
   const opdLoc = stockLocations.find((l) => l.dispensesOpd)!.id
+  const ipdLoc = stockLocations.find((l) => l.dispensesIpd)!.id
+  for (const u of udDispenses) u.locationId = ipdLoc
   const safetyStocks: SafetyStock[] = []
   const realOut = new Map<string, { at: string; qty: number; ref: string }[]>()
   for (const d of dispenses.filter((x) => x.status === 'dispensed')) {
@@ -870,7 +891,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         .map((daysAgo) => ({ at: `${addDays(T, -daysAgo)} 17:30`, qty: int(1, busy ? 30 : 8), ref: '門診調劑（每日彙總）' })),
       // 帳本從期初（31 天前）開始；更早的發藥已經反映在期初數量裡，不能再重播一次
       ...(realOut.get(drug.id) ?? []).filter((o) => o.at >= addDays(T, -30)),
+      // 住院調劑：從住院藥局扣（小型就是同一個藥局）
+      ...udLines.filter((l) => l.drugId === drug.id && l.qty > 0).map((l) => ({ at: udAt, qty: l.qty, ref: udNo, loc: ipdLoc, line: l })),
     ]
+    const udNeed = udLines.filter((l) => l.drugId === drug.id).reduce((n, l) => n + l.qty, 0)
     const receiveAt = `${addDays(T, -14)} 10:00`
     const totalOut = outs.reduce((s, o) => s + o.qty, 0)
     const outBefore = outs.filter((o) => o.at < receiveAt).reduce((s, o) => s + o.qty, 0)
@@ -887,7 +911,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       receive = outAfterExpiry + 20
       opening = Math.max(target + totalOut - receive, outBefore + 20)
     }
-    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string })[] = [
+    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string; loc?: string; line?: UdLine })[] = [
       { kind: 'lot' as const, at: `${addDays(T, -31)} 08:00`, type: 'opening' as const, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year - 1).slice(2)}${String(di).padStart(3, '0')}A`, expiry: oldExpiry, qty: opening, receivedAt: `${addDays(T, -31)} 08:00` } },
       ...(receive > 0 ? [{ kind: 'lot' as const, at: receiveAt, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}B`, expiry: `${year + 2}-0${int(1, 9)}-28`, qty: receive, receivedAt: receiveAt } }] : []),
       // 大型：藥庫的備量比單一藥局多——一般的藥另外進一批（安全庫存 5 倍：撥給藥局後仍高於藥庫自己的 3 倍安全量；固定批號效期、不抽亂數）。
@@ -929,16 +953,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (ev.kind === 'lot') {
         lots.push({ ...ev.lot, locationId: recvLoc })
         post(recvLoc, ev.type, ev.at, ev.lot.qty, [{ lotNo: ev.lot.lotNo, qty: ev.lot.qty }], ev.ref)
-        // 大型：住院藥局開帳時從藥庫撥一些注射劑（住院給藥目前不扣庫存，這些是盤點、撥補示範用的存量）
-        if (scale === 'large' && ev.type === 'opening' && drug.category === '注射') {
-          const q = Math.min(20, Math.floor(ev.lot.qty / 10))
-          if (q > 0) transfer('LOC-IPD', q, `${ev.at.slice(0, 10)} 09:00`, xferRef())
+        // 大型：住院藥局開帳時從藥庫撥一些注射劑，和住院病人在用的藥（夠調劑幾天：UD、病房常備都從這裡扣）
+        if (scale === 'large' && ev.type === 'opening' && (drug.category === '注射' || udNeed > 0)) {
+          const q = Math.min(Math.floor(ev.lot.qty / 2), Math.max(Math.min(20, Math.floor(ev.lot.qty / 10)), udNeed * 4 + 10))
+          if (q > 0) transfer(ipdLoc, q, `${ev.at.slice(0, 10)} 09:00`, xferRef())
         }
         continue
       }
       // 大型：門診藥局發完會低於安全庫存，就先向藥庫請領，補到 3 倍安全庫存（藥庫不夠就撥它有的）——
       // 真實藥局是「低於安全量就請領」，不是等到發不出來才請；以前這樣做，示範時一大半的藥都顯示「偏低」，真正的警示反而被淹沒
-      if (opdLoc !== recvLoc) {
+      const outLoc = ev.loc ?? opdLoc
+      if (opdLoc !== recvLoc && outLoc === opdLoc) {
         const have = usableQty(at(opdLoc), ev.at)
         if (have - ev.qty < drug.safetyStock) {
           const want = drug.safetyStock * 3 + ev.qty - have
@@ -946,11 +971,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           if (whHas > 0) transfer(opdLoc, Math.min(want, whHas), ev.at, xferRef())
         }
       }
-      const takes = allocateFefo(at(opdLoc), ev.qty, ev.at)
+      const takes = allocateFefo(at(outLoc), ev.qty, ev.at)
       // 不足就直接報錯：之前這裡是「默默略過」，結果期初之前的舊發藥被略過卻仍算進總量，期初多出 120 都沒人發現
-      if (!takes) throw new Error(`種子資料庫存帳錯誤：${drug.id} 於 ${ev.at} 可用量不足（需 ${ev.qty}）`)
+      if (!takes) throw new Error(`種子資料庫存帳錯誤：${drug.id} 於 ${ev.at} ${outLoc} 可用量不足（需 ${ev.qty}）`)
       for (const t of takes) lots.find((l) => l.id === t.lotId)!.qty -= t.qty
-      post(opdLoc, 'dispense', ev.at, -ev.qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ev.ref)
+      post(outLoc, 'dispense', ev.at, -ev.qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ev.ref)
+      if (ev.line) ev.line.txnId = stockTxns.at(-1)!.id
     }
     drug.stock = Object.values(balance).reduce((a, b) => a + b, 0)
     drugLots.push(...lots)
@@ -1169,6 +1195,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     stocktakes: [],
     purchaseOrders,
     transfers,
+    udDispenses,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

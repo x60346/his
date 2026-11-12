@@ -7,6 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
+import { wardStockOut } from './stock-ledger'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
@@ -262,8 +263,14 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
       fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
+    // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
+    if (status === 'given' && order.type === 'long' && !m.udLineId) {
+      fail(`藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
+    }
     // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
     const forced = status === 'given' ? holdForQuery(order, force) : undefined
+    // 臨時（STAT）給藥用病房常備藥：給的時候扣住院藥局
+    if (status === 'given' && order.type === 'stat') wardStockOut(order, admitted(m.admissionId).admitNo, nurse.id)
     const noteText = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
     Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
@@ -285,6 +292,8 @@ export function givePrn(orderId: string, note: string, force?: { reason: string 
     if (o.status !== 'active' || o.freq !== 'PRN') fail('此醫囑不是有效的 PRN 給藥')
     if (!note.trim()) failField('note', '請註明給藥原因（例：體溫 38.5°C）')
     const forced = holdForQuery(o, force)
+    // PRN 用病房常備藥：給的時候扣住院藥局
+    wardStockOut(o, admitted(o.admissionId).admitNo, nurse.id)
     const t = now()
     const text = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
     const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text }
