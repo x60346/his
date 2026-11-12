@@ -1,11 +1,12 @@
 // 主檔（參考資料）查詢與維護：科別、醫師、身分、藥品、醫令、ICD、頻率，以及展示資料重置。
 // 帳號、科別醫師的維護在 admin.ts（有較多連動規則）。
-import type { Department, Doctor, Drug, Frequency, IcdCode, Identity, PreventItem, Procedure } from '@/types'
+import type { Department, Doctor, Drug, Frequency, IcdCode, Identity, PreventItem, PriceChange, Procedure } from '@/types'
 import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
-import { describeDrugs, matchesDrug, needsSameNameCheck, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
+import { applyPriceChange, describeDrugs, drugPriceOn, matchesDrug, needsSameNameCheck, nextPriceChange, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
+import { now, today } from '@/utils/date'
 
 // ---------- 唯讀代碼（不會在系統中修改） ----------
 export const staticCodes = {
@@ -40,15 +41,26 @@ export interface DrugQuery {
   includeInactive?: boolean
 }
 
-export function listDrugs(q: DrugQuery = {}): Promise<Drug[]> {
-  return query(() =>
-    db.drugs.filter((d) => {
-      if (!q.includeInactive && !d.active) return false
-      if (q.category && d.category !== q.category) return false
-      if (q.lowStockOnly && d.stock > d.safetyStock) return false
-      return matchesDrug(d, q.keyword ?? '')
-    }),
-  )
+/** 清單上的藥：nhiPrice、selfPrice 是「今天」的價格（主檔編輯表單也從這裡帶值）；nextPrice 是已排定還沒生效的調價 */
+export interface DrugView extends Drug {
+  nextPrice?: PriceChange
+}
+
+export function listDrugs(q: DrugQuery = {}): Promise<DrugView[]> {
+  return query(() => {
+    const t = today()
+    return db.drugs
+      .filter((d) => {
+        if (!q.includeInactive && !d.active) return false
+        if (q.category && d.category !== q.category) return false
+        if (q.lowStockOnly && d.stock > d.safetyStock) return false
+        return matchesDrug(d, q.keyword ?? '')
+      })
+      .map((d) => {
+        const next = nextPriceChange(d, t)
+        return { ...d, ...drugPriceOn(d, t), ...(next ? { nextPrice: next } : {}) }
+      })
+  })
 }
 
 export function listProcedures(q: { keyword?: string; category?: Procedure['category']; includeInactive?: boolean } = {}): Promise<Procedure[]> {
@@ -81,17 +93,24 @@ function nextCode(prefix: string, existing: string[], width: number): string {
  *   - 停用前檢查「還在用它的」：例如仍有執行中的住院醫囑，就不能停用該藥
  *   - 停用後不能再開立（服務層 usable.* 把關），但歷史紀錄照常顯示
  */
-export type DrugInput = Omit<Drug, 'id' | 'stock'> & {
+export type DrugInput = Omit<Drug, 'id' | 'stock' | 'priceChanges'> & {
   id?: string
   stock?: number
+  /**
+   * 修改時：nhiPrice、selfPrice 是「priceFrom 這天起」的價格（空白＝今天）。不能早於今天——
+   * 回溯調價會讓已看診、還沒批價的病人價格被改掉。設回生效前的價格＝取消那天的調價。新增藥品不用（就是原價）
+   */
+  priceFrom?: string
   /** 已有同名藥品時，使用者已確認仍要儲存（見 drug-rules.ts） */
   allowSameName?: boolean
 }
 
 export function saveDrug(input: DrugInput): Promise<Drug> {
   return mutate(() => {
-    requireUser('admin', 'pharmacist')
+    const user = requireUser('admin', 'pharmacist')
     const old = input.id ? db.drugs.find((x) => x.id === input.id) : undefined
+    const t = today()
+    const priceFrom = input.priceFrom?.trim() || t
     if (input.id && !old) fail('找不到藥品', 'NOT_FOUND')
     const name = input.name.trim().replace(/\s+/g, ' ') // 連續空白存成一個，避免「看起來一樣」的兩種寫法
     const nhiCode = input.nhiCode.trim().toUpperCase()
@@ -103,6 +122,8 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     // 價格必須大於 0：批價會把 0 元的健保藥照 0 元申報、病人也付 0 元（醫令有「0 點改收自費」，藥品沒有）
     if (!(input.nhiPrice > 0)) v.add('nhiPrice', '健保價需大於 0')
     if (!(input.selfPrice > 0)) v.add('selfPrice', '自費價需大於 0')
+    if (old && !/^\d{4}-\d{2}-\d{2}$/.test(priceFrom)) v.add('priceFrom', '請選擇生效日')
+    else if (old && priceFrom < t) v.add('priceFrom', '生效日不能早於今天（已看診、還沒批價的病人會被改價）')
     if (!Number.isInteger(input.safetyStock) || input.safetyStock < 0) v.add('safetyStock', '安全庫存需為 0 以上的整數')
     if (!(input.defaultDose > 0)) v.add('defaultDose', '預設劑量需大於 0')
     if (!db.frequencies.some((f) => f.code === input.defaultFreq)) v.add('defaultFreq', '請選擇預設頻率')
@@ -131,7 +152,14 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
         return a.length ? { aliases: a } : {}
       })(),
       generic: input.generic.trim(), spec: input.spec.trim(), unit: input.unit.trim(), category: input.category,
-      nhiPrice: input.nhiPrice, selfPrice: input.selfPrice, safetyStock: input.safetyStock,
+      // 原價不動；修改的價格記成「priceFrom 起」的調價（批價依看診日查 drugPriceOn）
+      nhiPrice: old ? old.nhiPrice : input.nhiPrice, selfPrice: old ? old.selfPrice : input.selfPrice,
+      ...(() => {
+        if (!old) return {}
+        const changes = applyPriceChange(old, { from: priceFrom, nhiPrice: input.nhiPrice, selfPrice: input.selfPrice, by: user.id, at: now() })
+        return changes.length ? { priceChanges: changes } : {}
+      })(),
+      safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
       highAlert: !!input.highAlert, doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
       indication: input.indication.trim(), warning: input.warning.trim(),
@@ -140,7 +168,13 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       // 維護主檔時一律沿用目前庫存（新藥從 0 開始），忽略傳入的 stock——否則改個藥名就能順手把庫存改掉，帳就對不起來了
       stock: old?.stock ?? 0,
     }
-    audit(old ? '修改藥品主檔' : '新增藥品', `${saved.id} ${name}${old && old.active !== saved.active ? (saved.active ? '（啟用）' : '（停用）') : ''}`)
+    // 調價寫進稽核：哪天起、從多少改成多少（取消排定的調價也看得出來）
+    const before = old && drugPriceOn(old, priceFrom)
+    const after = old && drugPriceOn(saved, priceFrom)
+    const priceNote = before && after && (before.nhiPrice !== after.nhiPrice || before.selfPrice !== after.selfPrice)
+      ? `（藥價 ${priceFrom} 起：健保 ${before.nhiPrice}→${after.nhiPrice}、自費 ${before.selfPrice}→${after.selfPrice}）`
+      : ''
+    audit(old ? '修改藥品主檔' : '新增藥品', `${saved.id} ${name}${old && old.active !== saved.active ? (saved.active ? '（啟用）' : '（停用）') : ''}${priceNote}`)
     return upsert(db.drugs, saved)
   })
 }

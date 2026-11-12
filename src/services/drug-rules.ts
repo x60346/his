@@ -3,7 +3,7 @@
 // 真實醫院裡同名藥是正常的：同成分不同廠牌、換供應商的新舊並存期。參照的 jian-HIS 以院內代碼識別藥品，
 // 藥名可以重複。但這個展示系統沒有廠牌、中文名欄位，醫師開藥時只看得到藥名——同名兩筆就分不出來。
 // 所以不直接擋，而是「提醒並要求確認」（和劑量偏高、重複開立同一種藥的確認方式一致）。
-import type { Drug, DrugTiming } from '@/types'
+import type { Drug, DrugTiming, PriceChange } from '@/types'
 
 /** 比對用的藥名：去頭尾空白、連續空白視為一個、不分大小寫（「acetaminophen  500MG」與「Acetaminophen 500mg」同名） */
 export function normalizeDrugName(name: string): string {
@@ -68,4 +68,41 @@ export function matchesDrug(d: Pick<Drug, 'id' | 'name' | 'nameZh' | 'generic' |
   const kw = keyword.trim().toLowerCase()
   if (!kw) return true
   return [d.id, d.name, d.nameZh, d.generic, d.nhiCode, d.indication, ...(d.aliases ?? [])].some((x) => (x ?? '').toLowerCase().includes(kw))
+}
+
+// ---------- 藥價生效日 ----------
+// 價格看「看診日」：調價日之前看診、之後才來批價的，收的是看診那天的價格（健保申報也依就醫日）。
+// 已批價的收據存著當時的明細，不受之後調價影響。
+
+type Priced = Pick<Drug, 'nhiPrice' | 'selfPrice' | 'priceChanges'>
+
+/** 某一天的價格：生效日 ≤ 那天的最後一筆調價；都還沒生效就是原價 */
+export function drugPriceOn(d: Priced, date: string): { nhiPrice: number; selfPrice: number } {
+  const c = (d.priceChanges ?? []).filter((x) => x.from <= date).sort((a, b) => a.from.localeCompare(b.from)).pop()
+  return c ? { nhiPrice: c.nhiPrice, selfPrice: c.selfPrice } : { nhiPrice: d.nhiPrice, selfPrice: d.selfPrice }
+}
+
+/** 已排定、還沒生效的下一筆調價（主檔清單提示「12/01 起 2.5 點」） */
+export function nextPriceChange(d: Priced, today: string): PriceChange | undefined {
+  return (d.priceChanges ?? []).filter((x) => x.from > today).sort((a, b) => a.from.localeCompare(b.from))[0]
+}
+
+/**
+ * 設定「from 這天起」的價格，回傳新的調價紀錄（不改傳入的資料）：
+ *   - 同一天已有調價就取代
+ *   - 和前一個價格相同就不記（等於取消那天的調價；改個藥名不會多出一筆「調價」）
+ * 之後已排定的調價保留（例：先排 12/01，再補一筆 11/20）。
+ */
+export function applyPriceChange(d: Priced, change: PriceChange): PriceChange[] {
+  const all = [...(d.priceChanges ?? []).filter((x) => x.from !== change.from), change].sort((a, b) => a.from.localeCompare(b.from))
+  // 整串重新整理：和前一個價格相同的都拿掉——不只新加的那筆，後面已排定的也可能因此變成「沒有變」
+  // （例：明天已排 4.2，今天也改成 4.2，明天那筆就多餘了；之後改回原價時才不會留下一筆「3.2 → 3.2」）
+  const out: PriceChange[] = []
+  let prev = { nhiPrice: d.nhiPrice, selfPrice: d.selfPrice }
+  for (const c of all) {
+    if (c.nhiPrice === prev.nhiPrice && c.selfPrice === prev.selfPrice) continue
+    out.push(c)
+    prev = c
+  }
+  return out
 }

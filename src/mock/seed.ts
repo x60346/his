@@ -15,7 +15,9 @@ import type {
   MedicationOrder,
   NursingNote,
   OrderSet,
+  Drug,
   Phrase,
+  PriceChange,
   Patient,
   Period,
   PreventRecord,
@@ -289,7 +291,17 @@ export function buildSeed(): Database {
   const charges: Charge[] = []
   const dispenses: Dispense[] = []
   const preventRecords: PreventRecord[] = []
-  const drugMap = new Map(codes.drugs.map((d) => [d.id, d]))
+  // 藥價調整示範（固定值、不抽亂數）：
+  //   Amlodipine 3 天前起健保價 3.6 → 3.2：更早看診的收據是舊價、之後的是新價（批價依看診日）
+  //   Metformin 下個月 1 日起 2 → 2.2：已排定、還沒生效，主檔清單會提示
+  // 收據在下面用 drugMap 算，所以調價紀錄要在這裡就掛上去，和最後存進資料庫的藥品主檔同一份
+  const nextMonthFirst = `${addDays(`${T.slice(0, 8)}01`, 32).slice(0, 8)}01`
+  const priceDemo: Record<string, PriceChange[]> = {
+    M012: [{ from: addDays(T, -3), nhiPrice: 3.2, selfPrice: 8, by: 'U001', at: `${addDays(T, -10)} 10:00` }],
+    M015: [{ from: nextMonthFirst, nhiPrice: 2.2, selfPrice: 5, by: 'U001', at: `${addDays(T, -1)} 15:00` }],
+  }
+  const withPrices = (d: Drug): Drug => (priceDemo[d.id] ? { ...d, priceChanges: structuredClone(priceDemo[d.id]) } : d)
+  const drugMap = new Map(codes.drugs.map((d) => [d.id, withPrices(d)]))
   const procMap = new Map(codes.procedures.map((p) => [p.id, p]))
   const identityMap = new Map(codes.identities.map((x) => [x.code, x]))
   const freqTimes = (f: string) => codes.frequencies.find((x) => x.code === f)?.timesPerDay ?? 1
@@ -813,7 +825,7 @@ export function buildSeed(): Database {
   // ---------- 藥品庫存帳 ----------
   // 用「重播」產生：期初 → 進貨 → 每日發藥，依時間順序、用與服務層相同的 FEFO 規則扣批號。
   // 這樣產生的帳，結存、批號、異動一定對得起來；最後的庫存約等於 codes 裡設定的目標值。
-  const drugs = structuredClone(codes.drugs)
+  const drugs = structuredClone(codes.drugs).map(withPrices)
   const drugLots: DrugLot[] = []
   const stockTxns: StockTxn[] = []
   const realOut = new Map<string, { at: string; qty: number; ref: string }[]>()

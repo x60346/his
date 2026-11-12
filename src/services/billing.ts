@@ -8,6 +8,7 @@
 //   4. 診察費、健保藥費、健保醫令列為健保申報點數；自費項目由病患全額自付
 //   5. 自費身分：所有項目以自費價計算，不申報健保
 import type { BillingSettings, Charge, ChargeLine, DiscountRule, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
+import { drugPriceOn } from './drug-rules'
 
 export const CONSULT_PROC_ID = 'P001'
 
@@ -68,12 +69,14 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
   for (const m of enc.medications) {
     const d = lk.drug(m.drugId)
     if (!d) continue
+    // 依看診日的價格（調價日前看診、調價後才批價，仍收看診那天的價格）
+    const price = drugPriceOn(d, visit.date)
     if (selfPayVisit || m.selfPay) {
-      lines.push({ kind: 'self', name: `${d.name}（自費）`, qty: m.qty, unitPrice: d.selfPrice, amount: round(d.selfPrice * m.qty), patientPay: true })
+      lines.push({ kind: 'self', name: `${d.name}（自費）`, qty: m.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * m.qty), patientPay: true })
     } else {
-      const amount = round(d.nhiPrice * m.qty)
+      const amount = round(price.nhiPrice * m.qty)
       nhiDrugTotal += amount
-      lines.push({ kind: 'drug', name: d.name, qty: m.qty, unitPrice: d.nhiPrice, amount, patientPay: false })
+      lines.push({ kind: 'drug', name: d.name, qty: m.qty, unitPrice: price.nhiPrice, amount, patientPay: false })
     }
   }
 

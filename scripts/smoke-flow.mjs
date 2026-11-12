@@ -2013,6 +2013,87 @@ try {
     await as('clerk01')
   }
 
+  // 藥價生效日：批價依「看診日」的價格；調價前看診、之後才批價的仍收舊價；已批價的收據不受影響
+  console.log('\n[藥價生效日]')
+  {
+    const { addDays } = await load('/src/utils/date.ts')
+    const R = await load('/src/services/drug-rules.ts')
+    const base = { nhiPrice: 2, selfPrice: 5, priceChanges: [{ from: '2026-03-01', nhiPrice: 2.5, selfPrice: 6 }, { from: '2026-06-01', nhiPrice: 3, selfPrice: 7 }] }
+    ok(R.drugPriceOn(base, '2026-02-28').nhiPrice === 2 && R.drugPriceOn(base, '2026-03-01').nhiPrice === 2.5 && R.drugPriceOn(base, '2026-05-31').selfPrice === 6 && R.drugPriceOn(base, '2026-12-31').nhiPrice === 3,
+      '某天的價格：生效日當天起用新價，之前用前一個價格')
+    ok(R.nextPriceChange(base, '2026-04-01')?.from === '2026-06-01' && !R.nextPriceChange(base, '2026-07-01'), '已排定、還沒生效的下一筆調價')
+    const rep = R.applyPriceChange(base, { from: '2026-03-01', nhiPrice: 2.8, selfPrice: 6 })
+    ok(rep.length === 2 && rep[0].nhiPrice === 2.8, '同一天再調價：取代那天的調價')
+    const cancel = R.applyPriceChange(base, { from: '2026-06-01', nhiPrice: 2.5, selfPrice: 6 })
+    ok(cancel.length === 1 && cancel[0].from === '2026-03-01', '把某天的價格改回生效前的價格＝取消那天的調價')
+    ok(R.applyPriceChange({ nhiPrice: 2, selfPrice: 5 }, { from: '2026-01-01', nhiPrice: 2, selfPrice: 5 }).length === 0, '價格沒變（例如只改藥名）不會多一筆調價')
+    ok(R.applyPriceChange(base, { from: '2026-04-01', nhiPrice: 2.6, selfPrice: 6 }).map((x) => x.from).join() === '2026-03-01,2026-04-01,2026-06-01', '補一筆中間的調價，之後已排定的保留、依日期排序')
+
+    // 種子：Amlodipine 3 天前調價 3.6 → 3.2；之前看診的收據是舊價、之後的是新價
+    const amlo = dbm.db.drugs.find((d) => d.id === 'M012')
+    const amloLines = dbm.db.charges.filter((c) => !c.voided).flatMap((c) => {
+      const v = dbm.db.visits.find((x) => x.id === c.visitId)
+      return c.lines.filter((l) => l.kind === 'drug' && l.name === amlo.name).map((l) => ({ date: v.date, unit: l.unitPrice }))
+    })
+    const changeDay = amlo.priceChanges?.[0]?.from
+    ok(!!changeDay && amloLines.length > 0 && amloLines.every((l) => l.unit === (l.date >= changeDay ? 3.2 : 3.6)),
+      `種子：Amlodipine ${changeDay} 起 3.2，${amloLines.length} 筆收據都依看診日計價（舊價 ${amloLines.filter((l) => l.unit === 3.6).length} 筆）`)
+    const metNext = (await api.masterApi.listDrugs({ includeInactive: true })).find((d) => d.id === 'M015')
+    ok(metNext?.nextPrice?.nhiPrice === 2.2 && metNext.nhiPrice === 2, 'Metformin 已排定下個月調價：清單顯示今天的價格與下一筆調價')
+
+    // 調價對「還沒批價」的影響：找今天看完診、還沒批價、有健保藥的人
+    const C = api.chargeApi
+    const target = dbm.db.visits.find((v) => v.date === T && v.status === 'consulted' && dbm.db.encounters.find((e) => e.visitId === v.id)?.medications.some((m) => !m.selfPay))
+    ok(!!target, '今天有看完診、還沒批價、開了健保藥的病人')
+    const enc = dbm.db.encounters.find((e) => e.visitId === target.id)
+    const med = enc.medications.find((m) => !m.selfPay)
+    const drug = dbm.db.drugs.find((d) => d.id === med.drugId)
+    const before = (await C.getChargeDetail(target.id)).preview
+    const paid = dbm.db.charges.find((c) => !c.voided && c.lines.some((l) => l.name === drug.name))
+    const paidLines = paid && JSON.stringify(paid.lines)
+    await as('admin')
+    const M = api.masterApi
+    const row = (await M.listDrugs({ includeInactive: true })).find((d) => d.id === drug.id)
+    const now0 = row.nhiPrice
+    try {
+      await M.saveDrug({ ...row, nhiPrice: now0 + 1, priceFrom: addDays(T, -1) })
+      ok(false, '回溯調價應被擋下')
+    } catch (e) {
+      ok(e.field === 'priceFrom', `生效日早於今天 → 「${e.message}」`)
+    }
+    await M.saveDrug({ ...row, nhiPrice: now0 + 1, priceFrom: addDays(T, 1) })
+    const sched = (await M.listDrugs({ includeInactive: true })).find((d) => d.id === drug.id)
+    ok(sched.nhiPrice === now0 && sched.nextPrice?.nhiPrice === now0 + 1 && dbm.db.auditLogs[0].detail.includes('藥價'), `排定明天調價：今天仍是 ${now0}、清單提示明天起 ${now0 + 1}；稽核記下調價`)
+    await as('clerk01')
+    ok((await C.getChargeDetail(target.id)).preview.patientTotal === before.patientTotal && (await C.getChargeDetail(target.id)).preview.nhiPoints === before.nhiPoints, '明天才生效：今天看診的批價不變')
+    await as('admin')
+    await M.saveDrug({ ...row, nhiPrice: now0 + 1 })
+    await as('clerk01')
+    const after = (await C.getChargeDetail(target.id)).preview
+    const lineOf = (p) => p.lines.find((l) => l.kind === 'drug' && l.name === drug.name)
+    ok(lineOf(after)?.unitPrice === now0 + 1 && after.nhiPoints > before.nhiPoints, `今天起生效（生效日空白＝今天）：今天看診的批價用新價 ${now0 + 1}`)
+    // 同一位病人若是昨天看診、今天才來批價：收昨天的價格
+    const keepDate = target.date
+    dbm.db.visits.find((v) => v.id === target.id).date = addDays(T, -1)
+    const yest = (await C.getChargeDetail(target.id)).preview
+    dbm.db.visits.find((v) => v.id === target.id).date = keepDate
+    ok(lineOf(yest)?.unitPrice === now0, `昨天看診、今天才批價：仍收看診那天的價格 ${now0}（依看診日）`)
+    ok(!paid || JSON.stringify(dbm.db.charges.find((c) => c.id === paid.id).lines) === paidLines, '已批價的收據不受調價影響（明細是批價當時存下的）')
+    // 還原：把今天的價格改回原價＝取消今天的調價
+    await as('admin')
+    await M.saveDrug({ ...row, nhiPrice: now0, priceFrom: addDays(T, 1) })
+    await M.saveDrug({ ...row, nhiPrice: now0 })
+    const restored = dbm.db.drugs.find((d) => d.id === drug.id)
+    ok(R.drugPriceOn(restored, T).nhiPrice === now0 && !R.nextPriceChange(restored, T) && (restored.priceChanges ?? []).every((c) => c.from < T),
+      '改回原價：今天與明天的調價都取消，不留多餘紀錄')
+    const nd = await M.saveDrug({ name: '調價測試新藥 1mg', generic: '', nhiCode: '', spec: '', category: '外用', unit: 'TUB', doseUnit: '', nhiPrice: 9, selfPrice: 20, safetyStock: 0, defaultDose: 1, defaultFreq: 'QD', defaultRoute: 'EXT', highAlert: false, indication: '測試', warning: '測試', timing: 'ANY', nameZh: '測試', active: true, priceFrom: addDays(T, 5) })
+    ok(nd.nhiPrice === 9 && !nd.priceChanges, '新增藥品：價格就是原價（生效日不適用）')
+    await as('clerk01')
+    const { readFileSync } = await import('node:fs')
+    const billingSrc = readFileSync('src/services/billing.ts', 'utf8')
+    ok(billingSrc.includes('drugPriceOn(d, visit.date)') && !/\bd\.(nhiPrice|selfPrice)\b/.test(billingSrc), '批價只用 drugPriceOn(藥, 看診日) 取價，不直接讀主檔價格')
+  }
+
   // 藥袋法定欄位（藥師法）：性別、作用或適應症、警語或副作用、藥局名稱地址、調劑者、調劑日期
   console.log('\n[藥袋法定欄位]')
   {

@@ -380,6 +380,16 @@ export type DrugCategory = '口服' | '外用' | '注射' | '吸入' | '眼用'
 /** 服用時機：AC 飯前、PC 飯後、WITH 隨餐、EMPTY 空腹、ANY 飯前飯後皆可（說明見 drug-rules.ts 的 TIMING_LABEL） */
 export type DrugTiming = 'AC' | 'PC' | 'WITH' | 'EMPTY' | 'ANY'
 
+/** 藥價調整：from 這天（含）起的價格。健保署公告調價通常是事先公布、某日生效 */
+export interface PriceChange {
+  from: string
+  nhiPrice: number
+  selfPrice: number
+  /** 設定的人（使用者 id）與時間 */
+  by?: string
+  at?: string
+}
+
 export interface Drug {
   id: string
   /** 健保藥品代碼 */
@@ -393,10 +403,12 @@ export interface Drug {
   spec: string
   unit: string
   category: DrugCategory
-  /** 健保單價（點） */
+  /** 健保單價（點）：最早的價格；之後的調價在 priceChanges。某天的價格一律用 drugPriceOn(drug, 日期) 查 */
   nhiPrice: number
-  /** 自費單價（元） */
+  /** 自費單價（元）：同上 */
   selfPrice: number
+  /** 調價紀錄（依生效日排序）：批價依「看診日」的價格，調價前看診、調價後才批價的仍收舊價 */
+  priceChanges?: PriceChange[]
   stock: number
   safetyStock: number
   defaultDose: number

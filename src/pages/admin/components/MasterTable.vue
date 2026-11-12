@@ -10,7 +10,7 @@ import { useAction } from '@/composables/useService'
 export interface FieldDef {
   key: string
   label: string
-  type?: 'text' | 'number' | 'select' | 'checkbox' | 'list'
+  type?: 'text' | 'number' | 'select' | 'checkbox' | 'list' | 'date'
   options?: readonly SelectOption[]
   required?: boolean
   /** 建立後不可修改（例如代碼） */
@@ -106,7 +106,7 @@ async function submit() {
           <UInput
             v-model="form[f.key]"
             :label="f.label"
-            :type="f.type === 'number' ? 'number' : 'text'"
+            :type="f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'"
             step="any"
             :required="f.required"
             :disabled="f.lockOnEdit && !isNew"

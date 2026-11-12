@@ -4,10 +4,10 @@
 import { computed, ref } from 'vue'
 import { UTabs, type Column } from '@/components/ui'
 import MasterTable, { type FieldDef } from './MasterTable.vue'
-import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, matchesDrug, TIMING_LABEL } from '@/services'
+import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, matchesDrug, TIMING_LABEL, type DrugView } from '@/services'
 import { useUi } from '@/stores/ui'
 import { Cancelled, useQuery } from '@/composables/useService'
-import type { Drug, IcdCode, PreventItem, Procedure } from '@/types'
+import type { IcdCode, PreventItem, Procedure } from '@/types'
 
 const tab = ref('drugs')
 const { data: drugs, loading: l1 } = useQuery(() => masterApi.listDrugs({ includeInactive: true }))
@@ -40,7 +40,8 @@ async function saveDrug(f: Record<string, any>) {
   }
 }
 
-const drugColumns: Column<Drug>[] = [
+// 價格欄是「今天」的價格（服務層 listDrugs 依生效日算好）；已排定的調價在下一行小字提示（見 #cell-nhiPrice）
+const drugColumns: Column<DrugView>[] = [
   { key: 'id', label: '代碼', width: '5rem' },
   { key: 'name', label: '藥名' },
   { key: 'category', label: '劑型', width: '4rem' },
@@ -60,6 +61,8 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'doseUnit', label: '給藥單位（不同時才填）', hint: '例：Insulin 每次 10 U，但調劑 1 PEN' },
   { key: 'nhiPrice', label: '健保價（點）', type: 'number', required: true },
   { key: 'selfPrice', label: '自費價（元）', type: 'number', required: true },
+  // 修改既有藥品才有：上面兩個價格「從哪天起」生效。批價依看診日，所以調價前看診、之後才批價的仍收舊價
+  { key: 'priceFrom', label: '價格生效日（空白＝今天）', type: 'date', wide: true, showIf: (f) => !!f.id, hint: '健保調價通常事先公告：填生效日即可，當天起看診的才用新價。要取消已排定的調價，把那天的價格改回原價' },
   { key: 'safetyStock', label: '安全庫存', type: 'number', hint: '庫存請由「藥品庫存」進貨或盤點調整' },
   { key: 'defaultDose', label: '預設劑量', type: 'number' },
   { key: 'defaultFreq', label: '預設頻率', type: 'select', options: (freqs.value ?? []).map((f) => ({ label: `${f.code} ${f.label}`, value: f.code })) },
@@ -145,6 +148,12 @@ const tabs = computed(() => [
       :save="saveDrug"
       note="庫存不在這裡修改：請到「藥品庫存」以進貨、盤點的方式調整，每一筆增減才會留下紀錄。"
     >
+      <template v-for="k in (['nhiPrice', 'selfPrice'] as const)" :key="k" #[`cell-${k}`]="{ row }">
+        {{ row[k] }}
+        <div v-if="row.nextPrice && row.nextPrice[k] !== row[k]" class="whitespace-nowrap text-xs text-amber-700" :title="`已排定 ${row.nextPrice.from} 起調價`">
+          {{ row.nextPrice.from.slice(5).replace('-', '/') }} 起 {{ row.nextPrice[k] }}
+        </div>
+      </template>
       <template #cell-name="{ row }">
         <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span>
         <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.generic }}・{{ row.spec }}</div>
