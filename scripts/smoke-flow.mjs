@@ -2842,6 +2842,89 @@ try {
     ok(cand.filter((c) => c.last).every((c) => dbm.db.suppliers.some((x) => x.id === c.last.supplierId)), '需求清單的「上次」帶供應商 id（開單時可直接選上）')
   }
 
+  // 密碼期限與歷史：從本人設定那天算、到期前提醒、過期只能改密碼（不鎖帳號）；不可重複最近幾次
+  console.log('\n[密碼期限與歷史]')
+  {
+    const R = await load('/src/services/password-rules.ts')
+    const { addDays } = await load('/src/utils/date.ts')
+    const a80 = R.passwordAge(addDays(T, -80), T, 90)
+    const a90 = R.passwordAge(addDays(T, -90), T, 90)
+    ok(a80.daysLeft === 10 && a80.warn && !a80.expired && a90.daysLeft === 0 && a90.expired && !a90.warn && R.passwordAge(addDays(T, -60), T, 90).warn === false,
+      '期限：80 天前設定還剩 10 天（提醒期）；第 90 天起過期；還剩 30 天不提醒')
+    ok(R.passwordAge(addDays(T, -500), T, 0) === null && R.passwordAge(undefined, T, 90) === null, '期限 0＝不限；不知道設定日不算')
+    const recent = ['cur1', 'old2', 'old3', 'old4']
+    ok(R.reusedPassword('old3', recent, 3)?.includes('最近 3 次') && R.reusedPassword('old4', recent, 3) === null && R.reusedPassword('cur1', recent, 0) === '不可與目前密碼相同' && R.reusedPassword('old2', recent, 0) === null,
+      '不可重複最近 3 次（含目前）；0 次時仍不能和目前相同')
+    const cp = R.checkPasswordPolicy
+    ok(!Object.keys(cp({ maxDays: 0, history: 0 })).length && !Object.keys(cp({ maxDays: 90, history: 3 })).length && cp({ maxDays: 29, history: 3 }).maxDays && cp({ maxDays: 366, history: 3 }).maxDays && cp({ maxDays: 90, history: 11 }).history && cp({ maxDays: 1.5, history: -1 }).history,
+      '設定範圍：期限 0 或 30–365、歷史 0–10 的整數')
+
+    ok(dbm.db.users.every((u) => u.passwordSetOn) && dbm.db.users.find((u) => u.username === 'nurse02').passwordSetOn === addDays(T, -80), '示範帳號都有密碼設定日；nurse02 是 80 天前（示範快到期）')
+    const n2 = await as('nurse02')
+    ok(n2.passwordDaysLeft === 10 && !n2.passwordExpired && !('passwordHistory' in n2) && !('password' in n2), 'nurse02 登入：提示 10 天後到期；登入資料不含密碼與歷史')
+    ok(!(await as('ph01')).passwordDaysLeft, '剛設定的帳號不提醒')
+
+    // 管理員縮短期限：nurse02 立刻過期（不鎖帳號）
+    await as('admin')
+    await expectError(() => api.authApi.savePasswordPolicy({ maxDays: 10, history: 3 }), '密碼期限設 10 天')
+    const pol = await api.authApi.savePasswordPolicy({ maxDays: 60, history: 3 })
+    ok(pol.expiredUsers === 1 && dbm.db.auditLogs[0].detail.includes('密碼期限 90→60'), '期限改成 60 天：回報 1 個帳號已過期、寫稽核')
+    const ur = (await api.adminApi.listUsers()).find((u) => u.username === 'nurse02')
+    ok(ur.passwordState?.expired === true && !('passwordHistory' in ur), '帳號清單標 nurse02 密碼過期（不含密碼歷史）')
+    const ex = await as('nurse02')
+    ok(ex.passwordExpired === true, '過期仍能登入（不鎖帳號），版面依 passwordExpired 蓋上變更畫面')
+    try {
+      await api.nursingApi.listWardPatients('5A')
+      ok(false, '過期應擋下其他操作')
+    } catch (e) {
+      ok(e.code === 'PASSWORD_CHANGE' && e.message.includes('過期'), `過期時其他 API 一律擋下 → 「${e.message}」`)
+    }
+
+    // 改密碼：規則、不可重複最近 3 次
+    const ch = (current, next) => api.authApi.changeOwnPassword({ current, next })
+    await ch('1234', 'Nurse111')
+    const u2 = () => dbm.db.users.find((u) => u.username === 'nurse02')
+    ok(u2().passwordSetOn === T && u2().passwordHistory[0] === '1234' && dbm.db.auditLogs[0].action === '密碼過期變更', '改了就重新起算、舊密碼進歷史、稽核記「密碼過期變更」')
+    ok(!api.authApi.currentUser().passwordExpired, '改完不再過期，可以照常操作')
+    await ch('Nurse111', 'Nurse222')
+    await ch('Nurse222', 'Nurse333')
+    try {
+      await ch('Nurse333', 'Nurse111')
+      ok(false, '最近 3 次用過的應被擋下')
+    } catch (e) {
+      ok(e.fields?.next?.includes('最近 3 次'), `改回 3 次前的密碼 → 「${e.fields?.next}」`)
+    }
+    await ch('Nurse333', 'Nurse444')
+    ok(u2().password === 'Nurse444' && u2().passwordHistory.slice(0, 4).join() === 'Nurse333,Nurse222,Nurse111,1234', '更早的（第 4 次前）可以再用；歷史新到舊保留')
+
+    // 管理員重設：舊密碼也進歷史，本人不能改回外洩的那組
+    await as('admin')
+    await api.adminApi.resetPassword(u2().id, 'Temp9999')
+    ok(u2().passwordHistory[0] === 'Nurse444' && u2().mustChangePassword, '管理員重設：外洩的舊密碼進歷史')
+    await api.authApi.login('nurse02', 'Temp9999')
+    try {
+      await ch('Temp9999', 'Nurse444')
+      ok(false, '改回重設前的密碼應被擋下')
+    } catch (e) {
+      ok(e.fields?.next?.includes('最近'), '本人不能改回重設前（外洩）的密碼')
+    }
+    await ch('Temp9999', 'Nurse555')
+    ok(dbm.db.auditLogs[0].action === '首次變更密碼' && u2().passwordHistory[0] === 'Temp9999', '管理員給的暫時密碼也記進歷史')
+
+    // 期限 0＝不限；還原
+    await as('admin')
+    await api.authApi.savePasswordPolicy({ maxDays: 0, history: 3 })
+    Object.assign(u2(), { password: '1234', passwordSetOn: addDays(T, -500) })
+    ok(!(await as('nurse02')).passwordExpired, '期限 0：500 天前設定的也不過期')
+    await as('admin')
+    await api.authApi.savePasswordPolicy({ maxDays: 90, history: 3 })
+    Object.assign(u2(), { password: '1234', passwordSetOn: addDays(T, -80) })
+    delete u2().passwordHistory
+    const { readFileSync } = await import('node:fs')
+    const httpSrc = readFileSync('src/services/http.ts', 'utf8')
+    ok(/passwordAgeOf\(u!\)\?\.expired\) fail\('密碼已過期/.test(httpSrc), '過期檢查在服務層 requireUser（直接呼叫 API 也擋），不是只有畫面')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {

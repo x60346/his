@@ -65,7 +65,7 @@ export interface Database {
    * 安全設定：閒置鎖定分鐘；twoPersonDispense＝調劑雙人核對（核對與發藥須由不同藥師）。
    * 沒有設定時用預設值（閒置 15 分、單人可完成調劑）
    */
-  securitySettings?: { idleLockMin?: number; twoPersonDispense?: boolean }
+  securitySettings?: { idleLockMin?: number; twoPersonDispense?: boolean; passwordMaxDays?: number; passwordHistory?: number }
   /** 門診診間 */
   rooms: Room[]
   weeklySlots: WeeklySlot[]
@@ -122,7 +122,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 50
+export const SCHEMA_VERSION = 51
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

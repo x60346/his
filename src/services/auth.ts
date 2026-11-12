@@ -1,19 +1,30 @@
 // 登入與身分。回傳給前端的使用者資料一律移除密碼欄位。
 import type { Role, User } from '@/types'
 import { db } from '@/mock/db'
-import { fail, failField, fieldErrors, mutate, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
-import { passwordProblem } from './password-rules'
+import { fail, failField, failFields, fieldErrors, mutate, passwordAgeOf, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
+import { checkPasswordPolicy, PASSWORD_HISTORY_DEFAULT, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_DEFAULT, passwordProblem, reusedPassword } from './password-rules'
 import { checkIdleMinutes, IDLE_LOCK_DEFAULT_MIN, UNLOCK_MAX_FAILS } from './idle-rules'
-import { now } from '@/utils/date'
+import { now, today } from '@/utils/date'
 
-export type SafeUser = Omit<User, 'password'>
+/** 給前端的使用者：沒有密碼、也沒有以前的密碼 */
+export type SafeUser = Omit<User, 'password' | 'passwordHistory'>
 
-export const toSafeUser = ({ password: _pw, ...rest }: User): SafeUser => rest
+export const toSafeUser = ({ password: _pw, passwordHistory: _h, ...rest }: User): SafeUser => rest
 
-/** 目前登入的人：帳號（roles＝能用的所有角色）＋這個分頁的作業角色 role。畫面上的角色判斷一律看 role */
-export type SessionUser = SafeUser & { role: Role }
+/**
+ * 目前登入的人：帳號（roles＝能用的所有角色）＋這個分頁的作業角色 role。畫面上的角色判斷一律看 role。
+ * passwordExpired：密碼過期，版面蓋上強制變更畫面；passwordDaysLeft：進入提醒期，右上角提示還剩幾天
+ */
+export type SessionUser = SafeUser & { role: Role; passwordExpired?: boolean; passwordDaysLeft?: number }
 
-const toSessionUser = (u: User): SessionUser => ({ ...toSafeUser(u), role: sessionRole() ?? u.roles[0] })
+const toSessionUser = (u: User): SessionUser => {
+  const age = passwordAgeOf(u)
+  return {
+    ...toSafeUser(u), role: sessionRole() ?? u.roles[0],
+    ...(age?.expired && !u.mustChangePassword ? { passwordExpired: true } : {}),
+    ...(age?.warn ? { passwordDaysLeft: age.daysLeft } : {}),
+  }
+}
 
 const roleText: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
 
@@ -87,17 +98,23 @@ export function changeOwnPassword(input: { current: string; next: string }): Pro
     const v = fieldErrors()
     if (!input.current) v.add('current', '請輸入目前的密碼')
     else if (input.current !== u!.password) v.add('current', '目前的密碼不正確')
-    const problem = passwordProblem(input.next, { username: u!.username, current: u!.password })
+    // 規則（長度、英數、不含帳號）先看；都符合才比對以前用過的——訊息一次只講一件事
+    const recent = [u!.password, ...(u!.passwordHistory ?? [])]
+    const problem = passwordProblem(input.next, { username: u!.username, current: u!.password }) ?? reusedPassword(input.next, recent, db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT)
     if (problem) v.add('next', problem)
     v.done()
     const forced = !!u!.mustChangePassword
+    const expired = !forced && !!passwordAgeOf(u!)?.expired
     const at = Date.now()
     const keepRole = sessionRole()
+    // 管理員設定的暫時密碼也記進歷史（本人不能「改回」管理員給的那組——管理員知道它）
+    u!.passwordHistory = recent.slice(0, PASSWORD_HISTORY_MAX)
     u!.password = input.next
     u!.passwordChangedAt = at
+    u!.passwordSetOn = today()
     delete u!.mustChangePassword
     setSessionUser(u!.id, at, keepRole) // 繼續登入，角色不變
-    audit(forced ? '首次變更密碼' : '變更密碼', u!.username)
+    audit(forced ? '首次變更密碼' : expired ? '密碼過期變更' : '變更密碼', u!.username)
     return toSessionUser(u!)
   })
 }
@@ -157,6 +174,27 @@ export function unlockSession(password: string): Promise<UnlockResult> {
     setSessionLock({ ...l, failures })
     audit('解鎖失敗', `${u!.username}：第 ${failures} 次`)
     return { ok: false, remaining: UNLOCK_MAX_FAILS - failures, loggedOut: false }
+  })
+}
+
+/** 密碼原則：期限（天，0＝不限）、不可重複最近幾次。登入後的版面與管理頁都會讀 */
+export function passwordPolicy(): Promise<{ maxDays: number; history: number }> {
+  return query(() => ({ maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT }))
+}
+
+/**
+ * 修改密碼原則（管理員）。縮短期限會讓一些帳號立刻過期——回傳受影響的帳號數，管理頁提示；
+ * 不會因此鎖帳號，那些人下次操作時先改密碼
+ */
+export function savePasswordPolicy(input: { maxDays: number; history: number }): Promise<{ maxDays: number; history: number; expiredUsers: number }> {
+  return mutate(() => {
+    requireUser('admin')
+    failFields(checkPasswordPolicy(input))
+    const old = { maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT }
+    db.securitySettings = { ...db.securitySettings, passwordMaxDays: input.maxDays, passwordHistory: input.history } // 合併：不蓋掉其他設定
+    const expiredUsers = db.users.filter((u) => u.active && !u.mustChangePassword && passwordAgeOf(u)?.expired).length
+    audit('修改安全設定', `密碼期限 ${old.maxDays}→${input.maxDays} 天、不可重複最近 ${old.history}→${input.history} 次`)
+    return { ...input, expiredUsers }
   })
 }
 

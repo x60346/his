@@ -157,6 +157,8 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
             </select>
             <div v-else class="text-xs text-slate-500">{{ auth.user ? roleLabel[auth.user.role] : '' }}</div>
           </div>
+          <!-- 密碼快到期（提醒期內）：點了直接開變更密碼 -->
+          <button v-if="auth.user?.passwordDaysLeft" type="button" class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-200" title="密碼快到期，點此變更" @click="pwOpen = true">密碼 {{ auth.user.passwordDaysLeft }} 天後到期</button>
           <UButton variant="ghost" size="sm" :icon="KeyRound" title="變更密碼" @click="pwOpen = true"><span class="hidden sm:inline">變更密碼</span></UButton>
           <UButton variant="ghost" size="sm" :icon="LogOut" @click="logout">登出</UButton>
         </div>
@@ -193,6 +195,6 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
       <PasswordChangeForm v-if="pwOpen" @done="pwOpen = false" />
     </UDialog>
     <LockScreen v-if="auth.lockedAt" />
-    <ForcePasswordScreen v-else-if="auth.user?.mustChangePassword" />
+    <ForcePasswordScreen v-else-if="auth.user?.mustChangePassword || auth.user?.passwordExpired" />
   </div>
 </template>

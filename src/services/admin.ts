@@ -7,10 +7,10 @@
 import type { BillingSettings, CopayValues, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser, failFields } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, passwordAgeOf, query, requireUser, sessionUser, failFields } from './http'
 import { checkDiscountRule, copayOn, COPAY_KEYS, discountSummary, pickCopay, regFeeOn } from './billing'
 import { applyChange, checkFrom, nextChange } from './dated-rules'
-import { passwordProblem } from './password-rules'
+import { PASSWORD_HISTORY_MAX, passwordProblem } from './password-rules'
 import { rolesProblem } from './role-rules'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
@@ -31,6 +31,8 @@ export interface UserRow extends SafeUser {
   doctorName: string
   /** 最近一次登入（取自稽核紀錄；紀錄只保留最近 500 筆，太久以前的會查不到） */
   lastLoginAt?: string
+  /** 密碼狀態：過期、快到期（提醒期內）；管理員設定還沒改的看 mustChangePassword */
+  passwordState?: { expired: boolean; daysLeft: number; expiresOn: string }
 }
 
 export function listUsers(): Promise<UserRow[]> {
@@ -40,6 +42,10 @@ export function listUsers(): Promise<UserRow[]> {
       ...toSafeUser(u),
       doctorName: nameOf.doctor(u.doctorId),
       lastLoginAt: db.auditLogs.find((l) => l.action === '登入' && l.userId === u.id)?.at,
+      ...(() => {
+        const age = u.mustChangePassword ? null : passwordAgeOf(u)
+        return age && (age.expired || age.warn) ? { passwordState: { expired: age.expired, daysLeft: age.daysLeft, expiresOn: age.expiresOn } } : {}
+      })(),
     }))
   })
 }
@@ -99,7 +105,7 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
       ...old,
       id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, roles, doctorId, active: input.active, password: password!,
       // 管理員設定的初始密碼：本人第一次登入就要改掉（管理員知道這組密碼）
-      ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now() }),
+      ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now(), passwordSetOn: today() }),
     }
     if (old) Object.assign(old, saved)
     else db.users.push(saved)
@@ -120,9 +126,12 @@ export function resetPassword(userId: string, password: string): Promise<void> {
     if (u.id === me.id) fail('自己的密碼請用右上角「變更密碼」')
     const problem = passwordProblem(password, { username: u.username })
     if (problem) failField('password', problem)
+    // 舊密碼記進歷史：本人改密碼時不能改回外洩的那組
+    u.passwordHistory = [u.password, ...(u.passwordHistory ?? [])].slice(0, PASSWORD_HISTORY_MAX)
     u.password = password
     u.mustChangePassword = true
     u.passwordChangedAt = Date.now()
+    u.passwordSetOn = today()
     audit('重設密碼', `${u.username}（下次登入須變更）`)
   })
 }

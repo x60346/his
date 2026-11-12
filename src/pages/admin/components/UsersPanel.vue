@@ -92,6 +92,9 @@ async function submitPw() {
     <UTable :columns="columns" :rows="rows" :row-key="(u) => u.id" :loading="loading && !users" dense :row-class="(u) => (u.active ? '' : 'text-slate-400')">
       <template #cell-username="{ row }">
         <span class="tabular font-medium">{{ row.username }}</span><UBadge v-if="row.id === auth.user?.id" tone="blue" class="ml-1">我</UBadge>
+        <UBadge v-if="row.mustChangePassword" tone="yellow" class="ml-1" title="管理員設定的密碼，本人登入後須先變更">待改密碼</UBadge>
+        <UBadge v-else-if="row.passwordState?.expired" tone="red" class="ml-1" :title="`${row.passwordState.expiresOn} 到期；登入後須先變更`">密碼過期</UBadge>
+        <UBadge v-else-if="row.passwordState" tone="yellow" class="ml-1" :title="`${row.passwordState.expiresOn} 到期`">密碼 {{ row.passwordState.daysLeft }} 天後到期</UBadge>
       </template>
       <template #cell-roles="{ row }">{{ row.roles.map((x) => roleLabel[x]).join('、') }}</template>
       <template #cell-doctorName="{ row }">{{ row.doctorName || '—' }}</template>

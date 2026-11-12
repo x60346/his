@@ -222,6 +222,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
     { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
   ]
+  // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
+  // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
+  for (const u of users) u.passwordSetOn = u.username === 'nurse02' ? addDays(T, -80) : T
   const doctorUser = (doctorId: string) => users.find((u) => u.doctorId === doctorId)!.id
 
   // ---------- 每週門診表 ----------

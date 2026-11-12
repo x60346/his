@@ -1,8 +1,9 @@
 // 服務層共用核心：模擬網路延遲、交易（失敗回滾）、回傳複本、統一錯誤、稽核紀錄。
 // 將來改接真實後端時，這個檔案會換成 fetch 包裝，其餘服務的函式簽章不變。
 import type { Role, User } from '@/types'
+import { PASSWORD_MAX_DAYS_DEFAULT, passwordAge, type PasswordAge } from './password-rules'
 import { commit, db, newId, replaceDatabase, StorageWriteError } from '@/mock/db'
-import { now } from '@/utils/date'
+import { now, today } from '@/utils/date'
 
 /** 業務錯誤：頁面 catch 後直接把 message 顯示給使用者 */
 export class ServiceError extends Error {
@@ -236,6 +237,11 @@ export function setSessionLock(lock: SessionLock | null): void {
 /** 這個分頁的登入時間（毫秒）；測試用來模擬「另一個比較早登入的分頁」 */
 export const sessionLoginTime = () => sessionLoginAt
 
+/** 這個帳號的密碼期限狀態（依安全設定；沒有期限回傳 null） */
+export function passwordAgeOf(u: Pick<User, 'passwordSetOn'>): PasswordAge | null {
+  return passwordAge(u.passwordSetOn, today(), db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT)
+}
+
 /** 目前登入者：帳號停用、或密碼在這個分頁登入之後被改過，都視為沒登入 */
 export function sessionUser(): User | null {
   const u = db.users.find((x) => x.id === sessionUserId && x.active)
@@ -264,6 +270,8 @@ export function requireUser(...roles: Role[]): Actor {
   if (sessionLockState) fail('畫面已鎖定，請先解鎖', 'LOCKED')
   // 管理員給的密碼還沒改：除了改密碼、登出，什麼都不能做（直接呼叫 API 也一樣）
   if (u!.mustChangePassword) fail('請先變更密碼', 'PASSWORD_CHANGE')
+  // 密碼過期：同樣只能改密碼、登出（不鎖帳號）
+  if (passwordAgeOf(u!)?.expired) fail('密碼已過期，請先變更密碼', 'PASSWORD_CHANGE')
   if (roles.length && !roles.includes(u.role)) {
     const need = roles.map((r) => roleName[r]).join('、')
     // 帳號其實有那個角色、只是現在用別的角色：告訴他切換就好，不是沒權限

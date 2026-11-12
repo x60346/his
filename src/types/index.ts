@@ -34,6 +34,10 @@ export interface User {
    * 用毫秒不用「YYYY-MM-DD HH:mm」：同一分鐘內先登入、後改密碼的分頁也要能分出先後
    */
   passwordChangedAt?: number
+  /** 這組密碼是哪天設定的（YYYY-MM-DD）：密碼期限從這天算（password-rules.passwordAge） */
+  passwordSetOn?: string
+  /** 以前用過的密碼（新到舊，最多 10 組）：改密碼時不可重複最近幾次。展示系統存明文（見 README 限制），真實系統只存雜湊 */
+  passwordHistory?: string[]
 }
 
 export interface Department {
