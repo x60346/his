@@ -762,6 +762,50 @@ export interface StocktakeSheet {
   cancelReason?: string
 }
 
+/**
+ * 採購單：藥師開單（草稿）→ 送出 → 管理員核准（或退回草稿、寫原因）→ 已訂購 → 分批到貨（對品項入批號效期）
+ * → 全部到齊自動「已到齊」；短交可手動結案（寫原因）；還沒到貨前可取消（寫原因）。
+ * 到貨進「採購入庫」的地點（小型＝藥局、大型＝藥庫）。進價只記在採購單上（顯示採購金額），不做庫存成本計價。
+ */
+export type PurchaseStatus = 'draft' | 'pending' | 'ordered' | 'received' | 'closed' | 'cancelled'
+
+export interface PurchaseLine {
+  id: string
+  drugId: string
+  qty: number
+  /** 進價（每調劑單位，元） */
+  unitCost: number
+  /** 由哪一張補貨申請帶入（追溯「為什麼買」；到貨時照常沖銷那張申請） */
+  restockId?: string
+  receivedQty: number
+  /** 這一行到貨入庫的庫存異動 */
+  txnIds: string[]
+}
+
+export interface PurchaseOrder {
+  id: string
+  /** 單號：PO20261112-01 */
+  no: string
+  supplier: string
+  expectedDate?: string
+  note?: string
+  status: PurchaseStatus
+  /** 入庫地點（核准時決定＝採購入庫的地點） */
+  locationId: string
+  lines: PurchaseLine[]
+  createdBy: string
+  createdAt: string
+  submittedAt?: string
+  approvedBy?: string
+  approvedAt?: string
+  /** 被退回的紀錄（管理員、時間、原因） */
+  rejections?: { by: string; at: string; reason: string }[]
+  closedBy?: string
+  closedAt?: string
+  /** 短交結案或取消的原因 */
+  closeReason?: string
+}
+
 /** 某地點對某藥的安全庫存（沒設定就用藥品主檔的 safetyStock） */
 export interface SafetyStock {
   locationId: string

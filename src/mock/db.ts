@@ -28,6 +28,7 @@ import type {
   StockLocation,
   SafetyStock,
   StocktakeSheet,
+  PurchaseOrder,
   Patient,
   PreventItem,
   PreventRecord,
@@ -100,13 +101,15 @@ export interface Database {
   safetyStocks: SafetyStock[]
   /** 盤點單 */
   stocktakes: StocktakeSheet[]
+  /** 採購單 */
+  purchaseOrders: PurchaseOrder[]
   auditLogs: AuditLog[]
   /** 流水號計數器，例：receipt:2024-05-01 */
   counters: Record<string, number>
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 42
+export const SCHEMA_VERSION = 43
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

@@ -10,14 +10,15 @@ import type { StockFlag } from '@/services/stock-rules'
 import { UBadge, UCard, UCheckbox, UEmpty, UInput, USelect, UStatCard, UTable, UTabs, type Column } from '@/components/ui'
 import DrugDetail from './components/DrugDetail.vue'
 import StocktakePanel from './components/StocktakePanel.vue'
+import PurchasePanel from './components/PurchasePanel.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
 import { useWorkLocation } from '@/composables/useWorkLocation'
 
 const work = useWorkLocation()
-// 庫存／盤點單（首頁待辦帶 ?tab=stocktake 進來直接看盤點單）
+// 庫存／採購單／盤點單（首頁待辦帶 ?tab=purchase、?tab=stocktake 進來直接看）
 const route0 = useRoute()
-const view = ref(route0.query.tab === 'stocktake' ? 'stocktake' : 'stock')
+const view = ref(['stocktake', 'purchase'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
 
 const keyword = ref('')
 const kw = useDebounced(keyword)
@@ -77,8 +78,9 @@ const shown = computed(() => rows.value?.length ?? 0)
       </div>
       <p class="pb-2 text-xs text-slate-500">下方的庫存、批號、進貨、報廢都是「{{ work.location.value?.name }}」的；醫師開藥看到的可用量是門診藥局的。</p>
     </div>
-    <UTabs v-model="view" :tabs="[{ key: 'stock', label: '庫存' }, { key: 'stocktake', label: '盤點單' }]" />
-    <StocktakePanel v-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
+    <UTabs v-model="view" :tabs="[{ key: 'stock', label: '庫存' }, { key: 'purchase', label: '採購單' }, { key: 'stocktake', label: '盤點單' }]" />
+    <PurchasePanel v-if="view === 'purchase'" />
+    <StocktakePanel v-else-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
     <template v-else>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
       <UStatCard label="使用中品項" :value="summary?.total ?? '—'" :icon="Pill" tone="slate" :on-click="() => (cardFilter = null)" />

@@ -234,13 +234,13 @@ try {
 
   const recvDrug = 'M010'
   const before10 = dbm.db.drugs.find((d) => d.id === recvDrug).stock
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: '', expiry: '2030-01-01' }), '進貨未填批號')
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '2020-01-01' }), '進貨效期已過')
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 100, lotNo: '', expiry: '2030-01-01' }), '進貨未填批號')
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '2020-01-01' }), '進貨效期已過')
   // G3：效期不再預填，留白送出要擋；今天到期也不能進貨
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '' }), '進貨效期空白')
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: T }), '進貨效期是今天')
-  await api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 100, lotNo: 't1', expiry: '2030-01-01' })
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: recvDrug, qty: 5, lotNo: 'T1', expiry: '2031-01-01' }), '同批號不同效期')
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: '' }), '進貨效期空白')
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 100, lotNo: 'T1', expiry: T }), '進貨效期是今天')
+  await api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 100, lotNo: 't1', expiry: '2030-01-01' })
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: recvDrug, qty: 5, lotNo: 'T1', expiry: '2031-01-01' }), '同批號不同效期')
   const lotT1 = dbm.db.drugLots.find((l) => l.drugId === recvDrug && l.lotNo === 'T1')
   ok(lotT1 && dbm.db.drugs.find((d) => d.id === recvDrug).stock === before10 + 100, '進貨：批號轉大寫、庫存 +100')
   // G6：實際數量的規則（頁面與服務層共用）
@@ -1349,7 +1349,7 @@ try {
   await expectError(() => api.ipdApi.addOrder({ admissionId: anyAdm.id, type: 'long', category: 'diet', content: '普通飲食' }), '管理員開立住院醫囑')
   await expectError(() => api.nursingApi.executeMar(anyMar.id, 'given'), '管理員執行給藥')
   if (anyDispense) await expectError(() => api.pharmacyApi.verifyDispense(anyDispense.id), '管理員核對處方')
-  await expectError(() => api.inventoryApi.receiveStock({ drugId: 'M001', qty: 10, lotNo: 'X1', expiry: '2030-01-01' }), '管理員進貨')
+  await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: 'M001', qty: 10, lotNo: 'X1', expiry: '2030-01-01' }), '管理員進貨')
   ok((await api.patientApi.searchPatients(anyPatient.name)).length > 0 && (await api.ipdApi.listOrders(anyAdm.id)).length > 0, '管理員仍可檢視病人與醫囑（唯讀）')
   ok((await A.listUsers()).length > 0, '管理員可以做系統管理（明確寫出 admin 的功能）')
 
@@ -2165,7 +2165,7 @@ try {
   console.log('\n[盤點單]')
   {
     const R = await load('/src/services/stocktake-rules.ts')
-    const INV = await load('/src/services/inventory.ts')
+    const INV = await load('/src/services/stock-ledger.ts')
     const S = api.stocktakeApi
     const sheetLike = { status: 'submitted', submittedBy: 'U302', lines: [{ countedBy: 'U301', counted: 5, systemQty: 7 }, { countedBy: 'U302', counted: 3, systemQty: 3 }] }
     ok(R.lineDiff({ counted: 5, systemQty: 7 }) === -2 && R.lineDiff({ counted: 4 }) === 4 && R.lineDiff({}) === undefined, '差異＝實點 − 清點那一刻的帳（架上找到的批號帳上為 0）')
@@ -2300,6 +2300,122 @@ try {
     // 清點存檔要排隊：共用一個 useAction 時，上一列還在存、下一列的存檔會被「進行中」擋掉（數字留在格子裡、其實沒存）
     ok(!sheetVue.includes('useAction(stocktakeApi.countLine') && sheetVue.includes('queue = queue.then') && sheetVue.includes('await queue'), '清點存檔排隊送出，送出前等所有存檔完成（手快不會漏存）')
     ok(ledgerBroken(dbm.db).length === 0, '盤點過帳後各地點帳本仍對得起來')
+    await as('clerk01')
+  }
+
+  // 採購單：藥師開單 → 管理員核准／退回 → 分批到貨（對品項入批號效期）→ 已到齊／短交結案；無單進貨要原因
+  console.log('\n[採購單]')
+  {
+    const PR = await load('/src/services/purchase-rules.ts')
+    const P = api.purchaseApi
+    const { readFileSync } = await import('node:fs')
+    ok(PR.remainingOf({ qty: 10, receivedQty: 4 }) === 6 && PR.remainingOf({ qty: 10, receivedQty: 12 }) === 0 && PR.purchaseTotal([{ qty: 3, unitCost: 1.5 }, { qty: 10, unitCost: 2.25 }]) === 27, '尚未到貨數量、採購金額（四捨五入到元）')
+    // 帳本寫入不對外：以前 inventoryApi.postStock 不檢查登入就能改庫存
+    ok(!Object.values(api).some((m) => m && typeof m === 'object' && 'postStock' in m) && !readFileSync('src/services/index.ts', 'utf8').includes('stock-ledger'), '帳本寫入（postStock）不經任何 Api 對外，只能透過有權限檢查的服務')
+
+    // 無單進貨：要原因（和數量、批號、效期一次標出）；「其他」要說明；異動帳標「無單進貨」
+    await as('ph01')
+    try {
+      await api.inventoryApi.receiveStock({ drugId: 'M001', qty: 0, lotNo: '', expiry: '', reason: '' })
+      ok(false, '空白無單進貨應被擋下')
+    } catch (e) {
+      ok(['reason', 'qty', 'lotNo', 'expiry'].every((k) => e.fields?.[k]), `無單進貨空白送出：原因、數量、批號、效期一次標出（${Object.keys(e.fields ?? {}).join('、')}）`)
+    }
+    try {
+      await api.inventoryApi.receiveStock({ drugId: 'M001', qty: 5, lotNo: 'NP-1', expiry: '2030-01-01', reason: '其他' })
+      ok(false, '其他沒說明應被擋下')
+    } catch (e) {
+      ok(e.field === 'note', `原因選「其他」沒說明 → 「${e.message}」`)
+    }
+    const np = await api.inventoryApi.receiveStock({ drugId: 'M001', qty: 5, lotNo: 'NP-1', expiry: '2030-01-01', reason: '廠商贈品／樣品', note: '業務送樣' })
+    ok(np.ref === '無單進貨：廠商贈品／樣品（業務送樣）', `無單進貨的異動標出原因（${np.ref}）`)
+
+    // 種子：帳上每一筆採購進貨都對得到一張已到齊的採購單；另有待核准、已訂購各一張
+    const recvTxns = dbm.db.stockTxns.filter((t) => t.type === 'receive' && !t.ref?.startsWith('無單進貨'))
+    const orphan = recvTxns.filter((t) => !dbm.db.purchaseOrders.some((p) => p.no === t.ref && p.lines.some((l) => l.txnIds.includes(t.id))))
+    ok(recvTxns.length > 0 && !orphan.length, `種子：${recvTxns.length} 筆進貨都對得到採購單（單號＝異動單號、品項記著這筆異動）`)
+    const pend = dbm.db.purchaseOrders.find((p) => p.status === 'pending')
+    const ord = dbm.db.purchaseOrders.find((p) => p.status === 'ordered')
+    ok(!!pend?.lines.some((l) => l.restockId) && !!ord, '種子：一張待核准（由補貨申請帶入）、一張已訂購等到貨')
+
+    // 需求清單：已列入採購單的補貨申請不再列出；低於安全庫存的藥有建議量
+    await as('nurse01')
+    await expectError(() => P.purchaseCandidates(), '護理師看採購需求')
+    await as('ph01')
+    const cand = await P.purchaseCandidates()
+    ok(!cand.some((c) => c.restock?.id === pend.lines.find((l) => l.restockId).restockId) && cand.some((c) => c.reason === 'low' && c.suggestedQty > 0), '需求清單：已列入採購單的申請不重複列出；低於安全庫存的藥附建議量')
+
+    // 開單驗證
+    try {
+      await P.savePurchaseDraft({ supplier: '', lines: [] })
+      ok(false, '空白採購單應被擋下')
+    } catch (e) {
+      ok(e.fields?.supplier && e.fields?.lines, '空白採購單：供應商、品項一次標出')
+    }
+    try {
+      await P.savePurchaseDraft({ supplier: 'X', lines: [{ drugId: 'M001', qty: 10, unitCost: 1 }, { drugId: 'M001', qty: 5, unitCost: 1 }, { drugId: 'M002', qty: 0, unitCost: 1 }] })
+      ok(false, '重複品項應被擋下')
+    } catch (e) {
+      ok(e.fields?.['line-1']?.includes('重複') && e.fields?.['line-2']?.includes('正整數'), '同一種藥兩行、數量 0：標在那一行')
+    }
+    await expectError(() => P.savePurchaseDraft({ supplier: 'X', lines: [{ drugId: pend.lines.find((l) => l.restockId).drugId, qty: 1, unitCost: 1, restockId: pend.lines.find((l) => l.restockId).restockId }] }), '同一張補貨申請列入兩張採購單')
+
+    // 開單 → 送出 → 核准（只有管理員）→ 分批到貨 → 到齊
+    const draft = await P.savePurchaseDraft({ supplier: '測試藥商', expectedDate: T, lines: [{ drugId: 'M002', qty: 30, unitCost: 2.5 }, { drugId: 'M003', qty: 10, unitCost: 3 }] })
+    ok(draft.status === 'draft' && draft.no.startsWith(`PO${T.replace(/-/g, '')}-`) && draft.total === 105, `開單 ${draft.no}：草稿、金額 105 元`)
+    await P.submitPurchase(draft.id)
+    await expectError(() => P.savePurchaseDraft({ id: draft.id, supplier: '改', lines: [{ drugId: 'M002', qty: 1, unitCost: 1 }] }), '送出後修改')
+    await expectError(() => P.receivePurchase(draft.id, 'L1', { qty: 1, lotNo: 'A', expiry: '2030-01-01' }), '還沒核准就到貨入庫')
+    await expectError(() => P.approvePurchase(draft.id), '藥師自己核准')
+    await as('admin')
+    const appr = await P.approvePurchase(draft.id)
+    ok(appr.status === 'ordered' && appr.approvedByName === '系統管理員' && appr.locationId === dbm.db.stockLocations.find((l) => l.receivesPurchase).id, '管理員核准：已訂購，入庫地點＝採購入庫的地點')
+    await as('ph01')
+    try {
+      await P.receivePurchase(draft.id, 'L1', { qty: 31, lotNo: 'PO-A', expiry: '2030-01-01' })
+      ok(false, '超收應被擋下')
+    } catch (e) {
+      ok(e.field === 'qty' && e.message.includes('30'), `到貨超過訂購量 → 「${e.message}」`)
+    }
+    const r1 = await P.receivePurchase(draft.id, 'L1', { qty: 20, lotNo: 'po-a', expiry: '2030-01-01' })
+    const t1 = dbm.db.stockTxns.at(-1)
+    ok(r1.status === 'ordered' && r1.lines[0].receivedQty === 20 && r1.lines[0].remaining === 10 && t1.ref === draft.no && t1.lots[0].lotNo === 'PO-A', '分批到貨：入 20、尚欠 10，異動單號＝採購單號、批號轉大寫')
+    await P.receivePurchase(draft.id, 'L1', { qty: 10, lotNo: 'PO-B', expiry: '2031-01-01' })
+    const all = await P.receivePurchase(draft.id, 'L2', { qty: 10, lotNo: 'PO-C', expiry: '2030-06-30' })
+    ok(all.status === 'received' && dbm.db.auditLogs[0].detail.includes('已到齊'), '全部到齊：自動「已到齊」')
+    await expectError(() => P.receivePurchase(draft.id, 'L1', { qty: 1, lotNo: 'X', expiry: '2030-01-01' }), '已到齊再入庫')
+
+    // 到貨沖銷補貨申請：核准待核准的那張、到貨後申請結案
+    const reqLine = pend.lines.find((l) => l.restockId)
+    await as('admin')
+    await P.approvePurchase(pend.id)
+    await as('ph01')
+    await P.receivePurchase(pend.id, reqLine.id, { qty: reqLine.qty, lotNo: 'RS-PO', expiry: '2030-01-01' })
+    ok(dbm.db.restockRequests.find((r) => r.id === reqLine.restockId).status === 'fulfilled', '採購到貨照常沖銷補貨申請（到齊就結案）')
+
+    // 退回、短交結案、取消
+    const d2 = await P.savePurchaseDraft({ supplier: '測試藥商', lines: [{ drugId: 'M004', qty: 5, unitCost: 9 }] })
+    await P.submitPurchase(d2.id)
+    await as('admin')
+    await expectError(() => P.rejectPurchase(d2.id, ''), '退回沒寫原因')
+    const rej = await P.rejectPurchase(d2.id, '數量太少，併下次')
+    ok(rej.status === 'draft' && rej.rejections.length === 1, '管理員退回：回到草稿、記下原因')
+    await as('ph01')
+    await expectError(() => P.closePurchase(d2.id, '測試'), '草稿短交結案')
+    const can = await P.cancelPurchase(d2.id, '不買了')
+    ok(can.status === 'cancelled' && can.closeReason === '不買了', '草稿可以取消（寫原因）')
+    const ordLine = ord.lines[0]
+    await P.receivePurchase(ord.id, ordLine.id, { qty: 1, lotNo: 'SHORT-1', expiry: '2030-01-01' })
+    await expectError(() => P.cancelPurchase(ord.id, '不要了'), '已有到貨還要取消')
+    const closed = await P.closePurchase(ord.id, '廠商缺貨，剩餘不再出貨')
+    ok(closed.status === 'closed' && closed.lines[0].receivedQty === 1, '已到一部分：短交結案（寫原因），已入庫的保留')
+    const dash = await api.dashboardApi.getDashboard()
+    ok(dash.purchasePending === dbm.db.purchaseOrders.filter((p) => p.status === 'pending').length && dash.purchaseOrdered === dbm.db.purchaseOrders.filter((p) => p.status === 'ordered').length, '首頁待辦：採購單待核准（管理員）、待到貨（藥師）')
+    const view = readFileSync('src/pages/drugs/components/PurchaseOrderView.vue', 'utf8')
+    ok(!/status\s*===\s*'ordered'\s*&&[^\n]*receivedQty\s*</.test(view) && view.includes('purchaseTotal('), '採購畫面：金額用共用的 purchaseTotal，到貨上限由服務層擋')
+    // 入庫對話框「一掛上就是打開的」（採購單點某一行時 v-if 與打開同時成立）：重設表單的 watch 要 immediate，否則數量不會帶入
+    ok(/watch\(\s*open,[\s\S]{0,800}\{ immediate: true \}/.test(readFileSync('src/components/ReceiveStockDialog.vue', 'utf8')), '入庫對話框打開就帶入尚未到貨數量（watch immediate）')
+    ok(ledgerBroken(dbm.db).length === 0, '採購到貨後各地點帳本仍對得起來')
     await as('clerk01')
   }
 
@@ -2631,10 +2747,10 @@ try {
       `待到貨：首頁 ${dash.restockOpen} = 庫存卡片 ${sum.restockOpen} = 篩選清單 ${list.length} 項；有病人在等的排前面`)
 
     const total = req2.qty
-    const t1 = await api.inventoryApi.receiveStock({ drugId, qty: 10, lotNo: 'RS-A', expiry: '2030-01-01' })
+    const t1 = await api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId, qty: 10, lotNo: 'RS-A', expiry: '2030-01-01' })
     ok(t1.restock?.status === 'open' && t1.restock.outstanding === total - 10, `分批到貨 10：申請留著，尚欠 ${t1.restock?.outstanding}`)
     ok((await api.inventoryApi.getDrugLedger(drugId)).restock?.receivedQty === 10, '庫存明細顯示已到 10')
-    const t2 = await api.inventoryApi.receiveStock({ drugId, qty: total - 10, lotNo: 'RS-B', expiry: '2030-01-01' })
+    const t2 = await api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId, qty: total - 10, lotNo: 'RS-B', expiry: '2030-01-01' })
     const closed = dbm.db.restockRequests.find((x) => x.id === req.id)
     ok(t2.restock?.status === 'fulfilled' && closed.status === 'fulfilled' && closed.txnIds.length === 2 && closed.closedBy === 'U301' && !(await api.inventoryApi.getDrugLedger(drugId)).restock,
       '到齊：自動結案，記下兩筆入庫異動與結案人；明細不再顯示待到貨')
@@ -2655,7 +2771,7 @@ try {
     const c3 = await api.inventoryApi.cancelRestock(r3.id, '改開替代藥')
     ok(c3.status === 'cancelled' && c3.cancelReason === '改開替代藥', '取消申請：記下原因')
     await expectError(() => api.inventoryApi.cancelRestock(r3.id, '再取消'), '已取消的申請再取消')
-    ok(!(await api.inventoryApi.receiveStock({ drugId, qty: 5, lotNo: 'RS-C', expiry: '2030-01-01' })).restock, '取消後進貨：不會去抵已取消的申請')
+    ok(!(await api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId, qty: 5, lotNo: 'RS-C', expiry: '2030-01-01' })).restock, '取消後進貨：不會去抵已取消的申請')
   }
 
   // B11：在一天中不同時刻重建種子——時間軸要合理、號碼依時間先後（放在最後：改時鐘會影響前面的流程）
@@ -2732,7 +2848,7 @@ try {
     const large = buildSeed({ scale: 'large' })
     ok(small.stockLocations.length === 1 && large.stockLocations.map((l) => l.name).join('、') === '藥庫、門診藥局、住院藥局', `小型 1 個地點；大型 ${large.stockLocations.map((l) => l.name).join('、')}`)
     // 全院總量：大型＝小型＋藥庫多進的那一批（示範用偏低、缺貨的藥沒有多進，兩邊一樣）
-    const extra = (d) => large.stockTxns.filter((t) => t.drugId === d.id && t.type === 'receive' && t.ref?.endsWith('W')).reduce((a, t) => a + t.qty, 0)
+    const extra = (d) => large.stockTxns.filter((t) => t.drugId === d.id && t.type === 'receive' && t.lots[0]?.lotNo.endsWith('W')).reduce((a, t) => a + t.qty, 0)
     ok(large.drugs.every((d) => d.stock === small.drugs.find((x) => x.id === d.id).stock + extra(d)), '兩種規模的全院總量只差藥庫多進的那一批（其餘事件完全相同）')
     const flagCount = (db, loc) => db.drugs.filter((d) => {
       const u = db.drugLots.filter((l) => l.drugId === d.id && l.locationId === loc && l.expiry >= T).reduce((a, l) => a + l.qty, 0)
@@ -2769,7 +2885,7 @@ try {
     await api.pharmacyApi.dispense(pend.id, { birthMMDD: pt.birthDate.slice(5).replace('-', '') })
     const last = dbm.db.stockTxns.at(-1)
     ok(last.type === 'dispense' && last.locationId === 'LOC-OPD' && dbm.db.drugLots.filter((l) => l.locationId === 'LOC-WH').reduce((a, l) => a + l.qty, 0) === whBefore, '發藥扣門診藥局，藥庫不動')
-    const rcv = await I.receiveStock({ drugId: 'M010', qty: 50, lotNo: 'BIG-1', expiry: '2030-01-01' })
+    const rcv = await I.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: 'M010', qty: 50, lotNo: 'BIG-1', expiry: '2030-01-01' })
     ok(rcv.locationId === 'LOC-WH' && dbm.db.drugLots.some((l) => l.lotNo === 'BIG-1' && l.locationId === 'LOC-WH'), '進貨沒指定地點：進藥庫')
     const wh = await I.listInventory({ locationId: 'LOC-WH' })
     const opd = await I.listInventory({ locationId: 'LOC-OPD' })
@@ -2782,6 +2898,9 @@ try {
     const ledger = await I.getDrugLedger('M010', 'LOC-WH')
     ok(ledger.txns.every((t) => t.locationId === 'LOC-WH') && ledger.lots.every((l) => l.locationId === 'LOC-WH'), '藥品明細依地點：只列這個地點的批號與異動')
     await expectError(() => I.listInventory({ locationId: 'LOC-NOPE' }), '查不存在的地點')
+    const ordL = dbm.db.purchaseOrders.find((p) => p.status === 'ordered')
+    await api.purchaseApi.receivePurchase(ordL.id, ordL.lines[0].id, { qty: 1, lotNo: 'BIG-PO', expiry: '2030-01-01' })
+    ok(ordL.locationId === 'LOC-WH' && dbm.db.drugLots.some((l) => l.lotNo === 'BIG-PO' && l.locationId === 'LOC-WH'), '大型：採購到貨進藥庫')
     ok(ledgerBroken(dbm.db).length === 0, '大型操作後，各地點帳本仍對得起來')
     dbm.resetDatabase('small')
     ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.length === 1, '再重建回小型')

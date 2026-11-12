@@ -18,6 +18,9 @@ export interface DashboardStats {
   lowStockDrugs: number
   /** 補貨申請待到貨（和藥品庫存頁「待到貨」卡片同一個來源） */
   restockOpen: number
+  /** 採購單待核准（管理員待辦）、已訂購待到貨（藥師待辦） */
+  purchasePending: number
+  purchaseOrdered: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
 }
@@ -65,6 +68,8 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
+      purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
+      purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {
         const date = addDays(t, i - 6)

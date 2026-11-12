@@ -5,57 +5,16 @@
 //   - 同時更新該地點的批號剩餘量與 drug.stock（全院總量的快取）
 //   - 不變式（流程測試驗證）：每個地點的批號總和 = 該地點帳本加總，且結存連續；drug.stock = 各地點總和
 // 其他模組（藥局發藥）要扣庫存，也是呼叫 postStock，不可以自己去改 drug.stock。
-import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockStatus, StockLocation, StockTxn, StockTxnType } from '@/types'
+import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockStatus, StockLocation, StockTxn } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
-import { allocateFefo, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus } from './stock-rules'
+import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus, NO_PO_REASONS } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
+import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
 import { matchesDrug } from './drug-rules'
 
-// ---------- 唯一的寫入點（服務層內部） ----------
-type Post =
-  | { kind: 'in'; drugId: string; locationId: string; qty: number; type: StockTxnType; lot: Pick<DrugLot, 'lotNo' | 'expiry'>; ref?: string; reason?: string }
-  | { kind: 'out'; drugId: string; locationId: string; qty: number; type: StockTxnType; ref?: string; reason?: string; includeExpired?: boolean; lotId?: string }
-
-/** 寫入一筆庫存異動。出庫依 FEFO 扣批號（或指定批號），不足時整筆失敗 */
-export function postStock(p: Post, userId: string, at = now()): StockTxn {
-  const drug = must(find.drug(p.drugId), '藥品')
-  if (!Number.isInteger(p.qty) || p.qty <= 0) fail('數量需為正整數')
-  const loc = stockLoc.usable(p.locationId)
-  const lots = stockLoc.lots(drug.id, loc.id)
-  let moved: { lotNo: string; qty: number }[]
-
-  if (p.kind === 'in') {
-    // 同批號再進貨就加到原批號（效期必須一致）
-    let lot = lots.find((l) => l.lotNo === p.lot.lotNo)
-    if (lot && lot.expiry !== p.lot.expiry) failField('lotNo', `批號 ${p.lot.lotNo} 已存在，效期為 ${lot.expiry}，與輸入不符`)
-    if (!lot) {
-      lot = { id: newId('LOT'), drugId: drug.id, locationId: loc.id, lotNo: p.lot.lotNo, expiry: p.lot.expiry, qty: 0, receivedAt: at }
-      db.drugLots.push(lot)
-    }
-    lot.qty += p.qty
-    moved = [{ lotNo: lot.lotNo, qty: p.qty }]
-  } else {
-    const takes = p.lotId
-      ? (() => {
-          const l = must(lots.find((x) => x.id === p.lotId), '批號')
-          return l.qty >= p.qty ? [{ lotId: l.id, lotNo: l.lotNo, qty: p.qty }] : null
-        })()
-      : allocateFefo(lots, p.qty, at, p.includeExpired)
-    if (!takes) fail(`${drug.name} ${loc.name}可用庫存不足（需 ${p.qty}，可用 ${usableQty(lots, at)}）`, 'CONFLICT')
-    for (const t of takes!) db.drugLots.find((l) => l.id === t.lotId)!.qty -= t.qty
-    moved = takes!.map((t) => ({ lotNo: t.lotNo, qty: -t.qty }))
-  }
-
-  const signed = p.kind === 'in' ? p.qty : -p.qty
-  drug.stock += signed
-  // 結存是「這個地點」的：異動後該地點所有批號的總和（和帳本逐筆累加一致）
-  const balance = stockLoc.lots(drug.id, loc.id).reduce((s, l) => s + l.qty, 0)
-  const txn: StockTxn = { id: newId('ST'), drugId: drug.id, locationId: loc.id, at, type: p.type, qty: signed, balance, lots: moved, ref: p.ref, reason: p.reason, userId }
-  db.stockTxns.push(txn)
-  return txn
-}
+// 寫入一律透過 stock-ledger.postStock（內部模組，不經 services/index 對外）
 
 // ---------- 查詢 ----------
 const USAGE_DAYS = 30
@@ -227,8 +186,10 @@ export interface ReceiveInput {
   qty: number
   lotNo: string
   expiry: string
-  /** 進貨單號 */
-  ref?: string
+  /** 無單進貨的原因（NO_PO_REASONS 之一）；一般進貨請走採購單 */
+  reason: string
+  /** 說明（原因選「其他」時必填；例：向 OO 藥局借 2 盒） */
+  note?: string
 }
 
 export interface ReceiveResult extends StockTxn {
@@ -237,32 +198,24 @@ export interface ReceiveResult extends StockTxn {
 }
 
 /**
- * 進貨：新增或累加批號。
- * 這種藥有「待到貨」的補貨申請時，進貨量自動抵掉申請（不管從申請按「到貨入庫」或一般「進貨」進來）——
- * 不然貨已經上架，申請還掛著，首頁一直提醒「待到貨」。
+ * 無單進貨：沒有採購單的入庫（緊急調貨、贈品、退藥回收…），要選原因，異動帳上標「無單進貨」。
+ * 一般進貨請走採購單（開單 → 管理員核准 → 到貨對品項入庫，見 purchase.ts）。
+ * 這種藥有待到貨的補貨申請時，一樣自動沖銷（病人等的是藥，不管藥從哪來）。
  */
 export function receiveStock(input: ReceiveInput): Promise<ReceiveResult> {
   return mutate(() => {
     const u = requireUser('pharmacist')
-    const lotNo = input.lotNo.trim().toUpperCase()
-    const v = fieldErrors()
-    if (!Number.isInteger(input.qty) || input.qty <= 0) v.add('qty', '進貨數量需為正整數')
-    if (!lotNo) v.add('lotNo', '請輸入批號')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry ?? '')) v.add('expiry', '請輸入效期')
-    else if (input.expiry <= today()) v.add('expiry', '效期已過或為今天，不可進貨')
-    v.done()
-    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, locationId: input.locationId || stockLoc.receiving(), qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref: input.ref?.trim() || undefined }, u.id)
-    const req = openRestockOf(input.drugId)
-    let restock: ReceiveResult['restock']
-    if (req) {
-      req.receivedQty += txn.qty
-      req.txnIds.push(txn.id)
-      const outstanding = outstandingOf(req)
-      if (!outstanding) Object.assign(req, { status: 'fulfilled', closedAt: txn.at, closedBy: u.id })
-      restock = { id: req.id, status: req.status, outstanding }
-    }
-    const note = !restock ? '' : restock.outstanding ? `，補貨申請尚欠 ${restock.outstanding}` : '，補貨申請已到齊'
-    audit('藥品進貨', `${find.drug(input.drugId)?.name} +${input.qty}（批號 ${lotNo}${note}）`)
+    const reason = (NO_PO_REASONS as readonly string[]).includes(input.reason) ? input.reason : ''
+    const note = input.note?.trim()
+    const errors: Record<string, string> = {}
+    if (!reason) errors.reason = '請選擇無單進貨的原因（一般進貨請開採購單）'
+    else if (reason === '其他' && !note) errors.note = '原因選「其他」時請說明'
+    const lotNo = checkReceiveInput(input, { errors })
+    const ref = `無單進貨：${reason === '其他' ? note : reason}${reason !== '其他' && note ? `（${note}）` : ''}`
+    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, locationId: input.locationId || stockLoc.receiving(), qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref }, u.id)
+    const restock = offsetRestock(input.drugId, txn, u.id)
+    const tail = !restock ? '' : restock.outstanding ? `，補貨申請尚欠 ${restock.outstanding}` : '，補貨申請已到齊'
+    audit('藥品進貨', `${find.drug(input.drugId)?.name} +${input.qty}（批號 ${lotNo}；${ref}${tail}）`)
     return { ...txn, ...(restock ? { restock } : {}) }
   })
 }
@@ -285,8 +238,6 @@ export function scrapExpired(drugId: string, locationId?: string): Promise<Stock
 // 調劑窗口缺藥：藥師只提出申請（數量），不在病人面前填批號、效期；貨到了在藥品庫存頁「到貨入庫」。
 // 同一種藥同時只有一張待到貨的申請（再缺就追加），進貨時自動抵掉。
 
-const openRestockOf = (drugId: string) => db.restockRequests.find((x) => x.drugId === drugId && x.status === 'open')
-const outstandingOf = (r: RestockRequest) => Math.max(0, r.qty - r.receivedQty)
 const medsOf = (d: Dispense) => db.encounters.find((e) => e.id === d.encounterId)?.medications ?? []
 /** 這張申請關聯、還沒發藥的調劑單（病人還在等） */
 const waitingOf = (r: RestockRequest) =>
@@ -302,6 +253,8 @@ export interface RestockWaiting {
 }
 
 export interface RestockView extends RestockRequest {
+  /** 已列入哪張進行中的採購單（草稿、待核准、已訂購）；到貨請在採購單入庫 */
+  purchase?: { id: string; no: string; status: string }
   drugName: string
   unit: string
   usable: number
@@ -313,8 +266,10 @@ export interface RestockView extends RestockRequest {
 
 function restockView(r: RestockRequest): RestockView {
   const drug = find.drug(r.drugId)
+  const po = db.purchaseOrders.find((p) => ['draft', 'pending', 'ordered'].includes(p.status) && p.lines.some((l) => l.restockId === r.id))
   return {
     ...r,
+    ...(po ? { purchase: { id: po.id, no: po.no, status: po.status } } : {}),
     drugName: drug?.name ?? r.drugId,
     unit: drug?.unit ?? '',
     usable: stockLoc.counting(r.drugId, stockLoc.opd()) ? 0 : usableQty(stockLoc.lots(r.drugId, stockLoc.opd()), today()),

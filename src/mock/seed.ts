@@ -17,6 +17,7 @@ import type {
   OrderSet,
   Drug,
   Phrase,
+  PurchaseOrder,
   SafetyStock,
   StockLocation,
   HospitalScale,
@@ -975,6 +976,46 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 採購單（不抽亂數）：
+  //   1. 歷史：帳上每一天的「進貨」異動，都屬於那天到齊的一張採購單（異動單號改成採購單號），開單、核准在幾天前
+  //   2. 待核准：昨天藥師開的，帶入上面那張補貨申請（管理員打開就有東西可核准）
+  //   3. 已訂購：三天前核准、還沒到貨（藥師打開就有東西可入庫）
+  const purchaseOrders: PurchaseOrder[] = []
+  const costOf = (drugId: string) => Math.round(drugMap.get(drugId)!.nhiPrice * 85) / 100
+  const SUPPLIERS = ['台灣藥品股份有限公司', '永信醫藥科技股份有限公司', '杏林藥業有限公司']
+  const recvByDay = new Map<string, StockTxn[]>()
+  for (const t of stockTxns.filter((x) => x.type === 'receive')) recvByDay.set(t.at.slice(0, 10), [...(recvByDay.get(t.at.slice(0, 10)) ?? []), t])
+  ;[...recvByDay.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([day, txns], k) => {
+    const no = `PO${addDays(day, -5).replace(/-/g, '')}-01`
+    for (const t of txns) t.ref = no
+    purchaseOrders.push({
+      id: `PO-SEED-H${k + 1}`, no, supplier: SUPPLIERS[k % SUPPLIERS.length], status: 'received', locationId: recvLoc,
+      lines: txns.map((t, i) => ({ id: `L${i + 1}`, drugId: t.drugId, qty: t.qty, unitCost: costOf(t.drugId), receivedQty: t.qty, txnIds: [t.id] })),
+      createdBy: 'U301', createdAt: `${addDays(day, -5)} 15:00`, submittedAt: `${addDays(day, -5)} 15:10`,
+      approvedBy: 'U001', approvedAt: `${addDays(day, -4)} 09:30`, closedBy: 'U301', closedAt: txns[txns.length - 1].at,
+    })
+  })
+  {
+    const req = restockRequests[0]
+    const other = drugs.find((d) => d.id !== req?.drugId && d.active && d.category === '口服' && d.id !== 'M009')!
+    const lines: PurchaseOrder['lines'] = [
+      ...(req ? [{ id: 'L1', drugId: req.drugId, qty: req.qty, unitCost: costOf(req.drugId), restockId: req.id, receivedQty: 0, txnIds: [] }] : []),
+      { id: req ? 'L2' : 'L1', drugId: other.id, qty: 200, unitCost: costOf(other.id), receivedQty: 0, txnIds: [] },
+    ]
+    purchaseOrders.push({
+      id: 'PO-SEED-P1', no: `PO${addDays(T, -1).replace(/-/g, '')}-01`, supplier: SUPPLIERS[0], status: 'pending', locationId: recvLoc, lines,
+      note: '補貨申請轉採購', createdBy: 'U301', createdAt: `${addDays(T, -1)} 16:50`, submittedAt: `${addDays(T, -1)} 16:55`,
+    })
+    const o1 = drugs.find((d) => d.id === 'M010')!
+    const o2 = drugs.find((d) => d.id === 'M018')!
+    purchaseOrders.push({
+      id: 'PO-SEED-O1', no: `PO${addDays(T, -3).replace(/-/g, '')}-01`, supplier: SUPPLIERS[1], status: 'ordered', locationId: recvLoc,
+      expectedDate: addDays(T, 1),
+      lines: [o1, o2].map((d, i) => ({ id: `L${i + 1}`, drugId: d.id, qty: d.safetyStock * 2, unitCost: costOf(d.id), receivedQty: 0, txnIds: [] })),
+      createdBy: 'U301', createdAt: `${addDays(T, -3)} 10:20`, submittedAt: `${addDays(T, -3)} 10:25`, approvedBy: 'U001', approvedAt: `${addDays(T, -3)} 14:00`,
+    })
+  }
+
   // 組套：每位門診醫師兩三組個人常用處方；內科的「糖尿病追蹤」是科室共用（陳映如、黃柏翰都看得到、都能改）
   const setMed = (drugId: string, dose: number, freq: string, days: number) => {
     const d = drugMap.get(drugId)!
@@ -1079,6 +1120,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     stockLocations,
     safetyStocks,
     stocktakes: [],
+    purchaseOrders,
     procedures: structuredClone(codes.procedures),
     icdCodes: structuredClone(codes.icdCodes),
     frequencies: structuredClone(codes.frequencies),

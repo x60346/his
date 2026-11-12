@@ -103,3 +103,9 @@ export function suggestRestockQty(i: { usable: number; need: number; safetyStock
   const onOrder = i.onOrder ? `（已扣除申請中 ${i.onOrder}）` : ''
   return { qty, raw, formula: `${head}安全庫存 ${i.safetyStock}＋${RESTOCK_COVER_DAYS} 天用量 ${cover}${tail}${raw > 0 ? `＝${raw} → ${qty}` : '，已足夠、不需追加'}${onOrder}` }
 }
+
+/**
+ * 沒有採購單的進貨，要選原因（一般進貨請走採購單：開單、核准、到貨對品項入庫）。
+ * 這些是「確實會發生、但不經採購」的情況；異動帳上會標「無單進貨：原因」，月底對帳查得到。
+ */
+export const NO_PO_REASONS = ['緊急調貨（向鄰近藥局借調）', '廠商贈品／樣品', '病人退藥回收', '其他'] as const

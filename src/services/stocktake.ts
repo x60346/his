@@ -10,7 +10,7 @@ import { db, newId, nextCounter } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
-import { postStock } from './inventory'
+import { postStock } from './stock-ledger'
 import { checkStocktakeActual } from './stock-rules'
 import { isOpenStocktake, lineDiff, reviewBlocker, uncountedLines } from './stocktake-rules'
 

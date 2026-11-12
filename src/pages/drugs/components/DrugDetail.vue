@@ -3,7 +3,7 @@
 // 正在盤點時（盲盤）服務層不給數量：顯示「盤點中」，批號只列批號效期、異動不列。
 // 異動紀錄就是「庫存為什麼是這個數字」的答案：每一筆增減都查得到時間、人、單據、原因。
 import { computed, ref } from 'vue'
-import { ClipboardList, PackageCheck, PackagePlus, Trash2 } from 'lucide-vue-next'
+import { ClipboardList, PackagePlus, Trash2 } from 'lucide-vue-next'
 import { UBadge, UBarChart, UButton, UDialog, UInput, UQueryState, type BarDatum } from '@/components/ui'
 import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
@@ -46,8 +46,6 @@ const receiveOpen = ref(false)
 // ---------- 補貨申請（U25） ----------
 const restock = computed(() => ledger.value?.restock)
 const requestOpen = ref(false)
-/** 到貨入庫：同一個進貨對話框，數量先帶「尚欠」——批號、效期照實物填 */
-const arriveOpen = ref(false)
 const cancelOpen = ref(false)
 const cancelReason = ref('')
 const cancel = useAction(inventoryApi.cancelRestock, { success: (r) => `已取消 ${r.drugName} 的補貨申請` })
@@ -80,7 +78,7 @@ async function onScrap() {
           <p class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.generic }}・{{ row.spec }}・{{ row.category }}</p>
         </div>
         <UButton size="sm" variant="secondary" :icon="ClipboardList" @click="requestOpen = true">{{ restock ? '追加申請' : '申請補貨' }}</UButton>
-        <UButton size="sm" :icon="PackagePlus" @click="receiveOpen = true">進貨</UButton>
+        <UButton size="sm" variant="secondary" :icon="PackagePlus" title="沒有採購單的入庫（緊急調貨、贈品、退藥回收）；一般進貨請開採購單" @click="receiveOpen = true">無單進貨</UButton>
       </header>
 
       <!-- 待到貨的補貨申請：貨到了按「到貨入庫」（批號、效期照實物填），到齊自動結案 -->
@@ -95,7 +93,9 @@ async function onScrap() {
           等候領藥：<span v-for="(w, i) in restock.waiting" :key="w.dispenseId">{{ i ? '、' : '' }}{{ w.date !== today() ? w.date.slice(5).replace('-', '/') + ' ' : '' }}領藥號 {{ w.pickupNo }}（{{ w.patientName }} {{ w.qty }}）</span>
         </p>
         <div class="mt-2 flex gap-2">
-          <UButton size="sm" :icon="PackageCheck" @click="arriveOpen = true">到貨入庫</UButton>
+          <!-- 到貨一律對採購單入庫：申請只是需求，開採購單時勾選帶入 -->
+          <span v-if="restock.purchase" class="text-xs">已列入採購單 <b class="tabular">{{ restock.purchase.no }}</b>（{{ { draft: '草稿', pending: '待核准', ordered: '已訂購，等到貨' }[restock.purchase.status] ?? restock.purchase.status }}）；到貨請在「採購單」入庫</span>
+          <span v-else class="text-xs">尚未列入採購單：到「採購單」分頁開單時會列出這張申請</span>
           <UButton size="sm" variant="ghost" @click="startCancel">取消申請</UButton>
         </div>
       </section>
@@ -169,7 +169,6 @@ async function onScrap() {
       </section>
 
       <ReceiveStockDialog v-model="receiveOpen" :location-id="locationId" :location-name="locationName" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="ledger.counting ? undefined : row.usable" :restock-outstanding="restock?.outstanding" />
-      <ReceiveStockDialog v-model="arriveOpen" title="到貨入庫" :location-id="locationId" :location-name="locationName" :drug-id="row.id" :drug-name="row.name" :unit="row.unit" :usable="ledger.counting ? undefined : row.usable" :suggested-qty="restock?.outstanding" :restock-outstanding="restock?.outstanding" />
       <RestockRequestDialog v-model="requestOpen" :drug-id="row.id" />
       <UDialog v-model="cancelOpen" title="取消補貨申請" size="sm" @submit="confirmCancel">
         <div class="space-y-3 text-sm">
