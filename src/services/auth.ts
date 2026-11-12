@@ -167,7 +167,7 @@ export function saveIdleLockMinutes(min: number): Promise<number> {
     const problem = checkIdleMinutes(min)
     if (problem) failField('idleLockMin', problem)
     const old = db.securitySettings?.idleLockMin ?? IDLE_LOCK_DEFAULT_MIN
-    db.securitySettings = { idleLockMin: min }
+    db.securitySettings = { ...db.securitySettings, idleLockMin: min } // 合併：不能把同一個物件裡的其他設定（雙人核對）蓋掉
     audit('修改安全設定', `閒置鎖定 ${old} → ${min} 分鐘`)
     return min
   })

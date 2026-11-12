@@ -230,8 +230,10 @@ const print = () => window.print()
         <div class="ml-auto flex gap-2">
           <UButton variant="secondary" :icon="Printer" @click="bagOpen = true">藥袋</UButton>
           <UButton v-if="d.status === 'pending'" :icon="ClipboardCheck" :disabled="shortages.length > 0" :loading="verify.pending.value" @click="verify.run(d.id)">核對處方</UButton>
-          <UButton v-if="d.status === 'verified'" variant="success" :icon="CheckCheck" :disabled="shortages.length > 0" :loading="give.pending.value" @click="onDispense">發藥</UButton>
+          <UButton v-if="d.status === 'verified'" variant="success" :icon="CheckCheck" :disabled="shortages.length > 0 || !!d.dispenseBlocked" :loading="give.pending.value" @click="onDispense">發藥</UButton>
         </div>
+        <!-- 雙人核對開啟、而我就是核對的人：先說清楚，不是按了才被擋（規則 rx-rules.dispenseBlocker） -->
+        <p v-if="d.dispenseBlocked" class="w-full text-right text-xs text-amber-700" role="status">{{ d.dispenseBlocked }}（核對：{{ d.pharmacistName }}）</p>
       </div>
     </div>
 

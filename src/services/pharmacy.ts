@@ -9,7 +9,7 @@ import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
-import { rxExpired, rxValidUntil } from './rx-rules'
+import { dispenseBlocker, rxExpired, rxValidUntil } from './rx-rules'
 import { timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 
@@ -60,6 +60,8 @@ export interface DispenseView extends Dispense, PatientBrief {
   pharmacistName: string
   /** 調劑日期：核對日；還沒核對就是今天 */
   dispenseDate: string
+  /** 目前登入的藥師不能發這張的原因（雙人核對開啟、而他就是核對的人）；畫面先提示，不必按了才被擋 */
+  dispenseBlocked?: string
   /** 處方箋有效期最後一天（看診日起 3 日，見 rx-rules） */
   rxValidUntil: string
   /** 已逾有效期：還沒發的看今天，已發的看發藥那天（紀錄上看得出是逾期後才發的）。只提醒、不擋 */
@@ -113,6 +115,11 @@ function dispenseView(d: Dispense): DispenseView {
     dispenseDate: d.verifiedAt?.slice(0, 10) ?? today(),
     rxValidUntil: rxValidUntil(e.date),
     rxExpired: rxExpired(e.date, d.dispensedAt ?? today()),
+    ...(() => {
+      const u = sessionUser()
+      const why = u ? dispenseBlocker(d, u.id, !!db.securitySettings?.twoPersonDispense) : undefined
+      return why ? { dispenseBlocked: why } : {}
+    })(),
   }
 }
 
@@ -181,6 +188,8 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     const ph = requireUser('pharmacist')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status !== 'verified') fail('請先完成核對再發藥', 'CONFLICT')
+    const blocked = dispenseBlocker(d, ph.id, !!db.securitySettings?.twoPersonDispense)
+    if (blocked) fail(blocked, 'CONFLICT')
     const p = must(find.patient(d.patientId), '病患')
     const v = fieldErrors()
     if (check.proxy) {
@@ -205,5 +214,19 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     const late = view.rxExpired ? `（處方已逾有效期：${view.date} 開立、有效至 ${view.rxValidUntil}）` : ''
     audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）${late}`)
     return dispenseView(d)
+  })
+}
+
+/** 調劑政策（任何登入者可讀：藥局畫面要知道）；管理員可改 */
+export const dispensePolicy = (): Promise<{ twoPersonDispense: boolean }> =>
+  query(() => (requireUser(), { twoPersonDispense: !!db.securitySettings?.twoPersonDispense }))
+
+export function saveDispensePolicy(twoPersonDispense: boolean): Promise<{ twoPersonDispense: boolean }> {
+  return mutate(() => {
+    requireUser('admin')
+    const old = !!db.securitySettings?.twoPersonDispense
+    db.securitySettings = { ...db.securitySettings, twoPersonDispense: !!twoPersonDispense }
+    audit('修改安全設定', `調劑雙人核對 ${old ? '開' : '關'} → ${twoPersonDispense ? '開' : '關'}`)
+    return { twoPersonDispense: !!twoPersonDispense }
   })
 }

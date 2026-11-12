@@ -11,3 +11,14 @@ export const rxValidUntil = (issueDate: string) => addDays(issueDate.slice(0, 10
 
 /** 在 at 這天是否已逾有效期 */
 export const rxExpired = (issueDate: string, at: string) => at.slice(0, 10) > rxValidUntil(issueDate)
+
+/**
+ * 調劑雙人核對（U24）：開啟時，核對處方的藥師不能自己發藥——由第二位藥師在發藥時再看一次。
+ * 預設關閉：許多診所只有一位藥師，寫死兩人會讓單人藥局無法發藥，所以做成管理員可設定。
+ * 回傳擋下的原因；可以發藥回傳 undefined。
+ */
+export function dispenseBlocker(d: { status: string; verifiedBy?: string }, userId: string, twoPerson: boolean): string | undefined {
+  if (d.status !== 'verified') return undefined
+  if (twoPerson && d.verifiedBy === userId) return '本院規定核對與發藥須由不同藥師：請由另一位藥師發藥'
+  return undefined
+}

@@ -2303,6 +2303,41 @@ try {
     await as('clerk01')
   }
 
+  // 調劑雙人核對（U24）：管理員可設定「核對與發藥須由不同藥師」；預設關閉（單人藥局要能發藥）
+  console.log('\n[調劑雙人核對]')
+  {
+    const RX = await load('/src/services/rx-rules.ts')
+    ok(RX.dispenseBlocker({ status: 'verified', verifiedBy: 'U301' }, 'U301', true) && !RX.dispenseBlocker({ status: 'verified', verifiedBy: 'U301' }, 'U302', true) && !RX.dispenseBlocker({ status: 'verified', verifiedBy: 'U301' }, 'U301', false),
+      '雙人核對開啟：核對的人不能自己發藥、別人可以；關閉時同一人可以')
+    const PH = api.pharmacyApi
+    await as('ph01')
+    ok((await PH.dispensePolicy()).twoPersonDispense === false, '預設關閉（只有一位藥師的診所照常能發藥）')
+    await expectError(() => PH.saveDispensePolicy(true), '藥師改調劑政策')
+    await as('admin')
+    await PH.saveDispensePolicy(true)
+    ok(dbm.db.auditLogs[0].detail.includes('調劑雙人核對 關 → 開'), '管理員開啟，稽核記下')
+    await api.authApi.saveIdleLockMinutes(20)
+    ok((await PH.dispensePolicy()).twoPersonDispense === true && dbm.db.securitySettings.idleLockMin === 20, '改閒置鎖定不會把雙人核對的設定蓋掉（同一個設定物件，要合併）')
+    await as('ph01')
+    // 用盤點單測試留下的「ph01 已核對」那張（今天能發得出來的待調劑單只有一張，前面已經核對過了）
+    const pd = dbm.db.dispenses.find((d) => d.status === 'verified' && d.verifiedBy === 'U301')
+    ok(!!pd, 'ph01 核對過、等發藥的單')
+    const mine = await PH.getDispense(pd.id)
+    ok(!!mine.dispenseBlocked, `核對的藥師打開調劑單就看到「${mine.dispenseBlocked}」（不必按了才被擋）`)
+    const pt = dbm.db.patients.find((p) => p.id === pd.patientId)
+    const check = { birthMMDD: pt.birthDate.slice(5).replace('-', '') }
+    await expectError(() => PH.dispense(pd.id, check), '核對的藥師自己發藥（雙人核對開啟）')
+    await as('ph02')
+    ok(!(await PH.getDispense(pd.id)).dispenseBlocked, '另一位藥師打開：可以發藥')
+    const done = await PH.dispense(pd.id, check)
+    ok(done.status === 'dispensed' && done.dispensedBy === 'U302' && done.verifiedBy === 'U301', '第二位藥師發藥：核對 ph01、發藥 ph02 各自留下')
+    await as('admin')
+    await PH.saveDispensePolicy(false)
+    await api.authApi.saveIdleLockMinutes(15)
+    await as('clerk01')
+  }
+
+
   // 採購單：藥師開單 → 管理員核准／退回 → 分批到貨（對品項入批號效期）→ 已到齊／短交結案；無單進貨要原因
   console.log('\n[採購單]')
   {

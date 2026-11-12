@@ -59,7 +59,11 @@ export interface Database {
   /** 優免類別 */
   discounts: DiscountRule[]
   /** 安全設定（選用：沒有就用預設值） */
-  securitySettings?: { idleLockMin: number }
+  /**
+   * 安全設定：閒置鎖定分鐘；twoPersonDispense＝調劑雙人核對（核對與發藥須由不同藥師）。
+   * 沒有設定時用預設值（閒置 15 分、單人可完成調劑）
+   */
+  securitySettings?: { idleLockMin?: number; twoPersonDispense?: boolean }
   /** 門診診間 */
   rooms: Room[]
   weeklySlots: WeeklySlot[]
