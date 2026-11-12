@@ -630,7 +630,9 @@ export interface MarRecord {
 
 /**
  * 住院調劑（Unit Dose）：藥師每天下午調次日整天的劑量；當天新開的醫囑「補調劑」今天剩下的。
- * 一次調劑＝藥師按一次「調劑」：每位病人、每筆醫囑一行，扣住院藥局的庫存。
+ * 一次調劑＝藥師按一次「調劑」：每位病人、每筆醫囑一行。兩段：
+ *   調劑（備藥，不扣帳）→ 核對：逐位病人的藥盒（boxes）通過才扣住院藥局、送病房，護理師才能給；
+ *   核對發現錯誤可以退回重調（那位病人的劑量回到待調劑）。雙人核對設定開啟時，調劑的人不能自己核對
  */
 export interface UdDispense {
   id: string
@@ -639,9 +641,23 @@ export interface UdDispense {
   locationId: string
   /** daily 每日調劑（次日）；extra 補調劑（今天剩下的、新開的醫囑） */
   kind: 'daily' | 'extra'
+  /** 調劑（備藥）的人與時間 */
   dispensedBy: string
   dispensedAt: string
+  /** 每位病人一個藥盒：核對以藥盒為單位 */
+  boxes: UdBox[]
   lines: UdLine[]
+}
+
+export interface UdBox {
+  admissionId: string
+  /** prepared 已調劑待核對、verified 已核對送病房（已扣帳）、rejected 退回重調（劑量回到待調劑） */
+  status: 'prepared' | 'verified' | 'rejected'
+  verifiedBy?: string
+  verifiedAt?: string
+  rejectedBy?: string
+  rejectedAt?: string
+  rejectReason?: string
 }
 
 export interface UdLine {
@@ -655,8 +671,10 @@ export interface UdLine {
   qty: number
   /** 每劑幾個調劑單位：可換算時才有（沒給的劑量依這個退）；無法換算的（胰島素筆、眼藥水）沒有，也不退 */
   perDose?: number
-  /** 扣庫存的那筆異動（qty 0 沒有）：退藥時退回同幾個批號 */
+  /** 扣庫存的那筆異動（核對通過才有；qty 0 沒有）：退藥時退回同幾個批號 */
   txnId?: string
+  /** 病房送回藥局（護理師）：送回了哪幾劑。藥師只能點收已送回的 */
+  sendBacks?: { at: string; by: string; marIds: string[] }[]
   /** 退藥點收紀錄：每次點收結清哪幾劑、應退、實收（短少要寫原因） */
   returns?: UdReturn[]
 }

@@ -8,6 +8,7 @@ import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser }
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
 import { wardStockOut } from './stock-ledger'
+import { udStage } from './ud-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
@@ -264,8 +265,9 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
     // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
-    if (status === 'given' && order.type === 'long' && !m.udLineId) {
-      fail(`藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
+    // 核對通過、送到病房才算（只調劑還在藥局核對中，藥也還沒到）
+    if (status === 'given' && order.type === 'long' && udStage(m) !== 'verified') {
+      fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5)}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
     }
     // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
     const forced = status === 'given' ? holdForQuery(order, force) : undefined

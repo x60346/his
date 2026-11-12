@@ -1,13 +1,15 @@
 <script setup lang="ts">
-// 住院藥局：UD（Unit Dose）調劑與退藥點收。
+// 住院藥局：UD（Unit Dose）調劑、核對與退藥點收。
 //   - 補調劑（今天）：今天才開的醫囑、還沒調劑的今天劑量——護理師在等，排最上面
-//   - 每日調劑（明天）：每天下午把明天整天的劑量調好送病房
-//   - 待退藥：發出去、不會給的劑量（暫停、拒絕、醫囑停止、出院），病房送回來由藥師點收入庫
+//   - 每日調劑（明天）：每天下午把明天整天的劑量調好
+//   - 待核對：逐位病人的藥盒核對，通過才扣帳、送病房；發現錯誤退回重調（雙人核對開啟時調劑的人不能自己核對）
+//   - 待退藥：病房送回來的（暫停、拒絕、醫囑停止、出院）由藥師點收入庫；還沒送回的另外列出供參考
 // 每劑幾個、哪些要退都由服務層算（ud-rules、ud-work）；頁面送出的是畫面上看得到的那幾劑。
 import { computed, reactive, ref, watch } from 'vue'
-import { AlertTriangle, PackageCheck, PillBottle, Undo2 } from 'lucide-vue-next'
+import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/components/ui'
-import { udApi, type UdReturnRow, type UdWorkGroup } from '@/services'
+import { udApi, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
+import ReasonDialog from '@/components/ReasonDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 
@@ -29,17 +31,26 @@ const sections = computed(() =>
 )
 const doseCount = (gs: readonly UdWorkGroup[]) => gs.reduce((n, g) => n + g.lines.reduce((s, l) => s + l.marIds.length, 0), 0)
 
-const run = useAction(udApi.dispenseUd, { success: (r) => `已調劑 ${r.no}：${r.patients} 位病人、${r.lines} 項` })
+const run = useAction(udApi.dispenseUd, { success: (r) => `已調劑 ${r.no}：${r.patients} 位病人、${r.lines} 項，請逐位核對後送病房` })
 const errOf = (orderId: string) => run.fieldErrors.value[`qty.${orderId}`]
 async function dispense(kind: Kind, groups: readonly UdWorkGroup[]) {
   const lines = groups.flatMap((g) => g.lines)
   if (groups.length > 1) {
-    const ok = await ui.confirm({ title: kind === 'daily' ? '每日調劑' : '補調劑', message: `調劑 ${groups.length} 位病人、${lines.length} 項（${doseCount(groups)} 劑）？會從${w.value?.locationName}扣庫存。`, okText: '調劑' })
+    const ok = await ui.confirm({ title: kind === 'daily' ? '每日調劑' : '補調劑', message: `調劑 ${groups.length} 位病人、${lines.length} 項（${doseCount(groups)} 劑）？調好後逐位核對，核對通過才從${w.value?.locationName}扣庫存、送病房。`, okText: '調劑' })
     if (!ok) return
   }
   const q: Record<string, number> = {}
   for (const l of lines) if (!l.perDose && qtys[l.orderId] !== undefined) q[l.orderId] = qtys[l.orderId]!
   if (await run.run({ kind, marIds: lines.flatMap((l) => l.marIds), qtys: q })) for (const l of lines) delete qtys[l.orderId]
+}
+
+// ---------- 核對 ----------
+const verify = useAction(udApi.verifyUdBox, { success: (r) => `已核對 ${r.patientName}（${r.no}），送病房` })
+const rejecting = ref<UdVerifyBox | null>(null)
+const rejectOpen = computed({ get: () => !!rejecting.value, set: (v) => !v && (rejecting.value = null) })
+const reject = useAction(udApi.rejectUdBox, { success: '已退回重調：這位病人的劑量回到待調劑' })
+async function confirmReject(reason: string) {
+  if (rejecting.value && (await reject.run(rejecting.value.dispenseId, rejecting.value.admissionId, reason))) rejecting.value = null
 }
 
 // ---------- 退藥點收 ----------
@@ -117,27 +128,71 @@ async function confirmReturn() {
           </div>
         </UCard>
 
+        <UCard :padded="false" :class="w.verify.length ? 'border-sky-300' : ''">
+          <template #title>
+            <div class="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <ClipboardCheck class="h-4 w-4 text-sky-600" />待核對
+              <UBadge v-if="w.verify.length" tone="blue">{{ w.verify.length }} 位病人</UBadge>
+            </div>
+            <div class="text-xs text-slate-500">逐位病人核對藥盒：通過才扣{{ w.locationName }}、送病房，護理師才能給；發現錯誤退回重調</div>
+          </template>
+          <UEmpty v-if="!w.verify.length" title="沒有待核對的藥盒" class="py-6" />
+          <div v-for="b in w.verify" :key="b.dispenseId + b.admissionId" class="border-t border-slate-100 first:border-t-0">
+            <div class="flex flex-wrap items-center gap-2 bg-slate-50 px-4 py-2 text-sm">
+              <span class="tabular font-semibold text-brand-700">{{ b.bedNo }}</span>
+              <span class="font-medium text-slate-800">{{ b.patientName }}</span>
+              <UBadge v-if="b.allergies.length" tone="red">過敏：{{ b.allergies.join('、') }}</UBadge>
+              <span class="text-xs text-slate-500">{{ b.no }}・{{ b.kind === 'daily' ? '每日調劑' : '補調劑' }}・{{ b.preparedByName }} {{ b.preparedAt.slice(11) }} 調劑</span>
+              <div class="ml-auto flex gap-1.5">
+                <UButton size="sm" variant="ghost" @click="rejecting = b">退回重調</UButton>
+                <UButton size="sm" :icon="ClipboardCheck" :disabled="!!b.blocked" :title="b.blocked" :loading="verify.pending.value" @click="verify.run(b.dispenseId, b.admissionId)">核對送出</UButton>
+              </div>
+              <p v-if="b.blocked" class="w-full text-right text-xs text-amber-700" role="status">{{ b.blocked }}</p>
+            </div>
+            <ul class="divide-y divide-slate-100">
+              <li v-for="l in b.lines" :key="l.lineId" class="flex flex-wrap items-center gap-3 px-4 py-1.5 text-sm">
+                <span class="min-w-0 flex-1">
+                  <span class="font-medium text-slate-800">{{ l.drugName }}</span><UBadge v-if="l.highAlert" tone="purple" class="ml-1">高警訊</UBadge>
+                  <span class="block text-xs text-slate-500">每次 {{ l.dose }} {{ l.doseUnit }}・{{ l.freqLabel }}・{{ l.route }}・{{ l.times.map((t) => t.slice(6)).join('、') }}</span>
+                </span>
+                <span class="tabular"><b>{{ l.qty }}</b> {{ l.unit }}</span>
+              </li>
+            </ul>
+          </div>
+        </UCard>
+
         <UCard :padded="false">
           <template #title>
             <div class="flex items-center gap-2 text-sm font-semibold text-slate-800">
               <Undo2 class="h-4 w-4 text-slate-500" />待退藥點收
               <UBadge v-if="w.returns.length" tone="yellow">{{ w.returns.length }} 項</UBadge>
             </div>
-            <div class="text-xs text-slate-500">發出去、不會給的劑量（暫停、拒絕、醫囑停止、出院）；病房送回後點收入庫，退回原批號</div>
+            <div class="text-xs text-slate-500">病房送回來的（暫停、拒絕、醫囑停止、出院）：點收入庫，退回原批號</div>
           </template>
-          <UEmpty v-if="!w.returns.length" title="沒有待退的藥" class="py-6" />
+          <UEmpty v-if="!w.returns.length" title="沒有已送回待點收的藥" class="py-6" />
           <ul v-else class="divide-y divide-slate-100">
             <li v-for="r in w.returns" :key="r.lineId" class="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
               <span class="tabular w-14 font-semibold text-brand-700">{{ r.bedNo || '—' }}</span>
               <div class="min-w-0 flex-1">
                 <div class="font-medium text-slate-800">{{ r.patientName }}・{{ r.drugName }}</div>
-                <div class="text-xs text-slate-500">{{ r.no }}（{{ r.dispensedAt.slice(5, 16).replace('-', '/') }} 調劑）・{{ r.causes }}</div>
+                <div class="text-xs text-slate-500">{{ r.no }}・{{ r.causes }}・{{ r.sentByName }} {{ r.sentAt?.slice(5, 16).replace('-', '/') }} 送回</div>
               </div>
               <span class="tabular">應退 <b class="text-base">{{ r.expected }}</b> {{ r.unit }}</span>
               <UButton size="sm" variant="secondary" :icon="PackageCheck" @click="returning = r">點收</UButton>
             </li>
           </ul>
         </UCard>
+
+        <details v-if="w.awaitingWard.length" class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
+          <summary class="cursor-pointer font-medium text-slate-700">病房還沒送回的（{{ w.awaitingWard.length }} 項，參考；病房按「送回藥局」後才會出現在待點收）</summary>
+          <ul class="mt-2 divide-y divide-slate-100">
+            <li v-for="r in w.awaitingWard" :key="r.lineId" class="flex flex-wrap gap-3 py-1.5">
+              <span class="tabular w-24 text-xs text-slate-500">{{ r.ward.split(' ')[0] }} {{ r.bedNo }}</span>
+              <span class="min-w-0 flex-1">{{ r.patientName }}<UBadge v-if="r.discharged" tone="gray" class="ml-1">已出院</UBadge>・{{ r.drugName }}<span class="ml-1 text-xs text-slate-500">{{ r.causes }}</span></span>
+              <span class="tabular">{{ r.expected }} {{ r.unit }}</span>
+            </li>
+          </ul>
+        </details>
 
         <UCard :padded="false">
           <template #title><span class="text-sm font-semibold text-slate-800">最近的調劑</span></template>
@@ -149,7 +204,7 @@ async function confirmReturn() {
                 <th class="px-3 py-2 text-left">類別</th>
                 <th class="px-3 py-2 text-left">時間</th>
                 <th class="px-3 py-2 text-left">藥師</th>
-                <th class="px-3 py-2 text-right">病人／項目</th>
+                <th class="px-3 py-2 text-right">已核對／病人／項目</th>
                 <th class="px-3 py-2 text-right">已退回</th>
               </tr>
             </thead>
@@ -159,7 +214,7 @@ async function confirmReturn() {
                 <td class="px-3 py-2"><UBadge :tone="u.kind === 'daily' ? 'blue' : 'yellow'">{{ u.kind === 'daily' ? '每日調劑' : '補調劑' }}</UBadge></td>
                 <td class="px-3 py-2 text-slate-600">{{ u.dispensedAt.slice(5, 16).replace('-', '/') }}</td>
                 <td class="px-3 py-2 text-slate-600">{{ u.dispensedByName }}</td>
-                <td class="px-3 py-2 text-right">{{ u.patients }}／{{ u.lines }}</td>
+                <td class="px-3 py-2 text-right">{{ u.verified }}／{{ u.patients }}／{{ u.lines }}</td>
                 <td class="px-3 py-2 text-right text-slate-500">{{ u.returned || '—' }}</td>
               </tr>
             </tbody>
@@ -168,6 +223,17 @@ async function confirmReturn() {
       </template>
     </UQueryState>
 
+    <ReasonDialog
+      v-model="rejectOpen"
+      title="退回重調"
+      :subject="rejecting ? `${rejecting.bedNo} ${rejecting.patientName}・${rejecting.no}` : ''"
+      label="退回原因（調劑的藥師會看到）"
+      :presets="['劑量放錯', '少一顆', '藥品放錯藥盒', '標示不清']"
+      ok-text="退回重調"
+      :pending="reject.pending.value"
+      :error="reject.fieldErrors.value.reason"
+      @confirm="confirmReject"
+    />
     <UDialog v-model="returnOpen" title="退藥點收" size="sm" @submit="confirmReturn">
       <div v-if="returning" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">

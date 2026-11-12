@@ -20,3 +20,11 @@ export const UD_RETURN_CAUSE: Record<UdReturnCause, string> = {
   discharged: '出院',
   cancelled: '排程取消',
 }
+
+/**
+ * 核對能不能由這位藥師做：管理員開啟「調劑雙人核對」時（門診、住院共用同一個設定），調劑的人不能自己核對。
+ * 回傳擋下的原因；可以核對回 undefined
+ */
+export function udVerifyBlocker(preparedBy: string, userId: string, twoPerson: boolean): string | undefined {
+  return twoPerson && preparedBy === userId ? '本院規定調劑與核對須由不同藥師：請由另一位藥師核對' : undefined
+}

@@ -846,10 +846,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   void doctorUser
 
-  // ---------- 住院調劑（UD）：昨天 15:00 已調好今天整天的劑量（不抽亂數） ----------
+  // ---------- 住院調劑（UD）：昨天 15:00 調劑、15:20 另一位藥師核對送出今天整天的劑量（不抽亂數） ----------
   // 今天的排程（已給的、待給的）都由這一次調劑送到病房；明天的還沒調——藥師下午打開「住院藥局」就有每日調劑可做。
-  // 扣庫存的異動在下面重播帳本時一起產生（和門診發藥同一套 FEFO），txnId 那時才填
+  // 核對通過才扣帳：扣庫存的異動在下面重播帳本時一起產生（時間＝核對，和門診發藥同一套 FEFO），txnId 那時才填
   const udAt = `${addDays(T, -1)} 15:00`
+  const udVerifiedAt = `${addDays(T, -1)} 15:20`
   const udLines: UdLine[] = []
   for (const o of ipdOrders.filter((x) => x.category === 'medication' && x.type === 'long' && x.status === 'active' && x.freq !== 'PRN' && x.startAt < udAt)) {
     const ms = mar.filter((m) => m.orderId === o.id && m.scheduledAt.startsWith(T))
@@ -860,7 +861,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     udLines.push(line)
   }
   const udNo = `UD${addDays(T, -1).replace(/-/g, '')}-01`
-  const udDispenses: UdDispense[] = udLines.length ? [{ id: 'UD-SEED-1', no: udNo, locationId: '', kind: 'daily', dispensedBy: 'U301', dispensedAt: udAt, lines: udLines }] : []
+  const udDispenses: UdDispense[] = udLines.length ? [{
+    id: 'UD-SEED-1', no: udNo, locationId: '', kind: 'daily', dispensedBy: 'U301', dispensedAt: udAt, lines: udLines,
+    boxes: [...new Set(udLines.map((l) => l.admissionId))].map((admissionId) => ({ admissionId, status: 'verified' as const, verifiedBy: 'U302', verifiedAt: udVerifiedAt })),
+  }] : []
 
   // ---------- 藥品庫存帳 ----------
   // 用「重播」產生：期初 → 進貨 → 每日發藥，依時間順序、用與服務層相同的 FEFO 規則扣批號。
@@ -905,7 +909,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // 帳本從期初（31 天前）開始；更早的發藥已經反映在期初數量裡，不能再重播一次
       ...(realOut.get(drug.id) ?? []).filter((o) => o.at >= addDays(T, -30)),
       // 住院調劑：從住院藥局扣（小型就是同一個藥局）
-      ...udLines.filter((l) => l.drugId === drug.id && l.qty > 0).map((l) => ({ at: udAt, qty: l.qty, ref: udNo, loc: ipdLoc, line: l })),
+      ...udLines.filter((l) => l.drugId === drug.id && l.qty > 0).map((l) => ({ at: udVerifiedAt, qty: l.qty, ref: udNo, loc: ipdLoc, line: l })),
     ]
     const udNeed = udLines.filter((l) => l.drugId === drug.id).reduce((n, l) => n + l.qty, 0)
     const receiveAt = `${addDays(T, -14)} 10:00`

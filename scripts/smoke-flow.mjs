@@ -52,6 +52,13 @@ try {
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  /** 住院調劑＋核對送出（雙人核對預設關閉，同一位藥師即可）；給藥測試要先有這一步 */
+  const udSupply = async (kind, marIds, qtys) => {
+    const r = await api.udApi.dispenseUd({ kind, marIds, qtys })
+    const d = dbm.db.udDispenses.find((x) => x.no === r.no)
+    for (const b of d.boxes) await api.udApi.verifyUdBox(d.id, b.admissionId)
+    return r
+  }
   // 盤點單整套走一次（建立 → 依 counts 清點 → 送出 → 管理員覆核過帳）：測試要調整庫存一律照盤點單的路走，帳本不變式仍成立。
   // counts(line, lot) 回傳實點數量；結束時登入身分是 ph01
   const takeStock = async (drugIds, counts, reasonText = '測試', locationId) => {
@@ -1178,7 +1185,7 @@ try {
       mar.scheduledAt = addMinutes(nowStr(), -5)
       // 排程給藥要先由住院藥局調劑（這一劑改到現在＝今天，用補調劑）
       await as('ph01')
-      await api.udApi.dispenseUd({ kind: 'extra', marIds: [mar.id] })
+      await udSupply('extra', [mar.id])
       await as('nurse01')
       const mv = (await api.ipdApi.listMar(adm.id, mar.scheduledAt.slice(0, 10))).find((m) => m.id === mar.id)
       ok(mv?.queried === '頻率 QID 疑為 TID', '給藥紀錄這一筆標「待醫師回覆」')
@@ -3032,7 +3039,7 @@ try {
       `醫囑：停止勾選的 2 筆（排程一併刪除），其餘 ${kept.length} 筆延續（仍記原開立者）`)
     ok(v.bed?.id === bed.id && db().beds.find((b) => b.id === oldBed).status === 'cleaning' && x.fromBedId === oldBed && x.toBedId === bed.id, `一併轉床：${db().beds.find((b) => b.id === oldBed).bedNo} → ${bed.bedNo}（原床清潔中）`)
     await as('ph01')
-    ok((await api.udApi.getUdWork()).returns.some((r) => r.admissionId === stroke.id && r.causes.includes('醫囑停止')), '停止的給藥醫囑已調劑沒給的，自動列入待退藥')
+    ok((await api.udApi.getUdWork()).awaitingWard.some((r) => r.admissionId === stroke.id && r.causes.includes('醫囑停止')), '停止的給藥醫囑已調劑沒給的，自動列入待退藥（等病房送回）')
     await as('nurse01')
     ok((await api.nursingApi.listNursingOrders(stroke.id)).flatMap((g) => g.orders).some((o) => o.id === med.id && o.needsAck), '護理站：轉科停止的醫囑要核對')
     await as('dr09')
@@ -3054,8 +3061,8 @@ try {
     // 種子：昨天 15:00 調好今天的
     const seedUd = db().udDispenses[0]
     const todayLong = db().mar.filter((m) => m.scheduledAt.startsWith(T) && db().ipdOrders.find((o) => o.id === m.orderId)?.type === 'long')
-    ok(seedUd?.kind === 'daily' && seedUd.dispensedAt.startsWith(addDays(T, -1)) && todayLong.length > 0 && todayLong.every((m) => m.udLineId),
-      `展示資料：昨天 15:00 已調劑今天的 ${todayLong.length} 劑（${seedUd?.no}）`)
+    ok(seedUd?.kind === 'daily' && seedUd.dispensedAt.startsWith(addDays(T, -1)) && todayLong.length > 0 && todayLong.every((m) => m.udLineId) && seedUd.boxes.every((b) => b.status === 'verified' && b.verifiedBy !== seedUd.dispensedBy),
+      `展示資料：昨天 15:00 調劑、另一位藥師核對送出今天的 ${todayLong.length} 劑（${seedUd?.no}）`)
     ok(seedUd.lines.every((l) => l.qty === 0 || db().stockTxns.find((x) => x.id === l.txnId && x.ref === seedUd.no && x.locationId === ipd && x.qty === -l.qty)), '展示資料的調劑都有扣住院藥局的異動（同單號、同數量）')
     ok(ledgerBroken(db()).length === 0, '加上住院調劑後，帳本、批號、結存仍對得起來')
     await as('nurse01')
@@ -3063,7 +3070,7 @@ try {
     await as('ph01')
     let w = await U.getUdWork()
     const dailyLines = w.daily.flatMap((g) => g.lines)
-    ok(w.extra.length === 0 && w.daily.length > 0 && w.returns.length === 0 && w.recent.length === 1, `工作清單：補調劑 0、明天 ${w.daily.length} 位病人 ${dailyLines.length} 項、待退藥 0`)
+    ok(w.extra.length === 0 && w.daily.length > 0 && w.verify.length === 0 && w.returns.length === 0 && w.awaitingWard.length === 0 && w.recent.length === 1, `工作清單：補調劑 0、明天 ${w.daily.length} 位病人 ${dailyLines.length} 項、待退藥 0`)
     const insulin = dailyLines.find((l) => !l.perDose)
     ok(insulin && insulin.doseUnit !== insulin.unit && dailyLines.filter((l) => l.perDose).every((l) => l.qty === l.perDose * l.marIds.length), `可換算的自動算量（每劑 × 劑數）；${insulin?.drugName} 每次 ${insulin?.dose} ${insulin?.doseUnit} 無法換算`)
     const dailyIds = dailyLines.flatMap((l) => l.marIds)
@@ -3082,9 +3089,27 @@ try {
     for (const l of dailyLines.filter((l) => l.perDose)) need[l.drugId] = (need[l.drugId] ?? 0) + l.qty
     const before = Object.fromEntries(Object.keys(need).map((d) => [d, usableAt(d)]))
     const r = await U.dispenseUd({ kind: 'daily', marIds: dailyIds, qtys: { [insulin.orderId]: 0 } })
-    ok(r.lines === dailyLines.length && Object.entries(need).every(([d, q]) => usableAt(d) === before[d] - q) && db().auditLogs[0].action === '住院調劑',
-      `每日調劑 ${r.no}：${r.patients} 位病人 ${r.lines} 項，扣住院藥局（胰島素床邊已有填 0，不扣）`)
-    ok(dailyIds.every((id) => db().mar.find((m) => m.id === id).udLineId) && !db().stockTxns.some((x) => x.ref === r.no && x.drugId === insulin.drugId), '那幾劑標為已調劑；填 0 的不產生異動')
+    w = await U.getUdWork()
+    ok(r.lines === dailyLines.length && Object.entries(need).every(([d]) => usableAt(d) === before[d]) && w.verify.length === r.patients && !w.daily.some((g) => g.lines.some((l) => l.marIds.some((id) => dailyIds.includes(id)))) && db().auditLogs[0].action === '住院調劑',
+      `每日調劑 ${r.no}：${r.patients} 位病人 ${r.lines} 項，待核對（調劑只是備藥，還不扣帳）`)
+    const tomorrowMar = (await api.ipdApi.listMar(admId, addDays(T, 1))).find((m) => dailyIds.includes(m.id))
+    ok(tomorrowMar?.awaitingUd === 'checking', '護理站：已調劑、核對中的標「藥局核對中」（還不能給）')
+    // 雙人核對（和門診共用同一個設定）：調劑的人不能自己核對
+    await as('admin')
+    await api.pharmacyApi.saveDispensePolicy(true)
+    await as('ph01')
+    const myBox = (await U.getUdWork()).verify[0]
+    await expectError(() => U.verifyUdBox(myBox.dispenseId, myBox.admissionId), '雙人核對開啟時，調劑的人自己核對')
+    ok(!!myBox.blocked, `待核對清單先說清楚：「${myBox.blocked}」`)
+    await as('ph02')
+    for (const b of (await U.getUdWork()).verify) await U.verifyUdBox(b.dispenseId, b.admissionId)
+    ok(Object.entries(need).every(([d, q]) => usableAt(d) === before[d] - q) && db().auditLogs[0].action === '住院調劑核對' && db().udDispenses.find((x) => x.no === r.no).boxes.every((b) => b.status === 'verified' && b.verifiedBy === 'U302'),
+      '另一位藥師逐位病人核對通過：這時才扣住院藥局、送病房')
+    ok(dailyIds.every((id) => db().mar.find((m) => m.id === id).udLineId) && !db().stockTxns.some((x) => x.ref === r.no && x.drugId === insulin.drugId), '那幾劑標為已調劑；胰島素填 0（床邊已有）不產生異動')
+    await expectError(() => U.verifyUdBox(myBox.dispenseId, myBox.admissionId), '已核對的藥盒再核對一次')
+    await as('admin')
+    await api.pharmacyApi.saveDispensePolicy(false)
+    await as('ph01')
     await expectError(() => U.dispenseUd({ kind: 'daily', marIds: dailyIds, qtys: { [insulin.orderId]: 0 } }), '同幾劑再調劑一次（畫面過期）')
     w = await U.getUdWork()
     const freshExtra = w.extra.flatMap((g) => g.lines).find((l) => l.orderId === fresh.id)
@@ -3104,11 +3129,31 @@ try {
       ok(mv?.awaitingUd && e.code === 'CONFLICT' && e.field === 'ud', `給藥紀錄標「待藥局調劑」；還沒調劑就給 → 「${e.message}」`)
     }
     await as('ph01')
-    await U.dispenseUd({ kind: 'extra', marIds: freshExtra.marIds })
-    const r2 = await U.dispenseUd({ kind: 'daily', marIds: freshDaily.marIds })
+    const rx = await U.dispenseUd({ kind: 'extra', marIds: freshExtra.marIds })
+    await as('nurse01')
+    try {
+      await api.nursingApi.executeMar(fm.id, 'given')
+      ok(false, '核對中就給藥應被擋下')
+    } catch (e) {
+      ok(e.field === 'ud' && e.message.includes('核對'), `已調劑、還沒核對就給 → 「${e.message}」`)
+    }
+    await as('ph01')
+    const xbox = (await U.getUdWork()).verify.find((b) => b.no === rx.no)
+    try {
+      await U.rejectUdBox(xbox.dispenseId, xbox.admissionId, '')
+      ok(false, '退回重調沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', `退回重調沒寫原因 → 「${e.message}」`)
+    }
+    await U.rejectUdBox(xbox.dispenseId, xbox.admissionId, '劑量放錯藥盒')
+    w = await U.getUdWork()
+    ok(!w.verify.some((b) => b.no === rx.no) && w.extra.flatMap((g) => g.lines).some((l) => l.orderId === fresh.id && l.marIds.includes(fm.id)) && !db().stockTxns.some((x) => x.ref === rx.no),
+      '核對發現錯誤退回重調：那幾劑回到待調劑，沒有扣帳')
+    await udSupply('extra', freshExtra.marIds)
+    const r2 = await udSupply('daily', freshDaily.marIds)
     await as('nurse01')
     const given = await api.nursingApi.executeMar(fm.id, 'given')
-    ok(given.status === 'given', '補調劑後可以給')
+    ok(given.status === 'given', '重新調劑、核對送出後可以給')
     // 退藥：暫停一劑、醫師停止醫囑（明天已調好的 4 劑被取消）
     const later = db().mar.find((m) => m.orderId === fresh.id && m.status === 'pending' && m.udLineId && m.scheduledAt.startsWith(T))
     await api.nursingApi.executeMar(later.id, 'held', '病人禁食')
@@ -3117,7 +3162,24 @@ try {
     await as('ph01')
     w = await U.getUdWork()
     const lineOf = (x) => db().udDispenses.find((u) => u.id === x.dispenseId).lines.find((l) => l.id === x.lineId)
+    ok(!w.returns.some((x) => lineOf(x).orderId === fresh.id) && w.awaitingWard.filter((x) => lineOf(x).orderId === fresh.id).length === 2, '沒給的劑量先列在「病房待送回」，還不能點收')
+    const waitRow = w.awaitingWard.find((x) => lineOf(x).orderId === fresh.id)
+    await expectError(() => U.receiveUdReturn(waitRow.lineId, { qty: waitRow.expected }), '病房還沒送回就點收')
+    await as('nurse01')
+    const ward = db().beds.find((b) => b.id === db().admissions.find((a) => a.id === admId).bedId).ward
+    const wardRows = await U.listWardUdReturns(ward)
+    const mine = wardRows.filter((x) => lineOf(x).orderId === fresh.id)
+    ok(mine.length === 2, `護理站「待送回藥局」：${mine.map((x) => `${x.bedNo} ${x.drugName} ${x.expected}`).join('、')}`)
+    await as('ph01')
+    await expectError(() => U.sendBackUd(mine.map((x) => x.lineId)), '藥師按「送回藥局」')
+    await as('nurse01')
+    const sb = await U.sendBackUd(mine.map((x) => x.lineId))
+    ok(sb.lines === 2 && !(await U.listWardUdReturns(ward)).some((x) => lineOf(x).orderId === fresh.id) && db().auditLogs[0].action === '送回藥局', `送回藥局：${sb.lines} 項 ${sb.doses} 劑，離開護理站待辦`)
+    await expectError(() => U.sendBackUd([mine[0].lineId]), '已送回的再送一次')
+    await as('ph01')
+    w = await U.getUdWork()
     const rows = w.returns.filter((x) => lineOf(x).orderId === fresh.id)
+    ok(rows.every((x) => x.sentByName === '周怡萱' && x.sentAt), '藥局待點收：看得到誰、何時送回')
     ok(rows.length === 2, `待退藥 ${rows.length} 項：${rows.map((x) => `${x.no} ${x.drugName} 應退 ${x.expected}（${x.causes}）`).join('；')}`)
     const extraRow = rows.find((x) => x.causes.includes('暫停給藥 1'))
     const stopRow = rows.find((x) => x.no === r2.no)
@@ -3161,9 +3223,9 @@ try {
         await api.ipdApi.saveDischargeSummary(dis.id, { diagnosis: dis.diagnosis, course: '測試', condition: '穩定', followUp: '門診追蹤', dischargeType: '治癒' }, true)
         await as('nurse01')
         await api.admissionApi.discharge(dis.id, { confirmUnfinished: true })
-        await as('ph01')
-        const rws = (await U.getUdWork()).returns.filter((x) => x.admissionId === dis.id)
-        ok(rws.length > 0 && rws.every((x) => x.causes.startsWith('出院')), `出院後：今天已調好沒給的 ${rws.reduce((n, x) => n + x.doses, 0)} 劑列入待退藥（原因「出院」）`)
+        const disWard = db().beds.find((b) => b.id === dis.bedId).ward
+        const rws = (await U.listWardUdReturns(disWard)).filter((x) => x.admissionId === dis.id)
+        ok(rws.length > 0 && rws.every((x) => x.causes.startsWith('出院') && x.discharged), `出院後：今天已調好沒給的 ${rws.reduce((n, x) => n + x.doses, 0)} 劑列在原病房「待送回藥局」（標已出院，原因「出院」）`)
       }
     }
     ok(ledgerBroken(db()).length === 0, '調劑、退藥、病房常備之後，帳本仍對得起來')
@@ -3207,7 +3269,7 @@ try {
       const w = await api.udApi.getUdWork()
       const g = w.daily[0]
       const ids = g.lines.filter((l) => l.perDose).flatMap((l) => l.marIds)
-      const r = await api.udApi.dispenseUd({ kind: 'daily', marIds: ids })
+      const r = await udSupply('daily', ids)
       const tx = dbm.db.stockTxns.filter((x) => x.ref === r.no)
       ok(w.locationId === 'LOC-IPD' && tx.length > 0 && tx.every((x) => x.locationId === 'LOC-IPD'), `大型：住院調劑扣住院藥局（${w.locationName}），門診藥局、藥庫不動`)
     }

@@ -9,6 +9,7 @@ import { doseUnitOf } from './billing'
 import { find, nameOf, openDeptTransfer, usable } from './views'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
+import { udStage } from './ud-work'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -161,8 +162,8 @@ export function stopOrder(orderId: string): Promise<OrderView> {
 export interface MarView extends MarRecord {
   /** 醫囑有疑問、待醫師回覆：給藥暫停（緊急時寫原因強制） */
   queried?: string
-  /** 長期排程、藥局還沒調劑（藥還沒到病房）：不能給，要請住院藥局補調劑 */
-  awaitingUd?: boolean
+  /** 長期排程、藥還沒到病房：pending 藥局還沒調劑（要請補調劑）、checking 已調劑在核對中。都不能給 */
+  awaitingUd?: 'pending' | 'checking'
   content: string
   dose?: number
   unit: string
@@ -186,7 +187,7 @@ export function marViews(admissionId: string, date: string): MarView[] {
       return {
         ...m,
         ...(q && m.status === 'pending' ? { queried: q.reason } : {}),
-        ...(m.status === 'pending' && o?.type === 'long' && !m.udLineId ? { awaitingUd: true } : {}),
+        ...(m.status === 'pending' && o?.type === 'long' && udStage(m) !== 'verified' ? { awaitingUd: udStage(m) === 'prepared' ? ('checking' as const) : ('pending' as const) } : {}),
         content: o?.content ?? '',
         dose: o?.dose,
         unit: d ? doseUnitOf(d) : '',

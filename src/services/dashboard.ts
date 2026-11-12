@@ -27,9 +27,11 @@ export interface DashboardStats {
   orderQueries?: number
   /** 醫師：轉入我科、等我接的轉科申請 */
   transferIncoming?: number
-  /** 住院藥局：今天還沒調劑的劑量（補調劑）、待退藥點收的項數 */
+  /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   udReturns: number
+  udVerify: number
+  udSendBack: number
   /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
   transferRequested?: number
   transferIssued?: number
@@ -80,7 +82,9 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
-      udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).marIds.length > 0).length,
+      udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
+      udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
+      udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
       ...(() => {
