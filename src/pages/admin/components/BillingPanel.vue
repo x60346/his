@@ -4,10 +4,11 @@
 // 已收費的收據存的是當時的明細，不受影響；只有「尚未收費」的會用新參數計算。
 import { computed, reactive, ref, watch } from 'vue'
 import { Pencil } from 'lucide-vue-next'
-import { UBadge, UButton, UCheckbox, UDialog, UInput } from '@/components/ui'
-import { adminApi, drugCopay, masterApi } from '@/services'
+import { Plus } from 'lucide-vue-next'
+import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect } from '@/components/ui'
+import { adminApi, chargeApi, discountSummary, drugCopay, masterApi, type DiscountInput } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
-import type { BillingSettings, Identity } from '@/types'
+import type { BillingSettings, DiscountRule, Identity } from '@/types'
 
 const { data: settings } = useQuery(() => adminApi.getBillingSettings())
 const { data: identities } = useQuery(() => masterApi.listIdentities())
@@ -55,6 +56,20 @@ function openId(i: Identity) {
 const saveId = useAction(adminApi.saveIdentity, { success: (r) => `已儲存 ${r.identity.name}${r.affectedPending ? `；${r.affectedPending} 筆待批價將以新設定計算` : ''}` })
 async function submitId() {
   if (await saveId.run({ ...idForm })) idOpen.value = false
+}
+
+// ---------- 優免類別（只減掛號費、自費項目；部分負擔不能減） ----------
+const { data: discounts } = useQuery(() => chargeApi.listDiscounts({ includeInactive: true }))
+const dcOpen = ref(false)
+const dcForm = reactive<DiscountInput>({ name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true })
+function openDc(d?: DiscountRule) {
+  Object.assign(dcForm, d ?? { code: undefined, name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true })
+  saveDc.fieldErrors.value = {}
+  dcOpen.value = true
+}
+const saveDc = useAction(adminApi.saveDiscount, { success: (d) => `已儲存優免類別：${d.name}` })
+async function submitDc() {
+  if (await saveDc.run({ ...dcForm })) dcOpen.value = false
 }
 </script>
 
@@ -108,6 +123,39 @@ async function submitId() {
       </ul>
       <p class="mt-1 text-xs text-slate-500">身分代碼對應健保規定，只能調整，不能新增或更改代碼。</p>
     </section>
+
+    <section>
+      <div class="mb-2 flex items-center">
+        <h3 class="text-sm font-semibold text-slate-700">優免類別</h3>
+        <UButton class="ml-auto" size="sm" variant="secondary" :icon="Plus" @click="openDc()">新增</UButton>
+      </div>
+      <ul class="divide-y divide-slate-100 rounded-md border border-slate-200 text-sm">
+        <li v-for="d in discounts" :key="d.code" :class="['flex items-center gap-3 px-3 py-2', !d.active && 'text-slate-400']">
+          <span class="tabular w-12 text-xs text-slate-500">{{ d.code }}</span>
+          <span class="w-28 font-medium">{{ d.name }}</span>
+          <span class="flex-1">{{ discountSummary(d) }}</span>
+          <UBadge v-if="d.needsReason" tone="yellow">需註明原因</UBadge>
+          <UBadge v-if="!d.active">停用</UBadge>
+          <UButton size="sm" variant="ghost" :icon="Pencil" @click="openDc(d)">編輯</UButton>
+        </li>
+      </ul>
+      <p class="mt-1 text-xs text-slate-500">優免只減掛號費與自費項目：健保部分負擔依規定醫院不能自行減免（法定免部分負擔請用「就醫身分」）。用過的類別只能停用，舊收據仍顯示當時的名稱。</p>
+    </section>
+
+    <UDialog v-model="dcOpen" @submit="submitDc" :title="dcForm.code ? `編輯優免類別：${dcForm.code}` : '新增優免類別'" size="sm">
+      <div class="space-y-3">
+        <UInput v-model="dcForm.name" label="名稱" required placeholder="例：員工、志工" :error="saveDc.fieldErrors.value.name" />
+        <USelect v-model="dcForm.regMode" label="掛號費" :options="[{ label: '全免', value: 'all' }, { label: '減固定金額', value: 'amount' }, { label: '不減', value: 'none' }]" :error="saveDc.fieldErrors.value.regMode" />
+        <UInput v-if="dcForm.regMode === 'amount'" v-model="dcForm.regAmount" label="掛號費減免金額" type="number" min="1" hint="元（不會超過掛號費本身）" :error="saveDc.fieldErrors.value.regAmount" />
+        <UInput v-model="dcForm.selfPayRate" label="自費項目付幾成" type="number" min="0" max="100" hint="80 = 8 折；100 = 不打折" :error="saveDc.fieldErrors.value.selfPayRate" />
+        <UCheckbox v-model="dcForm.needsReason" label="批價時需註明原因" />
+        <UCheckbox v-model="dcForm.active" label="啟用" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="dcOpen = false">取消</UButton>
+        <UButton :loading="saveDc.pending.value" type="submit">儲存</UButton>
+      </template>
+    </UDialog>
 
     <UDialog v-model="idOpen" @submit="submitId" :title="`編輯就醫身分：${idForm.code}`" size="sm">
       <div class="space-y-3">

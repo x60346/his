@@ -9,6 +9,7 @@ import type {
   Charge,
   ClinicSession,
   Department,
+  DiscountRule,
   Dispense,
   Doctor,
   Drug,
@@ -48,6 +49,8 @@ export interface Database {
   identities: Identity[]
   /** 收費參數 */
   billingSettings: BillingSettings
+  /** 優免類別 */
+  discounts: DiscountRule[]
   /** 安全設定（選用：沒有就用預設值） */
   securitySettings?: { idleLockMin: number }
   /** 門診診間 */
@@ -88,7 +91,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 36
+export const SCHEMA_VERSION = 37
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(): Database {

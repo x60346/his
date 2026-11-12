@@ -4,10 +4,11 @@
 //   - 不能停用自己、不能拿掉自己的管理員角色、系統至少要留一個啟用的管理員（否則沒人能再管）
 //   - 有資料在用的東西只能停用、不能刪除；停用前先檢查「已經在用它的資料」
 //   - 稽核紀錄只能查，沒有任何修改或刪除的 API
-import type { BillingSettings, Department, Doctor, Identity, Role, User } from '@/types'
+import type { BillingSettings, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser, failFields } from './http'
+import { checkDiscountRule, discountSummary } from './billing'
 import { passwordProblem } from './password-rules'
 import { rolesProblem } from './role-rules'
 import { toSafeUser, type SafeUser } from './auth'
@@ -331,5 +332,34 @@ export function saveIdentity(input: Identity): Promise<{ identity: Identity; aff
     Object.assign(idt, { name: input.name.trim(), regFee: input.regFee, copayExempt: !!input.copayExempt, selfPay: !!input.selfPay })
     audit('修改就醫身分', `${idt.code} ${idt.name} 掛號費 ${before}→${idt.regFee}`)
     return { identity: idt, affectedPending: pendingChargeCount() }
+  })
+}
+
+// ---------- 優免類別 ----------
+export type DiscountInput = Omit<DiscountRule, 'code'> & { code?: string }
+
+/** 新增或修改優免類別。只能停用、不能刪除（舊收據還記著它）；代碼由系統編 */
+export function saveDiscount(input: DiscountInput): Promise<DiscountRule> {
+  return mutate(() => {
+    requireUser('admin')
+    const old = input.code ? db.discounts.find((x) => x.code === input.code) : undefined
+    if (input.code && !old) fail('找不到優免類別', 'NOT_FOUND')
+    const e = checkDiscountRule(input)
+    const name = input.name?.trim() ?? ''
+    if (!e.name && db.discounts.some((d) => d.name === name && d.code !== old?.code)) e.name = '已有同名的優免類別'
+    failFields(e)
+    const saved: DiscountRule = {
+      code: old?.code ?? `DC${String(db.discounts.length + 1).padStart(2, '0')}`,
+      name,
+      regMode: input.regMode,
+      regAmount: input.regMode === 'amount' ? input.regAmount : 0,
+      selfPayRate: input.selfPayRate,
+      needsReason: !!input.needsReason,
+      active: input.active !== false,
+    }
+    if (old) Object.assign(old, saved)
+    else db.discounts.push(saved)
+    audit(old ? '修改優免類別' : '新增優免類別', `${saved.code} ${saved.name}：${discountSummary(saved)}${saved.needsReason ? '（需註明原因）' : ''}${saved.active ? '' : '（停用）'}`)
+    return saved
   })
 }

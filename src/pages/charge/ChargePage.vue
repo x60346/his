@@ -4,13 +4,13 @@
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { Ban, CreditCard, Printer, Smartphone, Wallet } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
+import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
-import { chargeApi, checkCash, checkRepay } from '@/services'
+import { chargeApi, checkCash, checkRepay, discountSummary } from '@/services'
 import type { DebtItem } from '@/services/charge'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -40,13 +40,31 @@ useRevealOnNarrow(visitId) // 窄螢幕點選後把明細捲進畫面
 watch(date, () => (visitId.value = undefined))
 
 // ---------- 右側資料：一次取得（狀態、試算、收據在同一時間點讀出，不依賴可能過期的清單） ----------
+// 優免（discountCode）也一起帶進同一次查詢——見服務層 getChargeDetail 的說明
+const discountCode = ref('')
+const discountReason = ref('')
 const { data: detail, loading: detailLoading } = useQuery(
-  async () => (visitId.value ? chargeApi.getChargeDetail(visitId.value) : undefined),
-  [visitId],
+  async () => (visitId.value ? chargeApi.getChargeDetail(visitId.value, discountCode.value) : undefined),
+  [visitId, discountCode],
 )
 // 切換病人時，舊病人的資料在新資料回來前不顯示
 const item = computed(() => (detail.value?.visit.id === visitId.value ? detail.value?.visit : undefined))
-const preview = computed(() => (item.value ? detail.value?.preview : undefined))
+// ---------- 優免：選了就請服務層連優免一起重算（金額只在服務層算）；換病人清掉 ----------
+const { data: discountRules } = useQuery(() => chargeApi.listDiscounts())
+watch(visitId, () => {
+  discountCode.value = ''
+  discountReason.value = ''
+})
+const rule = computed(() => discountRules.value?.find((d) => d.code === discountCode.value))
+const discountOptions = computed(() => [{ label: '不優免', value: '' }, ...(discountRules.value ?? []).map((d) => ({ label: `${d.name}（${discountSummary(d)}）`, value: d.code }))])
+const preview = computed(() => {
+  const pv = item.value ? detail.value?.preview : undefined
+  if (!pv) return undefined
+  // 換了優免、新的試算還沒回來時不顯示舊金額（不能用的優免由服務層退回不含優免的試算，並給 discountError）
+  const want = detail.value?.discountError ? undefined : discountCode.value || undefined
+  return pv.discount?.code === want ? pv : undefined
+})
+const lastDiscount = computed(() => (item.value ? detail.value?.lastDiscount : undefined))
 const receipt = computed(() => (item.value ? detail.value?.receipt : undefined))
 
 // ---------- 結帳 ----------
@@ -76,7 +94,7 @@ const change = computed(() => (payMethod.value === 'cash' ? (received.value ?? 0
 // 與服務層同一條規則：不足（沒勾欠款）、非整數、找零異常（多打了 0）都不能收款
 const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value, owe.value) : null))
 const owedAmount = computed(() => (owe.value ? Math.max(0, total.value - (received.value ?? 0)) : 0))
-const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()))
+const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()) && (!rule.value?.needsReason || !!discountReason.value.trim()))
 
 const pay = useAction(chargeApi.pay, { success: (c) => `結帳完成：收據 ${c.receiptNo}` })
 async function onPay() {
@@ -85,6 +103,7 @@ async function onPay() {
     payMethod: payMethod.value,
     received: payMethod.value === 'cash' ? received.value ?? 0 : total.value,
     owe: owe.value ? { reason: oweReason.value } : undefined,
+    discount: discountCode.value ? { code: discountCode.value, reason: discountReason.value } : undefined,
   })
   // 結帳後清單經 dbVersion 自動刷新，右側會切換成收據
 }
@@ -199,6 +218,18 @@ const identityOpen = ref(false)
 
           <UCard title="結帳" class="self-start">
             <div class="space-y-4">
+              <!-- 優免：只減掛號費與自費項目，部分負擔依健保規定不能減 -->
+              <div class="space-y-2">
+                <USelect v-model="discountCode" label="優免" :options="discountOptions" :error="detail?.discountError ?? pay.fieldErrors.value.discount" />
+                <button
+                  v-if="lastDiscount && discountCode !== lastDiscount.code"
+                  type="button"
+                  class="text-xs text-brand-600 underline-offset-2 hover:underline"
+                  @click="discountCode = lastDiscount.code"
+                >上次使用：{{ lastDiscount.name }}（{{ lastDiscount.date.slice(5).replace('-', '/') }}），按此套用</button>
+                <UInput v-if="rule?.needsReason" v-model="discountReason" label="優免原因" required placeholder="例：院長特准、社工轉介" :error="pay.fieldErrors.value.discountReason" />
+                <p v-if="rule" class="text-xs text-slate-500">部分負擔依健保規定不能減免，優免只減掛號費與自費項目。</p>
+              </div>
               <div class="rounded-md bg-slate-900 px-4 py-3 text-right text-white">
                 <div class="text-xs text-slate-400">應收金額</div>
                 <div class="tabular text-3xl font-bold">$ {{ total.toLocaleString() }}</div>

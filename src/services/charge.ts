@@ -1,10 +1,10 @@
 // 批價：試算、結帳、作廢、日結報表。
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
-import type { Charge, ChargeLine, PayMethod, Repayment } from '@/types'
+import type { Charge, ChargeLine, DiscountRule, PayMethod, Repayment } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { calcChargeLines, checkCash, checkRepay, outstandingOf, summarize } from './billing'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
+import { audit, fail, failField, must, mutate, query, requireUser, ServiceError } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 
 export interface ChargeListItem extends VisitView {
@@ -34,22 +34,39 @@ export interface ChargePreview {
   lines: ChargeLine[]
   nhiPoints: number
   patientTotal: number
+  /** 套用的優免（沒有就不給） */
+  discount?: { code: string; name: string; amount: number }
 }
 
-function buildPreview(visitId: string): ChargePreview {
+/** 優免類別（啟用中的才能用；停用的舊收據照樣顯示當時存下的名稱） */
+function usableDiscount(code: string): DiscountRule {
+  const d = db.discounts.find((x) => x.code === code)
+  if (!d) failField('discount', '找不到這個優免類別')
+  if (!d!.active) failField('discount', `「${d!.name}」已停用，不能再使用`)
+  return d!
+}
+
+function buildPreview(visitId: string, discountCode?: string): ChargePreview {
   const v = must(find.visit(visitId), '掛號紀錄')
   const e = must(find.encounterOfVisit(visitId), '病歷')
-  const lines = calcChargeLines(v, e, billingLookup(v.identityCode))
-  return { visit: visitView(v), lines, ...summarize(lines) }
+  const base = calcChargeLines(v, e, billingLookup(v.identityCode))
+  const rule = discountCode ? usableDiscount(discountCode) : undefined
+  const lines = rule ? applyDiscount(base, rule) : base
+  return { visit: visitView(v), lines, ...summarize(lines), ...(rule ? { discount: { code: rule.code, name: rule.name, amount: discountAmountOf(lines) } } : {}) }
 }
 
-/** 試算：畫面上先顯示明細，確認後才結帳 */
-export function previewCharge(visitId: string): Promise<ChargePreview> {
+/** 試算：畫面上先顯示明細，確認後才結帳。選了優免就連優免一起算（金額只在服務層算） */
+export function previewCharge(visitId: string, discountCode?: string): Promise<ChargePreview> {
   return query(() => {
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價')
-    return buildPreview(visitId)
+    return buildPreview(visitId, discountCode || undefined)
   })
+}
+
+/** 優免類別（批價頁選單、管理頁） */
+export function listDiscounts(q: { includeInactive?: boolean } = {}): Promise<DiscountRule[]> {
+  return query(() => db.discounts.filter((d) => q.includeInactive || d.active))
 }
 
 /** 收據號：依「開立那天」流水編號（結帳、收回欠款共用同一個序號） */
@@ -60,6 +77,8 @@ export interface PayInput {
   received: number
   /** 實收不足時，差額記為欠款（只限現金；刷卡、行動支付一定是足額扣款） */
   owe?: { reason: string }
+  /** 優免：類別與原因（需註明原因的類別必填） */
+  discount?: { code: string; reason?: string }
 }
 
 export function pay(visitId: string, input: PayInput): Promise<Charge> {
@@ -68,7 +87,10 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
     const e = must(find.encounterOfVisit(visitId), '病歷')
-    const pv = buildPreview(visitId)
+    const pv = buildPreview(visitId, input.discount?.code || undefined)
+    const rule = input.discount?.code ? usableDiscount(input.discount.code) : undefined
+    const discountReason = input.discount?.reason?.trim()
+    if (rule?.needsReason && !discountReason) failField('discountReason', `「${rule.name}」需註明原因`)
     // 刷卡、行動支付金額必定等於應收
     const received = input.payMethod === 'cash' ? input.received : pv.patientTotal
     const owe = !!input.owe
@@ -86,6 +108,7 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
       receiptNo: nextReceiptNo(v.date),
       cashierId: cashier.id, paidAt: now(), voided: false,
       ...(owe ? { owed, oweReason: input.owe!.reason.trim(), repayments: [] } : {}),
+      ...(rule ? { discount: { code: rule.code, name: rule.name, ...(discountReason ? { reason: discountReason } : {}), amount: pv.discount!.amount } } : {}),
     }
     db.charges.push(charge)
     v.status = 'charged'
@@ -96,7 +119,8 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
         pickupNo: nextCounter(`pickup:${v.date}`), status: 'pending', createdAt: now(),
       })
     }
-    audit('批價結帳', `${charge.receiptNo} ${find.patient(v.patientId)?.name} ${pv.patientTotal} 元${owed ? `（欠 ${owed} 元：${charge.oweReason}）` : ''}`)
+    const discNote = charge.discount ? `（優免：${charge.discount.name} −${charge.discount.amount} 元${charge.discount.reason ? `，${charge.discount.reason}` : ''}）` : ''
+    audit('批價結帳', `${charge.receiptNo} ${find.patient(v.patientId)?.name} ${pv.patientTotal} 元${discNote}${owed ? `（欠 ${owed} 元：${charge.oweReason}）` : ''}`)
     return charge
   })
 }
@@ -196,6 +220,10 @@ export interface ChargeDetail {
   receipt?: ReceiptView
   /** 這個病人尚未還清的欠款（含本次以外的就醫） */
   debts: DebtItem[]
+  /** 選的優免不能用（例：剛被停用）：試算改為不含優免，並說明原因 */
+  discountError?: string
+  /** 這個病人上次用過的優免（類別還啟用中才給）：批價頁提示，按一下才套用 */
+  lastDiscount?: { code: string; name: string; date: string }
 }
 
 /**
@@ -203,17 +231,38 @@ export interface ChargeDetail {
  * 如果頁面先看清單上的狀態、再決定呼叫試算或收據，清單一旦過期（例如剛結帳完、清單還沒刷新），
  * 就會用錯誤的狀態發出請求。在同一個時間點讀狀態並組好資料，就沒有這種不同步。
  */
-export function getChargeDetail(visitId: string): Promise<ChargeDetail> {
+/**
+ * 優免也從這裡帶進來（discountCode），不另外呼叫試算：結帳後資料一起重新整理時，
+ * 另一個試算請求還拿著「待批價」的舊狀態去算，就會跳出「此病人已批價」的錯誤。
+ */
+export function getChargeDetail(visitId: string, discountCode?: string): Promise<ChargeDetail> {
   return query(() => {
     const v = must(find.visit(visitId), '掛號紀錄')
     const charge = db.charges.find((c) => c.visitId === visitId && !c.voided)
+    let preview: ChargePreview | undefined
+    let discountError: string | undefined
+    if (v.status === 'consulted') {
+      try {
+        preview = buildPreview(visitId, discountCode || undefined)
+      } catch (e) {
+        if (!(discountCode && e instanceof ServiceError && e.field === 'discount')) throw e
+        discountError = e.message
+        preview = buildPreview(visitId)
+      }
+    }
     return {
       visit: visitView(v),
-      preview: v.status === 'consulted' ? buildPreview(visitId) : undefined,
+      preview,
+      ...(discountError ? { discountError } : {}),
       receipt: charge
         ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId) }
         : undefined,
       debts: debtsOf(v.patientId),
+      ...(() => {
+        const last = db.charges.filter((c) => c.patientId === v.patientId && !c.voided && c.discount && c.visitId !== v.id).sort((a, b) => b.paidAt.localeCompare(a.paidAt))[0]
+        const rule = last && db.discounts.find((d) => d.code === last.discount!.code && d.active)
+        return last && rule ? { lastDiscount: { code: rule.code, name: rule.name, date: last.paidAt.slice(0, 10) } } : {}
+      })(),
     }
   })
 }
@@ -242,7 +291,10 @@ export interface DailyReport {
   /** 依收費人員：交班時各自對自己的錢箱，所以是實際收到的錢；加總 = 實收 */
   byCashier: { cashierName: string; count: number; repayCount: number; collected: number }[]
   /** 依費用類別（取自收據當時存下的明細，不用現在的設定重算）；加總 = 收入合計 */
-  byFeeType: { reg: number; basicCopay: number; drugCopay: number; selfPay: number }
+  byFeeType: { reg: number; basicCopay: number; drugCopay: number; selfPay: number; discount: number }
+  /** 優免：依類別的筆數與減免金額（正數）；合計 = discountTotal */
+  discounts: { name: string; count: number; amount: number }[]
+  discountTotal: number
   /** 當天看完診、還沒批價的病人（下班前漏收就會出現在這裡）；預估與批價試算同一個計算 */
   unpaid: { visitId: string; patientName: string; chartNo: string; deptName: string; doctorName: string; estimate: number }[]
 }
@@ -269,7 +321,8 @@ export function dailyReport(date: string): Promise<DailyReport> {
       cashier.set(name, row)
       return row
     }
-    const byFeeType = { reg: 0, basicCopay: 0, drugCopay: 0, selfPay: 0 }
+    const byFeeType = { reg: 0, basicCopay: 0, drugCopay: 0, selfPay: 0, discount: 0 }
+    const disc = new Map<string, { name: string; count: number; amount: number }>()
     for (const c of valid) {
       const row = cashierRow(c.cashierId)
       row.count++
@@ -281,8 +334,17 @@ export function dailyReport(date: string): Promise<DailyReport> {
       byFeeType.reg += reg
       byFeeType.basicCopay += basic
       byFeeType.drugCopay += drug
-      // 自費（含自費身分的診察費）用「收據總額 − 其他三類」：收據總額四捨五入過，這樣四類加總一定等於收入合計
-      byFeeType.selfPay += c.patientTotal - reg - basic - drug
+      // 優免是負數列（明細裡記下的，不用現在的類別設定重算）
+      const off = sum('discount')
+      byFeeType.discount += off
+      if (c.discount) {
+        const d = disc.get(c.discount.name) ?? { name: c.discount.name, count: 0, amount: 0 }
+        d.count++
+        d.amount += c.discount.amount
+        disc.set(d.name, d)
+      }
+      // 自費（含自費身分的診察費）用「收據總額 − 其他類」：收據總額四捨五入過，這樣各類加總一定等於收入合計
+      byFeeType.selfPay += c.patientTotal - reg - basic - drug - off
     }
     // 收回欠款：算在收回那天（原收據可能是更早的日子）。作廢的收據不會有收回紀錄（有收回就不能作廢）
     const repayments: DailyReport['repayments'] = []
@@ -314,6 +376,8 @@ export function dailyReport(date: string): Promise<DailyReport> {
       voidedTotal: all.filter((c) => c.voided).reduce((s, c) => s + c.patientTotal, 0),
       byCashier: [...cashier.values()].sort((a, b) => b.collected - a.collected),
       byFeeType,
+      discounts: [...disc.values()].sort((a, b) => b.amount - a.amount),
+      discountTotal: [...disc.values()].reduce((s, d) => s + d.amount, 0),
       unpaid,
       patientTotal,
       newDebt,

@@ -38,6 +38,11 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
       <div><div class="text-xs text-slate-500">找零</div><div class="tabular font-medium">{{ receipt.change.toLocaleString() }}</div></div>
     </div>
 
+    <div v-if="receipt.discount" class="mt-2 flex justify-between rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+      <span>優免：{{ receipt.discount.name }}<template v-if="receipt.discount.reason">（{{ receipt.discount.reason }}）</template></span>
+      <span class="tabular font-semibold">−{{ receipt.discount.amount.toLocaleString() }}</span>
+    </div>
+
     <!-- 記欠款的收據：印出欠多少，病人帶回去也知道下次要補多少 -->
     <div v-if="receipt.owed" class="mt-2 flex justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
       <span>欠款（{{ receipt.oweReason }}）</span>

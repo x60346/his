@@ -951,6 +951,7 @@ export function buildSeed(): Database {
     doctors: structuredClone(codes.doctors),
     identities: structuredClone(codes.identities),
     billingSettings: structuredClone(codes.billingSettings),
+    discounts: structuredClone(codes.discounts),
     rooms: rooms.sort((a, b) => a.roomNo.localeCompare(b.roomNo)),
     weeklySlots,
     sessions,

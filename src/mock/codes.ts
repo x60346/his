@@ -2,6 +2,7 @@
 // 皆為展示用資料：藥品代碼、醫令點數為近似值，不代表現行健保給付標準。
 import type {
   BillingSettings,
+  DiscountRule,
   Department,
   Doctor,
   Drug, DrugTiming,
@@ -45,6 +46,17 @@ export const identities: Identity[] = [
   { code: '05', name: '身心障礙', regFee: 50, copayExempt: false, selfPay: false },
   { code: '06', name: '兒童（未滿 3 歲）', regFee: 100, copayExempt: true, selfPay: false },
   { code: '09', name: '自費', regFee: 200, copayExempt: false, selfPay: true },
+]
+
+/**
+ * 優免類別（展示用）。低收入戶不在這裡：它是健保的「就醫身分」（掛號費 0、免部分負擔），不是院內優免。
+ */
+export const discounts: DiscountRule[] = [
+  { code: 'DC01', name: '員工', regMode: 'all', regAmount: 0, selfPayRate: 80, needsReason: false, active: true },
+  { code: 'DC02', name: '員工眷屬', regMode: 'amount', regAmount: 50, selfPayRate: 90, needsReason: false, active: true },
+  { code: 'DC03', name: '志工', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true },
+  { code: 'DC04', name: '社福個案', regMode: 'all', regAmount: 0, selfPayRate: 50, needsReason: true, active: true },
+  { code: 'DC05', name: '專案減免', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: true, active: true },
 ]
 
 /** 收費參數預設值（展示用的簡化規則） */

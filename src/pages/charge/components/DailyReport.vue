@@ -35,6 +35,7 @@ const feeTypes = [
   { key: 'basicCopay', label: '基本部分負擔' },
   { key: 'drugCopay', label: '藥品部分負擔' },
   { key: 'selfPay', label: '自費項目（含自費診察費）' },
+  { key: 'discount', label: '優免減免' },
 ] as const
 type RepayRow = DailyReport['repayments'][number]
 const repayColumns: Column<RepayRow>[] = [
@@ -111,10 +112,17 @@ const print = async () => {
           <ul class="tabular space-y-2 text-sm">
             <li v-for="f in feeTypes" :key="f.key" class="flex justify-between border-b border-slate-100 pb-1.5">
               <span class="text-slate-600">{{ f.label }}</span>
-              <span class="font-medium text-slate-800">{{ money(r.byFeeType[f.key]) }}</span>
+              <span class="font-medium text-slate-800">{{ r.byFeeType[f.key] < 0 ? `−${money(-r.byFeeType[f.key])}` : money(r.byFeeType[f.key]) }}</span>
             </li>
             <li class="flex justify-between font-semibold"><span>應收合計</span><span>{{ money(r.patientTotal) }}</span></li>
           </ul>
+          <!-- 優免依類別：誰被減了多少，月底對帳、稽核用 -->
+          <div v-if="r.discounts.length" class="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm">
+            <div class="mb-1 text-xs font-medium text-emerald-800">優免明細（合計 {{ money(r.discountTotal) }}）</div>
+            <div v-for="d in r.discounts" :key="d.name" class="tabular flex justify-between text-emerald-900">
+              <span>{{ d.name }}<span class="ml-1 text-xs text-emerald-700">{{ d.count }} 筆</span></span><span>{{ money(d.amount) }}</span>
+            </div>
+          </div>
         </UCard>
         <UCard title="依收費人員" subtitle="交班時各自核對錢箱（實際收到的錢）">
           <ul class="tabular space-y-2 text-sm">

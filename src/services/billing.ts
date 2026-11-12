@@ -7,7 +7,7 @@
 //      （免部分負擔身分、慢性病連續處方調劑免收）
 //   4. 診察費、健保藥費、健保醫令列為健保申報點數；自費項目由病患全額自付
 //   5. 自費身分：所有項目以自費價計算，不申報健保
-import type { BillingSettings, Charge, ChargeLine, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
+import type { BillingSettings, Charge, ChargeLine, DiscountRule, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
 
 export const CONSULT_PROC_ID = 'P001'
 
@@ -129,6 +129,51 @@ export function checkRepay(outstanding: number, amount: number | undefined): str
   if (!Number.isInteger(amount) || amount <= 0) return '收回金額需為大於 0 的整數'
   if (amount > outstanding) return `超過尚欠金額 ${outstanding} 元`
   return null
+}
+
+// ---------- 優免 ----------
+/** 「8 折」「8.5 折」 */
+export const rateText = (rate: number) => `${rate / 10} 折`
+
+/** 給人看的優免內容，例：「掛號費全免・自費 8 折」 */
+export function discountSummary(d: Pick<DiscountRule, 'regMode' | 'regAmount' | 'selfPayRate'>): string {
+  const reg = d.regMode === 'all' ? '掛號費全免' : d.regMode === 'amount' ? `掛號費減 ${d.regAmount} 元` : ''
+  const self = d.selfPayRate < 100 ? `自費 ${rateText(d.selfPayRate)}` : ''
+  return [reg, self].filter(Boolean).join('・') || '不減免'
+}
+
+/** 優免可以打折的自費項目：自費藥品與醫令、自費身分的診察費 */
+const isSelfPayLine = (l: ChargeLine) => l.patientPay && (l.kind === 'self' || l.kind === 'consult')
+
+/**
+ * 套用優免：在明細後面加上負數的優免列（收據、日結看得到減了什麼）。
+ *   - 掛號費：全免或減固定金額（不超過掛號費本身）
+ *   - 自費項目：打折，減免金額四捨五入到元
+ *   - 部分負擔（基本、藥品）一律不減：健保法禁止醫院自行減免部分負擔；健保申報點數也不受影響
+ */
+export function applyDiscount(lines: ChargeLine[], d: DiscountRule): ChargeLine[] {
+  const out = [...lines]
+  const reg = lines.filter((l) => l.patientPay && l.kind === 'reg').reduce((s, l) => s + l.amount, 0)
+  const regOff = d.regMode === 'all' ? reg : d.regMode === 'amount' ? Math.min(d.regAmount, reg) : 0
+  if (regOff > 0) out.push({ kind: 'discount', name: `優免：${d.name}（掛號費）`, qty: 1, unitPrice: -regOff, amount: -regOff, patientPay: true })
+  const self = lines.filter(isSelfPayLine).reduce((s, l) => s + l.amount, 0)
+  const selfOff = Math.min(Math.round((self * (100 - d.selfPayRate)) / 100), Math.round(self))
+  if (selfOff > 0) out.push({ kind: 'discount', name: `優免：${d.name}（自費項目 ${rateText(d.selfPayRate)}）`, qty: 1, unitPrice: -selfOff, amount: -selfOff, patientPay: true })
+  return out
+}
+
+/** 優免減免了多少（正數） */
+export const discountAmountOf = (lines: ChargeLine[]) => -lines.filter((l) => l.kind === 'discount').reduce((s, l) => s + l.amount, 0)
+
+/** 優免類別的欄位檢查（服務層與管理頁共用）；回傳欄位 → 訊息 */
+export function checkDiscountRule(d: Partial<DiscountRule>): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!d.name?.trim()) e.name = '請輸入名稱'
+  if (!['none', 'all', 'amount'].includes(d.regMode ?? '')) e.regMode = '請選擇掛號費減免方式'
+  if (d.regMode === 'amount' && !(Number.isInteger(d.regAmount) && d.regAmount! >= 1 && d.regAmount! <= 2000)) e.regAmount = '減免金額需為 1–2000 的整數'
+  if (!(Number.isInteger(d.selfPayRate) && d.selfPayRate! >= 0 && d.selfPayRate! <= 100)) e.selfPayRate = '自費付幾成需為 0–100 的整數（80 = 8 折，100 = 不打折）'
+  else if (d.regMode === 'none' && d.selfPayRate === 100) e.selfPayRate = '掛號費不減、自費也不打折，這個優免沒有作用'
+  return e
 }
 
 export function summarize(lines: ChargeLine[]): { nhiPoints: number; patientTotal: number } {

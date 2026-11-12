@@ -1933,6 +1933,81 @@ try {
     ok(ed.includes('applyDaysToAll(') && opd.includes('_qtyStale: _s'), '處方表用 applyDaysToAll；送出前移除畫面用的旗標')
   }
 
+  // 優免：只減掛號費與自費項目，部分負擔不減；需原因的要填；停用的不能用；日結有優免合計
+  console.log('\n[優免]')
+  {
+    const B = await load('/src/services/billing.ts')
+    const lines = [
+      { kind: 'reg', name: '掛號費', qty: 1, unitPrice: 150, amount: 150, patientPay: true },
+      { kind: 'consult', name: '診察費', qty: 1, unitPrice: 300, amount: 300, patientPay: false },
+      { kind: 'drug', name: '藥', qty: 10, unitPrice: 5, amount: 50, patientPay: false },
+      { kind: 'self', name: '自費藥', qty: 1, unitPrice: 155, amount: 155, patientPay: true },
+      { kind: 'copay-basic', name: '基本部分負擔', qty: 1, unitPrice: 80, amount: 80, patientPay: true },
+      { kind: 'copay-drug', name: '藥品部分負擔', qty: 1, unitPrice: 20, amount: 20, patientPay: true },
+    ]
+    const staff = { code: 'X1', name: '員工', regMode: 'all', regAmount: 0, selfPayRate: 80, needsReason: false, active: true }
+    const a = B.applyDiscount(lines, staff)
+    const sa = B.summarize(a)
+    const s0 = B.summarize(lines)
+    ok(B.discountAmountOf(a) === 150 + 31 && sa.patientTotal === s0.patientTotal - 181, `員工：掛號費全免 −150、自費 155 打 8 折 −31（四捨五入）→ 應收 ${s0.patientTotal} → ${sa.patientTotal}`)
+    ok(a.filter((l) => l.kind.startsWith('copay')).reduce((n, l) => n + l.amount, 0) === 100 && sa.nhiPoints === s0.nhiPoints, '部分負擔一律不減（80＋20 照收），健保申報點數不變')
+    const fam = B.applyDiscount([{ ...lines[0], amount: 30, unitPrice: 30 }, lines[3]], { ...staff, regMode: 'amount', regAmount: 50, selfPayRate: 90 })
+    ok(fam.find((l) => l.name.includes('掛號費') && l.kind === 'discount').amount === -30 && B.discountAmountOf(fam) === 30 + 16, '減固定金額不超過掛號費本身（掛號費 30、減 50 → 只減 30）；9 折 155 → −16')
+    const selfId = B.applyDiscount([{ kind: 'consult', name: '診察費（自費）', qty: 1, unitPrice: 500, amount: 500, patientPay: true }], { ...staff, regMode: 'none', selfPayRate: 0 })
+    ok(B.discountAmountOf(selfId) === 500 && B.summarize(selfId).patientTotal === 0, '自費身分的診察費算自費項目；0 成（全免）減到 0，不會變負數')
+    ok(B.checkDiscountRule({ name: '無效', regMode: 'none', selfPayRate: 100 }).selfPayRate && B.checkDiscountRule({ name: 'x', regMode: 'amount', regAmount: 0, selfPayRate: 100 }).regAmount && B.checkDiscountRule({ name: '', regMode: 'all', selfPayRate: 120 }).name,
+      '類別檢查：沒作用的優免、減 0 元、名稱空白、超過 100 成都擋')
+
+    await as('clerk01')
+    const visitP = dbm.db.visits.find((v) => v.date === T && v.status === 'consulted' && !v.refillOf)
+    ok(!!visitP, '今天有待批價的病人')
+    const base = await api.chargeApi.previewCharge(visitP.id)
+    const pv = await api.chargeApi.previewCharge(visitP.id, 'DC01')
+    ok(pv.discount?.name === '員工' && pv.patientTotal === base.patientTotal - pv.discount.amount && pv.nhiPoints === base.nhiPoints, `試算套用員工優免：${base.patientTotal} → ${pv.patientTotal}（−${pv.discount?.amount}）`)
+    try {
+      await api.chargeApi.pay(visitP.id, { payMethod: 'cash', received: 9999, discount: { code: 'DC05' } })
+      ok(false, '專案減免沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'discountReason', `專案減免沒寫原因 → 「${e.message}」`)
+    }
+    await expectError(() => api.adminApi.saveDiscount({ name: '櫃台自己加', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true }), '櫃台新增優免類別')
+    await as('admin')
+    try {
+      await api.adminApi.saveDiscount({ name: '員工', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true })
+      ok(false, '同名應被擋下')
+    } catch (e) {
+      ok(e.fields?.name, `新增同名優免 → 「${e.fields?.name}」`)
+    }
+    const dc3 = dbm.db.discounts.find((d) => d.code === 'DC03')
+    await api.adminApi.saveDiscount({ ...dc3, active: false })
+    await as('clerk01')
+    try {
+      await api.chargeApi.previewCharge(visitP.id, 'DC03')
+      ok(false, '停用的優免應被擋下')
+    } catch (e) {
+      ok(e.field === 'discount', `停用的優免 → 「${e.message}」`)
+    }
+    ok(!(await api.chargeApi.listDiscounts()).some((d) => d.code === 'DC03'), '批價頁選單不列停用的類別')
+    const dd = await api.chargeApi.getChargeDetail(visitP.id, 'DC03')
+    ok(dd.discountError?.includes('已停用') && dd.preview && !dd.preview.discount && dd.preview.patientTotal === base.patientTotal, '批價頁選的優免剛被停用：試算退回不含優免，並說明原因（整頁不會壞掉）')
+    await as('admin')
+    await api.adminApi.saveDiscount({ ...dc3, active: true })
+    await as('clerk01')
+    const charge = await api.chargeApi.pay(visitP.id, { payMethod: 'cash', received: pv.patientTotal, discount: { code: 'DC01' } })
+    ok(charge.patientTotal === pv.patientTotal && charge.discount?.amount === pv.discount.amount && charge.lines.some((l) => l.kind === 'discount') && dbm.db.auditLogs[0].detail.includes('優免：員工'),
+      `結帳：收據記下優免（員工 −${charge.discount?.amount}）、明細有優免列、稽核有紀錄`)
+    const other = dbm.db.visits.find((v) => v.patientId === visitP.patientId && v.id !== visitP.id)
+    if (other) ok((await api.chargeApi.getChargeDetail(other.id)).lastDiscount?.code === 'DC01', '同一位病人下次批價：提示「上次使用：員工」')
+    const after = await api.chargeApi.getChargeDetail(visitP.id, 'DC01')
+    ok(after.receipt?.discount?.code === 'DC01' && !after.preview && !after.discountError, '結帳後頁面仍帶著優免重新整理：拿到收據、不會報「已批價」錯誤')
+    const rep = await api.chargeApi.dailyReport(T)
+    const valid = dbm.db.charges.filter((c) => c.paidAt.startsWith(T) && !c.voided)
+    const fee = rep.byFeeType
+    ok(rep.discountTotal === valid.reduce((n, c) => n + (c.discount?.amount ?? 0), 0) && rep.discounts.some((d) => d.name === '員工') && fee.discount === -rep.discountTotal,
+      `日結：優免合計 ${rep.discountTotal} 元＝各收據減免加總，依類別列出`)
+    ok(fee.reg + fee.basicCopay + fee.drugCopay + fee.selfPay + fee.discount === rep.patientTotal, '日結依費用類別（含優免負數）加總＝應收合計')
+  }
+
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案
   console.log('\n[補貨申請（U25）]')
   {

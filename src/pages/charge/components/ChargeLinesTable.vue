@@ -21,7 +21,7 @@ const isCopay = (l: ChargeLine) => l.kind === 'copay-basic' || l.kind === 'copay
       </tr>
     </thead>
     <tbody class="tabular">
-      <tr v-for="(l, i) in lines" :key="i" :class="['border-b border-slate-100', isCopay(l) && 'bg-amber-50/50']">
+      <tr v-for="(l, i) in lines" :key="i" :class="['border-b border-slate-100', isCopay(l) && 'bg-amber-50/50', l.kind === 'discount' && 'bg-emerald-50/60 text-emerald-800']">
         <td class="py-1.5 text-slate-800">{{ l.name }}</td>
         <td class="py-1.5 text-right text-slate-600">{{ fmt(l.qty) }}</td>
         <td class="py-1.5 text-right text-slate-600">{{ fmt(l.unitPrice) }}</td>

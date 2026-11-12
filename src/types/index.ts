@@ -264,7 +264,8 @@ export interface Encounter {
 }
 
 export interface ChargeLine {
-  kind: 'reg' | 'copay-basic' | 'copay-drug' | 'drug' | 'procedure' | 'consult' | 'self'
+  /** discount：優免（負數，病人自付欄） */
+  kind: 'reg' | 'copay-basic' | 'copay-drug' | 'drug' | 'procedure' | 'consult' | 'self' | 'discount'
   name: string
   qty: number
   /** 單價（元或點） */
@@ -299,6 +300,26 @@ export interface Charge {
   oweReason?: string
   /** 收回欠款紀錄：可分次，每次一張收據號，日結算在收回那天 */
   repayments?: Repayment[]
+  /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列） */
+  discount?: { code: string; name: string; reason?: string; amount: number }
+}
+
+/**
+ * 優免類別（管理員維護）：只能減掛號費與自費項目。
+ * 健保部分負擔醫院不能自行減免（健保法禁止以減免部分負擔招攬病人；法定免部分負擔由「就醫身分」處理）。
+ */
+export interface DiscountRule {
+  code: string
+  name: string
+  /** 掛號費：不減／全免／減固定金額 */
+  regMode: 'none' | 'all' | 'amount'
+  /** regMode = amount 時減多少元 */
+  regAmount: number
+  /** 自費項目付幾成（百分比）：80 = 8 折，100 = 不打折 */
+  selfPayRate: number
+  /** 需註明原因（例：專案減免） */
+  needsReason: boolean
+  active: boolean
 }
 
 /** 收回欠款（一次） */
