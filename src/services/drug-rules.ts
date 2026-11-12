@@ -57,3 +57,15 @@ export function timingText(timing: DrugTiming | undefined, freq: string, route: 
   if (route !== 'PO' || FREQ_SAYS_WHEN.includes(freq)) return ''
   return (short ? TIMING_SHORT : TIMING_LABEL)[timing ?? 'ANY']
 }
+
+// ---------- 藥品搜尋 ----------
+/**
+ * 關鍵字是否符合這種藥：代碼、英文藥名、學名、健保碼、中文名、別名、作用。
+ * 醫師開藥、住院醫囑、藥品庫存、主檔清單都用這一份——以前各自比對英文欄位，打「普拿疼」「降血壓」都找不到。
+ * 比對「作用」：打「降血壓」列出所有降血壓藥。
+ */
+export function matchesDrug(d: Pick<Drug, 'id' | 'name' | 'nameZh' | 'generic' | 'nhiCode'> & Partial<Pick<Drug, 'aliases' | 'indication'>>, keyword: string): boolean {
+  const kw = keyword.trim().toLowerCase()
+  if (!kw) return true
+  return [d.id, d.name, d.nameZh, d.generic, d.nhiCode, d.indication, ...(d.aliases ?? [])].some((x) => (x ?? '').toLowerCase().includes(kw))
+}

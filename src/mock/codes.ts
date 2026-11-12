@@ -161,7 +161,7 @@ const drug = (
   defaultRoute: string,
   highAlert = false,
   doseUnit?: string,
-): Omit<Drug, 'indication' | 'warning' | 'timing'> => ({
+): Omit<Drug, 'indication' | 'warning' | 'timing' | 'nameZh'> => ({
   id, nhiCode, name, generic, spec, unit, category, nhiPrice, selfPrice, stock,
   safetyStock: Math.max(50, Math.round(stock * 0.15)), defaultDose, defaultFreq, defaultRoute, highAlert, active: true,
   ...(doseUnit ? { doseUnit } : {}),
@@ -269,8 +269,57 @@ const timingOf: Record<string, DrugTiming> = {
   M027: 'EMPTY',
 }
 
+/**
+ * 中文名與搜尋別名。中文名用通用的中文學名（展示用譯名，不是衛福部核定的正式譯名），不用商品名；
+ * 別名只用來搜尋（大家習慣打的叫法），不印出。
+ */
+const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
+  M001: ['乙醯胺酚', ['普拿疼']],
+  M002: ['布洛芬'],
+  M003: ['安莫西林'],
+  M004: ['安莫西林／克拉維酸'],
+  M005: ['頭孢力新'],
+  M006: ['阿奇黴素'],
+  M007: ['西替利嗪'],
+  M008: ['氯雷他定'],
+  M009: ['右美沙芬'],
+  M010: ['氨溴索'],
+  M011: ['偽麻黃鹼'],
+  M012: ['胺氯地平'],
+  M013: ['洛沙坦'],
+  M014: ['比索洛爾'],
+  M015: ['二甲雙胍', ['美福明']],
+  M016: ['格列美脲'],
+  M017: ['西格列汀'],
+  M018: ['阿托伐他汀'],
+  M019: ['阿斯匹靈', ['阿司匹林']],
+  M020: ['氯吡格雷'],
+  M021: ['華法林'],
+  M022: ['奧美拉唑'],
+  M023: ['法莫替丁'],
+  M024: ['氧化鎂', ['軟便劑']],
+  M025: ['多潘立酮'],
+  M026: ['洛哌丁胺'],
+  M027: ['左旋甲狀腺素'],
+  M028: ['唑吡坦', ['安眠藥']],
+  M029: ['阿普唑侖'],
+  M030: ['塞來昔布'],
+  M031: ['曲馬多'],
+  M032: ['雙氯芬酸凝膠', ['痠痛凝膠']],
+  M033: ['倍他美松乳膏', ['類固醇藥膏']],
+  M034: ['慶大黴素眼藥水'],
+  M035: ['沙丁胺醇吸入劑', ['氣喘噴劑']],
+  M036: ['頭孢曲松注射劑'],
+  M037: ['生理食鹽水', ['點滴', 'NS']],
+  M038: ['甘精胰島素'],
+  M039: ['嗎啡注射劑'],
+  M040: ['氯化鉀注射劑', ['KCl']],
+}
+
 export const drugs: Drug[] = drugBase.map((d) => ({
   ...d,
+  nameZh: zhOf[d.id][0],
+  ...(zhOf[d.id][1] ? { aliases: zhOf[d.id][1] } : {}),
   indication: labelInfo[d.id][0],
   warning: labelInfo[d.id][1],
   timing: d.category === '口服' ? timingOf[d.id] ?? 'ANY' : 'ANY',

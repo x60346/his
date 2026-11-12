@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { UTabs, type Column } from '@/components/ui'
 import MasterTable, { type FieldDef } from './MasterTable.vue'
-import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, TIMING_LABEL } from '@/services'
+import { masterApi, preventApi, ServiceError, DRUG_TIMINGS, matchesDrug, TIMING_LABEL } from '@/services'
 import { useUi } from '@/stores/ui'
 import { Cancelled, useQuery } from '@/composables/useService'
 import type { Drug, IcdCode, PreventItem, Procedure } from '@/types'
@@ -50,7 +50,9 @@ const drugColumns: Column<Drug>[] = [
 ]
 const drugFields = computed<FieldDef[]>(() => [
   { key: 'name', label: '藥名', required: true },
+  { key: 'nameZh', label: '中文名', required: true, hint: '印在藥袋、顯示在開藥選單，例：乙醯胺酚' },
   { key: 'generic', label: '學名' },
+  { key: 'aliases', label: '搜尋別名（選填）', type: 'list', hint: '只用來搜尋、不印出，例：普拿疼；' },
   { key: 'nhiCode', label: '健保代碼' },
   { key: 'spec', label: '規格', hint: '例：500 mg/tab' },
   { key: 'category', label: '劑型', type: 'select', required: true, options: ['口服', '外用', '注射', '吸入', '眼用'] },
@@ -69,7 +71,7 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
 // 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
-const blankDrug = () => ({ name: '', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, timing: '', indication: '', warning: '', active: true })
+const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, timing: '', indication: '', warning: '', active: true })
 
 // ---------- 醫令 ----------
 const procColumns: Column<Procedure>[] = [
@@ -138,13 +140,14 @@ const tabs = computed(() => [
       :fields="drugFields"
       :row-key="(d) => d.id"
       :search-keys="['id', 'name', 'generic', 'nhiCode']"
+      :match="matchesDrug"
       :blank="blankDrug"
       :save="saveDrug"
       note="庫存不在這裡修改：請到「藥品庫存」以進貨、盤點的方式調整，每一筆增減才會留下紀錄。"
     >
       <template #cell-name="{ row }">
         <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span>
-        <div class="text-xs text-slate-500">{{ row.generic }}・{{ row.spec }}</div>
+        <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.generic }}・{{ row.spec }}</div>
       </template>
     </MasterTable>
     <MasterTable

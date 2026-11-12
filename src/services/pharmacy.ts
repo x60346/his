@@ -15,6 +15,8 @@ import { find, nameOf, patientBrief, type PatientBrief } from './views'
 export interface DispenseItem {
   drugId: string
   drugName: string
+  /** 中文名（藥袋、處方表） */
+  drugNameZh: string
   spec: string
   /** 調劑單位（總量用） */
   unit: string
@@ -67,6 +69,7 @@ function dispenseView(d: Dispense): DispenseView {
     return {
       drugId: m.drugId,
       drugName: drug?.name ?? m.drugId,
+      drugNameZh: drug?.nameZh ?? '',
       spec: drug?.spec ?? '',
       unit: drug?.unit ?? '',
       doseUnit: drug ? doseUnitOf(drug) : '',

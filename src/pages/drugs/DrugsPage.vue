@@ -72,7 +72,7 @@ const shown = computed(() => rows.value?.length ?? 0)
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_32rem]">
       <UCard :padded="false" class="self-start">
         <div class="flex flex-wrap items-end gap-3 border-b border-slate-100 p-3">
-          <UInput v-model="keyword" placeholder="藥名、學名、代碼" class="w-56" />
+          <div class="w-64"><UInput v-model="keyword" placeholder="藥名、中文名、作用、代碼" /></div>
           <USelect v-model="category" :options="[{ label: '全部劑型', value: '' }, ...categories]" class="w-32" />
           <UCheckbox v-model="attentionOnly" label="只看需處理（缺貨、偏低、效期）" class="pb-2" />
           <span class="ml-auto flex items-center gap-2 pb-2 text-xs text-slate-500">
@@ -96,7 +96,7 @@ const shown = computed(() => rows.value?.length ?? 0)
         >
           <template #cell-name="{ row }">
             <div class="font-medium text-slate-800">{{ row.name }}<UBadge v-if="row.highAlert" tone="purple" class="ml-1">高警訊</UBadge></div>
-            <div class="text-xs text-slate-500">{{ row.id }}・{{ row.spec }}・{{ row.category }}</div>
+            <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.spec }}・{{ row.category }}</div>
           </template>
           <template #cell-usable="{ row }">
             <span :class="['tabular font-medium', row.status === 'out' ? 'text-red-600' : row.status === 'low' ? 'text-amber-700' : 'text-slate-800']">{{ row.usable }}</span>

@@ -1542,7 +1542,7 @@ try {
 
     // I1：同名藥要確認、價格必須大於 0
     {
-      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '測試用', warning: '測試用', timing: 'PC', active: true }
+      const base = { generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: '測試用', warning: '測試用', timing: 'PC', nameZh: '測試藥', active: true }
       const m001 = dbm.db.drugs.find((d) => d.id === 'M001')
       await expectError(() => M.saveDrug({ ...base, name: '  acetaminophen   500MG ' }), '新增與 M001 同名的藥（大小寫、空白不同）未確認')
       await expectError(() => M.saveDrug({ ...base, name: freeDrug.name }), `新增與停用中的 ${freeDrug.id} 同名的藥未確認`)
@@ -1810,7 +1810,7 @@ try {
     ok(missing.length === 0, `${dbm.db.drugs.length} 種藥都有作用與警語（缺 ${missing.map((d) => d.id).join('、') || 0}）`)
     await as('admin')
     try {
-      await api.masterApi.saveDrug({ name: '測試新藥 10mg', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: ' ', warning: '', timing: 'PC', active: true })
+      await api.masterApi.saveDrug({ name: '測試新藥 10mg', generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: 2, selfPrice: 5, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, indication: ' ', warning: '', timing: 'PC', nameZh: '測試新藥', active: true })
       ok(false, '新增藥品沒填作用、警語應被擋下')
     } catch (e) {
       ok(e.fields?.indication && e.fields?.warning, `新增藥品沒填作用、警語 → 兩欄一次標出（${Object.values(e.fields ?? {}).join('；')}）`)
@@ -1866,6 +1866,42 @@ try {
     const { readFileSync } = await import('node:fs')
     const bag = readFileSync('src/pages/pharmacy/components/DrugBagLabels.vue', 'utf8')
     ok(bag.includes('it.timingText') && !bag.includes("'飯後服用'"), '藥袋元件用服務層算好的時機，不再自己寫死「飯後服用」')
+  }
+
+  // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
+  console.log('\n[藥品中文名]')
+  {
+    const dr = await load('/src/services/drug-rules.ts')
+    const seedDrugs = dbm.db.drugs.filter((d) => /^M0[0-4]\d$/.test(d.id))
+    ok(seedDrugs.every((d) => d.nameZh?.trim()), `${seedDrugs.length} 種藥都有中文名`)
+    await as('ph01')
+    const names = async (kw) => (await api.masterApi.listDrugs({ keyword: kw })).map((d) => d.id)
+    const inv = async (kw) => (await api.inventoryApi.listInventory({ keyword: kw })).map((d) => d.id).sort()
+    ok((await names('普拿疼')).includes('M001') && (await names('乙醯胺酚')).includes('M001'), '搜「普拿疼」（別名）、「乙醯胺酚」（中文名）都找到 Acetaminophen')
+    const bp = await names('降血壓')
+    ok(['M012', 'M013', 'M014'].every((id) => bp.includes(id)), `搜「降血壓」（作用）列出 ${bp.length} 種降血壓藥`)
+    ok((await names('acetaminophen')).includes('M001') && (await names('AC00012100')).includes('M012'), '英文藥名（不分大小寫）、健保碼照樣搜得到')
+    let same = true
+    for (const kw of ['普拿疼', '降血壓', '胰島素', 'metformin', '點滴']) same &&= JSON.stringify((await names(kw)).sort()) === JSON.stringify(await inv(kw))
+    ok(same, '開藥選單與藥品庫存頁的搜尋結果一致（同一個 matchesDrug）')
+    ok(dr.matchesDrug({ id: 'X', name: 'A', nameZh: '甲', generic: '', nhiCode: '' }, '  ') && !dr.matchesDrug({ id: 'X', name: 'A', nameZh: '甲', generic: '', nhiCode: '' }, '乙'), '空白關鍵字＝全部；不相干的字不符合')
+    await as('admin')
+    const m1 = dbm.db.drugs.find((d) => d.id === 'M001')
+    try {
+      await api.masterApi.saveDrug({ ...m1, nameZh: ' ' })
+      ok(false, '沒填中文名應被擋下')
+    } catch (e) {
+      ok(e.fields?.nameZh || e.field === 'nameZh', `主檔沒填中文名 → 「${e.fields?.nameZh ?? e.message}」`)
+    }
+    const saved = await api.masterApi.saveDrug({ ...m1, aliases: [' 普拿疼 ', '', '普拿疼', '止痛藥'] })
+    ok(JSON.stringify(saved.aliases) === '["普拿疼","止痛藥"]', `別名去空白、去空項、去重複：${JSON.stringify(saved.aliases)}`)
+    await api.masterApi.saveDrug({ ...m1 })
+    await as('ph01')
+    const pend = dbm.db.dispenses.find((d) => d.status !== 'dispensed')
+    const v = await api.pharmacyApi.getDispense(pend.id)
+    ok(v.items.every((it) => it.drugNameZh === dbm.db.drugs.find((d) => d.id === it.drugId).nameZh), `調劑單帶出中文名（${v.items.map((it) => it.drugNameZh).join('、')}）`)
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/pharmacy/components/DrugBagLabels.vue', 'utf8').includes('it.drugNameZh'), '藥袋印出中文名')
   }
 
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案

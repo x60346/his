@@ -341,6 +341,10 @@ export interface Drug {
   /** 健保藥品代碼 */
   nhiCode: string
   name: string
+  /** 中文名（通用的中文學名，印在藥袋、顯示在選單；展示用譯名，非官方核定） */
+  nameZh: string
+  /** 別名：只用來搜尋、不印出（大家習慣打的叫法，例：普拿疼、美福明、點滴） */
+  aliases?: string[]
   generic: string
   spec: string
   unit: string

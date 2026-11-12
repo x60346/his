@@ -78,7 +78,7 @@ async function onScrap() {
           <h2 class="flex flex-wrap items-center gap-2 text-lg font-bold text-slate-800">
             {{ row.name }}<UBadge v-if="row.highAlert" tone="purple">高警訊</UBadge>
           </h2>
-          <p class="text-xs text-slate-500">{{ row.id }}・{{ row.generic }}・{{ row.spec }}・{{ row.category }}</p>
+          <p class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.generic }}・{{ row.spec }}・{{ row.category }}</p>
         </div>
         <UButton size="sm" variant="secondary" :icon="ClipboardList" @click="requestOpen = true">{{ restock ? '追加申請' : '申請補貨' }}</UButton>
         <UButton size="sm" :icon="PackagePlus" @click="receiveOpen = true">進貨</UButton>

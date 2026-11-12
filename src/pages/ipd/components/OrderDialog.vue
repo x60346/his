@@ -153,11 +153,11 @@ ${doseNote(drug, input.dose ?? 0)}。
       <template v-if="form.category === 'medication'">
         <USearchSelect
           label="藥品"
-          placeholder="藥名、學名，例：Ceftriaxone、Insulin"
+          placeholder="藥名、中文名、作用，例：Ceftriaxone、胰島素、止痛"
           :search="(kw) => masterApi.listDrugs({ keyword: kw })"
           :item-key="(d) => d.id"
-          :item-label="(d) => `${d.name}${d.highAlert ? '　⚠ 高警訊' : ''}`"
-          :item-sub="(d) => `${d.category}・${d.spec}・庫存 ${d.stock}`"
+          :item-label="(d) => `${d.name}　${d.nameZh}${d.highAlert ? '　⚠ 高警訊' : ''}`"
+          :item-sub="(d) => `${d.category}・${d.spec}・${d.indication}・庫存 ${d.stock}`"
           :clear-on-select="false"
           @select="pickDrug"
         />

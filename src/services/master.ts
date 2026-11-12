@@ -5,7 +5,7 @@ import * as codes from '@/mock/codes'
 import { db, isSeedStale, resetDatabase, SCHEMA_VERSION } from '@/mock/db'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { contains } from './views'
-import { describeDrugs, needsSameNameCheck, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
+import { describeDrugs, matchesDrug, needsSameNameCheck, sameNameDrugs, DRUG_TIMINGS } from './drug-rules'
 
 // ---------- 唯讀代碼（不會在系統中修改） ----------
 export const staticCodes = {
@@ -46,8 +46,7 @@ export function listDrugs(q: DrugQuery = {}): Promise<Drug[]> {
       if (!q.includeInactive && !d.active) return false
       if (q.category && d.category !== q.category) return false
       if (q.lowStockOnly && d.stock > d.safetyStock) return false
-      const kw = q.keyword?.trim()
-      return !kw || contains(d.name, kw) || contains(d.generic, kw) || contains(d.nhiCode, kw) || contains(d.id, kw)
+      return matchesDrug(d, q.keyword ?? '')
     }),
   )
 }
@@ -98,6 +97,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     const nhiCode = input.nhiCode.trim().toUpperCase()
     const v = fieldErrors()
     if (!name) v.add('name', '請輸入藥名')
+    if (!input.nameZh?.trim()) v.add('nameZh', '請輸入中文名（印在藥袋、開藥選單）')
     if (!input.unit.trim()) v.add('unit', '請輸入調劑單位')
     if (!['口服', '外用', '注射', '吸入', '眼用'].includes(input.category)) v.add('category', '請選擇劑型')
     // 價格必須大於 0：批價會把 0 元的健保藥照 0 元申報、病人也付 0 元（醫令有「0 點改收自費」，藥品沒有）
@@ -124,7 +124,13 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     }
     const saved: Drug = {
       id: old?.id ?? nextCode('M', db.drugs.map((d) => d.id), 3),
-      nhiCode, name, generic: input.generic.trim(), spec: input.spec.trim(), unit: input.unit.trim(), category: input.category,
+      nhiCode, name, nameZh: input.nameZh.trim(),
+      // 別名：去空白、去空項、去重複；沒有就不存
+      ...(() => {
+        const a = [...new Set((input.aliases ?? []).map((x) => x.trim()).filter(Boolean))]
+        return a.length ? { aliases: a } : {}
+      })(),
+      generic: input.generic.trim(), spec: input.spec.trim(), unit: input.unit.trim(), category: input.category,
       nhiPrice: input.nhiPrice, selfPrice: input.selfPrice, safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
       highAlert: !!input.highAlert, doseUnit: input.doseUnit?.trim() || undefined, active: input.active,

@@ -28,6 +28,8 @@ const routeName = (code: string) => masterApi.staticCodes.routes.find((r) => r.c
         <span class="tabular whitespace-nowrap text-xs">調劑日 {{ toRoc(d.dispenseDate) }}</span>
       </div>
       <div class="mt-2 text-base font-bold">{{ it.drugName }}</div>
+      <!-- 中文名：病人（尤其長輩）看得懂的藥名 -->
+      <div v-if="it.drugNameZh" class="font-bold">{{ it.drugNameZh }}</div>
       <div class="text-xs text-slate-600">{{ it.spec }}</div>
       <div class="mt-2 rounded bg-slate-100 px-2 py-1.5 text-base">
         {{ routeName(it.route) }}・{{ it.freqLabel }}・每次 {{ it.dose }} {{ it.doseUnit }}

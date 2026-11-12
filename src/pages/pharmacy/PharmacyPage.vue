@@ -176,6 +176,7 @@ const print = () => window.print()
             <tr :class="['border-t border-slate-100', it.shortage && 'bg-red-50']">
               <td class="px-4 py-2">
                 <div class="font-medium text-slate-800">{{ it.drugName }}</div>
+                <div v-if="it.drugNameZh" class="text-xs text-slate-600">{{ it.drugNameZh }}</div>
                 <div class="flex items-center gap-1 text-xs text-slate-500">{{ it.spec }}<UBadge v-if="it.highAlert" tone="purple">高警訊</UBadge></div>
               </td>
               <td class="px-3 py-2 text-slate-700">{{ it.dose }} {{ it.doseUnit }}・{{ it.freq }}・{{ it.route }}<span v-if="it.timingShort" :class="['ml-1 rounded px-1 text-xs', it.timingShort === '飯前飯後皆可' ? 'text-slate-500' : 'bg-amber-100 font-medium text-amber-800']">{{ it.timingShort }}</span></td>

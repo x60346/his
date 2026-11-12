@@ -30,6 +30,8 @@ const props = defineProps<{
   rowKey: (r: R) => string
   /** 搜尋比對的欄位 */
   searchKeys: (keyof R)[]
+  /** 自訂搜尋規則（有給就不用 searchKeys；例：藥品用 drug-rules.matchesDrug，和開藥選單同一份） */
+  match?: (row: R, keyword: string) => boolean
   /** 新增時的空白資料；不提供表示不能新增 */
   blank?: () => Record<string, unknown>
   save: (form: Record<string, any>, isNew: boolean) => Promise<unknown>
@@ -40,7 +42,7 @@ const props = defineProps<{
 const keyword = ref('')
 const showInactive = ref(false)
 const shown = computed(() =>
-  (props.rows ?? []).filter((r) => (showInactive.value || r.active !== false) && (!keyword.value || props.searchKeys.some((k) => String(r[k] ?? '').toLowerCase().includes(keyword.value.trim().toLowerCase())))),
+  (props.rows ?? []).filter((r) => (showInactive.value || r.active !== false) && (!keyword.value || (props.match ? props.match(r, keyword.value) : props.searchKeys.some((k) => String(r[k] ?? '').toLowerCase().includes(keyword.value.trim().toLowerCase()))))),
 )
 
 const open = ref(false)

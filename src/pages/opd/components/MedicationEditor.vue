@@ -62,11 +62,11 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
   <div class="space-y-3">
     <USearchSelect
       v-if="!readonly"
-      placeholder="輸入藥名、學名或健保碼，例：Acetaminophen、Metformin"
+      placeholder="藥名、中文名、作用或健保碼，例：Metformin、普拿疼、降血壓"
       :search="(kw) => masterApi.listDrugs({ keyword: kw })"
       :item-key="(d) => d.id"
-      :item-label="(d) => `${d.name}${d.highAlert ? '　⚠ 高警訊' : ''}`"
-      :item-sub="(d) => `${d.generic}・${d.spec}・庫存 ${d.stock}`"
+      :item-label="(d) => `${d.name}　${d.nameZh}${d.highAlert ? '　⚠ 高警訊' : ''}`"
+      :item-sub="(d) => `${d.generic}・${d.spec}・${d.indication}・庫存 ${d.stock}`"
       @select="add"
     />
     <UEmpty v-if="!rows.length" title="尚未開立藥品" />

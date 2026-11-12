@@ -11,6 +11,7 @@ import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
 import { allocateFefo, checkStocktakeActual, daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus } from './stock-rules'
 import { find, nameOf } from './views'
+import { matchesDrug } from './drug-rules'
 
 // ---------- 唯一的寫入點（服務層內部） ----------
 type Post =
@@ -112,7 +113,7 @@ export function listInventory(q: InventoryQuery = {}): Promise<InventoryRow[]> {
     const kw = q.keyword?.trim().toLowerCase()
     return db.drugs
       .filter((d) => d.active && (!q.category || d.category === q.category))
-      .filter((d) => !kw || [d.id, d.name, d.generic, d.nhiCode].some((x) => x.toLowerCase().includes(kw)))
+      .filter((d) => !kw || matchesDrug(d, kw))
       .map((d) => inventoryRow(d, t))
       .filter((r) => !q.attentionOnly || r.flags.length > 0)
       .filter((r) => !q.flags?.length || r.flags.some((f) => q.flags!.includes(f)))
