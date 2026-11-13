@@ -25,6 +25,7 @@ import * as ud from './ud'
 import * as permission from './permission'
 import * as consult from './consult'
 import * as wardStock from './ward-stock'
+import * as witness from './witness'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -50,6 +51,7 @@ export const udApi = overNetwork(ud)
 export const permissionApi = overNetwork(permission)
 export const consultApi = overNetwork(consult)
 export const wardStockApi = overNetwork(wardStock)
+export const witnessApi = overNetwork(witness)
 export type { PhraseView, PhraseShareTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'

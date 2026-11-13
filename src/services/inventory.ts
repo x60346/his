@@ -13,6 +13,7 @@ import { LOCATION_ROLES, locationNameProblem, normalizeLocationName, type Locati
 import { pendingReturn } from './ud-work'
 import { daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus, NO_PO_REASONS } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
+import { consumeWitness, expiredScrapRef, quarantineScrapRef, WITNESS_MIN, witnessFor } from './witness-core'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
 import { isExpired } from './stock-rules'
 import { matchesDrug } from './drug-rules'
@@ -228,16 +229,26 @@ export function receiveStock(input: ReceiveInput): Promise<ReceiveResult> {
   })
 }
 
+/** 報廢一律要另一位藥師（或管理者）當場覆核（witness.approveWitness）：報廢是帳上直接消失的出庫，雙人才查得到 */
+function scrapWitness(token: string | undefined, refId: string, actorId: string) {
+  const w = witnessFor(token, 'scrap', refId, actorId)
+  if (w === null) failField('witness', '報廢需另一位藥師覆核')
+  if (w === 'expired') failField('witness', `覆核已超過 ${WITNESS_MIN} 分鐘，請重新覆核`)
+  return w as Exclude<typeof w, null | 'expired'>
+}
+
 /** 報廢某藥在某地點所有已過期批號（沒給地點＝門診藥局） */
-export function scrapExpired(drugId: string, locationId?: string): Promise<StockTxn[]> {
+export function scrapExpired(drugId: string, locationId?: string, witness?: string): Promise<StockTxn[]> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const t = today()
     const loc = stockLoc.usable(locationId)
     const expired = stockLoc.lots(drugId, loc.id).filter((l) => l.qty > 0 && l.expiry < t)
     if (!expired.length) fail(`${loc.name}沒有已過期的批號`)
-    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, locationId: loc.id, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}）` }, u.id))
-    audit('過期藥品報廢', `${find.drug(drugId)?.name} ${loc.name} ${expired.map((l) => l.lotNo).join('、')}`)
+    const w = scrapWitness(witness, expiredScrapRef(drugId, loc.id), u.id)
+    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, locationId: loc.id, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}；覆核 ${w.witnessName}）` }, u.id))
+    audit('過期藥品報廢', `${find.drug(drugId)?.name} ${loc.name} ${expired.map((l) => l.lotNo).join('、')}；覆核 ${w.witnessName}`)
+    consumeWitness(witness)
     return txns
   })
 }
@@ -612,14 +623,16 @@ function quarantineLot(lotId: string) {
 }
 
 /** 報廢待報廢區的一個批號（整批；寫原因） */
-export function scrapQuarantine(lotId: string, reason: string): Promise<StockTxn> {
+export function scrapQuarantine(lotId: string, reason: string, witness?: string): Promise<StockTxn> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const { lot, loc } = quarantineLot(lotId)
     const why = reason?.trim()
     if (!why) failField('reason', '請寫報廢原因（例：過期、破損）')
-    const txn = postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty: lot.qty, lotId: lot.id, reason: `報廢（待報廢區）：${why}` }, u.id)
-    audit('待報廢區報廢', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo} ${-txn.qty}：${why}`)
+    const w = scrapWitness(witness, quarantineScrapRef(lot.id), u.id)
+    const txn = postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty: lot.qty, lotId: lot.id, reason: `報廢（待報廢區）：${why}；覆核 ${w.witnessName}` }, u.id)
+    audit('待報廢區報廢', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo} ${-txn.qty}：${why}；覆核 ${w.witnessName}`)
+    consumeWitness(witness)
     return txn
   })
 }

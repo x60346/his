@@ -5,6 +5,7 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { Ban, CreditCard, Printer, ShieldCheck, Smartphone, Undo2, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
+import WitnessDialog from '@/components/WitnessDialog.vue'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
@@ -71,27 +72,13 @@ const lastDiscount = computed(() => (item.value ? detail.value?.lastDiscount : u
 const approval = ref<{ token: string; name: string; visitId: string; code: string }>()
 const approvalNow = computed(() => (approval.value && approval.value.visitId === visitId.value && approval.value.code === discountCode.value ? approval.value : undefined))
 const apOpen = ref(false)
-const apForm = ref({ username: '', password: '' })
-const apError = ref<{ username?: string; password?: string }>({})
-function openApproval() {
-  apForm.value = { username: '', password: '' }
-  apError.value = {}
-  approve.fieldErrors.value = {}
-  apOpen.value = true
+// 共用的第二人確認對話框（WitnessDialog）：帳密錯、沒權限、核准自己都由服務層回傳，留在稽核
+const approveFn = async (cred: { username: string; password: string }) => {
+  const r = await chargeApi.approveDiscount({ visitId: visitId.value!, code: rule.value!.code, ...cred })
+  return r.ok ? { ok: true as const, token: r.token, witnessName: r.approverName } : r
 }
-const approve = useAction(chargeApi.approveDiscount)
-async function onApprove() {
-  if (!visitId.value || !rule.value) return
-  apError.value = {}
-  const r = await approve.run({ visitId: visitId.value, code: rule.value.code, ...apForm.value })
-  if (!r) return
-  if (!r.ok) {
-    apError.value = { [r.field]: r.message }
-    apForm.value.password = ''
-    return
-  }
-  approval.value = { token: r.token, name: r.approverName, visitId: visitId.value, code: rule.value.code }
-  apOpen.value = false
+function onApproved(token: string, name: string) {
+  if (visitId.value && rule.value) approval.value = { token, name, visitId: visitId.value, code: rule.value.code }
 }
 const receipt = computed(() => (item.value ? detail.value?.receipt : undefined))
 
@@ -276,7 +263,7 @@ const identityOpen = ref(false)
                   <ShieldCheck class="h-4 w-4 shrink-0" />
                   <span v-if="approvalNow" class="flex-1">已由 <b>{{ approvalNow.name }}</b> 核准</span>
                   <span v-else class="flex-1">「{{ rule.name }}」需主管核准</span>
-                  <UButton size="sm" :variant="approvalNow ? 'ghost' : 'primary'" @click="openApproval">{{ approvalNow ? '重新核准' : '主管核准' }}</UButton>
+                  <UButton size="sm" :variant="approvalNow ? 'ghost' : 'primary'" @click="apOpen = true">{{ approvalNow ? '重新核准' : '主管核准' }}</UButton>
                   <p v-if="pay.fieldErrors.value.approval" class="w-full text-xs text-red-600">{{ pay.fieldErrors.value.approval }}</p>
                 </div>
                 <p v-if="rule" class="text-xs text-slate-500">部分負擔依健保規定不能減免，優免只減掛號費與自費項目。</p>
@@ -374,20 +361,11 @@ const identityOpen = ref(false)
       </template>
     </UDialog>
 
-    <UDialog v-model="apOpen" title="主管核准優免" size="sm" @submit="onApprove">
-      <div class="space-y-3 text-sm">
-        <p class="text-slate-600">
-          {{ item?.patientName }}・{{ rule?.name }}（{{ rule && discountSummary(rule) }}）<span v-if="discountReason.trim()">：{{ discountReason.trim() }}</span>
-        </p>
-        <p class="text-xs text-slate-500">請主管輸入<b>自己的</b>帳號密碼（不是目前登入的櫃台）。核准只用於這一次結帳；換病人或優免類別要重新核准。</p>
-        <UInput v-model="apForm.username" label="主管帳號" required autocomplete="off" :error="apError.username ?? approve.fieldErrors.value.username" />
-        <UInput v-model="apForm.password" label="密碼" type="password" required autocomplete="off" :error="apError.password ?? approve.fieldErrors.value.password" />
-      </div>
-      <template #footer>
-        <UButton variant="secondary" @click="apOpen = false">取消</UButton>
-        <UButton type="submit" :loading="approve.pending.value">核准</UButton>
-      </template>
-    </UDialog>
+    <WitnessDialog v-model="apOpen" title="主管核准優免" who="主管" ok-text="核准" note="核准只用於這一次結帳；換病人或優免類別要重新核准。" :approve="approveFn" @approved="onApproved">
+      <p class="text-slate-600">
+        {{ item?.patientName }}・{{ rule?.name }}（{{ rule && discountSummary(rule) }}）<span v-if="discountReason.trim()">：{{ discountReason.trim() }}</span>
+      </p>
+    </WitnessDialog>
 
     <UDialog v-model="refundOpen" title="退費" size="sm">
       <div v-if="receipt" class="space-y-3 text-sm">

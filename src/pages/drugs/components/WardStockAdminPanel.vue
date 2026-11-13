@@ -46,6 +46,7 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
           <li v-for="r in w.rows" :key="r.drugId" class="flex flex-wrap items-center gap-2 px-4 py-1.5">
             <span class="min-w-0 flex-1">
               <span class="font-medium text-slate-800">{{ r.drugName }}</span>
+              <UBadge v-if="r.controlled" tone="red" class="ml-1">管制 {{ r.controlled }} 級</UBadge>
               <UBadge v-if="r.below" tone="yellow" class="ml-1">低於基準</UBadge>
               <span class="block text-xs text-slate-500">現有 {{ r.onHand }} {{ r.unit }}<template v-if="r.onHand !== r.usable">（可用 {{ r.usable }}）</template></span>
             </span>
@@ -66,7 +67,7 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
           </template>
           <template v-else>
             <UButton size="sm" variant="ghost" :icon="Plus" @click="(adding = w.ward), (newDrug = null), (newPar = 10)">新增品項</UButton>
-            <span v-if="w.lastCount" class="ml-2">上次點班 {{ md(w.lastCount.at) }} {{ w.lastCount.byName }}{{ w.lastCount.diffs ? `・差異 ${w.lastCount.diffs} 項` : '' }}</span>
+            <span v-if="w.lastCount" class="ml-2">上次點班 {{ md(w.lastCount.at) }} {{ w.lastCount.byName }}{{ w.lastCount.diffs ? `・差異 ${w.lastCount.diffs} 項` : '' }}{{ w.lastCount.witnessName ? `・見證 ${w.lastCount.witnessName}` : '' }}</span>
           </template>
         </div>
       </UCard>

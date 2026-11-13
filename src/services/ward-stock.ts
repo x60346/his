@@ -10,6 +10,7 @@ import { postStock } from './stock-ledger'
 import { shiftInstanceOf, shiftOf } from './nursing-rules'
 import { allocateFefo, usableQty } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
+import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
 
 function wardLoc(ward: string) {
   const l = stockLoc.ward(ward)
@@ -37,6 +38,8 @@ export interface WardStockRow {
   usable: number
   /** 低於基準量 */
   below: boolean
+  /** 管制藥品級別（有就是管制藥：點班要另一位護理師見證） */
+  controlled?: number
 }
 
 export interface WardStockView {
@@ -45,26 +48,27 @@ export interface WardStockView {
   locationName: string
   rows: WardStockRow[]
   shift: { shift: WardCount['shift']; date: string; counted: boolean }
-  lastCount?: { at: string; byName: string; shift: WardCount['shift']; diffs: number }
+  lastCount?: { at: string; byName: string; shift: WardCount['shift']; diffs: number; witnessName?: string }
+  /** 有管制藥：點班要另一位護理師當場見證（witness.approveWitness wardCount） */
+  needsWitness: boolean
 }
 
 function wardView(ward: string): WardStockView {
   const loc = wardLoc(ward)
   const t = now()
-  const items = db.wardStockItems.filter((x) => x.ward === ward)
-  const extra = [...new Set(db.drugLots.filter((l) => l.locationId === loc.id && l.qty > 0).map((l) => l.drugId))].filter((id) => !items.some((x) => x.drugId === id))
-  const rows: WardStockRow[] = [...items.map((x) => ({ drugId: x.drugId, par: x.par })), ...extra.map((drugId) => ({ drugId, par: 0 }))].map(({ drugId, par }) => {
+  const rows: WardStockRow[] = stockLoc.wardDrugIds(ward, loc.id).map((drugId) => {
+    const par = db.wardStockItems.find((x) => x.ward === ward && x.drugId === drugId)?.par ?? 0
     const d = find.drug(drugId)
     const onHand = bookQty(drugId, loc.id)
     const usable = usableQty(stockLoc.lots(drugId, loc.id), t)
-    return { drugId, drugName: d?.name ?? drugId, unit: d?.unit ?? '', par, onHand, usable, below: par > 0 && usable < par }
+    return { drugId, drugName: d?.name ?? drugId, unit: d?.unit ?? '', par, onHand, usable, below: par > 0 && usable < par, ...(d?.controlled ? { controlled: d.controlled } : {}) }
   })
   const cur = currentShift(t)
   const last = db.wardCounts.filter((c) => c.ward === ward).sort((a, b) => b.at.localeCompare(a.at))[0]
   return {
-    ward, locationId: loc.id, locationName: loc.name, rows,
+    ward, locationId: loc.id, locationName: loc.name, rows, needsWitness: rows.some((r) => r.controlled),
     shift: { ...cur, counted: db.wardCounts.some((c) => c.ward === ward && c.shift === cur.shift && c.date === cur.date) },
-    ...(last ? { lastCount: { at: last.at, byName: nameOf.user(last.countedBy), shift: last.shift, diffs: last.lines.filter((l) => l.counted !== l.book).length } } : {}),
+    ...(last ? { lastCount: { at: last.at, byName: nameOf.user(last.countedBy), shift: last.shift, diffs: last.lines.filter((l) => l.counted !== l.book).length, ...(last.witnessBy ? { witnessName: nameOf.user(last.witnessBy) } : {}) } } : {}),
   }
 }
 
@@ -147,7 +151,7 @@ export function refillWard(ward: string, lines: { drugId: string; qty: number }[
  * 點班（護理師，每班一次）：畫面上列出的每一項都要填實點數量；有差異要寫原因，自動調帳（盤虧依效期先到先出扣、
  * 盤盈加到效期最晚的那一批）。送出的是畫面上看到的品項——之後才補充或用掉的，請重新整理再點
  */
-export function countWard(ward: string, input: { lines: { drugId: string; book: number; counted: number; reason?: string }[] }): Promise<WardCount> {
+export function countWard(ward: string, input: { lines: { drugId: string; book: number; counted: number; reason?: string }[]; witness?: string }): Promise<WardCount> {
   return mutate(() => {
     const u = requireUser('nurse')
     const loc = wardLoc(ward)
@@ -163,6 +167,11 @@ export function countWard(ward: string, input: { lines: { drugId: string; book: 
       else if (l.counted !== l.book && !l.reason?.trim()) errors[`reason.${l.drugId}`] = `差 ${l.counted - l.book}，請寫原因`
     }
     failFields(errors)
+    // 管制藥：另一位護理師當場見證（服務層把關，不是畫面擋）
+    const w = view.needsWitness ? witnessFor(input.witness, 'wardCount', ward, u.id) : undefined
+    if (w === null) failField('witness', '點班含管制藥，需另一位護理師見證')
+    if (w === 'expired') failField('witness', `見證已超過 ${WITNESS_MIN} 分鐘，請重新見證`)
+    const witness = w || undefined
     const t = now()
     const cur = currentShift(t)
     for (const l of lines.filter((x) => x.counted !== x.book)) {
@@ -180,12 +189,13 @@ export function countWard(ward: string, input: { lines: { drugId: string; book: 
       }
     }
     const c: WardCount = {
-      id: newId('WC'), ward, shift: cur.shift, date: cur.date, countedBy: u.id, at: t,
+      id: newId('WC'), ward, shift: cur.shift, date: cur.date, countedBy: u.id, ...(witness ? { witnessBy: witness.witnessId } : {}), at: t,
       lines: lines.map((l) => ({ drugId: l.drugId, book: l.book, counted: l.counted, ...(l.counted !== l.book ? { reason: l.reason!.trim() } : {}) })),
     }
     db.wardCounts.push(c)
     const diffs = c.lines.filter((l) => l.counted !== l.book)
-    audit('病房點班', `${ward} ${cur.date} ${cur.shift}：${lines.length} 項${diffs.length ? `，差異 ${diffs.map((l) => `${find.drug(l.drugId)?.name} ${l.counted - l.book > 0 ? '+' : ''}${l.counted - l.book}（${l.reason}）`).join('、')}` : '，帳實相符'}`)
+    audit('病房點班', `${ward} ${cur.date} ${cur.shift}：${lines.length} 項${diffs.length ? `，差異 ${diffs.map((l) => `${find.drug(l.drugId)?.name} ${l.counted - l.book > 0 ? '+' : ''}${l.counted - l.book}（${l.reason}）`).join('、')}` : '，帳實相符'}${witness ? `；見證 ${witness.witnessName}` : ''}`)
+    if (witness) consumeWitness(input.witness)
     return c
   })
 }

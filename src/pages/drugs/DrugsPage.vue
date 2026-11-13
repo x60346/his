@@ -136,7 +136,7 @@ const shown = computed(() => rows.value?.length ?? 0)
           @row-click="(r) => (selectedId = r.id)"
         >
           <template #cell-name="{ row }">
-            <div class="font-medium text-slate-800">{{ row.name }}<UBadge v-if="row.highAlert" tone="purple" class="ml-1">高警訊</UBadge></div>
+            <div class="font-medium text-slate-800">{{ row.name }}<UBadge v-if="row.highAlert" tone="purple" class="ml-1">高警訊</UBadge><UBadge v-if="row.controlled" tone="red" class="ml-1">管制 {{ row.controlled }} 級</UBadge></div>
             <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.spec }}・{{ row.category }}</div>
           </template>
           <template #cell-usable="{ row }">

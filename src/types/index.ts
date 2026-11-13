@@ -490,6 +490,8 @@ export interface Drug {
   defaultRoute: string
   /** 是否為高警訊藥品 */
   highAlert: boolean
+  /** 管制藥品級別（管制藥品管理條例第一～四級）；沒有＝非管制藥。病房點班含管制藥要雙人、報廢要覆核 */
+  controlled?: 1 | 2 | 3 | 4
   /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
@@ -747,6 +749,8 @@ export interface WardCount {
   /** 這一班的日期（小夜跨午夜寫的算前一天） */
   date: string
   countedBy: string
+  /** 管制藥點班的見證護理師 */
+  witnessBy?: string
   at: string
   lines: { drugId: string; book: number; counted: number; reason?: string }[]
 }

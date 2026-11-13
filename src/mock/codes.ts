@@ -328,6 +328,9 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M040: ['氯化鉀注射劑', ['KCl']],
 }
 
+/** 管制藥品級別：Morphine 第二級、Tramadol 第四級 */
+const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M031: 4 }
+
 export const drugs: Drug[] = drugBase.map((d) => ({
   ...d,
   nameZh: zhOf[d.id][0],
@@ -335,6 +338,7 @@ export const drugs: Drug[] = drugBase.map((d) => ({
   indication: labelInfo[d.id][0],
   warning: labelInfo[d.id][1],
   timing: d.category === '口服' ? timingOf[d.id] ?? 'ANY' : 'ANY',
+  ...(controlledOf[d.id] ? { controlled: controlledOf[d.id] } : {}),
 }))
 
 export const procedures: Procedure[] = [

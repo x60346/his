@@ -5,7 +5,8 @@ import { computed, ref } from 'vue'
 import { PackageX, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
-import { inventoryApi, type QuarantineRow } from '@/services'
+import WitnessDialog from '@/components/WitnessDialog.vue'
+import { inventoryApi, witnessApi, type QuarantineRow } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: rows, loading } = useQuery(() => inventoryApi.listQuarantine())
@@ -19,8 +20,22 @@ const release = useAction(inventoryApi.releaseQuarantine, { success: (r) => `已
 async function confirm(reason: string) {
   const a = acting.value
   if (!a) return
+  // 報廢：原因寫好了再請另一位藥師覆核（沒寫原因直接送，讓服務層標在原因欄）
+  if (a.kind === 'scrap' && reason.trim()) {
+    scrapping.value = { row: a.row, reason: reason.trim() }
+    acting.value = null
+    return
+  }
   const ok = a.kind === 'scrap' ? await scrap.run(a.row.lotId, reason) : await release.run(a.row.lotId, reason)
   if (ok) acting.value = null
+}
+// 報廢覆核（另一位藥師或管理者，不能是自己；服務層 scrapQuarantine 沒有覆核就擋）
+const scrapping = ref<{ row: QuarantineRow; reason: string } | null>(null)
+const scrapOpen = computed({ get: () => !!scrapping.value, set: (v) => !v && (scrapping.value = null) })
+const approveScrap = (cred: { username: string; password: string }) => witnessApi.approveWitness({ purpose: 'scrapQuarantine', lotId: scrapping.value!.row.lotId, ...cred })
+async function onScrapApproved(token: string) {
+  const s = scrapping.value
+  if (s) await scrap.run(s.row.lotId, s.reason, token)
 }
 </script>
 
@@ -55,6 +70,17 @@ async function confirm(reason: string) {
       :pending="scrap.pending.value || release.pending.value"
       :error="scrap.fieldErrors.value.reason || release.fieldErrors.value.reason"
       @confirm="confirm"
+    />
+    <WitnessDialog
+      v-model="scrapOpen"
+      title="報廢覆核"
+      who="覆核藥師"
+      ok-text="覆核並報廢"
+      danger
+      :subject="scrapping ? `${scrapping.row.drugName} 批號 ${scrapping.row.lotNo}・${scrapping.row.qty} ${scrapping.row.unit}\n原因：${scrapping.reason}` : ''"
+      note="報廢會從帳上扣除，覆核人要當場確認實物。"
+      :approve="approveScrap"
+      @approved="onScrapApproved"
     />
   </UCard>
 </template>

@@ -71,11 +71,12 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'timing', label: '服用時機（印在藥袋）', type: 'select', required: true, options: DRUG_TIMINGS.map((t) => ({ label: TIMING_LABEL[t], value: t })), showIf: (f) => f.category === '口服' },
   { key: 'indication', label: '作用或適應症（印在藥袋）', required: true, wide: true, hint: '給病人看的白話，例：降血壓' },
   { key: 'warning', label: '警語或副作用（印在藥袋）', required: true, wide: true, hint: '例：可能頭暈、腳踝水腫；起身請放慢' },
+  { key: 'controlled', label: '管制藥品級別', type: 'select', options: [{ label: '非管制藥', value: '' }, ...[1, 2, 3, 4].map((n) => ({ label: `第${'一二三四'[n - 1]}級管制藥品`, value: n }))], hint: '病房點班含管制藥要另一位護理師見證' },
   { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
 // 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
-const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, timing: '', indication: '', warning: '', active: true })
+const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, controlled: '', timing: '', indication: '', warning: '', active: true })
 
 // ---------- 醫令 ----------
 const procColumns: Column<ProcedureView>[] = [
@@ -158,7 +159,7 @@ const tabs = computed(() => [
         </div>
       </template>
       <template #cell-name="{ row }">
-        <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span>
+        <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span><span v-if="row.controlled" class="ml-1 text-xs text-rose-700">管制 {{ row.controlled }} 級</span>
         <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.generic }}・{{ row.spec }}</div>
       </template>
     </MasterTable>

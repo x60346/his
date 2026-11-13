@@ -1,0 +1,61 @@
+// 第二人當場確認（見證、覆核）：管制藥點班要另一位護理師見證、報廢要另一位藥師（或管理者）覆核。
+// 共用 witness-core（和優免主管核准同一套）：第二人輸入自己的帳號密碼、不能是自己、一次性、綁定對象與發起人、10 分鐘有效。
+// 這裡只發「確認」；真正的點班（ward-stock.countWard）、報廢（inventory.scrapExpired / scrapQuarantine）帶著它送出才算數。
+import { db } from '@/mock/db'
+import { today } from '@/utils/date'
+import { fail, must, mutate, requireUser } from './http'
+import { find, stockLoc } from './views'
+import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, type WitnessResult } from './witness-core'
+
+export type WitnessTarget =
+  /** 病房點班（含管制藥）：另一位護理師見證 */
+  | { purpose: 'wardCount'; ward: string }
+  /** 報廢某地點的過期批號：另一位藥師或管理者覆核 */
+  | { purpose: 'scrapExpired'; drugId: string; locationId?: string }
+  /** 報廢待報廢區的一個批號：另一位藥師或管理者覆核 */
+  | { purpose: 'scrapQuarantine'; lotId: string }
+
+export type { WitnessResult }
+
+/**
+ * 第二人確認。帳密錯誤、資格不符、找自己確認都**回傳**失敗（不丟錯），失敗的嘗試也留在稽核。
+ * 對象本身不對（病房沒有管制藥、沒有過期批號）才丟錯——那是發起的人的問題，不是第二人的。
+ */
+export function approveWitness(input: WitnessTarget & { username: string; password: string }): Promise<WitnessResult> {
+  return mutate((): WitnessResult => {
+    const cred = { username: input.username, password: input.password }
+    if (input.purpose === 'wardCount') {
+      const u = requireUser('nurse')
+      const ward = input.ward
+      const loc = stockLoc.ward(ward)
+      if (!loc) fail(`「${ward}」沒有病房常備`)
+      const ctrl = stockLoc.wardDrugIds(ward, loc!.id).map((id) => find.drug(id)).filter((d) => d?.controlled)
+      if (!ctrl.length) fail(`${ward}的病房常備沒有管制藥，點班不需要見證`)
+      return grantWitness({
+        purpose: 'wardCount', refId: ward, actor: u, ...cred, who: '見證護理師',
+        selfMessage: '不能見證自己的點班，請另一位護理師見證',
+        qualifies: (w) => (hasRole(w, ['nurse']) ? null : `${w.name} 不是護理師，不能見證病房點班`),
+        auditAction: '管制藥點班見證', verb: '見證', what: `${ward} 點班（管制藥：${ctrl.map((d) => d!.name).join('、')}；點班 ${u.name}）`,
+      })
+    }
+    const u = requireUser('pharmacist')
+    const scrapRule = (w: Parameters<Parameters<typeof grantWitness>[0]['qualifies']>[0]) => (hasRole(w, ['pharmacist', 'admin']) ? null : `${w.name} 不是藥師或管理者，不能覆核報廢`)
+    const base = { purpose: 'scrap' as const, actor: u, ...cred, who: '覆核人', selfMessage: '不能覆核自己的報廢，請另一位藥師覆核', qualifies: scrapRule, auditAction: '報廢覆核', verb: '覆核' }
+    if (input.purpose === 'scrapExpired') {
+      const loc = stockLoc.usable(input.locationId)
+      const drug = must(find.drug(input.drugId), '藥品')
+      const t = today()
+      const expired = stockLoc.lots(drug.id, loc.id).filter((l) => l.qty > 0 && l.expiry < t)
+      if (!expired.length) fail(`${loc.name}沒有已過期的批號`)
+      return grantWitness({ ...base, refId: expiredScrapRef(drug.id, loc.id), what: `${drug.name} ${loc.name} 過期報廢 ${expired.reduce((n, l) => n + l.qty, 0)} ${drug.unit}（${u.name}）` })
+    }
+    if (input.purpose === 'scrapQuarantine') {
+      const lot = must(db.drugLots.find((x) => x.id === input.lotId), '批號')
+      if (db.stockLocations.find((l) => l.id === lot.locationId)?.kind !== 'quarantine') fail('這個批號不在待報廢區')
+      if (lot.qty <= 0) fail('這個批號已經處理完了', 'CONFLICT')
+      const drug = find.drug(lot.drugId)
+      return grantWitness({ ...base, refId: quarantineScrapRef(lot.id), what: `${drug?.name} 批號 ${lot.lotNo} 待報廢區報廢 ${lot.qty} ${drug?.unit ?? ''}（${u.name}）` })
+    }
+    fail('不支援的確認類型')
+  })
+}

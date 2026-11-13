@@ -167,6 +167,9 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     if (!input.warning?.trim()) v.add('warning', '請輸入警語或副作用（會印在藥袋上）')
     // 口服藥要選服用時機（飯前、飯後、隨餐、空腹、皆可）；其他劑型沒有飯前飯後之分
     if (input.category === '口服' && !DRUG_TIMINGS.includes(input.timing)) v.add('timing', '請選擇服用時機（會印在藥袋上）')
+    // 管制藥品級別：空白＝非管制藥；只有第一～四級
+    const controlled = Number(input.controlled ?? 0) || undefined
+    if (controlled !== undefined && ![1, 2, 3, 4].includes(controlled)) v.add('controlled', '管制藥品級別只有第一～四級')
     v.done()
     // 規則：欄位都正確後才檢查
     if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
@@ -195,7 +198,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       })(),
       safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
-      highAlert: !!input.highAlert, doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
+      highAlert: !!input.highAlert, ...(controlled ? { controlled: controlled as Drug['controlled'] } : {}), doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
       indication: input.indication.trim(), warning: input.warning.trim(),
       timing: input.category === '口服' ? input.timing : 'ANY',
       // 庫存不是主檔欄位，只能透過進貨、發藥、盤點的異動改變。

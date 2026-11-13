@@ -95,6 +95,12 @@ export const stockLoc = {
   receiving: () => (db.stockLocations.find((l) => l.receivesPurchase && l.active) ?? db.stockLocations[0]).id,
   /** 病房常備地點（沒有就 undefined） */
   ward: (ward: string) => db.stockLocations.find((l) => l.kind === 'ward' && l.ward === ward && l.active),
+  /** 病房常備要點的藥：常備清單上的＋櫃子裡還有、但已不在清單上的（例：品項剛移除） */
+  wardDrugIds(ward: string, locationId: string) {
+    const items = db.wardStockItems.filter((x) => x.ward === ward).map((x) => x.drugId)
+    const extra = [...new Set(db.drugLots.filter((l) => l.locationId === locationId && l.qty > 0).map((l) => l.drugId))].filter((id) => !items.includes(id))
+    return [...items, ...extra]
+  },
   /** 一般作業的地點（不含待報廢區、病房常備）：地點選單、「是不是多地點」都看這個 */
   isWork: (l: { kind: string }) => l.kind === 'warehouse' || l.kind === 'pharmacy',
   /** 指定的地點（沒指定＝門診藥局）；不存在或停用就擋 */

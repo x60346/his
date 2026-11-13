@@ -5,17 +5,16 @@
 import { computed, ref } from 'vue'
 import { ClipboardList, PackagePlus, Trash2 } from 'lucide-vue-next'
 import { UBadge, UBarChart, UButton, UDialog, UInput, UQueryState, type BarDatum } from '@/components/ui'
+import WitnessDialog from '@/components/WitnessDialog.vue'
 import ReceiveStockDialog from '@/components/ReceiveStockDialog.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
-import { inventoryApi, isExpiringSoon } from '@/services'
+import { inventoryApi, isExpiringSoon, witnessApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
-import { useUi } from '@/stores/ui'
 import { today } from '@/utils/date'
 import type { DrugLot, StockTxnType } from '@/types'
 
 /** locationId：哪個地點的批號與異動；locationName：多地點時才給（顯示在標題，單一藥局不必提） */
 const props = defineProps<{ drugId: string; locationId?: string; locationName?: string }>()
-const ui = useUi()
 
 const { data, loading } = useQuery(
   async () => {
@@ -73,11 +72,13 @@ async function onSafety() {
   if (row.value && props.locationId && (await setSafety.run(row.value.id, props.locationId, safetyQty.value as number))) safetyOpen.value = false
 }
 
+// 報廢要另一位藥師（或管理者）當場覆核：覆核對話框就是確認（服務層 scrapExpired 沒有覆核就擋）
 const scrap = useAction(inventoryApi.scrapExpired, { success: (t) => `已報廢 ${t.length} 個過期批號` })
-async function onScrap() {
-  if (!row.value) return
-  const ok = await ui.confirm({ title: '報廢過期藥品', message: `${row.value.name} 已過期 ${row.value.expiredQty} ${row.value.unit}，確定報廢？\n報廢會寫入盤點調整紀錄。`, okText: '報廢', danger: true })
-  if (ok) scrap.run(row.value.id, props.locationId || undefined)
+const scrapOpen = ref(false)
+const approveScrap = (cred: { username: string; password: string }) => witnessApi.approveWitness({ purpose: 'scrapExpired', drugId: row.value!.id, locationId: props.locationId || undefined, ...cred })
+const scrapSubject = computed(() => (row.value ? `${row.value.name}${props.locationName ? `（${props.locationName}）` : ''} 已過期 ${row.value.expiredQty} ${row.value.unit}` : ''))
+function onScrapApproved(token: string) {
+  if (row.value) scrap.run(row.value.id, props.locationId || undefined, token)
 }
 </script>
 
@@ -87,7 +88,7 @@ async function onScrap() {
       <header class="flex items-start gap-3">
         <div class="min-w-0 flex-1">
           <h2 class="flex flex-wrap items-center gap-2 text-lg font-bold text-slate-800">
-            {{ row.name }}<UBadge v-if="row.highAlert" tone="purple">高警訊</UBadge>
+            {{ row.name }}<UBadge v-if="row.highAlert" tone="purple">高警訊</UBadge><UBadge v-if="row.controlled" tone="red">管制 {{ row.controlled }} 級</UBadge>
           </h2>
           <p class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.id }}・{{ row.generic }}・{{ row.spec }}・{{ row.category }}</p>
         </div>
@@ -146,7 +147,7 @@ async function onScrap() {
       <section>
         <div class="mb-2 flex items-center">
           <h3 class="text-sm font-semibold text-slate-700"><template v-if="locationName">{{ locationName }}・</template>批號（發藥依效期先後扣除）</h3>
-          <UButton v-if="row.expiredQty && !ledger.counting" class="ml-auto" size="sm" variant="danger" :icon="Trash2" :loading="scrap.pending.value" @click="onScrap">報廢過期 {{ row.expiredQty }}</UButton>
+          <UButton v-if="row.expiredQty && !ledger.counting" class="ml-auto" size="sm" variant="danger" :icon="Trash2" :loading="scrap.pending.value" @click="scrapOpen = true">報廢過期 {{ row.expiredQty }}</UButton>
         </div>
         <p v-if="!ledger.lots.length" class="text-sm text-slate-400">目前沒有庫存批號</p>
         <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
@@ -208,6 +209,7 @@ async function onScrap() {
           <UButton type="submit" variant="danger" :loading="cancel.pending.value">取消申請</UButton>
         </template>
       </UDialog>
+      <WitnessDialog v-model="scrapOpen" title="報廢過期藥品" who="覆核藥師" ok-text="覆核並報廢" danger :subject="scrapSubject" note="報廢會寫入盤點調整紀錄；覆核人要當場確認實物。" :approve="approveScrap" @approved="onScrapApproved" />
     </div>
   </UQueryState>
 </template>

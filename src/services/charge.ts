@@ -8,6 +8,7 @@ import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError, requirePermission } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { nextReceiptNo, nextRefundNo, prepayAvailable, refundPrepay } from './money'
+import { consumeWitness, grantWitness, WITNESS_MIN, witnessFor } from './witness-core'
 
 export interface ChargeListItem extends VisitView {
   charge?: Charge
@@ -82,19 +83,14 @@ export function listDiscounts(q: { includeInactive?: boolean } = {}): Promise<Di
 
 
 // ---------- 優免主管核准 ----------
-/**
- * 主管當場核准（和超商叫店長來刷卡一樣）：另一位有「可核准優免」權限的人輸入自己的帳號密碼。
- * 核准是**一次性的**，綁定「這一次掛號、這個優免類別、這位櫃台」，結帳時用掉；換了類別或病人就要重新核准。
- * 存在記憶體（不進資料庫）：重新整理頁面就要重新核准，也就不會有一張核准被拿去別處用。
- */
-export const DISCOUNT_APPROVAL_MIN = 10
-const approvals = new Map<string, { visitId: string; code: string; cashierId: string; approverId: string; approverName: string; at: number }>()
+// 主管當場核准（和超商叫店長來刷卡一樣）：另一位有「可核准優免」權限的人輸入自己的帳號密碼；一次性、綁定這次掛號＋類別＋櫃台
+export const DISCOUNT_APPROVAL_MIN = WITNESS_MIN
 
 export type DiscountApprovalResult = { ok: true; token: string; approverName: string } | { ok: false; field: 'username' | 'password'; message: string }
 
 /**
- * 主管核准優免。帳密錯誤、沒有權限、核准自己結帳的都**回傳**失敗（不丟錯），這樣失敗的嘗試也留在稽核裡
- * （mutate 丟錯會回滾整筆，連稽核一起不見）
+ * 主管核准優免（共用的第二人確認 witness-core，用途 discount）。帳密錯誤、沒有權限、核准自己結帳的都**回傳**失敗（不丟錯），
+ * 這樣失敗的嘗試也留在稽核裡（mutate 丟錯會回滾整筆，連稽核一起不見）
  */
 export function approveDiscount(input: { visitId: string; code: string; username: string; password: string }): Promise<DiscountApprovalResult> {
   return mutate((): DiscountApprovalResult => {
@@ -103,36 +99,22 @@ export function approveDiscount(input: { visitId: string; code: string; username
     if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
     const rule = usableDiscount(input.code)
     if (!rule.needsApproval) fail(`「${rule.name}」不需要主管核准`)
-    const username = (input.username ?? '').trim().toLowerCase()
-    const f = fieldErrors()
-    if (!username) f.add('username', '請輸入主管帳號')
-    if (!input.password) f.add('password', '請輸入密碼')
-    f.done()
-    const what = `${nameOf.patient(v.patientId)} ${rule.name}（櫃台 ${cashier.name}）`
-    const no = (field: 'username' | 'password', message: string): DiscountApprovalResult => {
-      audit('優免核准失敗', `${username}：${message}；${what}`)
-      return { ok: false, field, message }
-    }
-    const u = db.users.find((x) => x.username === username)
-    if (!u || u.password !== input.password) return no('password', '帳號或密碼錯誤')
-    if (!u.active) return no('username', '此帳號已停用')
-    if (u.id === cashier.id) return no('username', '不能核准自己結帳的優免，請另一位主管核准')
-    // 核准人用的是帳號（不是某個分頁的作業角色）：帳號任一角色在法規範圍內、且被指定了這項權限
-    const canApprove = u.roles.some((r) => permits(permDef('charge.approveDiscount'), db.permissionSettings as never, r, u.grants ?? []))
-    if (!canApprove) return no('username', `${u.name} 沒有核准優免的權限`)
-    const token = newId('APV')
-    approvals.set(token, { visitId: v.id, code: rule.code, cashierId: cashier.id, approverId: u.id, approverName: u.name, at: Date.now() })
-    audit('優免核准', `${u.name} 核准 ${what}`)
-    return { ok: true, token, approverName: u.name }
+    const r = grantWitness({
+      purpose: 'discount', refId: `${v.id}|${rule.code}`, actor: cashier, username: input.username, password: input.password,
+      who: '主管', selfMessage: '不能核准自己結帳的優免，請另一位主管核准', auditAction: '優免核准', verb: '核准',
+      what: `${nameOf.patient(v.patientId)} ${rule.name}（櫃台 ${cashier.name}）`,
+      // 帳號任一角色在法規範圍內、且被指定了這項權限
+      qualifies: (u) => (u.roles.some((ro) => permits(permDef('charge.approveDiscount'), db.permissionSettings as never, ro, u.grants ?? [])) ? null : `${u.name} 沒有核准優免的權限`),
+    })
+    return r.ok ? { ok: true, token: r.token, approverName: r.witnessName } : r
   })
 }
 
 /** 結帳時檢查核准：同一次掛號、同一類別、同一位櫃台、還沒過期 */
 function approvalFor(token: string | undefined, visitId: string, code: string, cashierId: string) {
-  const a = token ? approvals.get(token) : undefined
-  if (!a || a.visitId !== visitId || a.code !== code || a.cashierId !== cashierId) return null
-  if (Date.now() - a.at > DISCOUNT_APPROVAL_MIN * 60_000) return 'expired' as const
-  return a
+  const g = witnessFor(token, 'discount', `${visitId}|${code}`, cashierId)
+  if (!g || g === 'expired') return g
+  return { approverId: g.witnessId, approverName: g.witnessName }
 }
 
 export interface PayInput {
@@ -195,7 +177,7 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const discNote = charge.discount ? `（優免：${charge.discount.name} −${charge.discount.amount} 元${charge.discount.reason ? `，${charge.discount.reason}` : ''}${approved ? `，${approved.approverName} 核准` : ''}）` : ''
     const preNote = applied ? `（預收扣抵 ${applied} 元${excessRefund ? `、退還差額 ${excessRefund.amount} 元 ${excessRefund.receiptNo}` : ''}）` : ''
     audit('批價結帳', `${charge.receiptNo} ${find.patient(v.patientId)?.name} ${pv.patientTotal} 元${preNote}${discNote}${owed ? `（欠 ${owed} 元：${charge.oweReason}）` : ''}`)
-    if (approved) approvals.delete(input.discount!.approval!) // 一次性：用掉
+    if (approved) consumeWitness(input.discount!.approval) // 一次性：用掉
     return charge
   })
 }

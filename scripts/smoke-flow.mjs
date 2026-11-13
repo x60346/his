@@ -52,6 +52,12 @@ try {
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  /** 第二人當場確認（管制藥點班見證、報廢覆核）：拿一次性的確認 token */
+  const witnessOf = async (target, username) => {
+    const r = await api.witnessApi.approveWitness({ ...target, username, password: '1234' })
+    if (!r.ok) throw new Error(`第二人確認失敗：${r.message}`)
+    return r.token
+  }
   /** 住院調劑＋核對送出（雙人核對預設關閉，同一位藥師即可）；給藥測試要先有這一步 */
   const udSupply = async (kind, marIds, qtys) => {
     const r = await api.udApi.dispenseUd({ kind, marIds, qtys })
@@ -284,7 +290,7 @@ try {
   }
   const expiredDrug = dbm.db.drugLots.find((l) => l.qty > 0 && l.expiry < new Date().toISOString().slice(0, 10))
   if (expiredDrug) {
-    await api.inventoryApi.scrapExpired(expiredDrug.drugId)
+    await api.inventoryApi.scrapExpired(expiredDrug.drugId, undefined, await witnessOf({ purpose: 'scrapExpired', drugId: expiredDrug.drugId }, 'ph02'))
     ok(!dbm.db.drugLots.some((l) => l.drugId === expiredDrug.drugId && l.qty > 0 && l.expiry < new Date().toISOString().slice(0, 10)), '報廢過期批號')
   } else ok(false, '種子資料應有一個已過期批號（M005）')
   ok(dbm.db.visits.find((v) => v.id === visit.id).status === 'dispensed', '發藥 → 掛號狀態已領藥')
@@ -4068,7 +4074,7 @@ try {
     await expectError(() => W.countWard(w1.ward, { lines: all({ M001: { book: 39, counted: 39 } }) }), '帳上數量在點的時候變了')
     const m31 = qtyAt('M031', w1.id)
     const m26 = qtyAt('M026', w1.id)
-    const c = await W.countWard(w1.ward, { lines: all({ M031: { counted: m31 - 2, reason: '找不到，已通報' }, M026: { counted: m26 + 1, reason: '上一班補充未登打' } }) })
+    const c = await W.countWard(w1.ward, { lines: all({ M031: { counted: m31 - 2, reason: '找不到，已通報' }, M026: { counted: m26 + 1, reason: '上一班補充未登打' } }), witness: await witnessOf({ purpose: 'wardCount', ward: w1.ward }, 'nurse02') })
     ok(qtyAt('M031', w1.id) === m31 - 2 && qtyAt('M026', w1.id) === m26 + 1 && c.lines.filter((l) => l.reason).length === 2 && db().auditLogs[0].detail.includes('找不到'), '點班差異自動調帳（盤虧 −2、盤盈 +1），原因寫進點班紀錄與稽核')
     ok((await W.getWardStock(w1.ward)).shift.counted && (await api.dashboardApi.getDashboard()).wardCountDue === 2 && ledgerBroken(db()).length === 0, '本班已點班：首頁未點班的病房少一個；帳本仍對得起來')
 
@@ -4080,13 +4086,115 @@ try {
     ok(g1.stockFrom === 'ward' && db().stockTxns.at(-1).locationId === pl.id, `PRN 給藥扣${pl.name}`)
     // 把這個病房的 Acetaminophen 點成 0（全被拿走）→ 再給藥改由藥局直送
     const pv = await W.getWardStock(pw)
-    await W.countWard(pw, { lines: pv.rows.map((r) => ({ drugId: r.drugId, book: r.onHand, counted: r.drugId === 'M001' ? 0 : r.onHand, reason: r.drugId === 'M001' ? '測試：櫃子空了' : undefined })) })
+    await W.countWard(pw, { lines: pv.rows.map((r) => ({ drugId: r.drugId, book: r.onHand, counted: r.drugId === 'M001' ? 0 : r.onHand, reason: r.drugId === 'M001' ? '測試：櫃子空了' : undefined })), witness: await witnessOf({ purpose: 'wardCount', ward: pw }, 'nurse02') })
     const ipdB = qtyAt('M001', ipd)
     const g2 = await api.nursingApi.givePrn(prn.id, '再次頭痛')
     ok(g2.stockFrom === 'pharmacy' && qtyAt('M001', ipd) === ipdB - prn.dose && db().stockTxns.at(-1).ref.startsWith('藥局直送'), '病房常備不夠：不擋給藥，改由住院藥局直送（給藥紀錄標「藥局直送」）')
     ok(db().mar.find((m) => m.id === g2.id).stockFrom === 'pharmacy', '給藥紀錄記下扣哪裡')
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/services/nursing.ts', 'utf8').includes('wardStockOut(') && !/stockLoc\.ipd\(\)/.test(readFileSync('src/services/nursing.ts', 'utf8')), 'PRN、STAT 扣帳只走 wardStockOut（護理站不自己決定扣哪裡）')
+    await as('clerk01')
+  }
+
+  // 第二人當場確認（共用 witness-core）：管制藥點班見證、報廢覆核；優免主管核准也走同一套（上面的優免測試）
+  console.log('\n[管制藥雙人點班、報廢覆核]')
+  {
+    dbm.resetDatabase('small')
+    const W = api.wardStockApi
+    const WI = api.witnessApi
+    const db = () => dbm.db
+    const drug = (id) => db().drugs.find((d) => d.id === id)
+    ok(drug('M039').controlled === 2 && drug('M031').controlled === 4 && !drug('M001').controlled, '種子：Morphine 第二級、Tramadol 第四級管制藥；其他不是')
+    // 主檔：級別只有 1～4；空白＝非管制
+    await as('ph01')
+    const m26 = drug('M026')
+    await expectError(() => api.masterApi.saveDrug({ ...m26, controlled: 5 }), '管制藥品級別填 5')
+    await api.masterApi.saveDrug({ ...m26, controlled: 3 })
+    ok(drug('M026').controlled === 3, '主檔設定管制級別（第三級）')
+    await api.masterApi.saveDrug({ ...drug('M026'), controlled: '' })
+    ok(drug('M026').controlled === undefined, '改回非管制（空白）')
+
+    const w1 = db().stockLocations.find((l) => l.kind === 'ward')
+    await as('nurse01')
+    let v = await W.getWardStock(w1.ward)
+    ok(v.needsWitness && v.rows.find((r) => r.drugId === 'M039')?.controlled === 2 && !v.rows.find((r) => r.drugId === 'M001').controlled, `${w1.name}含管制藥：點班要見證，品項標出級別`)
+    const lines = () => v.rows.map((r) => ({ drugId: r.drugId, book: r.onHand, counted: r.onHand }))
+    try {
+      await W.countWard(w1.ward, { lines: lines() })
+      ok(false, '沒有見證應被擋下')
+    } catch (e) {
+      ok(e.field === 'witness' && e.message.includes('另一位護理師'), `含管制藥沒有見證 → 「${e.message}」（服務層把關）`)
+    }
+    // 見證人：不能是自己、密碼錯、不是護理師、停用的帳號都回傳失敗（不丟錯），失敗留稽核
+    const tryW = (username, password = '1234') => WI.approveWitness({ purpose: 'wardCount', ward: w1.ward, username, password })
+    let r = await tryW('nurse01')
+    ok(!r.ok && r.field === 'username' && r.message.includes('自己') && db().auditLogs[0].action === '管制藥點班見證失敗', `見證人是自己 → 「${r.message}」，失敗留在稽核`)
+    r = await tryW('nurse02', 'wrong')
+    ok(!r.ok && r.field === 'password', '見證人密碼錯 → 回傳失敗（標在密碼欄）')
+    r = await tryW('ph01')
+    ok(!r.ok && r.message.includes('不是護理師'), `藥師見證病房點班 → 「${r.message}」`)
+    db().users.find((u) => u.username === 'nurse02').active = false
+    r = await tryW('nurse02')
+    db().users.find((u) => u.username === 'nurse02').active = true
+    ok(!r.ok && r.message.includes('停用'), '停用的帳號不能見證')
+    await expectError(() => WI.approveWitness({ purpose: 'wardCount', ward: w1.ward, username: '', password: '' }), '見證沒填帳密')
+    // 確認綁定病房與發起人
+    const other = db().stockLocations.filter((l) => l.kind === 'ward')[1]
+    const tOther = await witnessOf({ purpose: 'wardCount', ward: other.ward }, 'nurse02')
+    await expectError(() => W.countWard(w1.ward, { lines: lines(), witness: tOther }), '拿別的病房的見證點班')
+    const tok = await witnessOf({ purpose: 'wardCount', ward: w1.ward }, 'staff01')
+    ok(db().auditLogs[0].action === '管制藥點班見證' && db().auditLogs[0].detail.includes('陳小芬 見證') && db().auditLogs[0].detail.includes('Morphine'), '兼任護理師的帳號（護理＋櫃台）也能見證；稽核寫出見證人與管制藥')
+    await as('nurse02')
+    await expectError(() => W.countWard(w1.ward, { lines: lines(), witness: tok }), '別的護理師拿這張見證點班')
+    await as('nurse01')
+    // 送出失敗（差異沒寫原因）不會用掉見證：改好再送
+    await expectError(() => W.countWard(w1.ward, { lines: lines().map((l) => (l.drugId === 'M039' ? { ...l, counted: l.book - 1 } : l)), witness: tok }), '差異沒寫原因（見證還在）')
+    clockBase += 11 * 60_000
+    try {
+      await W.countWard(w1.ward, { lines: lines(), witness: tok })
+      ok(false, '過期的見證應被擋下')
+    } catch (e) {
+      ok(e.field === 'witness' && e.message.includes('重新見證'), `見證超過 10 分鐘 → 「${e.message}」`)
+    } finally {
+      clockBase -= 11 * 60_000
+    }
+    const c = await W.countWard(w1.ward, { lines: lines(), witness: tok })
+    ok(c.witnessBy === 'U501' && (await W.getWardStock(w1.ward)).lastCount?.witnessName === '陳小芬' && db().auditLogs[0].detail.includes('見證 陳小芬'), '點班完成：記下見證人（點班紀錄、上次點班、稽核）')
+    await expectError(() => W.countWard(w1.ward, { lines: lines(), witness: tok }), '同一張見證再用一次')
+    // 沒有管制藥的病房常備不需要見證
+    for (const id of ['M031', 'M039']) db().drugs.find((d) => d.id === id).controlled = undefined
+    v = await W.getWardStock(other.ward)
+    ok(!v.needsWitness, '常備沒有管制藥：不需要見證')
+    await expectError(() => WI.approveWitness({ purpose: 'wardCount', ward: other.ward, username: 'nurse02', password: '1234' }), '沒有管制藥卻要求見證')
+    await W.countWard(other.ward, { lines: lines() })
+    ok(!db().wardCounts.at(-1).witnessBy, '沒有管制藥：一個人點班即可')
+    dbm.resetDatabase('small')
+
+    // 報廢一律要另一位藥師（或管理者）覆核
+    await as('ph01')
+    const lot = db().drugLots.find((l) => l.qty > 0 && l.expiry < today() && l.locationId === db().stockLocations.find((x) => x.dispensesOpd).id)
+    ok(!!lot, '種子資料有已過期的批號')
+    try {
+      await api.inventoryApi.scrapExpired(lot.drugId)
+      ok(false, '沒有覆核應被擋下')
+    } catch (e) {
+      ok(e.field === 'witness' && e.message.includes('另一位藥師'), `過期報廢沒有覆核 → 「${e.message}」`)
+    }
+    const tryS = (username) => WI.approveWitness({ purpose: 'scrapExpired', drugId: lot.drugId, username, password: '1234' })
+    r = await tryS('ph01')
+    ok(!r.ok && r.message.includes('自己') && db().auditLogs[0].action === '報廢覆核失敗', '覆核人是自己 → 回傳失敗，留稽核')
+    r = await tryS('nurse01')
+    ok(!r.ok && r.message.includes('不是藥師或管理者'), `護理師覆核報廢 → 「${r.message}」`)
+    const other2 = db().drugLots.find((l) => l.qty > 0 && l.expiry >= today())
+    await expectError(() => WI.approveWitness({ purpose: 'scrapExpired', drugId: other2.drugId, locationId: other2.locationId, username: 'ph02', password: '1234' }), '沒有過期批號卻要求覆核')
+    const sTok = await witnessOf({ purpose: 'scrapExpired', drugId: lot.drugId }, 'admin')
+    const stockBefore = drug(lot.drugId).stock
+    const txns = await api.inventoryApi.scrapExpired(lot.drugId, undefined, sTok)
+    ok(txns.length >= 1 && drug(lot.drugId).stock < stockBefore && txns.every((x) => x.reason.includes('覆核 系統管理員')) && db().auditLogs[0].detail.includes('覆核 系統管理員'), '管理者覆核後報廢：異動原因與稽核都寫出覆核人')
+    ok(ledgerBroken(db()).length === 0, '報廢後帳本仍對得起來')
+    const { readFileSync } = await import('node:fs')
+    const src = (f) => readFileSync(f, 'utf8')
+    ok(!src('src/services/index.ts').includes('witness-core') && src('src/services/charge.ts').includes("grantWitness({") && !src('src/services/charge.ts').includes('const approvals'), '優免核准改用共用的 witness-core（內部模組，不是 API）')
     await as('clerk01')
   }
 
@@ -4586,9 +4694,10 @@ try {
         await expectError(() => INV2.releaseQuarantine(exQ.lotId, '想放回'), '過期的放回可用')
         const before = dbm.db.drugs.find((d) => d.id === exQ.drugId).stock
         await expectError(() => INV2.scrapQuarantine(exQ.lotId, ' '), '報廢沒寫原因')
-        await INV2.scrapQuarantine(exQ.lotId, '過期')
-        ok(dbm.db.drugs.find((d) => d.id === exQ.drugId).stock === before - exQ.qty && !(await INV2.listQuarantine()).some((r) => r.lotId === exQ.lotId) && dbm.db.auditLogs[0].action === '待報廢區報廢', `報廢 ${exQ.drugName} ${exQ.qty}：全院總量才扣、寫稽核`)
-        await expectError(() => INV2.scrapQuarantine(exQ.lotId, '再報廢'), '已報廢完的再報廢')
+        await expectError(() => INV2.scrapQuarantine(exQ.lotId, '過期'), '待報廢區報廢沒有覆核')
+        await INV2.scrapQuarantine(exQ.lotId, '過期', await witnessOf({ purpose: 'scrapQuarantine', lotId: exQ.lotId }, 'ph02'))
+        ok(dbm.db.drugs.find((d) => d.id === exQ.drugId).stock === before - exQ.qty && !(await INV2.listQuarantine()).some((r) => r.lotId === exQ.lotId) && dbm.db.auditLogs[0].action === '待報廢區報廢' && dbm.db.auditLogs[0].detail.includes('覆核 林雅婷'), `報廢 ${exQ.drugName} ${exQ.qty}：全院總量才扣、寫稽核（含覆核人）`)
+        await expectError(() => INV2.scrapQuarantine(exQ.lotId, '再報廢', 'x'), '已報廢完的再報廢')
       }
       await expectError(() => INV2.scrapQuarantine(dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.qty > 0).id, 'x'), '用待報廢區的報廢扣藥庫的批號')
       ok(ledgerBroken(dbm.db).length === 0, '報廢、放回後帳本仍對得起來')
