@@ -36,11 +36,17 @@ export function dailyReportCsv(r: DailyReport): string {
       key: x.receiptNo,
       cells: ['收回欠款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', PAY[x.payMethod], x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
     })),
+    // 掛號預收：算在收的那天
+    ...r.prepays.map((x) => ({
+      at: x.at,
+      key: x.receiptNo,
+      cells: ['掛號預收', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', PAY[x.payMethod], x.amount, '', '', x.cashierName, '有效', ''],
+    })),
     // 退款：負數，算在退款那天
     ...r.refunds.map((x) => ({
       at: x.at,
       key: x.receiptNo,
-      cells: ['退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
+      cells: [x.kind === '退預收' ? '退還預收' : '退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
     })),
   ].sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key))
   const period = r.date === r.to ? r.date : `${r.date} ~ ${r.to}`
@@ -54,6 +60,8 @@ export function dailyReportCsv(r: DailyReport): string {
     // 合計列的名稱不要和明細的「類別」同名（收費、收回欠款）：在 Excel 篩選類別時才不會混進來
     line(['新記欠款合計', r.newDebt]),
     line(['收回欠款合計', r.repaid]),
+    line(['掛號預收合計', r.prepaidIn]),
+    line(['預收扣抵合計', -r.prepaidApplied]),
     line(['退款合計', -r.refunded]),
     line(['實收合計', r.collected]),
     line(['有效收據張數', r.count]),
@@ -61,8 +69,8 @@ export function dailyReportCsv(r: DailyReport): string {
     line(['健保申報點數', r.nhiPoints]),
   ]
   if (r.byDay.length > 1) {
-    out.push('', line(['日期', '收據張數', '應收', '新欠', '收回', '退款', '實收']))
-    for (const d of r.byDay) out.push(line([d.date, d.count, d.patientTotal, d.newDebt, d.repaid, -d.refunded, d.collected]))
+    out.push('', line(['日期', '收據張數', '應收', '新欠', '收回', '預收', '預收扣抵', '退款', '實收']))
+    for (const d of r.byDay) out.push(line([d.date, d.count, d.patientTotal, d.newDebt, d.repaid, d.prepaidIn, -d.prepaidApplied, -d.refunded, d.collected]))
   }
   return '﻿' + out.join('\r\n') + '\r\n'
 }

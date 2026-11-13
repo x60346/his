@@ -1,5 +1,6 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { ChargeLine, Encounter, Visit, VisitStatus } from '@/types'
+import type { ChargeLine, Encounter, Visit, VisitStatus, PayMethod } from '@/types'
+import { prepayAvailable, refundPrepay, takePrepay } from './money'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
@@ -51,6 +52,8 @@ export interface RegisterInput {
   preventItems?: string[]
   /** 病人已在櫃台（現場掛號）：掛號同時報到。只能用在今天的診次 */
   checkIn?: boolean
+  /** 掛號預收（選填，只限掛號批價人員）：批價時扣抵、多退少補 */
+  prepay?: { amount: number; payMethod: PayMethod }
 }
 
 /**
@@ -108,11 +111,13 @@ function createVisit(input: RegisterInput): Visit {
 
 export function register(input: RegisterInput): Promise<VisitView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    const u = requireUser('clerk', 'nurse')
+    if (input.prepay && u.role !== 'clerk') fail('預收款請由掛號批價人員收取', 'FORBIDDEN')
     const v = createVisit(input)
+    const pp = input.prepay ? takePrepay(v, input.prepay, u.id) : undefined
     const p = find.patient(v.patientId)!
     const s = find.session(v.sessionId)!
-    audit('掛號', `${p.chartNo} ${p.name} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}${v.checkedInAt ? '（已報到）' : ''}`)
+    audit('掛號', `${p.chartNo} ${p.name} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}${v.checkedInAt ? '（已報到）' : ''}${pp ? `（預收 ${pp.amount} 元 ${pp.receiptNo}）` : ''}`)
     return visitView(v)
   })
 }
@@ -132,6 +137,11 @@ export function rescheduleVisit(visitId: string, input: Omit<RegisterInput, 'pat
     old.status = 'cancelled'
     // 已經報到的人當場改掛今天別的診（例如換醫師）：人還在，不必再報到一次
     const v = createVisit({ ...input, patientId: old.patientId, checkIn: !!old.checkedInAt && find.session(input.sessionId)?.date === today() })
+    // 預收款是這位病人付的、還沒用：跟著改到新的掛號（不必退了再收）
+    if (old.prepay) {
+      v.prepay = old.prepay
+      delete old.prepay
+    }
     const s = find.session(v.sessionId)!
     old.cancelReason = `改期至 ${s.date} ${periodLabel[s.period]} ${nameOf.dept(s.deptId)} ${nameOf.doctor(s.doctorId)} 第 ${v.seqNo} 號`
     audit('改期', `${find.patient(v.patientId)?.name}：${old.date} #${old.seqNo} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}`)
@@ -237,8 +247,12 @@ export function cancelVisit(visitId: string): Promise<VisitView> {
       return visitView(v)
     }
     if (v.status !== 'registered') fail('只有尚未看診的掛號可以退掛', 'CONFLICT')
+    const u = requireUser('clerk', 'nurse')
+    const back = prepayAvailable(v)
+    if (back > 0 && u.role !== 'clerk') fail('這筆掛號有預收款，退掛請由掛號批價人員辦理（要退錢）', 'FORBIDDEN')
     v.status = 'cancelled'
-    audit('退掛', `${find.patient(v.patientId)?.name} ${v.date} #${v.seqNo}`)
+    const r = back > 0 ? refundPrepay(v, back, '退掛', u.id) : undefined
+    audit('退掛', `${find.patient(v.patientId)?.name} ${v.date} #${v.seqNo}${r ? `（退還預收 ${r.amount} 元 ${r.receiptNo}）` : ''}`)
     return visitView(v)
   })
 }

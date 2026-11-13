@@ -7,6 +7,7 @@ import { scheduleApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { periodLabel, weekdayLabel } from '@/utils/date'
 import { useUi } from '@/stores/ui'
+import { useAuth } from '@/stores/auth'
 import type { NoticeRow } from '@/services/schedule'
 
 const ui = useUi()
@@ -14,6 +15,12 @@ const { data: notices, loading } = useQuery(() => scheduleApi.listSuspendNotices
 const mark = useAction(scheduleApi.markNotified, { success: '已記錄通知' })
 // 「已通知」不先確認（要連續按很多次），改成可以撤銷；撤銷較少用，所以先確認
 const unmark = useAction(scheduleApi.unmarkNotified, { success: '已改回待通知' })
+// 停診退掛的預收款：病人聯絡上或來院時退還（櫃台）
+const auth = useAuth()
+const refundPre = useAction(scheduleApi.refundSuspendedPrepay, { success: (r) => `已退還預收 ${r.amount} 元（退款單 ${r.receiptNo}）` })
+const doRefund = async (n: NoticeRow) => {
+  if (await ui.confirm({ title: '退還預收款', message: `退還 ${n.patientName} 預收款 ${n.prepayDue} 元（依預收時的付款方式），開退款單算在今天？`, okText: '退還' })) refundPre.run(n.visitId)
+}
 const undo = async (n: NoticeRow) => {
   if (await ui.confirm({ title: '撤銷通知紀錄', message: `把 ${n.patientName}（${n.date.slice(5)} #${n.seqNo}）改回待通知？\n撤銷會寫入稽核紀錄。`, okText: '改回待通知' })) unmark.run(n.visitId)
 }
@@ -32,6 +39,10 @@ const undo = async (n: NoticeRow) => {
         <span class="w-20 font-medium" :class="!n.notifiedAt && 'text-slate-800'">{{ n.patientName }}</span>
         <span class="tabular flex items-center gap-1"><Phone class="h-3.5 w-3.5" />{{ n.phone }}</span>
         <UBadge tone="gray">{{ n.reason }}</UBadge>
+        <span v-if="n.prepayDue" class="flex items-center gap-1 text-xs text-amber-800">
+          待退預收 <b class="tabular">{{ n.prepayDue }}</b> 元
+          <UButton v-if="auth.user?.role === 'clerk'" size="sm" variant="ghost" :loading="refundPre.pending.value" @click="doRefund(n)">退還</UButton>
+        </span>
         <span class="ml-auto">
           <span v-if="n.notifiedAt" class="tabular flex items-center gap-2 text-xs">
             {{ n.notifiedAt.slice(5) }} {{ n.notifiedByName ?? '' }} 已通知

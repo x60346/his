@@ -3198,6 +3198,103 @@ try {
     ok(page.includes("receipt.cancel?.mode === 'void'") && !/paidAt\.slice\(0, 10\) [!=]== todayStr \?/.test(page.replace(/receipt\.paidAt\.slice\(0, 10\) === todayStr \? '收回過欠款的收據'/, '')), '作廢還是退費由服務層決定（receipt.cancel），頁面不自己比日期')
   }
 
+  // 掛號預收：掛號時先收（選填），批價扣抵、多退少補；退掛退還；停診待退；收據作廢後預收款還在
+  console.log('\n[掛號預收]')
+  {
+    const { addDays } = await load('/src/utils/date.ts')
+    const B = api.bookingApi
+    const C = api.chargeApi
+    const db = () => dbm.db
+    const vOf = (id) => db().visits.find((v) => v.id === id)
+    const openSession = async (date) => (await api.scheduleApi.listSessions({ date })).find((x) => !x.full && !x.closed && !x.suspended)
+    const freePatient = (date) => db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === date && v.patientId === x.id))
+    const see = async (visitId) => {
+      const v = vOf(visitId)
+      await as(db().users.find((u) => u.doctorId === v.doctorId).username)
+      const e = await api.opdApi.startConsult(visitId, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(e.id, { subjective: '測試', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'J06.9', name: '急性上呼吸道感染', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+      await as('clerk01')
+    }
+    const sessT = await openSession(T)
+    ok(!!sessT, '今天還有可掛的診次')
+    const base = { sessionId: sessT.id, identityCode: '01', caseType: '01' }
+
+    await as('nurse01')
+    await expectError(() => B.register({ ...base, patientId: freePatient(T).id, prepay: { amount: 300, payMethod: 'cash' } }), '護理師掛號時收預收款')
+    await as('clerk01')
+    try {
+      await B.register({ ...base, patientId: freePatient(T).id, prepay: { amount: 0, payMethod: 'cash' } })
+      ok(false, '預收 0 元應被擋下')
+    } catch (e) {
+      ok(e.field === 'prepay', `預收金額要正整數 → 「${e.message}」`)
+    }
+    // A：預收 500，應收比較少 → 結帳不用再收，差額當場退還
+    const before = await C.dailyReport(T)
+    const vA = await B.register({ ...base, patientId: freePatient(T).id, prepay: { amount: 500, payMethod: 'cash' } })
+    ok(vA.prepaid?.amount === 500 && vA.prepaid.receiptNo.startsWith('R' + T.replace(/-/g, '')) && vA.prepaid.available === 500 && db().auditLogs[0].detail.includes('預收 500'), `掛號預收 500：開預收收據 ${vA.prepaid?.receiptNo}，寫稽核`)
+    await see(vA.id)
+    const pvA = await C.previewCharge(vA.id)
+    ok(pvA.prepaid?.applied === pvA.patientTotal && pvA.prepaid.due === 0 && pvA.prepaid.excess === 500 - pvA.patientTotal, `試算：應收 ${pvA.patientTotal}，預收扣抵 ${pvA.prepaid?.applied}，本次應收 0，多收 ${pvA.prepaid?.excess} 要退還`)
+    const chA = await C.pay(vA.id, { payMethod: 'cash', received: 0 })
+    const ppA = vOf(vA.id).prepay
+    ok(chA.prepaidApplied === pvA.patientTotal && chA.received === 0 && ppA.refunds.length === 1 && ppA.refunds[0].amount === pvA.prepaid.excess && ppA.refunds[0].receiptNo.startsWith('RF'),
+      `結帳：扣抵 ${chA.prepaidApplied}、不再收錢；差額 ${ppA.refunds[0]?.amount} 開退款單 ${ppA.refunds[0]?.receiptNo} 當場退還`)
+    const afterA = await C.dailyReport(T)
+    ok(afterA.prepaidIn === before.prepaidIn + 500 && afterA.prepaidApplied === before.prepaidApplied + pvA.patientTotal && afterA.refunds.some((x) => x.kind === '退預收' && x.amount === pvA.prepaid.excess) && afterA.collected === before.collected + 500 - pvA.prepaid.excess,
+      `日結：預收 +500、扣抵不重算、退還差額 −${pvA.prepaid.excess}：今天實收淨增 ${500 - pvA.prepaid.excess}（＝這位病人實際付的）`)
+    const sum = (r) => Object.values(r.byPayMethod).reduce((n, x) => n + x, 0)
+    ok(sum(afterA) === afterA.collected && afterA.byCashier.reduce((n, x) => n + x.collected, 0) === afterA.collected && afterA.byDay.reduce((n, x) => n + x.collected, 0) === afterA.collected, '依付款方式、收費人員、日期加總都＝實收')
+
+    // B：預收 50，不夠 → 補收差額；當天作廢後預收款還在，重新批價再扣抵
+    const vB = await B.register({ ...base, patientId: freePatient(T).id, prepay: { amount: 50, payMethod: 'card' } })
+    await see(vB.id)
+    const pvB = await C.previewCharge(vB.id)
+    ok(pvB.prepaid.applied === 50 && pvB.prepaid.due === pvB.patientTotal - 50 && !pvB.prepaid.excess, `預收不夠：應收 ${pvB.patientTotal} − 預收 50 ＝ 本次應收 ${pvB.prepaid.due}`)
+    await expectError(() => C.pay(vB.id, { payMethod: 'cash', received: pvB.prepaid.due - 1 }), '少收（現金沒到本次應收）')
+    const chB = await C.pay(vB.id, { payMethod: 'cash', received: pvB.prepaid.due })
+    ok(chB.received === pvB.prepaid.due && chB.change === 0 && chB.prepaidApplied === 50, '補收差額，收據記下扣抵 50')
+    await C.voidCharge(chB.id, '身分選錯')
+    ok(vOf(vB.id).prepay.refunds.length === 0 && (await C.previewCharge(vB.id)).prepaid?.applied === 50, '當天作廢：預收款還在這次就醫（沒退），重新批價再扣抵')
+    await C.pay(vB.id, { payMethod: 'cash', received: pvB.prepaid.due })
+
+    // 改期帶著預收走；退掛當場退還（只限櫃台）
+    const tm = addDays(T, 1)
+    const sessTm = await openSession(tm)
+    const vC = await B.register({ sessionId: sessTm.id, identityCode: '01', caseType: '01', patientId: freePatient(tm).id, prepay: { amount: 200, payMethod: 'mobile' } })
+    const sessTm2 = (await api.scheduleApi.listSessions({ date: tm })).find((x) => !x.full && !x.closed && !x.suspended && x.id !== sessTm.id)
+    let vC2 = vC
+    if (sessTm2) {
+      vC2 = await B.rescheduleVisit(vC.id, { sessionId: sessTm2.id, identityCode: '01', caseType: '01' })
+      ok(vC2.prepaid?.amount === 200 && !vOf(vC.id).prepay, '改期：預收款跟著改到新的掛號（不必退了再收）')
+    }
+    await as('nurse01')
+    await expectError(() => B.cancelVisit(vC2.id), '護理師退掛有預收款的掛號（要退錢）')
+    await as('clerk01')
+    await B.cancelVisit(vC2.id)
+    const ppC = vOf(vC2.id).prepay
+    ok(ppC.refunds.length === 1 && ppC.refunds[0].amount === 200 && db().auditLogs[0].detail.includes('退還預收 200'), '退掛：當場退還預收 200（開退款單、寫稽核）')
+
+    // 停診：病人不在現場 → 待退；名單上看得到、櫃台退還
+    const sessS = (await api.scheduleApi.listSessions({ date: addDays(T, 2) })).find((x) => !x.full && !x.closed && !x.suspended) ?? (await openSession(addDays(T, 3)))
+    const vS = await B.register({ sessionId: sessS.id, identityCode: '01', caseType: '01', patientId: freePatient(sessS.date).id, prepay: { amount: 150, payMethod: 'cash' } })
+    await as('admin')
+    await api.scheduleApi.suspendSession(sessS.id, '醫師開會')
+    ok(db().auditLogs[0].detail.includes('有預收款待退'), '停診稽核寫出有預收款待退')
+    await as('clerk01')
+    const nt = (await api.scheduleApi.listSuspendNotices()).find((x) => x.visitId === vS.id)
+    ok(nt?.prepayDue === 150, '停診通知名單：標「待退預收 150」')
+    await as('nurse01')
+    await expectError(() => api.scheduleApi.refundSuspendedPrepay(vS.id), '護理師退還預收款')
+    await as('clerk01')
+    const rr = await api.scheduleApi.refundSuspendedPrepay(vS.id)
+    ok(rr.amount === 150 && rr.receiptNo.startsWith('RF') && !(await api.scheduleApi.listSuspendNotices()).find((x) => x.visitId === vS.id)?.prepayDue, '退還後名單不再標待退')
+    await expectError(() => api.scheduleApi.refundSuspendedPrepay(vS.id), '已退還的再退一次')
+    const fin = await C.dailyReport(T)
+    ok(sum(fin) === fin.collected && fin.collected === fin.patientTotal - fin.newDebt - fin.prepaidApplied + fin.repaid + fin.prepaidIn - fin.refunded, '全部做完：實收公式與依付款方式加總一致')
+    const csv = (await load('/src/services/report-csv.ts')).dailyReportCsv(fin)
+    ok(csv.includes('掛號預收,') && csv.includes('退還預收,') && csv.includes(`預收扣抵合計,${-fin.prepaidApplied}`), '匯出 CSV：掛號預收、退還預收、預收扣抵合計')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {

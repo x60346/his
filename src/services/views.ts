@@ -8,6 +8,7 @@ import { fail, must } from './http'
 import { openQuery } from './nursing-rules'
 import { checkInProblem } from './queue-rules'
 import { normalizeRxTiming } from './drug-rules'
+import { prepayAvailable } from './money'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -164,7 +165,17 @@ export function patientBrief(patientId: string): PatientBrief {
   }
 }
 
+/** 掛號預收的摘要（VisitView 用） */
+export interface VisitPrepaySummary {
+  amount: number
+  receiptNo: string
+  /** 還沒用掉、也還沒退還的 */
+  available: number
+}
+
 export interface VisitView extends Visit, PatientBrief {
+  /** 掛號預收（有收才有） */
+  prepaid?: VisitPrepaySummary
   doctorName: string
   deptName: string
   identityName: string
@@ -188,6 +199,7 @@ export function visitView(v: Visit): VisitView {
     roomNo: s?.roomNo ?? '',
     roomLocation: s ? (find.room(s.roomNo)?.location ?? '') : '',
     canCheckIn: !checkInProblem(v, today()),
+    ...(v.prepay ? { prepaid: { amount: v.prepay.amount, receiptNo: v.prepay.receiptNo, available: prepayAvailable(v) } } : {}),
   }
 }
 

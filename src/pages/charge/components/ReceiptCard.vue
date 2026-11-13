@@ -43,6 +43,10 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
       <span class="tabular font-semibold">−{{ receipt.discount.amount.toLocaleString() }}</span>
     </div>
 
+    <div v-if="receipt.prepaidApplied" class="mt-2 flex justify-between rounded border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+      <span>掛號預收扣抵<template v-if="receipt.visit?.prepaid">（{{ receipt.visit.prepaid.receiptNo }}）</template></span>
+      <span class="tabular font-semibold">−{{ receipt.prepaidApplied.toLocaleString() }}</span>
+    </div>
     <!-- 已退費：原收據照算在原本那天，退款單另開、算在退款那天 -->
     <div v-if="receipt.refund" class="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
       <div class="flex justify-between"><span>已退費（退款單 {{ receipt.refund.receiptNo }}，{{ receipt.refund.at.slice(0, 16) }}）</span><span class="tabular font-semibold">−{{ receipt.refund.amount.toLocaleString() }}</span></div>

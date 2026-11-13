@@ -206,6 +206,22 @@ export interface Visit {
   refillOf?: string
   /** 慢箋第幾次調劑（看診當天那次是第 1 次，所以這裡從 2 開始） */
   refillSeq?: number
+  /**
+   * 掛號預收款（選填）：掛號時先收，批價時扣抵、多退少補。錢屬於「這次就醫」不屬於某張收據——
+   * 收據作廢或退費後預收款還在，重新批價時再扣抵；退掛、停診才退還
+   */
+  prepay?: VisitPrepay
+}
+
+export interface VisitPrepay {
+  amount: number
+  payMethod: PayMethod
+  /** 預收收據號（和批價收據同一個序號） */
+  receiptNo: string
+  at: string
+  cashierId: string
+  /** 退還紀錄（退掛、停診、預收多於應收的差額）：每筆一張退款單 */
+  refunds: { receiptNo: string; amount: number; reason: string; cashierId: string; at: string }[]
 }
 
 export interface VitalSigns {
@@ -360,6 +376,8 @@ export interface Charge {
    * 退款另開一張退款單、算在退款那天（負數）。有 refund 的收據 voided 也是 true（不再是這次就醫的有效收據）
    */
   refund?: Refund
+  /** 這張收據扣抵了多少掛號預收款（批價時「本次應收」＝ patientTotal − 這個） */
+  prepaidApplied?: number
   /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列）；需主管核准的記下核准人（id 與當時的姓名） */
   discount?: { code: string; name: string; reason?: string; amount: number; approvedBy?: string; approverName?: string }
 }

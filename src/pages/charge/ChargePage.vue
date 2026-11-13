@@ -98,7 +98,8 @@ const receipt = computed(() => (item.value ? detail.value?.receipt : undefined))
 // ---------- 結帳 ----------
 const payMethod = ref<PayMethod>('cash')
 const received = ref<number | undefined>()
-const total = computed(() => preview.value?.patientTotal ?? 0)
+// 本次要收的：應收 − 掛號預收扣抵（服務層算好的 due）
+const total = computed(() => preview.value?.prepaid?.due ?? preview.value?.patientTotal ?? 0)
 // 實收不足時可勾「差額記為欠款」（只限現金）
 const owe = ref(false)
 const oweReason = ref('')
@@ -281,9 +282,11 @@ const identityOpen = ref(false)
                 <p v-if="rule" class="text-xs text-slate-500">部分負擔依健保規定不能減免，優免只減掛號費與自費項目。</p>
               </div>
               <div class="rounded-md bg-slate-900 px-4 py-3 text-right text-white">
-                <div class="text-xs text-slate-400">應收金額</div>
+                <div class="text-xs text-slate-400">{{ preview?.prepaid ? '本次應收（已扣預收）' : '應收金額' }}</div>
                 <div class="tabular text-3xl font-bold">$ {{ total.toLocaleString() }}</div>
+                <div v-if="preview?.prepaid" class="tabular text-xs text-slate-300">應收 {{ preview.patientTotal.toLocaleString() }} − 掛號預收 {{ preview.prepaid.applied.toLocaleString() }}（{{ preview.prepaid.receiptNo }}）</div>
               </div>
+              <p v-if="preview?.prepaid?.excess" class="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">預收多收 <b class="tabular">{{ preview.prepaid.excess }}</b> 元：結帳時開退款單，當場退還病人（依預收時的付款方式）</p>
 
               <div class="grid grid-cols-3 gap-2">
                 <button
@@ -395,6 +398,7 @@ const identityOpen = ref(false)
           <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ (receipt.cancel?.refundAmount ?? 0).toLocaleString() }}</span></div>
           <div class="text-xs text-red-700">依原付款方式：結帳時 {{ PM_LABEL[receipt.payMethod] }}<template v-if="receipt.repayments?.length">；收回的欠款依當時的方式</template></div>
           <div v-if="receipt.owed && receipt.owed - (receipt.repayments ?? []).reduce((n, r) => n + r.amount, 0) > 0" class="text-xs text-red-700">還沒收回的欠款一併取消</div>
+          <div v-if="receipt.prepaidApplied" class="text-xs text-red-700">掛號預收的 {{ receipt.prepaidApplied }} 元不在這裡退：留在這次就醫，重新批價時再扣抵（退掛才退還）</div>
         </div>
         <UTextarea v-model="refundReason" label="退費原因" required placeholder="例：醫師改處方、病人過敏回診" :rows="2" :error="refundAction.fieldErrors.value.reason" />
       </div>

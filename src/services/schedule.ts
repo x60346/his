@@ -6,6 +6,7 @@
 //   單日診次——某一天的例外：停診（病人退掛並通知）、代診（病人轉給同科另一位醫師）。
 // 原則：已經有病人掛號的診次，任何調整都不能讓掛號默默消失或默默換醫師。
 import type { ClinicSession, Period, Room, Visit, WeeklySlot } from '@/types'
+import { prepayAvailable, refundPrepay } from './money'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
@@ -281,7 +282,8 @@ export function suspendSession(id: string, reason: string): Promise<AffectedVisi
       v.cancelReason = `停診：${reason.trim()}`
     }
     s.suspended = { reason: reason.trim(), at: now(), by: u.id }
-    audit('停診', `${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)}（${reason.trim()}），退掛 ${list.length} 筆待通知`)
+    const due = list.filter((a) => prepayAvailable(db.visits.find((x) => x.id === a.visitId)!) > 0).length
+    audit('停診', `${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)}（${reason.trim()}），退掛 ${list.length} 筆待通知${due ? `，${due} 筆有預收款待退` : ''}`)
     return list
   })
 }
@@ -295,11 +297,30 @@ export interface NoticeRow extends AffectedVisit {
   notifiedAt?: string
   /** 記錄通知的人（姓名） */
   notifiedByName?: string
+  /** 停診退掛、還沒退還的預收款（病人不在現場：聯絡上或來院時由櫃台退） */
+  prepayDue?: number
 }
 
-/** 停診通知名單的範圍：今天以後、因停診而退掛的掛號（含已通知者）。名單與首頁待辦共用 */
+/**
+ * 停診通知名單的範圍：今天以後、因停診而退掛的掛號（含已通知者）；
+ * 還有預收款沒退的，日期過了也留在名單上（錢還沒還給病人）。名單與首頁待辦共用
+ */
 export function suspendNoticeVisits(t = today()) {
-  return db.visits.filter((v) => v.date >= t && v.status === 'cancelled' && v.cancelReason?.startsWith('停診'))
+  return db.visits.filter((v) => v.status === 'cancelled' && v.cancelReason?.startsWith('停診') && (v.date >= t || prepayAvailable(v) > 0))
+}
+
+/** 停診退掛的預收款：病人聯絡上或來院時退還（櫃台；依原付款方式，開退款單） */
+export function refundSuspendedPrepay(visitId: string): Promise<{ receiptNo: string; amount: number }> {
+  return mutate(() => {
+    const u = requireUser('clerk')
+    const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
+    if (v.status !== 'cancelled') fail('這筆掛號沒有退掛', 'CONFLICT')
+    const back = prepayAvailable(v)
+    if (back <= 0) fail('這筆掛號沒有待退的預收款', 'CONFLICT')
+    const r = refundPrepay(v, back, `停診退掛（${v.cancelReason?.slice(3)}）`, u.id)!
+    audit('退還預收款', `${find.patient(v.patientId)?.name} ${v.date} #${v.seqNo}：${r.amount} 元 ${r.receiptNo}`)
+    return { receiptNo: r.receiptNo, amount: r.amount }
+  })
 }
 
 /** 今天以後因停診而退掛的病人（含已通知者，方便核對） */
@@ -313,6 +334,7 @@ export function listSuspendNotices(): Promise<NoticeRow[]> {
         return {
           visitId: v.id, seqNo: v.seqNo, patientName: p?.name ?? '', phone: p?.phone ?? '', status: v.status,
           date: v.date, period: s?.period ?? 'AM', doctorName: nameOf.doctor(s?.originalDoctorId ?? s?.doctorId), reason: v.cancelReason!.slice(3), notifiedAt: v.notifiedAt,
+          ...(prepayAvailable(v) > 0 ? { prepayDue: prepayAvailable(v) } : {}),
           notifiedByName: v.notifiedBy ? (db.users.find((u) => u.id === v.notifiedBy)?.name ?? v.notifiedBy) : undefined,
         }
       })

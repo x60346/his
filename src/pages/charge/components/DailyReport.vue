@@ -77,6 +77,7 @@ const feeTypes = [
 type RefundRow = DailyReport['refunds'][number]
 const refundColumns = computed<Column<RefundRow>[]>(() => [
   { key: 'receiptNo', label: '退款單號' },
+  { key: 'kind', label: '類別' },
   { key: 'at', label: '時間', format: (x) => (isRange.value ? `${x.at.slice(5, 10).replace('-', '/')} ${x.at.slice(11)}` : x.at.slice(11)) },
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
@@ -85,6 +86,17 @@ const refundColumns = computed<Column<RefundRow>[]>(() => [
   { key: 'reason', label: '原因' },
   { key: 'cashierName', label: '經辦' },
   { key: 'amount', label: '金額', align: 'right', format: (x) => `−${x.amount.toLocaleString()}` },
+])
+type PrepayRow = DailyReport['prepays'][number]
+const prepayColumns = computed<Column<PrepayRow>[]>(() => [
+  { key: 'receiptNo', label: '收據號碼' },
+  { key: 'at', label: '時間', format: (x) => (isRange.value ? `${x.at.slice(5, 10).replace('-', '/')} ${x.at.slice(11)}` : x.at.slice(11)) },
+  { key: 'chartNo', label: '病歷號' },
+  { key: 'patientName', label: '姓名' },
+  { key: 'visitDate', label: '就醫日', format: (x) => x.visitDate.slice(5).replace('-', '/') },
+  { key: 'payMethod', label: '付款', format: (x) => payMethodLabel[x.payMethod] },
+  { key: 'cashierName', label: '收費人員' },
+  { key: 'amount', label: '金額', align: 'right', format: (x) => x.amount.toLocaleString() },
 ])
 type RepayRow = DailyReport['repayments'][number]
 const repayColumns = computed<Column<RepayRow>[]>(() => [
@@ -100,8 +112,8 @@ const repayColumns = computed<Column<RepayRow>[]>(() => [
 // 有欠款或收回時，「實收」和「應收」不同，提示怎麼算出來的
 const collectedHint = computed(() => {
   const x = r.value
-  if (!x || (!x.newDebt && !x.repaid && !x.refunded)) return ''
-  return `應收 ${money(x.patientTotal)}${x.newDebt ? ` − 新欠 ${money(x.newDebt)}` : ''}${x.repaid ? ` ＋ 收回 ${money(x.repaid)}` : ''}${x.refunded ? ` − 退款 ${money(x.refunded)}` : ''}`
+  if (!x || (!x.newDebt && !x.repaid && !x.refunded && !x.prepaidIn && !x.prepaidApplied)) return ''
+  return `應收 ${money(x.patientTotal)}${x.newDebt ? ` − 新欠 ${money(x.newDebt)}` : ''}${x.prepaidApplied ? ` − 預收扣抵 ${money(x.prepaidApplied)}` : ''}${x.repaid ? ` ＋ 收回 ${money(x.repaid)}` : ''}${x.prepaidIn ? ` ＋ 預收 ${money(x.prepaidIn)}` : ''}${x.refunded ? ` − 退款 ${money(x.refunded)}` : ''}`
 })
 const unpaidTotal = computed(() => (r.value?.unpaid ?? []).reduce((s, u) => s + u.estimate, 0))
 
@@ -169,15 +181,16 @@ const print = async () => {
       <UCard v-if="isRange" title="依日期" :padded="false">
         <table class="tabular w-full text-sm">
           <thead class="bg-slate-50 text-xs text-slate-500">
-            <tr><th class="px-4 py-2 text-left">日期</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">退款</th><th class="px-4 py-2 text-right">實收</th></tr>
+            <tr><th class="px-4 py-2 text-left">日期</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">預收−扣抵</th><th class="px-4 py-2 text-right">退款</th><th class="px-4 py-2 text-right">實收</th></tr>
           </thead>
           <tbody>
-            <tr v-for="d in r.byDay" :key="d.date" :class="['border-t border-slate-100', !d.count && !d.repaid && !d.refunded && 'text-slate-400']">
+            <tr v-for="d in r.byDay" :key="d.date" :class="['border-t border-slate-100', !d.count && !d.repaid && !d.refunded && !d.prepaidIn && 'text-slate-400']">
               <td class="px-4 py-1.5">{{ d.date.slice(5).replace('-', '/') }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.count }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.patientTotal.toLocaleString() }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.newDebt ? d.newDebt.toLocaleString() : '' }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.repaid ? d.repaid.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right">{{ d.prepaidIn || d.prepaidApplied ? (d.prepaidIn - d.prepaidApplied).toLocaleString() : '' }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.refunded ? `−${d.refunded.toLocaleString()}` : '' }}</td>
               <td class="px-4 py-1.5 text-right font-medium">{{ d.collected.toLocaleString() }}</td>
             </tr>
@@ -187,6 +200,7 @@ const print = async () => {
               <td class="px-4 py-1.5 text-right">{{ r.patientTotal.toLocaleString() }}</td>
               <td class="px-4 py-1.5 text-right">{{ r.newDebt ? r.newDebt.toLocaleString() : '' }}</td>
               <td class="px-4 py-1.5 text-right">{{ r.repaid ? r.repaid.toLocaleString() : '' }}</td>
+              <td class="px-4 py-1.5 text-right">{{ r.prepaidIn || r.prepaidApplied ? (r.prepaidIn - r.prepaidApplied).toLocaleString() : '' }}</td>
               <td class="px-4 py-1.5 text-right">{{ r.refunded ? `−${r.refunded.toLocaleString()}` : '' }}</td>
               <td class="px-4 py-1.5 text-right">{{ r.collected.toLocaleString() }}</td>
             </tr>
@@ -214,7 +228,7 @@ const print = async () => {
         <UCard title="依收費人員" subtitle="交班時各自核對錢箱（實際收到的錢）">
           <ul class="tabular space-y-2 text-sm">
             <li v-for="c in r.byCashier" :key="c.cashierName" class="flex justify-between border-b border-slate-100 pb-1.5">
-              <span class="text-slate-600">{{ c.cashierName }}<span class="ml-1 text-xs text-slate-400">{{ c.count }} 張{{ c.repayCount ? `・收回 ${c.repayCount} 筆` : '' }}{{ c.refundCount ? `・退款 ${c.refundCount} 筆` : '' }}</span></span>
+              <span class="text-slate-600">{{ c.cashierName }}<span class="ml-1 text-xs text-slate-400">{{ c.count }} 張{{ c.repayCount ? `・收回 ${c.repayCount} 筆` : '' }}{{ c.prepayCount ? `・預收 ${c.prepayCount} 筆` : '' }}{{ c.refundCount ? `・退款 ${c.refundCount} 筆` : '' }}</span></span>
               <span class="font-medium text-slate-800">{{ money(c.collected) }}</span>
             </li>
             <li v-if="!r.byCashier.length" class="py-2 text-center text-slate-400">當日沒有收費</li>
@@ -253,6 +267,10 @@ const print = async () => {
 
       <UCard title="收據明細" subtitle="作廢的收據以刪除線標示、不計入合計；已退費的照算在這天（退款算在退款那天），以紅字標示" :padded="false">
         <UTable :columns="columns" :rows="r.charges" :row-key="(c) => c.id" :loading="loading" dense empty-text="當日沒有收據" :row-class="(c) => (c.refund ? 'text-red-700' : c.voided ? 'text-slate-400 line-through' : '')" />
+      </UCard>
+
+      <UCard v-if="r.prepays.length" title="掛號預收" :subtitle="`${r.prepays.length} 筆・${money(r.prepaidIn)}（錢算在收的這天；批價扣抵時從那天的應收減掉，不會算兩次）`" :padded="false">
+        <UTable :columns="prepayColumns" :rows="r.prepays" :row-key="(x) => x.receiptNo" dense />
       </UCard>
 
       <UCard v-if="r.refunds.length" title="退款" :subtitle="`${r.refunds.length} 筆・−${money(r.refunded)}（原收據可能是之前的日子，退款算在退款這天）`" :padded="false">

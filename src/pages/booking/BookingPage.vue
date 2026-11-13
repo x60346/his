@@ -119,6 +119,15 @@ watch(patient, (p) => {
   preventItems.value = []
 })
 // 慢箋：病人來領第 2、3 次藥，不必掛號看診——在這裡登記，直接去批價、領藥
+// ---------- 掛號預收（選填，只限掛號批價人員）：預設帶預估應收，可以改；批價時扣抵、多退少補 ----------
+const canPrepay = computed(() => auth.user?.role === 'clerk')
+const prepayOn = ref(false)
+const prepayAmount = ref<number | undefined>()
+const prepayMethod = ref<'cash' | 'card' | 'mobile'>('cash')
+function togglePrepay(on: boolean) {
+  prepayOn.value = on
+  if (on && prepayAmount.value === undefined) prepayAmount.value = estimate.value?.total
+}
 const { data: refills } = useQuery(async () => (patient.value ? bookingApi.listRefills(patient.value.id) : []), [patient])
 const registerRefill = useAction(bookingApi.registerRefill, { success: (v) => `已登記 ${v.patientName} 慢箋第 ${v.refillSeq} 次領藥，請至批價` })
 const cancelRefill = useAction(bookingApi.cancelVisit, { success: (v) => `已取消 ${v.patientName} 的慢箋領藥登記` })
@@ -205,9 +214,12 @@ async function submit() {
     caseType: String(caseType.value),
     preventItems: preventItems.value,
     checkIn: sessionIsToday.value && checkInNow.value,
+    ...(canPrepay.value && prepayOn.value && prepayAmount.value ? { prepay: { amount: Number(prepayAmount.value), payMethod: prepayMethod.value } } : {}),
   })
   if (v) {
     lastResult.value = v
+    prepayOn.value = false
+    prepayAmount.value = undefined
     // 掛完清掉病人，準備服務下一位；診次保留（櫃台常連續掛同一診）
     patient.value = null
     // 「同時報到」回到預設：上一位是電話預約取消了勾選，下一位現場病人不能跟著變成未報到
@@ -445,6 +457,16 @@ function openIdentity(v: VisitView) {
               <!-- 自費身分沒有「部分負擔」，藥費全額自付 -->
               <div class="mt-0.5 text-xs text-slate-400">{{ estimate.copayNote === '自費身分' ? '藥費等項目' : '藥品部分負擔、自費項目' }}看診後才確定；看診後至批價櫃台結帳</div>
             </div>
+            <div v-if="canPrepay && !rescheduling" class="space-y-1.5 text-sm">
+              <UCheckbox :model-value="prepayOn" @update:model-value="togglePrepay">掛號時預收（選填）</UCheckbox>
+              <div v-if="prepayOn" class="flex flex-wrap items-end gap-2 pl-6">
+                <div class="w-28"><UInput v-model="prepayAmount" type="number" min="1" label="預收金額" :error="register.fieldErrors.value.prepay" /></div>
+                <div class="flex gap-1 pb-0.5">
+                  <button v-for="m in ([{ k: 'cash', l: '現金' }, { k: 'card', l: '刷卡' }, { k: 'mobile', l: '行動支付' }] as const)" :key="m.k" type="button" :class="['rounded border px-2 py-1 text-xs', prepayMethod === m.k ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600']" @click="prepayMethod = m.k">{{ m.l }}</button>
+                </div>
+                <p class="w-full text-xs text-slate-500">開一張預收收據；批價時扣抵，多收的當場退還、不夠的補收。退掛會退還。</p>
+              </div>
+            </div>
             <div v-if="sessionIsToday && !rescheduling" class="text-sm">
               <UCheckbox v-model="checkInNow">病人已在櫃台（掛號同時報到）</UCheckbox>
               <p v-if="!checkInNow" class="mt-0.5 text-xs text-amber-700">電話或網路預約：病人到院時，在下方清單或病人卡上按「報到」，醫師才會叫到他。</p>
@@ -465,6 +487,7 @@ function openIdentity(v: VisitView) {
             <div class="tabular text-xs text-slate-600">就醫序號 {{ lastResult.cardSeq }}</div>
             <div v-if="lastResult.date === today()" :class="['text-xs', lastResult.checkedInAt ? 'text-emerald-700' : 'text-amber-700']">{{ lastResult.checkedInAt ? '已報到' : '尚未報到：到院時請報到' }}</div>
             <div v-if="lastEstimate" class="mt-1 text-xs text-slate-600">預估應收 <b class="tabular">{{ lastEstimate.total }}</b> 元起（看診後批價結帳）</div>
+            <div v-if="lastResult.prepaid" class="text-xs font-medium text-emerald-800">已預收 {{ lastResult.prepaid.amount }} 元（收據 {{ lastResult.prepaid.receiptNo }}），批價時扣抵</div>
           </div>
           <UButton class="ml-auto self-center" size="sm" variant="secondary" :icon="Printer" @click="openSlip(lastResult)">列印掛號單</UButton>
         </div>
