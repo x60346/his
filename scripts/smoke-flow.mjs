@@ -3295,6 +3295,113 @@ try {
     ok(csv.includes('掛號預收,') && csv.includes('退還預收,') && csv.includes(`預收扣抵合計,${-fin.prepaidApplied}`), '匯出 CSV：掛號預收、退還預收、預收扣抵合計')
   }
 
+  // 權限可設定：只能在權限目錄的範圍內調整；服務層、設定畫面、說明都讀同一份目錄
+  console.log('\n[權限可設定]')
+  {
+    const PR = await load('/src/services/permission-rules.ts')
+    const PM = api.permissionApi
+    const db = () => dbm.db
+    const def = PR.permDef('purchase.approve')
+    ok(PR.checkPermissionRoles(PR.permDef('order.write'), ['doctor', 'clerk'])?.includes('固定') && PR.checkPermissionRoles(def, ['clerk'])?.includes('只能給') && PR.checkPermissionRoles(def, [])?.includes('至少要留') && PR.checkPermissionRoles(PR.permDef('charge.approveDiscount'), ['clerk'])?.includes('只能指定給個人') && PR.checkPermissionRoles(def, ['pharmacist']) === null,
+      '規則：固定的不能改、只能在法規範圍內、至少留一個角色、只指定個人的不能開給整個角色')
+    ok(PR.permits(def, {}, 'admin') && !PR.permits(def, {}, 'pharmacist') && PR.permits(def, {}, 'pharmacist', ['purchase.approve']) && !PR.permits(def, {}, 'clerk', ['purchase.approve']),
+      '指定個人：被指定的藥師可以；被指定但目前角色不在法規範圍（櫃台）仍不行')
+    await as('clerk01')
+    await expectError(() => PM.listPermissions(), '櫃台看權限設定')
+    await as('admin')
+    const rows = await PM.listPermissions()
+    ok(rows.length === PR.PERMISSIONS.length && rows.find((r) => r.key === 'charge.approveDiscount').grantees.some((g) => g.username === 'clerk02') && rows.every((r) => !r.changed), `權限清單 ${rows.length} 項（含固定的），都是預設；優免核准指定給 clerk02`)
+    try {
+      await PM.savePermissionRoles('order.write', { roles: ['doctor', 'nurse'], reason: '測試' })
+      ok(false, '固定的權限應不能改')
+    } catch (e) {
+      ok(e.fields?.roles?.includes('固定'), `改固定的權限 → 「${e.fields?.roles}」`)
+    }
+    try {
+      await PM.savePermissionRoles('visit.register', { roles: ['clerk', 'doctor'], reason: '' })
+      ok(false, '超出範圍、沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.fields?.roles && e.fields?.reason, '超出法規範圍（醫師掛號）、沒寫原因：一次標出')
+    }
+    // 掛號只留給櫃台：護理師會失去權限 → 先列出受影響的帳號
+    try {
+      await PM.savePermissionRoles('visit.register', { roles: ['clerk'], reason: '大醫院掛號集中在櫃台' })
+      ok(false, '有人會失去權限應先確認')
+    } catch (e) {
+      ok(e.code === 'CONFLICT' && e.message.includes('nurse01') && e.message.includes('staff01') === false, `列出會失去權限的帳號 → 「${e.message}」（護理兼櫃台的 staff01 不受影響）`)
+    }
+    await PM.savePermissionRoles('visit.register', { roles: ['clerk'], reason: '大醫院掛號集中在櫃台', confirm: true })
+    ok(db().permissionSettings['visit.register'].join() === 'clerk' && db().auditLogs[0].detail === '掛號、退掛、改期：掛號批價、護理師 → 掛號批價（大醫院掛號集中在櫃台）', '調整後存下設定、稽核寫出前後與原因')
+    await as('nurse01')
+    const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended)
+    const pt = db().patients.find((x) => !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    try {
+      await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      ok(false, '護理師應不能掛號')
+    } catch (e) {
+      ok(e.code === 'FORBIDDEN' && e.message.includes('掛號、退掛、改期'), `服務層照設定把關：護理師掛號 → 「${e.message}」`)
+    }
+    ok(!api.authApi.currentUser().can.includes('visit.register'), '登入資料的 can 跟著變（頁面據此不顯示按鈕）')
+    await api.authApi.login('staff01', '1234', 'nurse')
+    try {
+      await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      ok(false, '用護理師角色應被擋')
+    } catch (e) {
+      ok(e.message.includes('請切換為「掛號批價」角色'), '護理兼櫃台的帳號用護理師角色時：提示切換角色，不是說沒權限')
+    }
+    await as('admin')
+    await PM.savePermissionRoles('visit.register', { roles: ['clerk', 'nurse'], reason: '還原' })
+    ok(!db().permissionSettings['visit.register'], '改回預設：不留設定（只存和預設不同的）')
+
+    // 採購核准指定給藥劑部主管 ph02
+    const ph02 = db().users.find((u) => u.username === 'ph02')
+    await expectError(() => PM.setPermissionGrant('purchase.approve', ph02.id, { on: true, reason: '' }), '指定個人沒寫原因')
+    await expectError(() => PM.setPermissionGrant('purchase.approve', db().users.find((u) => u.username === 'clerk01').id, { on: true, reason: 'x' }), '採購核准指定給櫃台（不在法規範圍）')
+    await expectError(() => PM.setPermissionGrant('order.write', ph02.id, { on: true, reason: 'x' }), '固定的權限指定給個人')
+    await PM.setPermissionGrant('purchase.approve', ph02.id, { on: true, reason: '升任藥劑部主管' })
+    ok(db().users.find((u) => u.username === 'ph02').grants.includes('purchase.approve') && db().auditLogs[0].detail.includes('指定給 林雅婷'), '採購核准指定給 ph02（寫稽核）')
+    // ph01 開單送出，ph02 核准；ph01 自己不能核准
+    await as('ph01')
+    const cand = (await api.purchaseApi.purchaseCandidates())[0]
+    const sup = (await api.purchaseApi.listSuppliers())[0]
+    const po = await api.purchaseApi.savePurchaseDraft({ supplierId: sup.id, lines: [{ drugId: cand.drugId, qty: 10, unitCost: 1 }] })
+    await api.purchaseApi.submitPurchase(po.id)
+    await expectError(() => api.purchaseApi.approvePurchase(po.id), 'ph01（沒被指定）核准採購單')
+    await as('ph02')
+    ok(api.authApi.currentUser().can.includes('purchase.approve'), 'ph02 登入資料有「採購核准」')
+    ok((await api.purchaseApi.approvePurchase(po.id)).status === 'ordered', '被指定的藥師核准採購單')
+    await as('admin')
+    await PM.setPermissionGrant('purchase.approve', ph02.id, { on: false, reason: '測試結束' })
+    await api.purchaseApi.cancelPurchase(po.id, '測試結束').catch(() => {})
+
+    // 盤點覆核只留給管理員：藥師看得到送出的盤點單，但標「沒有權限」、服務層也擋
+    await PM.savePermissionRoles('stocktake.review', { roles: ['admin'], reason: '覆核集中由管理員', confirm: true })
+    await as('ph01')
+    const st = await api.stocktakeApi.createStocktake({ scope: { kind: 'drugs', drugIds: ['M001'] } })
+    for (const l of st.lines) await api.stocktakeApi.countLine(st.id, l.id, db().drugLots.find((x) => x.id === l.lotId).qty)
+    await api.stocktakeApi.submitStocktake(st.id)
+    await as('ph02')
+    const stv = await api.stocktakeApi.getStocktake(st.id)
+    ok(stv.reviewBlocked?.includes('沒有「盤點覆核」的權限'), `沒權限的藥師：盤點單標「${stv.reviewBlocked}」（不出現覆核按鈕）`)
+    await expectError(() => api.stocktakeApi.postStocktake(st.id), '沒權限的藥師覆核過帳')
+    await as('admin')
+    ok((await api.stocktakeApi.postStocktake(st.id)).status === 'posted', '管理員覆核過帳')
+    await PM.savePermissionRoles('stocktake.review', { roles: ['admin', 'pharmacist'], reason: '還原' })
+
+    // 原始碼：受控的動作都走 requirePermission（不能繞過目錄自己寫角色）
+    const { readFileSync } = await import('node:fs')
+    const keysInCode = new Set()
+    for (const f of ['booking', 'patient', 'admission', 'schedule', 'purchase', 'stocktake', 'inventory', 'ipd', 'opd', 'pharmacy', 'charge', 'admin', 'nursing', 'permission']) {
+      for (const m of readFileSync(`src/services/${f}.ts`, 'utf8').matchAll(/requirePermission\('([a-zA-Z.]+)'\)/g)) keysInCode.add(m[1])
+    }
+    const unused = PR.PERMISSIONS.filter((d) => !d.grantOnly && !keysInCode.has(d.key)).map((d) => d.key)
+    ok(!unused.length && [...keysInCode].every((k) => PR.PERMISSIONS.some((d) => d.key === k)), `目錄裡每一項都有服務層在檢查、服務層檢查的都在目錄裡（${keysInCode.size} 項）`)
+    const bk = readFileSync('src/services/purchase.ts', 'utf8')
+    ok(!/export function approvePurchase[\s\S]{0,120}requireUser\(/.test(bk), '採購核准不再寫死 requireUser')
+    const panel = readFileSync('src/pages/admin/components/PermissionsPanel.vue', 'utf8')
+    ok(!panel.includes('const actions:'), '權限頁不再有手寫的操作權限摘要（改從目錄產生）')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {
@@ -3488,7 +3595,7 @@ try {
     // 優免主管核准：主管當場輸入自己的帳密；核准一次性、綁這次掛號＋類別＋櫃台；失敗的嘗試留稽核
     {
       const C = api.chargeApi
-      ok(dbm.db.discounts.find((d) => d.code === 'DC05').needsApproval && dbm.db.users.find((u) => u.username === 'clerk02').approvesDiscount, '種子：專案減免需主管核准；櫃台組長 clerk02 可核准優免')
+      ok(dbm.db.discounts.find((d) => d.code === 'DC05').needsApproval && dbm.db.users.find((u) => u.username === 'clerk02').grants?.includes('charge.approveDiscount'), '種子：專案減免需主管核准；櫃台組長 clerk02 可核准優免')
       // 自己掛兩位、看完診（前面的測試已把待批價的病人結完）：不依賴種子當天剩下多少
       const { addDays } = await load('/src/utils/date.ts')
       const makeConsulted = async () => {
@@ -3574,10 +3681,10 @@ try {
       await api.adminApi.saveDiscount({ ...dc1, needsApproval: false })
       ok(!('needsApproval' in dc1), '取消需核准')
       const s1 = dbm.db.users.find((u) => u.username === 'staff01')
-      await api.adminApi.saveUser({ id: s1.id, username: s1.username, name: s1.name, roles: s1.roles, active: true, approvesDiscount: true })
-      ok(s1.approvesDiscount === true && dbm.db.auditLogs[0].detail.includes('可核准優免'), '帳號管理勾「可核准優免」（寫稽核）')
-      await api.adminApi.saveUser({ id: s1.id, username: s1.username, name: s1.name, roles: s1.roles, active: true })
-      ok(!('approvesDiscount' in s1) && dbm.db.auditLogs[0].detail.includes('取消核准優免'), '取消可核准優免')
+      await api.permissionApi.setPermissionGrant('charge.approveDiscount', s1.id, { on: true, reason: '代理組長' })
+      ok(s1.grants?.includes('charge.approveDiscount') && dbm.db.auditLogs[0].detail.includes('優免核准：指定給'), '權限設定把「優免核准」指定給 staff01（寫稽核）')
+      await api.permissionApi.setPermissionGrant('charge.approveDiscount', s1.id, { on: false, reason: '代理結束' })
+      ok(!('grants' in s1) && dbm.db.auditLogs[0].detail.includes('收回'), '收回優免核准')
       ok(!Object.keys(api.chargeApi).includes('approvalFor'), '核准檢查是服務層內部函式，不對外')
       await as('clerk01')
     }

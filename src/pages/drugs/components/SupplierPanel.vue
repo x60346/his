@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // 供應商主檔：清單（含停用的）＋右側明細與「以前的進價」。藥師與管理員都能維護。
 // 統一編號的檢查碼與服務層同一個 taxIdProblem（輸入時就提示打錯）；停用前服務層檢查還有沒有進行中的採購單。
+import { useCan } from '@/composables/useCan'
 import { computed, reactive, ref } from 'vue'
 import { Pencil, Plus, Truck } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UTextarea } from '@/components/ui'
 import { purchaseApi, taxIdProblem, type SupplierInput, type SupplierView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
+const can = useCan()
 const showInactive = ref(false)
 const { data: suppliers, loading } = useQuery(() => purchaseApi.listSuppliers({ includeInactive: true }))
 const rows = computed(() => (suppliers.value ?? []).filter((x) => showInactive.value || x.active))
@@ -42,7 +44,7 @@ const md = (d?: string) => (d ? d.slice(5).replace('-', '/') : '')
   <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,24rem),1fr))]">
     <UCard :padded="false" class="self-start">
       <template #title><span class="text-sm font-semibold">供應商</span></template>
-      <template #actions><UButton size="sm" :icon="Plus" @click="edit()">新增供應商</UButton></template>
+      <template #actions><UButton v-if="can('supplier.edit')" size="sm" :icon="Plus" @click="edit()">新增供應商</UButton></template>
       <UQueryState :loading="loading && !suppliers" :ready="!!suppliers">
         <UEmpty v-if="!rows.length" :icon="Truck" title="還沒有供應商" description="採購單只能選這裡有的供應商" />
         <ul v-else class="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">
@@ -79,7 +81,7 @@ const md = (d?: string) => (d ? d.slice(5).replace('-', '/') : '')
             <p v-if="selected.note" class="text-xs text-slate-500">{{ selected.note }}</p>
             <p v-if="selected.openOrders.length" class="text-xs text-sky-700">進行中的採購單：{{ selected.openOrders.join('、') }}</p>
           </div>
-          <UButton size="sm" variant="secondary" :icon="Pencil" @click="edit(selected)">編輯</UButton>
+          <UButton v-if="can('supplier.edit')" size="sm" variant="secondary" :icon="Pencil" @click="edit(selected)">編輯</UButton>
         </header>
 
         <h3 class="text-sm font-semibold text-slate-700">以前的進價</h3>

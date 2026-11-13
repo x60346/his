@@ -2,6 +2,7 @@
 // 庫存地點：新增、改名、停用；三項工作（門診發藥、住院調劑與病房常備、採購入庫）由哪個地點負責。
 // 能不能停用、能不能接某項工作都由服務層判斷（inventory.locationBlockers、setLocationRole），畫面只把原因先列出來。
 // 改負責地點影響大：服務層先回 CONFLICT 說明「之後從哪裡扣」，這裡確認後帶 confirm 重送。
+import { useCan } from '@/composables/useCan'
 import { computed, reactive, ref } from 'vue'
 import { Pencil, Plus, Warehouse } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect } from '@/components/ui'
@@ -10,6 +11,7 @@ import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 
 const ui = useUi()
+const can = useCan()
 const { data, loading } = useQuery(() => inventoryApi.listStockLocations({ includeInactive: true }))
 const locations = computed(() => data.value?.locations ?? [])
 const kindLabel = (k: StockLocationView['kind']) => (k === 'warehouse' ? '藥庫' : k === 'quarantine' ? '待報廢區' : '藥局')
@@ -55,7 +57,7 @@ async function onMove(role: LocationRole) {
   <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,24rem),1fr))]">
     <UCard :padded="false" class="self-start">
       <template #title><span class="text-sm font-semibold">庫存地點</span></template>
-      <template #actions><UButton size="sm" :icon="Plus" @click="edit()">新增地點</UButton></template>
+      <template #actions><UButton v-if="can('location.edit')" size="sm" :icon="Plus" @click="edit()">新增地點</UButton></template>
       <UQueryState :loading="loading && !data" :ready="!!data">
         <UEmpty v-if="!locations.length" :icon="Warehouse" title="沒有庫存地點" />
         <ul v-else class="divide-y divide-slate-100">
@@ -69,7 +71,7 @@ async function onMove(role: LocationRole) {
               </p>
               <p v-if="l.active && l.blockers?.length" class="mt-0.5 text-xs text-slate-400" title="停用前要先處理">不能停用：{{ l.blockers.join('；') }}</p>
             </div>
-            <UButton size="sm" variant="ghost" :icon="Pencil" @click="edit(l)">編輯</UButton>
+            <UButton v-if="can('location.edit')" size="sm" variant="ghost" :icon="Pencil" @click="edit(l)">編輯</UButton>
           </li>
         </ul>
       </UQueryState>
@@ -81,7 +83,7 @@ async function onMove(role: LocationRole) {
           <p class="font-medium text-slate-700">
             {{ r.label }}：<span class="text-brand-700">{{ holderOf(r)?.name ?? '（無）' }}</span>
           </p>
-          <div class="flex flex-wrap items-end gap-2">
+          <div v-if="can('location.edit')" class="flex flex-wrap items-end gap-2">
             <div class="w-56">
               <USelect v-model="picks[r.key]" :options="optionsFor(r)" placeholder="改由…" />
             </div>

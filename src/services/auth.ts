@@ -1,7 +1,8 @@
 // 登入與身分。回傳給前端的使用者資料一律移除密碼欄位。
 import type { Role, User } from '@/types'
+import type { PermKey } from './permission-rules'
 import { db } from '@/mock/db'
-import { fail, failField, failFields, fieldErrors, mutate, passwordAgeOf, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
+import { fail, failField, failFields, fieldErrors, mutate, passwordAgeOf, permissionsOf, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
 import { checkPasswordPolicy, PASSWORD_HISTORY_DEFAULT, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_DEFAULT, passwordProblem, reusedPassword } from './password-rules'
 import { checkIdleMinutes, IDLE_LOCK_DEFAULT_MIN, UNLOCK_MAX_FAILS } from './idle-rules'
 import { now, today } from '@/utils/date'
@@ -15,12 +16,12 @@ export const toSafeUser = ({ password: _pw, passwordHistory: _h, ...rest }: User
  * 目前登入的人：帳號（roles＝能用的所有角色）＋這個分頁的作業角色 role。畫面上的角色判斷一律看 role。
  * passwordExpired：密碼過期，版面蓋上強制變更畫面；passwordDaysLeft：進入提醒期，右上角提示還剩幾天
  */
-export type SessionUser = SafeUser & { role: Role; passwordExpired?: boolean; passwordDaysLeft?: number }
+export type SessionUser = SafeUser & { role: Role; passwordExpired?: boolean; passwordDaysLeft?: number; can: PermKey[] }
 
 const toSessionUser = (u: User): SessionUser => {
   const age = passwordAgeOf(u)
   return {
-    ...toSafeUser(u), role: sessionRole() ?? u.roles[0],
+    ...toSafeUser(u), role: sessionRole() ?? u.roles[0], can: permissionsOf({ grants: u.grants, role: sessionRole() ?? u.roles[0] }),
     ...(age?.expired && !u.mustChangePassword ? { passwordExpired: true } : {}),
     ...(age?.warn ? { passwordDaysLeft: age.daysLeft } : {}),
   }

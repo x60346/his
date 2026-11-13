@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 帳號管理：新增、修改、停用（不刪除——帳號做過的事都記在稽核紀錄與病歷裡，刪掉就對不上人了）、重設密碼。
 // 一個帳號可以有多個角色（例：護理師兼櫃台）；不能兼任的組合（醫師＋藥師）用和服務層同一條 rolesProblem 即時提示。
+import { PERMISSIONS } from '@/services'
 import { computed, reactive, ref } from 'vue'
 import { KeyRound, Pencil, Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect, UTable, type Column } from '@/components/ui'
@@ -32,7 +33,8 @@ const columns: Column<UserRow>[] = [
 
 // ---------- 新增 / 修改 ----------
 const editOpen = ref(false)
-const form = reactive({ id: undefined as string | undefined, username: '', name: '', roles: ['clerk'] as Role[], doctorId: undefined as string | number | undefined, active: true, password: '', approvesDiscount: false })
+const permLabel = (k: string) => PERMISSIONS.find((p) => p.key === k)?.label ?? k
+const form = reactive({ id: undefined as string | undefined, username: '', name: '', roles: ['clerk'] as Role[], doctorId: undefined as string | number | undefined, active: true, password: '' })
 const roleOrder: Role[] = ['doctor', 'nurse', 'pharmacist', 'clerk', 'admin']
 function toggleRole(role: Role, on: boolean) {
   form.roles = on ? [...form.roles, role] : form.roles.filter((x) => x !== role)
@@ -42,7 +44,7 @@ const rolesHint = computed(() => rolesProblem(form.roles))
 const hasDoctor = computed(() => form.roles.includes('doctor'))
 const isSelf = computed(() => !!form.id && form.id === auth.user?.id)
 function openEdit(u?: UserRow) {
-  Object.assign(form, u ? { id: u.id, username: u.username, name: u.name, roles: [...u.roles], doctorId: u.doctorId, active: u.active, password: '', approvesDiscount: !!u.approvesDiscount } : { id: undefined, username: '', name: '', roles: ['clerk'], doctorId: undefined, active: true, password: '', approvesDiscount: false })
+  Object.assign(form, u ? { id: u.id, username: u.username, name: u.name, roles: [...u.roles], doctorId: u.doctorId, active: u.active, password: '' } : { id: undefined, username: '', name: '', roles: ['clerk'], doctorId: undefined, active: true, password: '' })
   save.fieldErrors.value = {}
   editOpen.value = true
 }
@@ -61,7 +63,6 @@ async function submit() {
     roles: form.roles,
     doctorId: hasDoctor.value ? (form.doctorId as string | undefined) : undefined,
     active: form.active,
-    approvesDiscount: form.approvesDiscount,
     password: form.id ? undefined : form.password,
   })
   if (ok) editOpen.value = false
@@ -93,7 +94,7 @@ async function submitPw() {
     <UTable :columns="columns" :rows="rows" :row-key="(u) => u.id" :loading="loading && !users" dense :row-class="(u) => (u.active ? '' : 'text-slate-400')">
       <template #cell-username="{ row }">
         <span class="tabular font-medium">{{ row.username }}</span><UBadge v-if="row.id === auth.user?.id" tone="blue" class="ml-1">我</UBadge>
-        <UBadge v-if="row.approvesDiscount" tone="blue" class="ml-1" title="可核准需主管核准的優免">核准優免</UBadge>
+        <UBadge v-for="g in row.grants ?? []" :key="g" tone="blue" class="ml-1" title="指定給這個帳號的權限（系統管理 → 權限）">{{ permLabel(g) }}</UBadge>
         <UBadge v-if="row.mustChangePassword" tone="yellow" class="ml-1" title="管理員設定的密碼，本人登入後須先變更">待改密碼</UBadge>
         <UBadge v-else-if="row.passwordState?.expired" tone="red" class="ml-1" :title="`${row.passwordState.expiresOn} 到期；登入後須先變更`">密碼過期</UBadge>
         <UBadge v-else-if="row.passwordState" tone="yellow" class="ml-1" :title="`${row.passwordState.expiresOn} 到期`">密碼 {{ row.passwordState.daysLeft }} 天後到期</UBadge>
@@ -142,7 +143,6 @@ async function submitPw() {
         <UInput v-model="form.name" label="姓名" required :error="save.fieldErrors.value.name" />
         <UInput v-if="!form.id" v-model="form.password" label="初始密碼" type="password" required :hint="`${PASSWORD_RULE}；本人第一次登入時須改成自己的密碼`" :error="save.fieldErrors.value.password" />
         <div class="col-span-2">
-          <UCheckbox v-model="form.approvesDiscount" label="可核准優免（需主管核准的優免類別，結帳時由此人當場輸入帳密）" class="mb-2" />
           <UCheckbox v-model="form.active" :disabled="isSelf" label="啟用" />
           <p v-if="isSelf" class="mt-1 text-xs text-slate-500">不能停用自己的帳號。</p>
           <p v-else-if="save.fieldErrors.value.active" class="mt-1 text-xs text-red-600">{{ save.fieldErrors.value.active }}</p>

@@ -3,7 +3,7 @@
 import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, addMinutes, now } from '@/utils/date'
-import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText } from './drug-rules'
@@ -171,7 +171,7 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
 
 export function addOrder(input: OrderInput): Promise<OrderView> {
   return mutate(() => {
-    const user = requireUser('doctor')
+    const user = requirePermission('order.write')
     const a = activeAdmission(input.admissionId)
     const o = createOrder(user, a, input, now())
     audit('開立住院醫囑', `${a.admitNo} ${o.content}`)
@@ -202,7 +202,7 @@ const orderSummary = (o: Pick<IpdOrder, 'dose' | 'freq' | 'route' | 'timing' | '
  */
 export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderView> {
   return mutate(() => {
-    const user = requireUser('doctor')
+    const user = requirePermission('order.write')
     const old = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (old.status !== 'active') fail('此醫囑已停止或完成', 'CONFLICT')
     if (old.category !== 'medication' || old.type !== 'long') fail('只有長期給藥醫囑（含需要時）可以修改；其他請停止後另開')
@@ -234,7 +234,7 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
 /** 停止醫囑：之後尚未執行的給藥排程一併刪除 */
 export function stopOrder(orderId: string): Promise<OrderView> {
   return mutate(() => {
-    const user = requireUser('doctor')
+    const user = requirePermission('order.write')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (o.status !== 'active') fail('此醫囑已停止或完成')
     // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）

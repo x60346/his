@@ -4,7 +4,7 @@ import { prepayAvailable, refundPrepay, takePrepay } from './money'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
@@ -111,7 +111,7 @@ function createVisit(input: RegisterInput): Visit {
 
 export function register(input: RegisterInput): Promise<VisitView> {
   return mutate(() => {
-    const u = requireUser('clerk', 'nurse')
+    const u = requirePermission('visit.register')
     if (input.prepay && u.role !== 'clerk') fail('預收款請由掛號批價人員收取', 'FORBIDDEN')
     const v = createVisit(input)
     const pp = input.prepay ? takePrepay(v, input.prepay, u.id) : undefined
@@ -129,7 +129,7 @@ export function register(input: RegisterInput): Promise<VisitView> {
  */
 export function rescheduleVisit(visitId: string, input: Omit<RegisterInput, 'patientId'>): Promise<VisitView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('visit.register')
     const old = must(find.visit(visitId), '掛號紀錄')
     if (old.status !== 'registered') fail('只有尚未看診的掛號可以改期', 'CONFLICT')
     if (old.sessionId === input.sessionId) fail('新診次與原本的相同', 'CONFLICT')
@@ -236,7 +236,7 @@ export function correctIdentity(visitId: string, identityCode: string, reason: s
 
 export function cancelVisit(visitId: string): Promise<VisitView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('visit.register')
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.refillOf) {
       // 慢箋領藥登記錯了：批價前可以退，系統代填的病歷一併刪除（它不是醫師寫的，不留在歷史病歷）
@@ -313,7 +313,7 @@ export function listRefills(patientId: string): Promise<RefillView[]> {
  */
 export function registerRefill(encounterId: string): Promise<VisitView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('visit.register')
     const e = must(db.encounters.find((x) => x.id === encounterId), '原處方')
     if (e.status !== 'completed' || e.refillTimes < 2) fail('這張處方不是慢性病連續處方箋')
     const mine = db.encounters.filter((x) => x.patientId === e.patientId && x.status === 'completed' && x.refillTimes >= 2 && find.visit(x.visitId)?.status !== 'cancelled')

@@ -4,7 +4,7 @@
 import type { Dispense, DispenseStatus, Drug, StockTxn } from '@/types'
 import { db } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser, requirePermission } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
@@ -161,7 +161,7 @@ function assertStock(view: DispenseView): void {
 /** 核對處方（第一位藥師） */
 export function verifyDispense(id: string): Promise<DispenseView> {
   return mutate(() => {
-    const ph = requireUser('pharmacist')
+    const ph = requirePermission('dispense')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status !== 'pending') fail('此單已核對', 'CONFLICT')
     assertStock(dispenseView(d))
@@ -188,7 +188,7 @@ export interface PickupCheckInput {
 
 export function dispense(id: string, check: PickupCheckInput = {}): Promise<DispenseView> {
   return mutate(() => {
-    const ph = requireUser('pharmacist')
+    const ph = requirePermission('dispense')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status !== 'verified') fail('請先完成核對再發藥', 'CONFLICT')
     const blocked = dispenseBlocker(d, ph.id, !!db.securitySettings?.twoPersonDispense)
@@ -235,7 +235,7 @@ function dispenseTxns(d: Dispense): StockTxn[] {
  */
 export function returnDispense(id: string, reason: string): Promise<DispenseView> {
   return mutate(() => {
-    const ph = requireUser('pharmacist')
+    const ph = requirePermission('dispense')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status === 'returned') fail('這張已經退藥了', 'CONFLICT')
     if (dispenseOpen(d)) fail('還沒發藥，不需要退藥', 'CONFLICT')

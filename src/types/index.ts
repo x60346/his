@@ -36,8 +36,11 @@ export interface User {
   passwordChangedAt?: number
   /** 這組密碼是哪天設定的（YYYY-MM-DD）：密碼期限從這天算（password-rules.passwordAge） */
   passwordSetOn?: string
-  /** 可核准優免（櫃台組長、主管）：需主管核准的優免類別，結帳時由這些人當場輸入帳密 */
-  approvesDiscount?: boolean
+  /**
+   * 指定給個人的權限（permission-rules 的 PermKey；只有 grantable／grantOnly 的才能指定）：
+   * 例如「優免核准」只給櫃台組長、「採購核准」只給藥劑部主管。在系統管理「權限」設定
+   */
+  grants?: string[]
   /** 以前用過的密碼（新到舊，最多 10 組）：改密碼時不可重複最近幾次。展示系統存明文（見 README 限制），真實系統只存雜湊 */
   passwordHistory?: string[]
 }

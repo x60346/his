@@ -43,6 +43,7 @@ import type {
   VitalRecord,
   Room,
   WeeklySlot,
+  Role,
 } from '@/types'
 import { today } from '@/utils/date'
 import { buildSeed } from './seed'
@@ -65,6 +66,8 @@ export interface Database {
    * 安全設定：閒置鎖定分鐘；twoPersonDispense＝調劑雙人核對（核對與發藥須由不同藥師）。
    * 沒有設定時用預設值（閒置 15 分、單人可完成調劑）
    */
+  /** 權限的角色設定（只存和預設不同的；固定的權限不會出現在這裡）：permission-rules */
+  permissionSettings?: Partial<Record<string, Role[]>>
   securitySettings?: { idleLockMin?: number; twoPersonDispense?: boolean; passwordMaxDays?: number; passwordHistory?: number }
   /** 門診診間 */
   rooms: Room[]
@@ -122,7 +125,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 55
+export const SCHEMA_VERSION = 56
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

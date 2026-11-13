@@ -4,7 +4,7 @@
 import type { HandoverNote, IpdOrder, MarRecord, NursingNote, VitalRecord } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
 import { wardStockOut } from './stock-ledger'
@@ -247,7 +247,7 @@ export function queryOrder(orderId: string, reason: string): Promise<{ ok: true 
  */
 export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string, force?: { reason: string }): Promise<MarRecord> {
   return mutate(() => {
-    const nurse = requireUser('nurse')
+    const nurse = requirePermission('mar.give')
     const m = must(db.mar.find((x) => x.id === marId), '給藥紀錄')
     admitted(m.admissionId)
     if (m.status !== 'pending') fail('此筆已執行', 'CONFLICT')
@@ -288,7 +288,7 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
 /** PRN（需要時）給藥：沒有排程，執行時直接新增一筆已給藥紀錄 */
 export function givePrn(orderId: string, note: string, force?: { reason: string }): Promise<MarRecord> {
   return mutate(() => {
-    const nurse = requireUser('nurse')
+    const nurse = requirePermission('mar.give')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.status !== 'active' || o.freq !== 'PRN') fail('此醫囑不是有效的 PRN 給藥')
@@ -321,7 +321,7 @@ function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefin
 /** 回傳 { ok: true }：讓呼叫端分得出「成功」與「失敗被擋」（void 的話兩者都是 undefined） */
 export function completeStatOrder(orderId: string, force?: { reason: string }): Promise<{ ok: true }> {
   return mutate(() => {
-    requireUser('nurse')
+    requirePermission('mar.give')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.type !== 'stat' || o.status !== 'active') fail('此醫囑無需執行')

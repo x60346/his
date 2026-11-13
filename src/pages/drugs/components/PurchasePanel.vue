@@ -39,7 +39,7 @@ const money = (n: number) => n.toLocaleString()
     </UCard>
 
     <UCard class="self-start">
-      <UEmpty v-if="!selectedId" :icon="ShoppingCart" title="請選擇一張採購單" description="草稿可修改後送出；待核准由管理員核准；已訂購的到貨時對品項入庫" />
+      <UEmpty v-if="!selectedId" :icon="ShoppingCart" title="請選擇一張採購單" description="草稿可修改後送出；待核准由有「採購核准」權限的人核准（預設管理員，可指定藥劑部主管）；已訂購的到貨時對品項入庫" />
       <PurchaseOrderView v-else :key="selectedId" :order-id="selectedId === 'new' ? undefined : selectedId" @created="(id) => (selectedId = id)" />
     </UCard>
   </div>

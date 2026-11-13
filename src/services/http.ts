@@ -1,6 +1,7 @@
 // 服務層共用核心：模擬網路延遲、交易（失敗回滾）、回傳複本、統一錯誤、稽核紀錄。
 // 將來改接真實後端時，這個檔案會換成 fetch 包裝，其餘服務的函式簽章不變。
 import type { Role, User } from '@/types'
+import { PERMISSIONS, permDef, permits, rolesOf, type PermKey } from './permission-rules'
 import { PASSWORD_MAX_DAYS_DEFAULT, passwordAge, type PasswordAge } from './password-rules'
 import { commit, db, newId, replaceDatabase, StorageWriteError } from '@/mock/db'
 import { now, today } from '@/utils/date'
@@ -261,6 +262,29 @@ const roleName: Record<Role, string> = { admin: '系統管理員', doctor: '醫�
  * 必須由具該角色的人執行——醫療紀錄要記在有執業資格的人名下。
  * 管理員能做的事，在呼叫端明確寫出 'admin'（例：requireUser('admin', 'pharmacist')）。
  */
+/**
+ * 依權限目錄把關（permission-rules）：角色在目前的設定裡，或這個帳號被指定了這項權限。
+ * 帳號有別的角色可以做：告訴他切換（和 requireUser 一樣）；固定的權限照目錄的預設
+ */
+export function requirePermission(key: PermKey): Actor {
+  const u = requireUser()
+  const def = permDef(key)
+  const settings = db.permissionSettings as Partial<Record<PermKey, Role[]>> | undefined
+  if (permits(def, settings, u.role, u.grants ?? [])) return u
+  const other = u.roles.find((r) => r !== u.role && permits(def, settings, r, u.grants ?? []))
+  if (other) fail(`請切換為「${roleName[other]}」角色後再操作（右上角）`, 'FORBIDDEN')
+  const roles = rolesOf(def, settings)
+  const who = [roles.map((r) => roleName[r]).join('、'), (def.grantable || def.grantOnly) && '指定人員'].filter(Boolean).join('或')
+  fail(u.role === 'admin' && !def.candidates.includes('admin') ? `系統管理員不能執行臨床操作，請以${roles.map((r) => roleName[r]).join('、')}帳號登入` : `您沒有「${def.label}」的權限（限${who}）`, 'FORBIDDEN')
+  return u
+}
+
+/** 這個帳號以目前角色能做哪些受控操作（登入資料帶給頁面：沒權限的按鈕不顯示；把關仍在服務層） */
+export function permissionsOf(u: Pick<User, 'grants'> & { role: Role }): PermKey[] {
+  const settings = db.permissionSettings as Partial<Record<PermKey, Role[]>> | undefined
+  return PERMISSIONS.filter((d) => permits(d, settings, u.role, u.grants ?? [])).map((d) => d.key)
+}
+
 export function requireUser(...roles: Role[]): Actor {
   const raw = sessionUser()
   if (!raw) fail('請先登入', 'UNAUTHORIZED')

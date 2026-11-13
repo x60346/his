@@ -1,10 +1,11 @@
 // 批價：試算、結帳、作廢、日結報表。
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
 import type { Charge, ChargeLine, DiscountRule, PayMethod, Refund, Repayment } from '@/types'
+import { permDef, permits } from './permission-rules'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, diffDays, now, today } from '@/utils/date'
 import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError, requirePermission } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { nextReceiptNo, nextRefundNo, prepayAvailable, refundPrepay } from './money'
 
@@ -116,7 +117,9 @@ export function approveDiscount(input: { visitId: string; code: string; username
     if (!u || u.password !== input.password) return no('password', '帳號或密碼錯誤')
     if (!u.active) return no('username', '此帳號已停用')
     if (u.id === cashier.id) return no('username', '不能核准自己結帳的優免，請另一位主管核准')
-    if (!u.approvesDiscount) return no('username', `${u.name} 沒有核准優免的權限`)
+    // 核准人用的是帳號（不是某個分頁的作業角色）：帳號任一角色在法規範圍內、且被指定了這項權限
+    const canApprove = u.roles.some((r) => permits(permDef('charge.approveDiscount'), db.permissionSettings as never, r, u.grants ?? []))
+    if (!canApprove) return no('username', `${u.name} 沒有核准優免的權限`)
     const token = newId('APV')
     approvals.set(token, { visitId: v.id, code: rule.code, cashierId: cashier.id, approverId: u.id, approverName: u.name, at: Date.now() })
     audit('優免核准', `${u.name} 核准 ${what}`)
@@ -143,7 +146,7 @@ export interface PayInput {
 
 export function pay(visitId: string, input: PayInput): Promise<Charge> {
   return mutate(() => {
-    const cashier = requireUser('clerk')
+    const cashier = requirePermission('charge.pay')
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
     const e = must(find.encounterOfVisit(visitId), '病歷')
@@ -236,7 +239,7 @@ function reopenVisit(c: Charge) {
 /** 作廢（只限當天、沒收回過欠款）：已發藥的不可作廢（需先退藥）；作廢後掛號回到待批價，醫師可修改病歷 */
 export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
   return mutate(() => {
-    requireUser('clerk')
+    requirePermission('charge.pay')
     if (!reason.trim()) fail('請輸入作廢原因')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢')
@@ -259,7 +262,7 @@ export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
  */
 export function refundCharge(chargeId: string, reason: string): Promise<Charge> {
   return mutate(() => {
-    const cashier = requireUser('clerk')
+    const cashier = requirePermission('charge.pay')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail(c.refund ? '這張已經退費了' : '此收據已作廢', 'CONFLICT')
     const m = cancelModeOf(c)
@@ -312,7 +315,7 @@ function debtsOf(patientId: string): DebtItem[] {
 /** 收回欠款（可分次、可只收一部分）。收據號依「收回那天」編，日結也算在那天 */
 export function repayDebt(chargeId: string, input: { payMethod: PayMethod; amount: number }): Promise<Repayment> {
   return mutate(() => {
-    const cashier = requireUser('clerk')
+    const cashier = requirePermission('charge.pay')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢', 'CONFLICT')
     const problem = checkRepay(outstandingOf(c), input.amount)

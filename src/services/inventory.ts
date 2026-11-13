@@ -8,7 +8,7 @@
 import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockStatus, StockLocation, StockTxn } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { LOCATION_ROLES, locationNameProblem, normalizeLocationName, type LocationRole } from './stock-rules'
 import { pendingReturn } from './ud-work'
 import { daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus, NO_PO_REASONS } from './stock-rules'
@@ -486,7 +486,7 @@ export interface StockLocationInput {
  */
 export function saveStockLocation(input: StockLocationInput): Promise<StockLocationView> {
   return mutate(() => {
-    requireUser('pharmacist', 'admin')
+    requirePermission('location.edit')
     const old = input.id ? must(db.stockLocations.find((l) => l.id === input.id), '庫存地點') : undefined
     const name = (input.name ?? '').trim()
     const v = fieldErrors()
@@ -531,7 +531,7 @@ export function saveStockLocation(input: StockLocationInput): Promise<StockLocat
  */
 export function setLocationRole(input: { role: LocationRole; locationId: string; confirm?: boolean }): Promise<{ from: string; to: string }> {
   return mutate(() => {
-    requireUser('pharmacist', 'admin')
+    requirePermission('location.edit')
     const r = LOCATION_ROLES.find((x) => x.key === input.role)
     if (!r) fail('不明的工作項目')
     const loc = stockLoc.usable(input.locationId)

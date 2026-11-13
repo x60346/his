@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
+import { useCan } from '@/composables/useCan'
 import { computed, nextTick, ref, watch } from 'vue'
 import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X } from 'lucide-vue-next'
 import {
@@ -26,6 +27,7 @@ const auth = useAuth()
 // ---------- 停診待通知：打電話通知病人是櫃台的工作。名單元件與系統管理共用（SuspendNotices）----------
 // 護理師也會用掛號頁，但看不到通知名單（服務層限櫃台與管理員）——只有櫃台才查，不然會跳出權限錯誤
 const canNotify = computed(() => auth.user?.role === 'clerk')
+const can = useCan()
 const { data: notices } = useQuery(async () => (canNotify.value ? scheduleApi.listSuspendNotices() : []), [canNotify])
 const pendingNotices = computed(() => (notices.value ?? []).filter((n) => !n.notifiedAt))
 const noticesOpen = ref(false)
@@ -471,7 +473,8 @@ function openIdentity(v: VisitView) {
               <UCheckbox v-model="checkInNow">病人已在櫃台（掛號同時報到）</UCheckbox>
               <p v-if="!checkInNow" class="mt-0.5 text-xs text-amber-700">電話或網路預約：病人到院時，在下方清單或病人卡上按「報到」，醫師才會叫到他。</p>
             </div>
-            <UButton block :icon="Ticket" :disabled="!canRegister || (!!rescheduling && sessionId === rescheduling.sessionId)" :loading="register.pending.value || reschedule.pending.value" @click="submit">{{ rescheduling ? '改期到此診' : '掛號' }}</UButton>
+            <p v-if="!can('visit.register')" class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">本院的掛號由掛號批價人員辦理（系統管理 → 權限）。</p>
+            <UButton v-else block :icon="Ticket" :disabled="!canRegister || (!!rescheduling && sessionId === rescheduling.sessionId)" :loading="register.pending.value || reschedule.pending.value" @click="submit">{{ rescheduling ? '改期到此診' : '掛號' }}</UButton>
           </div>
         </UCard>
 

@@ -5,6 +5,7 @@
 //   待核准（管理員）：核准或退回（寫原因）
 //   已訂購（藥師）：每一行「到貨入庫」（批號效期照實物，可分批）；短交結案、取消
 // 金額、尚未到貨數量、誰能做什麼都由服務層判斷；這裡照資料顯示。
+import { useCan } from '@/composables/useCan'
 import { computed, reactive, ref, watch } from 'vue'
 import { Check, PackageCheck, Plus, Send, Trash2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
@@ -20,6 +21,7 @@ const emit = defineEmits<{ created: [id: string] }>()
 const auth = useAuth()
 const ui = useUi()
 const role = computed(() => auth.user?.role)
+const can = useCan()
 
 const { data, loading } = useQuery(async () => (props.orderId ? purchaseApi.getPurchaseOrder(props.orderId) : undefined), [() => props.orderId])
 const po = computed(() => data.value)
@@ -134,7 +136,7 @@ const md = (t?: string) => (t ? t.slice(5, 16).replace('-', '/') : '')
             <p v-if="po.closeReason" class="text-xs text-slate-500">{{ po.closedByName }} {{ PURCHASE_STATUS[po.status].label }}：{{ po.closeReason }}</p>
           </template>
         </div>
-        <template v-if="po?.status === 'pending' && role === 'admin'">
+        <template v-if="po?.status === 'pending' && can('purchase.approve')">
           <UButton size="sm" variant="secondary" @click="openReason('reject')">退回</UButton>
           <UButton size="sm" :icon="Check" :loading="approve.pending.value" @click="onApprove">核准</UButton>
         </template>

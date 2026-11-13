@@ -9,7 +9,7 @@ import type { ClinicSession, Period, Room, Visit, WeeklySlot } from '@/types'
 import { prepayAvailable, refundPrepay } from './money'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { now, parseDate, periodLabel, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { find, nameOf } from './views'
 import { currentNumber } from './queue-rules'
 
@@ -234,7 +234,7 @@ function candidatesFor(s: ClinicSession) {
 
 export function getSessionImpact(id: string): Promise<SessionImpact> {
   return query(() => {
-    requireUser('admin')
+    requirePermission('schedule.suspend')
     const s = must(find.session(id), '診次')
     return { session: sessionView(s), visits: affected(s), blocked: blockReason(s), candidates: candidatesFor(s) }
   })
@@ -243,7 +243,7 @@ export function getSessionImpact(id: string): Promise<SessionImpact> {
 /** 代診：診次改由同科另一位醫師看，已掛號的病人一併轉過去（病人不用重掛） */
 export function substituteSession(id: string, doctorId: string, reason: string): Promise<SessionView> {
   return mutate(() => {
-    requireUser('admin')
+    requirePermission('schedule.suspend')
     const s = must(find.session(id), '診次')
     const blocked = blockReason(s)
     if (blocked) fail(blocked, 'CONFLICT')
@@ -270,7 +270,7 @@ export function substituteSession(id: string, doctorId: string, reason: string):
 /** 停診：診次不開，已掛號的病人全部退掛，並列入「停診通知」名單等候電話通知 */
 export function suspendSession(id: string, reason: string): Promise<AffectedVisit[]> {
   return mutate(() => {
-    const u = requireUser('admin')
+    const u = requirePermission('schedule.suspend')
     const s = must(find.session(id), '診次')
     const blocked = blockReason(s)
     if (blocked) fail(blocked, 'CONFLICT')
@@ -344,7 +344,7 @@ export function listSuspendNotices(): Promise<NoticeRow[]> {
 
 export function markNotified(visitId: string): Promise<void> {
   return mutate(() => {
-    const u = requireUser('admin', 'clerk')
+    const u = requirePermission('schedule.notice')
     const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (v.notifiedAt) fail('已記錄通知', 'CONFLICT')
@@ -361,7 +361,7 @@ export function markNotified(visitId: string): Promise<void> {
  */
 export function unmarkNotified(visitId: string): Promise<void> {
   return mutate(() => {
-    requireUser('admin', 'clerk')
+    requirePermission('schedule.notice')
     const v = must(db.visits.find((x) => x.id === visitId), '掛號紀錄')
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (!v.notifiedAt) fail('這位病人尚未記錄通知', 'CONFLICT')

@@ -8,7 +8,7 @@
 import type { StocktakeLine, StocktakeSheet } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission, permissionsOf } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { postStock } from './stock-ledger'
 import { checkStocktakeActual } from './stock-rules'
@@ -46,6 +46,8 @@ const scopeText = (s: StocktakeSheet['scope']) =>
   s.kind === 'all' ? '全部藥品' : s.kind === 'category' ? `${s.category}劑型` : `指定 ${s.drugIds.length} 種藥品`
 
 function view(s: StocktakeSheet, userId?: string): StocktakeView {
+  // 沒有「盤點覆核」權限的人看得到單子，但覆核按鈕不出現（服務層也擋）
+  const canReview = !userId || permissionsOf(requireUser()).includes('stocktake.review')
   // 清點中不揭露：帳上數量、差異都拿掉（不只是畫面不顯示——資料就不給）
   const revealed = s.status !== 'counting'
   const lines: StocktakeLineView[] = s.lines.map((l) => {
@@ -74,7 +76,7 @@ function view(s: StocktakeSheet, userId?: string): StocktakeView {
     countedCount: s.lines.filter((l) => l.counted !== undefined).length,
     ...(revealed ? { diffCount: s.lines.filter((l) => (lineDiff(l) ?? 0) !== 0).length } : {}),
     revealed,
-    ...(userId && s.status === 'submitted' ? { reviewBlocked: reviewBlocker(s, userId) } : {}),
+    ...(userId && s.status === 'submitted' ? { reviewBlocked: canReview ? reviewBlocker(s, userId) : '你沒有「盤點覆核」的權限（系統管理 → 權限）' } : {}),
   }
 }
 
@@ -200,7 +202,7 @@ export function submitStocktake(id: string): Promise<StocktakeView> {
 /** 覆核退回重盤：數量保留、可改；寫原因 */
 export function returnStocktake(id: string, reason: string): Promise<StocktakeView> {
   return mutate(() => {
-    const u = requireUser('pharmacist', 'admin')
+    const u = requirePermission('stocktake.review')
     const s = sheetOf(id)
     const blocked = reviewBlocker(s, u.id)
     if (blocked) fail(blocked, s.status === 'submitted' ? 'FORBIDDEN' : 'CONFLICT')
@@ -221,7 +223,7 @@ export function returnStocktake(id: string, reason: string): Promise<StocktakeVi
  */
 export function postStocktake(id: string, reasons: Record<string, string> = {}): Promise<StocktakeView> {
   return mutate(() => {
-    const u = requireUser('pharmacist', 'admin')
+    const u = requirePermission('stocktake.review')
     const s = sheetOf(id)
     const blocked = reviewBlocker(s, u.id)
     if (blocked) fail(blocked, s.status === 'submitted' ? 'FORBIDDEN' : 'CONFLICT')

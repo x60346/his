@@ -14,6 +14,11 @@ const props = withDefaults(
     size?: 'sm' | 'md' | 'lg' | 'xl'
     persistent?: boolean
     /**
+     * 疊在其他對話框上面（確認框）：對話框都 Teleport 到 body，誰在上面取決於「掛上的先後」——
+     * 確認框的宿主最早掛上，不加這個就會被之後打開的對話框蓋住，滑鼠點到的是底下那層
+     */
+    top?: boolean
+    /**
      * 有綁 @submit 時，對話框以 <form> 呈現：單行欄位按 Enter 就送出（主要按鈕要設 type="submit"），
      * 多行文字框按 Enter 是換行（瀏覽器原生行為）。
      * 只給「送出後還能修改」的資料維護表單用；開立醫囑、出院、停診這類不可逆或臨床動作刻意不綁，
@@ -81,7 +86,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-100">
-      <div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-[8vh]" @mousedown.self="close">
+      <div v-if="open" :class="['fixed inset-0 flex', top ? 'z-[55]' : 'z-50']" class="items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-[8vh]" @mousedown.self="close">
         <!-- novalidate：必填等檢查交給服務層一次標出所有欄位，不用瀏覽器一次只跳一個的原生提示 -->
         <component
           :is="onSubmit ? 'form' : 'div'"

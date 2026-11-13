@@ -3,7 +3,7 @@ import type { Patient } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, toDateStr } from '@/utils/date'
 import { checkBirthDate, checkName, isValidIdNo, isValidPhone, makeIdNo } from '@/utils/validators'
-import { audit, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { contains, find } from './views'
 import { allergyOptions } from '@/mock/codes'
 
@@ -40,7 +40,7 @@ function validate(p: PatientInput, selfId?: string): void {
 
 export function createPatient(input: PatientInput): Promise<Patient> {
   return mutate(() => {
-    requireUser('clerk', 'doctor', 'nurse')
+    requirePermission('patient.edit')
     validate(input)
     const p: Patient = {
       ...input,
@@ -74,7 +74,7 @@ export function addAllergy(patientId: string, allergen: string): Promise<Patient
 
 export function updatePatient(id: string, input: PatientInput): Promise<Patient> {
   return mutate(() => {
-    requireUser('clerk', 'doctor', 'nurse')
+    requirePermission('patient.edit')
     const p = must(find.patient(id), '病患')
     validate(input, id)
     Object.assign(p, input, { name: input.name.trim(), idNo: input.idNo.toUpperCase() })

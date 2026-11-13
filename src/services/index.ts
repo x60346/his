@@ -22,6 +22,7 @@ import * as stocktake from './stocktake'
 import * as purchase from './purchase'
 import * as transfer from './transfer'
 import * as ud from './ud'
+import * as permission from './permission'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -44,6 +45,7 @@ export const stocktakeApi = overNetwork(stocktake)
 export const purchaseApi = overNetwork(purchase)
 export const transferApi = overNetwork(transfer)
 export const udApi = overNetwork(ud)
+export const permissionApi = overNetwork(permission)
 export type { PhraseView, PhraseShareTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
@@ -71,6 +73,8 @@ export * from './rx-rules'
 export * from './stocktake-rules'
 export * from './purchase-rules'
 export * from './ud-rules'
+export * from './permission-rules'
+export type { PermissionRow } from './permission'
 export { REPORT_MAX_DAYS } from './charge'
 export type { VisitView, AdmissionView, PatientBrief, DeptTransferView } from './views'
 export type { IncomingTransfer } from './admission'

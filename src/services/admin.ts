@@ -7,7 +7,7 @@
 import type { BillingSettings, CopayValues, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, passwordAgeOf, query, requireUser, sessionUser, failFields } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, passwordAgeOf, query, requireUser, sessionUser, failFields, requirePermission } from './http'
 import { checkDiscountRule, copayOn, COPAY_KEYS, discountSummary, pickCopay, regFeeOn } from './billing'
 import { applyChange, checkFrom, nextChange } from './dated-rules'
 import { PASSWORD_HISTORY_MAX, passwordProblem } from './password-rules'
@@ -50,11 +50,11 @@ export function listUsers(): Promise<UserRow[]> {
   })
 }
 
-export type UserInput = Pick<User, 'username' | 'name' | 'roles' | 'doctorId' | 'active' | 'approvesDiscount'> & { id?: string; password?: string }
+export type UserInput = Pick<User, 'username' | 'name' | 'roles' | 'doctorId' | 'active'> & { id?: string; password?: string }
 
 export function saveUser(input: UserInput): Promise<SafeUser> {
   return mutate(() => {
-    const me = requireUser('admin')
+    const me = requirePermission('system.accounts')
     const username = input.username.trim().toLowerCase()
     const name = input.name.trim()
     const old = input.id ? must(db.users.find((u) => u.id === input.id), '使用者') : undefined
@@ -104,19 +104,12 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     const saved: User = {
       ...old,
       id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, roles, doctorId, active: input.active, password: password!,
-      approvesDiscount: input.approvesDiscount ? true : undefined, // 下面存檔後把 undefined 刪掉（不留空欄位）
       // 管理員設定的初始密碼：本人第一次登入就要改掉（管理員知道這組密碼）
       ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now(), passwordSetOn: today() }),
     }
-    const approveChanged = !!old?.approvesDiscount !== !!saved.approvesDiscount
-    if (old) {
-      Object.assign(old, saved)
-      if (!saved.approvesDiscount) delete old.approvesDiscount
-    } else {
-      if (!saved.approvesDiscount) delete saved.approvesDiscount
-      db.users.push(saved)
-    }
-    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.roles.join('+')}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}${old && approveChanged ? (saved.approvesDiscount ? '，可核准優免' : '，取消核准優免') : !old && saved.approvesDiscount ? '，可核准優免' : ''}）`)
+    if (old) Object.assign(old, saved)
+    else db.users.push(saved)
+    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.roles.join('+')}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}）`)
     return toSafeUser(saved)
   })
 }
@@ -128,7 +121,7 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
  */
 export function resetPassword(userId: string, password: string): Promise<void> {
   return mutate(() => {
-    const me = requireUser('admin')
+    const me = requirePermission('system.accounts')
     const u = must(db.users.find((x) => x.id === userId), '使用者')
     if (u.id === me.id) fail('自己的密碼請用右上角「變更密碼」')
     const problem = passwordProblem(password, { username: u.username })

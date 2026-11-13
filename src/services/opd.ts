@@ -6,7 +6,7 @@ import { addDays, now } from '@/utils/date'
 import { autoQty, doseUnitOf } from './billing'
 import { checkDays, doseLevel, doseNote } from './dose-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, must, mutate, query, requireUser, requirePermission } from './http'
 import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
 import type { ExpandedOrders } from './orderset'
 
@@ -119,7 +119,7 @@ export interface CompleteResult {
 /** confirmHighDose：處方中有劑量偏高的藥，醫師已確認無誤（放在選項而不是病歷草稿裡，避免被存進病歷） */
 export function completeEncounter(encounterId: string, draft: EncounterDraft, opts: { confirmHighDose?: boolean } = {}): Promise<CompleteResult> {
   return mutate(() => {
-    requireUser('doctor')
+    requirePermission('order.write')
     const e = editableEncounter(encounterId)
     const v = must(find.visit(e.visitId), '掛號紀錄')
     Object.assign(e, structuredClone(draft))

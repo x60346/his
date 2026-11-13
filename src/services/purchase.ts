@@ -9,7 +9,7 @@ import type { PurchaseLine, PurchaseOrder, Supplier } from '@/types'
 import { dispenseOpen } from './rx-rules'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
 import { stockStatus, suggestRestockQty, usableQty } from './stock-rules'
@@ -166,7 +166,7 @@ export type SupplierInput = Pick<Supplier, 'name' | 'taxId' | 'contact' | 'phone
 
 export function saveSupplier(input: SupplierInput): Promise<Supplier> {
   return mutate(() => {
-    requireUser('pharmacist', 'admin')
+    requirePermission('supplier.edit')
     const old = input.id ? db.suppliers.find((x) => x.id === input.id) : undefined
     if (input.id && !old) fail('找不到供應商', 'NOT_FOUND')
     const name = (input.name ?? '').trim().replace(/\s+/g, ' ')
@@ -318,7 +318,7 @@ export function submitPurchase(id: string): Promise<PurchaseView> {
 /** 管理員核准：正式向藥商訂購；入庫地點以此刻的「採購入庫地點」為準 */
 export function approvePurchase(id: string): Promise<PurchaseView> {
   return mutate(() => {
-    const u = requireUser('admin')
+    const u = requirePermission('purchase.approve')
     const po = poOf(id)
     if (po.status !== 'pending') fail('只有待核准的採購單可以核准', 'CONFLICT')
     if (po.createdBy === u.id) fail('開單的人不能自己核准', 'FORBIDDEN')
@@ -331,7 +331,7 @@ export function approvePurchase(id: string): Promise<PurchaseView> {
 /** 管理員退回：回到草稿讓藥師修改，記下原因 */
 export function rejectPurchase(id: string, reason: string): Promise<PurchaseView> {
   return mutate(() => {
-    const u = requireUser('admin')
+    const u = requirePermission('purchase.approve')
     const po = poOf(id)
     if (po.status !== 'pending') fail('只有待核准的採購單可以退回', 'CONFLICT')
     const why = reason?.trim()

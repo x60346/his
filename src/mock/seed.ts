@@ -220,7 +220,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
     { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', roles: ['clerk'], active: true },
     // 櫃台組長：可核准優免（「專案減免」要主管核准：clerk01 結帳時請 clerk02 輸入帳密）
-    { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, approvesDiscount: true },
+    { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount'] },
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
     { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
   ]

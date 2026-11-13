@@ -37,7 +37,7 @@ const confirmOpen = computed({
     </div>
   </Teleport>
 
-  <UDialog v-model="confirmOpen" :title="ui.confirmState?.title ?? '請確認'" size="sm">
+  <UDialog v-model="confirmOpen" :title="ui.confirmState?.title ?? '請確認'" size="sm" top>
     <p class="whitespace-pre-line text-sm text-slate-700">{{ ui.confirmState?.message }}</p>
     <template #footer>
       <UButton variant="secondary" @click="ui.answer(false)">{{ ui.confirmState?.cancelText ?? '取消' }}</UButton>

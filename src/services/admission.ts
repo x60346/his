@@ -4,7 +4,7 @@
 import type { Admission, AdmissionStatus, Bed, BedStatus, DeptTransfer } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
@@ -66,7 +66,7 @@ export function reserve(input: ReserveInput): Promise<Admission> {
 
 export function cancelReservation(id: string): Promise<Admission> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('admission.desk')
     const a = must(find.admission(id), '住院紀錄')
     if (a.status !== 'reserved') fail('只有預約中的住院可以取消', 'CONFLICT')
     a.status = 'cancelled'
@@ -113,7 +113,7 @@ export const bedStatusLabel: Record<BedStatus, string> = { empty: '空床', occu
 /** 報到：配床、產生住院號 */
 export function checkIn(admissionId: string, bedId: string): Promise<AdmissionView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('admission.desk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'reserved') fail('此住院紀錄不是預約狀態', 'CONFLICT')
     const bed = takeBed(bedId, a.id)
@@ -130,7 +130,7 @@ export function checkIn(admissionId: string, bedId: string): Promise<AdmissionVi
 
 export function transferBed(admissionId: string, bedId: string): Promise<AdmissionView> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('admission.desk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以轉床')
     if (a.bedId === bedId) fail('與目前床位相同')
@@ -264,7 +264,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
  */
 export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied'>, reservedFor?: string): Promise<Bed> {
   return mutate(() => {
-    requireUser('clerk', 'nurse')
+    requirePermission('admission.desk')
     const bed = must(find.bed(bedId), '病床')
     if (bed.status === 'occupied') fail('使用中的病床不可直接變更狀態', 'CONFLICT')
     if (status === 'reserved') {

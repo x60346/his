@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 停診通知：因停診而退掛的病人，逐一電話通知後打勾。
 // 「退掛」只是系統裡的狀態，病人不知道就還是會來——通知完成才算處理完。
+import { useCan } from '@/composables/useCan'
 import { Check, Phone } from 'lucide-vue-next'
 import { UBadge, UButton, UQueryState } from '@/components/ui'
 import { scheduleApi } from '@/services'
@@ -11,6 +12,7 @@ import { useAuth } from '@/stores/auth'
 import type { NoticeRow } from '@/services/schedule'
 
 const ui = useUi()
+const can = useCan()
 const { data: notices, loading } = useQuery(() => scheduleApi.listSuspendNotices())
 const mark = useAction(scheduleApi.markNotified, { success: '已記錄通知' })
 // 「已通知」不先確認（要連續按很多次），改成可以撤銷；撤銷較少用，所以先確認
@@ -46,9 +48,9 @@ const undo = async (n: NoticeRow) => {
         <span class="ml-auto">
           <span v-if="n.notifiedAt" class="tabular flex items-center gap-2 text-xs">
             {{ n.notifiedAt.slice(5) }} {{ n.notifiedByName ?? '' }} 已通知
-            <button type="button" class="text-brand-600 underline-offset-2 hover:underline disabled:opacity-50" :disabled="unmark.pending.value" @click="undo(n)">撤銷</button>
+            <button type="button" class="text-brand-600 underline-offset-2 hover:underline disabled:opacity-50" :disabled="unmark.pending.value || !can('schedule.notice')" @click="undo(n)">撤銷</button>
           </span>
-          <UButton v-else size="sm" variant="secondary" :icon="Check" :loading="mark.pending.value" @click="mark.run(n.visitId)">已通知</UButton>
+          <UButton v-else-if="can('schedule.notice')" size="sm" variant="secondary" :icon="Check" :loading="mark.pending.value" @click="mark.run(n.visitId)">已通知</UButton>
         </span>
       </li>
     </ul>
