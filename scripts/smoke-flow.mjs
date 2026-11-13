@@ -2064,7 +2064,8 @@ try {
     ok(JSON.stringify(R.checkPhrase({ code: '', text: '' })) === JSON.stringify({ code: '請輸入簡碼', text: '請輸入片語內容' }) && R.checkPhrase({ code: 'a-b', text: 'x' }).code && R.checkPhrase({ code: 'abcdefghijk', text: 'x' }).code && !Object.keys(R.checkPhrase({ code: '.HTN', text: 'x' })).length,
       '簡碼與內容一次標出；只能英數、最多 10 碼；「.HTN」視為 htn')
     const PH = api.phraseApi
-    const lp = async (q) => (await PH.listPhrases(q)).phrases
+    // 這一段測個人、科室、病房的範圍；全院共用另外測（下面「全院片語」）
+    const lp = async (q) => (await PH.listPhrases(q)).phrases.filter((p) => p.scope !== 'hospital')
     await as('clerk01')
     await expectError(() => PH.listPhrases(), '櫃台查看片語')
     await as('nurse01')
@@ -2146,6 +2147,38 @@ try {
     ok(!(await PH.listPhrases({ ward: '6B 外科病房' })).phrases.some((p) => p.scope === 'ward'), '醫師看不到護理病房共用片語')
     await as('nurse01')
     await PH.deletePhrase(wp.id, { ward: '6B 外科病房' })
+
+    // 全院片語：醫師、護理師各一組；大家都能用，只有被指定的人能改；優先順序 個人 > 科室／病房 > 全院
+    {
+      const RR = await load('/src/services/phrase-rules.ts')
+      const all = (await PH.listPhrases({ ward: ward5A }))
+      const hosp = all.phrases.filter((p) => p.scope === 'hospital')
+      ok(hosp.length >= 2 && hosp.every((p) => p.forRole === 'nurse' && !p.canEdit) && all.hospital.label === '全院護理共用' && !all.hospital.canEdit, '護理師看得到全院護理片語（不是醫師那組）；nurse01 沒被指定，不能改')
+      const fall = all.phrases.filter((p) => p.code === 'fall')
+      ok(fall[0].scope !== 'hospital' && fall.find((p) => p.scope === 'hospital')?.shadowedBy === '你的個人片語' && RR.expandPhrase('.fall', 5, all.phrases)?.text === fall[0].text, '同簡碼 .fall：個人的優先（全院的標「被你的個人片語蓋住」）')
+      ok(all.phrases.find((p) => p.code === 'pain')?.scope === 'hospital' &&RR.expandPhrase('.pain', 5, all.phrases)?.text === all.phrases.find((p) => p.code === 'pain').text, '沒有更近的同簡碼：展開全院片語（.pain）')
+      const h1 = hosp.find((p) => p.code === 'pain')
+      await expectError(() => PH.savePhrase({ id: h1.id, code: 'pain', text: '亂改' }), '沒被指定的護理師改全院片語')
+      await expectError(() => PH.deletePhrase(h1.id), '沒被指定的護理師刪全院片語')
+      await expectError(() => PH.savePhrase({ code: 'x2', text: 'x', hospital: true }), '沒被指定的護理師新增全院片語')
+      await as('nurse02')
+      const nh = await PH.savePhrase({ code: 'iso', text: '依感染管制規範執行接觸隔離，進出病室洗手並穿戴隔離衣。', hospital: true })
+      ok(nh.scope === 'hospital' && nh.forRole === 'nurse' && dbm.db.auditLogs[0].detail === '全院護理共用 .iso', '被指定的 nurse02 新增全院護理片語（寫稽核）')
+      await expectError(() => PH.savePhrase({ code: 'iso', text: '重複', hospital: true }), '全院片語簡碼重複')
+      await as('dr02')
+      const drAll = await PH.listPhrases()
+      ok(!drAll.phrases.some((p) => p.code === 'iso') && drAll.phrases.some((p) => p.code === 'ama' && p.scope === 'hospital') && drAll.hospital.label === '全院醫師共用', '醫師看不到護理那組，看得到全院醫師片語（.ama）')
+      await expectError(() => PH.savePhrase({ code: 'x3', text: 'x', hospital: true }), '沒被指定的醫師新增全院片語')
+      await as('dr01')
+      const ama = (await PH.listPhrases()).phrases.find((p) => p.code === 'ama')
+      ok(ama.canEdit && (await PH.savePhrase({ id: ama.id, code: 'ama', text: ama.text + '（已通知主治醫師）' })).text.endsWith('（已通知主治醫師）'), '被指定的 dr01 可以改全院醫師片語')
+      const fu = (await PH.listPhrases()).phrases.filter((p) => p.code === 'fu')
+      ok(fu[0].scope === undefined && fu[1]?.scope === 'hospital' && fu[1].shadowed, 'dr01 的個人 .fu 蓋住全院的 .fu')
+      await as('nurse02')
+      await PH.deletePhrase(nh.id)
+      const PR3 = await load('/src/services/permission-rules.ts')
+      ok(PR3.permDef('phrase.hospital').grantOnly && PR3.permDef('phrase.hospital').candidates.join() === 'doctor,nurse', '「維護全院片語」只能指定給個人（醫師、護理師）')
+    }
     await as('dr01')
     {
       const { readFileSync } = await import('node:fs')
@@ -2153,7 +2186,7 @@ try {
       const ho = readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8')
       const svc = readFileSync('src/services/phrase.ts', 'utf8')
       ok(nn.includes('usePhrases(() => props.admission.bed?.ward)') && ho.includes('usePhrases(() => props.ward)'), '護理紀錄、交班帶目前的病房（病房共用片語）')
-      ok(svc.includes("scopeOf(a) === 'personal' ? -1 : 1"), '「個人優先」靠服務層排序（個人在前）＋ expandPhrase 取第一個，頁面不另寫')
+      ok(svc.includes('rankOf(a) - rankOf(b)'), '「個人 > 科室／病房 > 全院」靠服務層排序＋ expandPhrase 取第一個，頁面不另寫')
     }
     {
       // 片語展開只有一份（usePhrases）：門診、住院病程與病摘、護理紀錄、交班都用它，頁面不自己呼叫 expandPhrase

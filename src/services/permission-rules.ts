@@ -21,6 +21,7 @@ export type PermKey =
   | 'supplier.edit'
   | 'location.edit'
   | 'transfer.warehouse'
+  | 'phrase.hospital'
   | 'charge.approveDiscount'
   | 'order.write'
   | 'mar.give'
@@ -30,7 +31,7 @@ export type PermKey =
 
 export interface PermDef {
   key: PermKey
-  group: '門診' | '住院' | '藥局' | '排班' | '收費' | '系統'
+  group: '門診' | '住院' | '藥局' | '排班' | '收費' | '病歷' | '系統'
   label: string
   /** 包含哪些動作（設定畫面顯示，讓人知道勾了會影響什麼） */
   covers: string
@@ -57,6 +58,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'location.edit', group: '藥局', label: '庫存地點維護', covers: '新增、改名、停用地點，改由哪個地點負責發藥／調劑／入庫', candidates: ['admin', 'pharmacist'], defaults: ['admin', 'pharmacist'], grantable: true, note: '改負責地點影響每天的發藥，常見做法是只給藥劑部主管' },
   { key: 'transfer.warehouse', group: '藥局', label: '藥庫作業（撥發、審核退回）', covers: '撥補單撥發、審核藥局的退回申請（同意、少收、不收）', candidates: ['pharmacist'], defaults: ['pharmacist'], grantable: true, note: '預設所有藥師都能做；要限定藥庫藥師：先指定給藥庫藥師個人，再把角色取消。藥局端的請領、申請退回、送出、簽收不受影響' },
   { key: 'charge.approveDiscount', group: '收費', label: '優免核准', covers: '需主管核准的優免，結帳時當場輸入帳密核准', candidates: ['clerk', 'admin'], defaults: [], grantOnly: true, note: '只能指定給個人（櫃台組長、主管）；不能核准自己結帳的' },
+  { key: 'phrase.hospital', group: '病歷', label: '維護全院片語', covers: '新增、修改、刪除全院共用片語（醫師、護理師各一組，各自維護自己那組）', candidates: ['doctor', 'nurse'], defaults: [], grantOnly: true, note: '全院都在用的文字：只指定給個人（例：醫療部主任、護理部督導），其他人只能用' },
   { key: 'order.write', group: '住院', label: '開立／修改／停止醫囑、完成看診', covers: '門診完成看診（處方）、住院醫囑開立修改停止', candidates: ['doctor'], defaults: ['doctor'], fixed: true, note: '醫療紀錄要記在有執業資格的醫師名下' },
   { key: 'mar.give', group: '住院', label: '給藥', covers: '執行給藥、暫停、拒絕、補登', candidates: ['nurse'], defaults: ['nurse'], fixed: true, note: '給藥紀錄要記在執行的護理師名下' },
   { key: 'dispense', group: '藥局', label: '核對處方、發藥', covers: '門診核對、發藥、退藥', candidates: ['pharmacist'], defaults: ['pharmacist'], fixed: true, note: '藥事法：調劑由藥師執行' },

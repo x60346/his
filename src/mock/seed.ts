@@ -215,9 +215,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     ...codes.doctors.map((d, i): User => ({
       id: `U1${String(i + 1).padStart(2, '0')}`, username: `dr${String(i + 1).padStart(2, '0')}`, password: '1234',
       name: d.name, roles: ['doctor'], doctorId: d.id, active: true,
+      // dr01：被指定維護全院（醫師）片語（示範：醫療部主任）
+      ...(i === 0 ? { grants: ['phrase.hospital'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
-    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true },
+    // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
+    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital'] },
     { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
     // 第二位藥師：盤點單「清點的人不能自己覆核」，要有另一位藥師可以覆核（小診所沒有的話由管理員覆核）
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
@@ -1255,6 +1258,16 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     return { id: `PH-SHARED-${i + 1}`, userId, scope, ...(scope === 'dept' ? { deptId: where } : { ward: where }), code, text, createdAt: setAt, updatedAt: setAt, updatedBy: userId }
   })
   phrases.push(...sharedPhrases)
+  // 全院共用片語：醫師、護理師各一組（dr01、nurse02 被指定維護）。.fu、.fall 和個人片語同簡碼，示範「個人的優先」
+  const hospitalPhrases: Phrase[] = (
+    [
+      ['U101', 'doctor', 'ama', '病人及家屬經說明病情及繼續住院治療之必要性後，仍要求自動出院，已告知可能之風險並簽署自動出院同意書。'],
+      ['U101', 'doctor', 'fu', '請依約回診；若症狀加劇或出現新的不適，請提早就醫或至急診。'],
+      ['U202', 'nurse', 'fall', '依全院防跌政策：衛教下床先坐起、站穩再走，夜間開小燈，穿防滑鞋，需要協助時按呼叫鈴。'],
+      ['U202', 'nurse', 'pain', '疼痛評估（0–10 分）並記錄；衛教疼痛時主動告知，依醫囑給藥後 30 分鐘再評估。'],
+    ] as const
+  ).map(([userId, forRole, code, text], i) => ({ id: `PH-HOSP-${i + 1}`, userId, scope: 'hospital' as const, forRole, code, text, createdAt: setAt, updatedAt: setAt, updatedBy: userId }))
+  phrases.push(...hospitalPhrases)
 
   // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
   // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒

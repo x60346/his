@@ -300,10 +300,12 @@ export interface Phrase {
   id: string
   /** 個人片語的擁有者；共用片語是建立的人（使用者帳號 id） */
   userId: string
-  /** personal（預設）：本人的；dept：醫師科室共用（deptId）；ward：護理病房共用（ward） */
-  scope?: 'personal' | 'dept' | 'ward'
+  /** personal（預設）：本人的；dept：醫師科室共用（deptId）；ward：護理病房共用（ward）；hospital：全院共用（forRole 醫師或護理師各一組） */
+  scope?: 'personal' | 'dept' | 'ward' | 'hospital'
   deptId?: string
   ward?: string
+  /** 全院片語給哪一組用 */
+  forRole?: 'doctor' | 'nurse'
   /** 共用片語最後修改的人（大家都能改，要看得出是誰改的） */
   updatedBy?: string
   /** 簡碼：英數字 1–10 碼，存小寫；同一個人不重複 */

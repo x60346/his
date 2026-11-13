@@ -52,7 +52,7 @@ export const permissionApi = overNetwork(permission)
 export const consultApi = overNetwork(consult)
 export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
-export type { PhraseView, PhraseShareTarget } from './phrase'
+export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
 
