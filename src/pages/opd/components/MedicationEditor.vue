@@ -7,7 +7,7 @@
 //   - 過敏：顯示警示但不阻擋，最終由醫師判斷；庫存不足、高警訊藥品也標示出來
 //   - 「全部天數」一次改完（dose-rules.applyDaysToAll）：總量手動填的、無法換算的不自動改，標「請確認總量」
 //   - 服用時機：預設照藥品主檔，可為這張處方另外指定（只有口服、頻率不是睡前／需要時／立即才有選單——和藥袋同一條 timingApplies）
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AlertTriangle, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { UBadge, UButton, UEmpty, USearchSelect } from '@/components/ui'
 import { applyDaysToAll, autoQty, checkDays, distinctDays, doseLevel, doseUnitOf, DRUG_TIMINGS, MAX_RX_DAYS, masterApi, timingApplies, TIMING_SHORT, type AllergyWarning, type DrugView } from '@/services'
@@ -27,6 +27,21 @@ const props = defineProps<{
 }>()
 const ui = useUi()
 const routes = masterApi.staticCodes.routes
+
+// 版面：量處方表自己的寬度（不是螢幕寬度）——1024 寬的門診頁，左邊候診清單佔掉後只剩約 410px
+// 欄寬固定，每一列各自是 grid 也會對齊表頭
+const COLS = 'grid-cols-[minmax(9rem,1fr)_6.5rem_6.5rem_5.5rem_4.5rem_8.5rem_3rem_2rem]'
+const WIDE_PX = 800
+const boxEl = ref<HTMLElement | null>(null)
+const wide = ref(true)
+let ro: ResizeObserver | undefined
+watch(boxEl, (el) => {
+  ro?.disconnect()
+  if (!el) return
+  ro = new ResizeObserver(([e]) => { wide.value = e.contentRect.width >= WIDE_PX })
+  ro.observe(el)
+})
+onBeforeUnmount(() => ro?.disconnect())
 
 const timesOf = (freq: string) => props.freqs.find((f) => f.code === freq)?.timesPerDay ?? 1
 
@@ -123,97 +138,98 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
       <span v-else-if="daysInUse.length > 1" class="ml-auto text-xs font-medium text-amber-700">天數不一致：{{ daysInUse.join('、') }} 天</span>
     </div>
     <UEmpty v-if="!rows.length" title="尚未開立藥品" />
-    <div v-else class="overflow-x-auto rounded-md border border-slate-200">
-      <table class="w-full text-sm">
-        <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
-          <tr>
-            <th class="px-2 py-2 text-left">藥品</th>
-            <th class="px-2 py-2 text-left">劑量</th>
-            <th class="px-2 py-2 text-left">頻率／時機</th>
-            <th class="px-2 py-2 text-left">途徑</th>
-            <th class="px-2 py-2 text-left">天數</th>
-            <th class="px-2 py-2 text-left">總量</th>
-            <th class="px-2 py-2 text-center">自費</th>
-            <th v-if="!readonly" class="w-8" />
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(r, i) in rows" :key="r.drugId" :class="['border-t border-slate-100 align-top', warningOf(r.drugId).length && 'bg-red-50/60']">
-            <td class="px-2 py-1.5">
-              <div class="font-medium text-slate-800">{{ drugs.get(r.drugId)?.name ?? r.drugId }}</div>
-              <div class="flex flex-wrap items-center gap-1 text-xs text-slate-500">
-                {{ drugs.get(r.drugId)?.spec }}
-                <UBadge v-if="drugs.get(r.drugId)?.highAlert" tone="purple">高警訊</UBadge>
-                <UBadge v-for="a in warningOf(r.drugId)" :key="a" tone="red"><AlertTriangle class="h-3 w-3" />病人對 {{ a }} 過敏</UBadge>
-                <!-- 放在藥名欄（永遠看得到）：窄螢幕時處方表橫向捲動，總量欄可能在畫面外 -->
-                <UBadge v-if="!readonly && r._qtyStale" tone="yellow">天數已改，請確認總量</UBadge>
-                <!-- 用可用量（未過期批號），不用帳上總量：過期品發不出去，算進來會讓醫師以為夠 -->
-                <UBadge v-if="!readonly && (drugs.get(r.drugId)?.usable ?? 0) < r.qty" tone="yellow">庫存不足（可用 {{ drugs.get(r.drugId)?.usable ?? 0 }}）</UBadge>
-                <!-- 劑量合理性：與服務層同一條規則 -->
-                <UBadge v-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'absurd'" tone="red">劑量不合理，請確認是否打錯</UBadge>
-                <UBadge v-else-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'high'" tone="yellow">劑量偏高（常用 {{ drugs.get(r.drugId)!.defaultDose }}）</UBadge>
-              </div>
-            </td>
-            <td class="px-2 py-1.5">
-              <div class="flex items-center gap-1">
-                <input v-model.number="r.dose" type="number" min="0" step="0.5" class="form-control w-16 px-2" :disabled="readonly" @input="recalc(r)" />
-                <span class="text-xs text-slate-500">{{ drugs.get(r.drugId) ? doseUnitOf(drugs.get(r.drugId)!) : '' }}</span>
-              </div>
-            </td>
-            <td class="px-2 py-1.5">
-              <select v-model="r.freq" class="form-control w-24 px-2" :disabled="readonly" @change="recalc(r)">
-                <option v-for="f in freqs" :key="f.code" :value="f.code">{{ f.code }}</option>
-              </select>
-              <select
-                v-if="timingApplies(r.freq, r.route)"
-                :value="r.timing ?? ''"
-                aria-label="服用時機"
-                :class="['form-control mt-1 w-24 px-1 text-xs', r.timing && 'border-sky-400 text-sky-800']"
-                :disabled="readonly"
-                @change="setTiming(r, ($event.target as HTMLSelectElement).value)"
-              >
-                <option value="">{{ masterTiming(r) }}（主檔）</option>
-                <option v-for="t in DRUG_TIMINGS.filter((x) => x !== (drugs.get(r.drugId)?.timing ?? 'ANY'))" :key="t" :value="t">{{ TIMING_SHORT[t] }}</option>
-              </select>
-            </td>
-            <td class="px-2 py-1.5">
-              <select v-model="r.route" class="form-control w-20 px-2" :disabled="readonly">
-                <option v-for="rt in routes" :key="rt.code" :value="rt.code">{{ rt.code }}</option>
-              </select>
-            </td>
-            <td class="px-2 py-1.5">
-              <input
-                v-model.number="r.days"
-                type="number"
-                min="1"
-                :max="MAX_RX_DAYS"
-                :class="['form-control w-16 px-2', !readonly && checkDays(r.days) && 'form-control-error']"
-                :title="checkDays(r.days) ?? ''"
-                :disabled="readonly"
-                @input="onDays(r)"
-              />
-              <div v-if="!readonly && checkDays(r.days)" class="mt-0.5 text-xs text-red-600">{{ checkDays(r.days) }}</div>
-            </td>
-            <td class="px-2 py-1.5">
-              <div class="flex items-center gap-1">
-                <input v-model.number="r.qty" type="number" min="0" :class="['form-control w-16 px-2', (r._manual || r._qtyStale) && 'border-amber-400']" :disabled="readonly" @input="onQty(r)" />
-                <!-- 總量是「調劑單位」：幾錠、幾支、幾瓶 -->
-                <span class="text-xs text-slate-500">{{ drugs.get(r.drugId)?.unit }}</span>
-                <button v-if="r._manual && !readonly && convertible(r)" class="rounded p-1 text-amber-600 hover:bg-amber-50" title="已手動修改，按此恢復自動計算" @click="resetQty(r)">
-                  <RotateCcw class="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div v-if="!convertible(r) && !readonly" class="mt-0.5 text-[11px] text-amber-700">無法由劑量換算，請填寫</div>
-            </td>
-            <td class="px-2 py-1.5 text-center">
-              <input v-model="r.selfPay" type="checkbox" class="mt-2 h-4 w-4 rounded border-slate-300 text-brand-600" :disabled="readonly" />
-            </td>
-            <td v-if="!readonly" class="px-1 py-1.5">
-              <button class="mt-1 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="刪除" @click="rows.splice(i, 1)"><Trash2 class="h-4 w-4" /></button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- 寬度夠（≥ WIDE_PX）一種藥一行、上面一列表頭；不夠時分兩段：藥名＋刪除一行，各欄位（附小標題）一行——不再左右捲動，總量、自費、刪除都看得到 -->
+    <div v-else ref="boxEl" class="rounded-md border border-slate-200 text-sm">
+      <div v-if="wide" :class="['grid items-center gap-x-2 whitespace-nowrap rounded-t-md bg-slate-50 px-2 py-2 text-xs text-slate-500', COLS]">
+        <span>藥品</span><span>劑量</span><span>頻率／時機</span><span>途徑</span><span>天數</span><span>總量</span><span class="text-center">自費</span><span />
+      </div>
+      <div
+        v-for="(r, i) in rows"
+        :key="r.drugId"
+        :class="['border-t border-slate-100 px-2 py-1.5 first:border-t-0', wide ? ['grid items-start gap-x-2', COLS] : 'flex flex-wrap items-start gap-x-3 gap-y-2', warningOf(r.drugId).length && 'bg-red-50/60']"
+      >
+        <div :class="['min-w-0', !wide && 'order-1 flex-1 basis-[calc(100%-3rem)]']">
+          <div class="font-medium text-slate-800">{{ drugs.get(r.drugId)?.name ?? r.drugId }}</div>
+          <div class="flex flex-wrap items-center gap-1 text-xs text-slate-500">
+            {{ drugs.get(r.drugId)?.spec }}
+            <UBadge v-if="drugs.get(r.drugId)?.highAlert" tone="purple">高警訊</UBadge>
+            <UBadge v-for="a in warningOf(r.drugId)" :key="a" tone="red"><AlertTriangle class="h-3 w-3" />病人對 {{ a }} 過敏</UBadge>
+            <!-- 放在藥名欄（永遠在最前面）：總量欄在窄版是第二段，提示放這裡一眼就看到 -->
+            <UBadge v-if="!readonly && r._qtyStale" tone="yellow">天數已改，請確認總量</UBadge>
+            <!-- 用可用量（未過期批號），不用帳上總量：過期品發不出去，算進來會讓醫師以為夠 -->
+            <UBadge v-if="!readonly && (drugs.get(r.drugId)?.usable ?? 0) < r.qty" tone="yellow">庫存不足（可用 {{ drugs.get(r.drugId)?.usable ?? 0 }}）</UBadge>
+            <!-- 劑量合理性：與服務層同一條規則 -->
+            <UBadge v-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'absurd'" tone="red">劑量不合理，請確認是否打錯</UBadge>
+            <UBadge v-else-if="!readonly && drugs.get(r.drugId) && doseLevel(drugs.get(r.drugId)!, r.dose) === 'high'" tone="yellow">劑量偏高（常用 {{ drugs.get(r.drugId)!.defaultDose }}）</UBadge>
+          </div>
+        </div>
+        <div :class="!wide && 'order-3'">
+          <div v-if="!wide" class="mb-0.5 text-xs text-slate-500">劑量</div>
+          <div class="flex items-center gap-1">
+            <input v-model.number="r.dose" type="number" min="0" step="0.5" class="form-control w-16 px-2" aria-label="劑量" :disabled="readonly" @input="recalc(r)" />
+            <span class="text-xs text-slate-500">{{ drugs.get(r.drugId) ? doseUnitOf(drugs.get(r.drugId)!) : '' }}</span>
+          </div>
+        </div>
+        <div :class="!wide && 'order-3'">
+          <div v-if="!wide" class="mb-0.5 text-xs text-slate-500">頻率／時機</div>
+          <div :class="!wide && 'flex gap-1'">
+            <select v-model="r.freq" class="form-control w-24 px-2" aria-label="頻率" :disabled="readonly" @change="recalc(r)">
+              <option v-for="f in freqs" :key="f.code" :value="f.code">{{ f.code }}</option>
+            </select>
+            <select
+              v-if="timingApplies(r.freq, r.route)"
+              :value="r.timing ?? ''"
+              aria-label="服用時機"
+              :class="['form-control w-24 px-1 text-xs', wide && 'mt-1', r.timing && 'border-sky-400 text-sky-800']"
+              :disabled="readonly"
+              @change="setTiming(r, ($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">{{ masterTiming(r) }}（主檔）</option>
+              <option v-for="t in DRUG_TIMINGS.filter((x) => x !== (drugs.get(r.drugId)?.timing ?? 'ANY'))" :key="t" :value="t">{{ TIMING_SHORT[t] }}</option>
+            </select>
+          </div>
+        </div>
+        <div :class="!wide && 'order-3'">
+          <div v-if="!wide" class="mb-0.5 text-xs text-slate-500">途徑</div>
+          <select v-model="r.route" class="form-control w-20 px-2" aria-label="途徑" :disabled="readonly">
+            <option v-for="rt in routes" :key="rt.code" :value="rt.code">{{ rt.code }}</option>
+          </select>
+        </div>
+        <div :class="!wide && 'order-3'">
+          <div v-if="!wide" class="mb-0.5 text-xs text-slate-500">天數</div>
+          <input
+            v-model.number="r.days"
+            type="number"
+            min="1"
+            :max="MAX_RX_DAYS"
+            aria-label="天數"
+            :class="['form-control w-16 px-2', !readonly && checkDays(r.days) && 'form-control-error']"
+            :title="checkDays(r.days) ?? ''"
+            :disabled="readonly"
+            @input="onDays(r)"
+          />
+          <div v-if="!readonly && checkDays(r.days)" class="mt-0.5 text-xs text-red-600">{{ checkDays(r.days) }}</div>
+        </div>
+        <div :class="!wide && 'order-3'">
+          <div v-if="!wide" class="mb-0.5 text-xs text-slate-500">總量</div>
+          <div class="flex items-center gap-1">
+            <input v-model.number="r.qty" type="number" min="0" aria-label="總量" :class="['form-control w-16 px-2', (r._manual || r._qtyStale) && 'border-amber-400']" :disabled="readonly" @input="onQty(r)" />
+            <!-- 總量是「調劑單位」：幾錠、幾支、幾瓶 -->
+            <span class="text-xs text-slate-500">{{ drugs.get(r.drugId)?.unit }}</span>
+            <button v-if="r._manual && !readonly && convertible(r)" class="rounded p-1 text-amber-600 hover:bg-amber-50" title="已手動修改，按此恢復自動計算" @click="resetQty(r)">
+              <RotateCcw class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div v-if="!convertible(r) && !readonly" class="mt-0.5 text-[11px] text-amber-700">無法由劑量換算，請填寫</div>
+        </div>
+        <label :class="wide ? 'flex justify-center pt-2' : 'order-3 flex flex-col items-center'">
+          <span v-if="!wide" class="mb-0.5 text-xs text-slate-500">自費</span>
+          <input v-model="r.selfPay" type="checkbox" :class="['h-4 w-4 rounded border-slate-300 text-brand-600', !wide && 'mt-2']" aria-label="自費" :disabled="readonly" />
+        </label>
+        <div :class="!wide && 'order-2'">
+          <button v-if="!readonly" class="mt-1 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="刪除" @click="rows.splice(i, 1)"><Trash2 class="h-4 w-4" /></button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
