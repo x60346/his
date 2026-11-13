@@ -78,9 +78,9 @@ async function submitId() {
 // ---------- 優免類別（只減掛號費、自費項目；部分負擔不能減） ----------
 const { data: discounts } = useQuery(() => chargeApi.listDiscounts({ includeInactive: true }))
 const dcOpen = ref(false)
-const dcForm = reactive<DiscountInput>({ name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true })
+const dcForm = reactive<DiscountInput>({ name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, needsApproval: false, active: true })
 function openDc(d?: DiscountRule) {
-  Object.assign(dcForm, d ?? { code: undefined, name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true })
+  Object.assign(dcForm, d ? { needsApproval: false, ...d } : { code: undefined, name: '', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, needsApproval: false, active: true })
   saveDc.fieldErrors.value = {}
   dcOpen.value = true
 }
@@ -155,6 +155,7 @@ async function submitDc() {
           <span class="w-28 font-medium">{{ d.name }}</span>
           <span class="flex-1">{{ discountSummary(d) }}</span>
           <UBadge v-if="d.needsReason" tone="yellow">需註明原因</UBadge>
+          <UBadge v-if="d.needsApproval" tone="red">需主管核准</UBadge>
           <UBadge v-if="!d.active">停用</UBadge>
           <UButton size="sm" variant="ghost" :icon="Pencil" @click="openDc(d)">編輯</UButton>
         </li>
@@ -169,6 +170,7 @@ async function submitDc() {
         <UInput v-if="dcForm.regMode === 'amount'" v-model="dcForm.regAmount" label="掛號費減免金額" type="number" min="1" hint="元（不會超過掛號費本身）" :error="saveDc.fieldErrors.value.regAmount" />
         <UInput v-model="dcForm.selfPayRate" label="自費項目付幾成" type="number" min="0" max="100" hint="80 = 8 折；100 = 不打折" :error="saveDc.fieldErrors.value.selfPayRate" />
         <UCheckbox v-model="dcForm.needsReason" label="批價時需註明原因" />
+        <UCheckbox v-model="dcForm.needsApproval" label="需主管核准（結帳時由「可核准優免」的人當場輸入帳密，不能是結帳的櫃台本人）" />
         <UCheckbox v-model="dcForm.active" label="啟用" />
       </div>
       <template #footer>

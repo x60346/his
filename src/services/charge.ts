@@ -72,13 +72,65 @@ export function listDiscounts(q: { includeInactive?: boolean } = {}): Promise<Di
 /** 收據號：依「開立那天」流水編號（結帳、收回欠款共用同一個序號） */
 const nextReceiptNo = (date: string) => `R${date.replace(/-/g, '')}${String(nextCounter(`receipt:${date}`)).padStart(4, '0')}`
 
+// ---------- 優免主管核准 ----------
+/**
+ * 主管當場核准（和超商叫店長來刷卡一樣）：另一位有「可核准優免」權限的人輸入自己的帳號密碼。
+ * 核准是**一次性的**，綁定「這一次掛號、這個優免類別、這位櫃台」，結帳時用掉；換了類別或病人就要重新核准。
+ * 存在記憶體（不進資料庫）：重新整理頁面就要重新核准，也就不會有一張核准被拿去別處用。
+ */
+export const DISCOUNT_APPROVAL_MIN = 10
+const approvals = new Map<string, { visitId: string; code: string; cashierId: string; approverId: string; approverName: string; at: number }>()
+
+export type DiscountApprovalResult = { ok: true; token: string; approverName: string } | { ok: false; field: 'username' | 'password'; message: string }
+
+/**
+ * 主管核准優免。帳密錯誤、沒有權限、核准自己結帳的都**回傳**失敗（不丟錯），這樣失敗的嘗試也留在稽核裡
+ * （mutate 丟錯會回滾整筆，連稽核一起不見）
+ */
+export function approveDiscount(input: { visitId: string; code: string; username: string; password: string }): Promise<DiscountApprovalResult> {
+  return mutate((): DiscountApprovalResult => {
+    const cashier = requireUser('clerk')
+    const v = must(find.visit(input.visitId), '掛號紀錄')
+    if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
+    const rule = usableDiscount(input.code)
+    if (!rule.needsApproval) fail(`「${rule.name}」不需要主管核准`)
+    const username = (input.username ?? '').trim().toLowerCase()
+    const f = fieldErrors()
+    if (!username) f.add('username', '請輸入主管帳號')
+    if (!input.password) f.add('password', '請輸入密碼')
+    f.done()
+    const what = `${nameOf.patient(v.patientId)} ${rule.name}（櫃台 ${cashier.name}）`
+    const no = (field: 'username' | 'password', message: string): DiscountApprovalResult => {
+      audit('優免核准失敗', `${username}：${message}；${what}`)
+      return { ok: false, field, message }
+    }
+    const u = db.users.find((x) => x.username === username)
+    if (!u || u.password !== input.password) return no('password', '帳號或密碼錯誤')
+    if (!u.active) return no('username', '此帳號已停用')
+    if (u.id === cashier.id) return no('username', '不能核准自己結帳的優免，請另一位主管核准')
+    if (!u.approvesDiscount) return no('username', `${u.name} 沒有核准優免的權限`)
+    const token = newId('APV')
+    approvals.set(token, { visitId: v.id, code: rule.code, cashierId: cashier.id, approverId: u.id, approverName: u.name, at: Date.now() })
+    audit('優免核准', `${u.name} 核准 ${what}`)
+    return { ok: true, token, approverName: u.name }
+  })
+}
+
+/** 結帳時檢查核准：同一次掛號、同一類別、同一位櫃台、還沒過期 */
+function approvalFor(token: string | undefined, visitId: string, code: string, cashierId: string) {
+  const a = token ? approvals.get(token) : undefined
+  if (!a || a.visitId !== visitId || a.code !== code || a.cashierId !== cashierId) return null
+  if (Date.now() - a.at > DISCOUNT_APPROVAL_MIN * 60_000) return 'expired' as const
+  return a
+}
+
 export interface PayInput {
   payMethod: PayMethod
   received: number
   /** 實收不足時，差額記為欠款（只限現金；刷卡、行動支付一定是足額扣款） */
   owe?: { reason: string }
-  /** 優免：類別與原因（需註明原因的類別必填） */
-  discount?: { code: string; reason?: string }
+  /** 優免：類別與原因（需註明原因的類別必填）；需主管核准的帶 approveDiscount 給的核准 */
+  discount?: { code: string; reason?: string; approval?: string }
 }
 
 export function pay(visitId: string, input: PayInput): Promise<Charge> {
@@ -91,6 +143,10 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const rule = input.discount?.code ? usableDiscount(input.discount.code) : undefined
     const discountReason = input.discount?.reason?.trim()
     if (rule?.needsReason && !discountReason) failField('discountReason', `「${rule.name}」需註明原因`)
+    const approval = rule?.needsApproval ? approvalFor(input.discount?.approval, visitId, rule.code, cashier.id) : undefined
+    if (approval === null) failField('approval', `「${rule!.name}」需主管核准`)
+    if (approval === 'expired') failField('approval', `主管核准已超過 ${DISCOUNT_APPROVAL_MIN} 分鐘，請重新核准`)
+    const approved = approval || undefined // null、expired 上面已擋下
     // 刷卡、行動支付金額必定等於應收
     const received = input.payMethod === 'cash' ? input.received : pv.patientTotal
     const owe = !!input.owe
@@ -108,7 +164,7 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
       receiptNo: nextReceiptNo(v.date),
       cashierId: cashier.id, paidAt: now(), voided: false,
       ...(owe ? { owed, oweReason: input.owe!.reason.trim(), repayments: [] } : {}),
-      ...(rule ? { discount: { code: rule.code, name: rule.name, ...(discountReason ? { reason: discountReason } : {}), amount: pv.discount!.amount } } : {}),
+      ...(rule ? { discount: { code: rule.code, name: rule.name, ...(discountReason ? { reason: discountReason } : {}), amount: pv.discount!.amount, ...(approved ? { approvedBy: approved.approverId, approverName: approved.approverName } : {}) } } : {}),
     }
     db.charges.push(charge)
     v.status = 'charged'
@@ -119,8 +175,9 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
         pickupNo: nextCounter(`pickup:${v.date}`), status: 'pending', createdAt: now(),
       })
     }
-    const discNote = charge.discount ? `（優免：${charge.discount.name} −${charge.discount.amount} 元${charge.discount.reason ? `，${charge.discount.reason}` : ''}）` : ''
+    const discNote = charge.discount ? `（優免：${charge.discount.name} −${charge.discount.amount} 元${charge.discount.reason ? `，${charge.discount.reason}` : ''}${approved ? `，${approved.approverName} 核准` : ''}）` : ''
     audit('批價結帳', `${charge.receiptNo} ${find.patient(v.patientId)?.name} ${pv.patientTotal} 元${discNote}${owed ? `（欠 ${owed} 元：${charge.oweReason}）` : ''}`)
+    if (approved) approvals.delete(input.discount!.approval!) // 一次性：用掉
     return charge
   })
 }

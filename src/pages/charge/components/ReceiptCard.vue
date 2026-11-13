@@ -39,7 +39,7 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
     </div>
 
     <div v-if="receipt.discount" class="mt-2 flex justify-between rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-      <span>優免：{{ receipt.discount.name }}<template v-if="receipt.discount.reason">（{{ receipt.discount.reason }}）</template></span>
+      <span>優免：{{ receipt.discount.name }}<template v-if="receipt.discount.reason">（{{ receipt.discount.reason }}）</template><template v-if="receipt.discount.approverName">・{{ receipt.discount.approverName }} 核准</template></span>
       <span class="tabular font-semibold">−{{ receipt.discount.amount.toLocaleString() }}</span>
     </div>
 

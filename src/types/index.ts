@@ -36,6 +36,8 @@ export interface User {
   passwordChangedAt?: number
   /** 這組密碼是哪天設定的（YYYY-MM-DD）：密碼期限從這天算（password-rules.passwordAge） */
   passwordSetOn?: string
+  /** 可核准優免（櫃台組長、主管）：需主管核准的優免類別，結帳時由這些人當場輸入帳密 */
+  approvesDiscount?: boolean
   /** 以前用過的密碼（新到舊，最多 10 組）：改密碼時不可重複最近幾次。展示系統存明文（見 README 限制），真實系統只存雜湊 */
   passwordHistory?: string[]
 }
@@ -353,8 +355,8 @@ export interface Charge {
   oweReason?: string
   /** 收回欠款紀錄：可分次，每次一張收據號，日結算在收回那天 */
   repayments?: Repayment[]
-  /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列） */
-  discount?: { code: string; name: string; reason?: string; amount: number }
+  /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列）；需主管核准的記下核准人（id 與當時的姓名） */
+  discount?: { code: string; name: string; reason?: string; amount: number; approvedBy?: string; approverName?: string }
 }
 
 /**
@@ -372,6 +374,8 @@ export interface DiscountRule {
   selfPayRate: number
   /** 需註明原因（例：專案減免） */
   needsReason: boolean
+  /** 需主管核准：結帳時另一位有「可核准優免」權限的人當場輸入帳密 */
+  needsApproval?: boolean
   active: boolean
 }
 

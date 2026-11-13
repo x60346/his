@@ -50,7 +50,7 @@ export function listUsers(): Promise<UserRow[]> {
   })
 }
 
-export type UserInput = Pick<User, 'username' | 'name' | 'roles' | 'doctorId' | 'active'> & { id?: string; password?: string }
+export type UserInput = Pick<User, 'username' | 'name' | 'roles' | 'doctorId' | 'active' | 'approvesDiscount'> & { id?: string; password?: string }
 
 export function saveUser(input: UserInput): Promise<SafeUser> {
   return mutate(() => {
@@ -104,12 +104,19 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     const saved: User = {
       ...old,
       id: old?.id ?? nextCode('U9', db.users.map((u) => u.id)), username, name, roles, doctorId, active: input.active, password: password!,
+      approvesDiscount: input.approvesDiscount ? true : undefined, // 下面存檔後把 undefined 刪掉（不留空欄位）
       // 管理員設定的初始密碼：本人第一次登入就要改掉（管理員知道這組密碼）
       ...(old ? {} : { mustChangePassword: true, passwordChangedAt: Date.now(), passwordSetOn: today() }),
     }
-    if (old) Object.assign(old, saved)
-    else db.users.push(saved)
-    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.roles.join('+')}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}）`)
+    const approveChanged = !!old?.approvesDiscount !== !!saved.approvesDiscount
+    if (old) {
+      Object.assign(old, saved)
+      if (!saved.approvesDiscount) delete old.approvesDiscount
+    } else {
+      if (!saved.approvesDiscount) delete saved.approvesDiscount
+      db.users.push(saved)
+    }
+    audit(old ? '修改帳號' : '新增帳號', `${username}（${saved.roles.join('+')}${old && old.active !== saved.active ? `，${saved.active ? '啟用' : '停用'}` : ''}${old && approveChanged ? (saved.approvesDiscount ? '，可核准優免' : '，取消核准優免') : !old && saved.approvesDiscount ? '，可核准優免' : ''}）`)
     return toSafeUser(saved)
   })
 }
@@ -391,11 +398,14 @@ export function saveDiscount(input: DiscountInput): Promise<DiscountRule> {
       regAmount: input.regMode === 'amount' ? input.regAmount : 0,
       selfPayRate: input.selfPayRate,
       needsReason: !!input.needsReason,
+      ...(input.needsApproval ? { needsApproval: true } : {}),
       active: input.active !== false,
     }
-    if (old) Object.assign(old, saved)
-    else db.discounts.push(saved)
-    audit(old ? '修改優免類別' : '新增優免類別', `${saved.code} ${saved.name}：${discountSummary(saved)}${saved.needsReason ? '（需註明原因）' : ''}${saved.active ? '' : '（停用）'}`)
+    if (old) {
+      Object.assign(old, saved)
+      if (!saved.needsApproval) delete old.needsApproval
+    } else db.discounts.push(saved)
+    audit(old ? '修改優免類別' : '新增優免類別', `${saved.code} ${saved.name}：${discountSummary(saved)}${saved.needsReason ? '（需註明原因）' : ''}${saved.needsApproval ? '（需主管核准）' : ''}${saved.active ? '' : '（停用）'}`)
     return saved
   })
 }

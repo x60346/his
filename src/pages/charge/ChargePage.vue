@@ -3,7 +3,7 @@
 // 金額全部來自服務層（previewCharge / pay），頁面只算「實收 − 應收 = 找零」。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
-import { Ban, CreditCard, Printer, Smartphone, Wallet } from 'lucide-vue-next'
+import { Ban, CreditCard, Printer, ShieldCheck, Smartphone, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
@@ -65,6 +65,34 @@ const preview = computed(() => {
   return pv.discount?.code === want ? pv : undefined
 })
 const lastDiscount = computed(() => (item.value ? detail.value?.lastDiscount : undefined))
+
+// ---------- 優免主管核准：主管當場輸入自己的帳密，核准綁「這位病人＋這個類別」；換了就要重新核准 ----------
+// 核准是否有效、是否過期由服務層在結帳時判斷；這裡只記下核准結果，換病人或類別時不再顯示
+const approval = ref<{ token: string; name: string; visitId: string; code: string }>()
+const approvalNow = computed(() => (approval.value && approval.value.visitId === visitId.value && approval.value.code === discountCode.value ? approval.value : undefined))
+const apOpen = ref(false)
+const apForm = ref({ username: '', password: '' })
+const apError = ref<{ username?: string; password?: string }>({})
+function openApproval() {
+  apForm.value = { username: '', password: '' }
+  apError.value = {}
+  approve.fieldErrors.value = {}
+  apOpen.value = true
+}
+const approve = useAction(chargeApi.approveDiscount)
+async function onApprove() {
+  if (!visitId.value || !rule.value) return
+  apError.value = {}
+  const r = await approve.run({ visitId: visitId.value, code: rule.value.code, ...apForm.value })
+  if (!r) return
+  if (!r.ok) {
+    apError.value = { [r.field]: r.message }
+    apForm.value.password = ''
+    return
+  }
+  approval.value = { token: r.token, name: r.approverName, visitId: visitId.value, code: rule.value.code }
+  apOpen.value = false
+}
 const receipt = computed(() => (item.value ? detail.value?.receipt : undefined))
 
 // ---------- 結帳 ----------
@@ -94,7 +122,7 @@ const change = computed(() => (payMethod.value === 'cash' ? (received.value ?? 0
 // 與服務層同一條規則：不足（沒勾欠款）、非整數、找零異常（多打了 0）都不能收款
 const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value, owe.value) : null))
 const owedAmount = computed(() => (owe.value ? Math.max(0, total.value - (received.value ?? 0)) : 0))
-const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()) && (!rule.value?.needsReason || !!discountReason.value.trim()))
+const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()) && (!rule.value?.needsReason || !!discountReason.value.trim()) && (!rule.value?.needsApproval || !!approvalNow.value))
 
 const pay = useAction(chargeApi.pay, { success: (c) => `結帳完成：收據 ${c.receiptNo}` })
 async function onPay() {
@@ -103,7 +131,7 @@ async function onPay() {
     payMethod: payMethod.value,
     received: payMethod.value === 'cash' ? received.value ?? 0 : total.value,
     owe: owe.value ? { reason: oweReason.value } : undefined,
-    discount: discountCode.value ? { code: discountCode.value, reason: discountReason.value } : undefined,
+    discount: discountCode.value ? { code: discountCode.value, reason: discountReason.value, ...(approvalNow.value ? { approval: approvalNow.value.token } : {}) } : undefined,
   })
   // 結帳後清單經 dbVersion 自動刷新，右側會切換成收據
 }
@@ -228,6 +256,13 @@ const identityOpen = ref(false)
                   @click="discountCode = lastDiscount.code"
                 >上次使用：{{ lastDiscount.name }}（{{ lastDiscount.date.slice(5).replace('-', '/') }}），按此套用</button>
                 <UInput v-if="rule?.needsReason" v-model="discountReason" label="優免原因" required placeholder="例：院長特准、社工轉介" :error="pay.fieldErrors.value.discountReason" />
+                <div v-if="rule?.needsApproval" :class="['flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm', approvalNow ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900']">
+                  <ShieldCheck class="h-4 w-4 shrink-0" />
+                  <span v-if="approvalNow" class="flex-1">已由 <b>{{ approvalNow.name }}</b> 核准</span>
+                  <span v-else class="flex-1">「{{ rule.name }}」需主管核准</span>
+                  <UButton size="sm" :variant="approvalNow ? 'ghost' : 'primary'" @click="openApproval">{{ approvalNow ? '重新核准' : '主管核准' }}</UButton>
+                  <p v-if="pay.fieldErrors.value.approval" class="w-full text-xs text-red-600">{{ pay.fieldErrors.value.approval }}</p>
+                </div>
                 <p v-if="rule" class="text-xs text-slate-500">部分負擔依健保規定不能減免，優免只減掛號費與自費項目。</p>
               </div>
               <div class="rounded-md bg-slate-900 px-4 py-3 text-right text-white">
@@ -316,6 +351,21 @@ const identityOpen = ref(false)
       <template #footer>
         <UButton variant="secondary" @click="repayTarget = undefined">取消</UButton>
         <UButton :disabled="!!repayProblem" :loading="repay.pending.value" @click="onRepay">確認收回</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="apOpen" title="主管核准優免" size="sm" @submit="onApprove">
+      <div class="space-y-3 text-sm">
+        <p class="text-slate-600">
+          {{ item?.patientName }}・{{ rule?.name }}（{{ rule && discountSummary(rule) }}）<span v-if="discountReason.trim()">：{{ discountReason.trim() }}</span>
+        </p>
+        <p class="text-xs text-slate-500">請主管輸入<b>自己的</b>帳號密碼（不是目前登入的櫃台）。核准只用於這一次結帳；換病人或優免類別要重新核准。</p>
+        <UInput v-model="apForm.username" label="主管帳號" required autocomplete="off" :error="apError.username ?? approve.fieldErrors.value.username" />
+        <UInput v-model="apForm.password" label="密碼" type="password" required autocomplete="off" :error="apError.password ?? approve.fieldErrors.value.password" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="apOpen = false">取消</UButton>
+        <UButton type="submit" :loading="approve.pending.value">核准</UButton>
       </template>
     </UDialog>
 

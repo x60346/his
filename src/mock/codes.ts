@@ -56,7 +56,7 @@ export const discounts: DiscountRule[] = [
   { code: 'DC02', name: '員工眷屬', regMode: 'amount', regAmount: 50, selfPayRate: 90, needsReason: false, active: true },
   { code: 'DC03', name: '志工', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: false, active: true },
   { code: 'DC04', name: '社福個案', regMode: 'all', regAmount: 0, selfPayRate: 50, needsReason: true, active: true },
-  { code: 'DC05', name: '專案減免', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: true, active: true },
+  { code: 'DC05', name: '專案減免', regMode: 'all', regAmount: 0, selfPayRate: 100, needsReason: true, needsApproval: true, active: true },
 ]
 
 /** 收費參數預設值（展示用的簡化規則） */

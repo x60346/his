@@ -1400,14 +1400,14 @@ try {
   await expectError(() => A.saveUser({ username: 'Bad Name', name: 'x', roles: ['clerk'], active: true, password: 'Welcome123' }), '帳號格式不符')
   await expectError(() => A.saveUser({ username: 'clerk01', name: 'x', roles: ['clerk'], active: true, password: 'Welcome123' }), '帳號重複')
   await expectError(() => A.saveUser({ username: 'dr99', name: 'x', roles: ['doctor'], doctorId: 'DR01', active: true, password: 'Welcome123' }), '同一位醫師建立第二個帳號')
-  await expectError(() => A.saveUser({ username: 'clerk02', name: '新櫃台', roles: ['clerk'], active: true, password: '12' }), '新帳號密碼太短')
-  const nu = await A.saveUser({ username: 'Clerk02', name: '新櫃台', roles: ['clerk'], active: true, password: 'Welcome123' })
-  ok(nu.username === 'clerk02' && !('password' in nu), '新增帳號：帳號轉小寫、回傳不含密碼')
+  await expectError(() => A.saveUser({ username: 'clerk09', name: '新櫃台', roles: ['clerk'], active: true, password: '12' }), '新帳號密碼太短')
+  const nu = await A.saveUser({ username: 'Clerk09', name: '新櫃台', roles: ['clerk'], active: true, password: 'Welcome123' })
+  ok(nu.username === 'clerk09' && !('password' in nu), '新增帳號：帳號轉小寫、回傳不含密碼')
   const admin2 = await A.saveUser({ username: 'admin2', name: '副管理員', roles: ['admin'], active: true, password: 'Welcome123' })
   await A.saveUser({ id: admin2.id, username: 'admin2', name: '副管理員', roles: ['admin'], active: false })
   await as('admin')
-  await A.saveUser({ id: nu.id, username: 'clerk02', name: '新櫃台', roles: ['clerk'], active: false })
-  await expectError(() => api.authApi.login('clerk02', 'Welcome123'), '停用的帳號登入')
+  await A.saveUser({ id: nu.id, username: 'clerk09', name: '新櫃台', roles: ['clerk'], active: false })
+  await expectError(() => api.authApi.login('clerk09', 'Welcome123'), '停用的帳號登入')
   await A.resetPassword(nu.id, 'Reset2026x')
   ok(!dbm.db.auditLogs.slice(0, 3).some((l) => l.detail.includes('Reset2026x')), '重設密碼：稽核紀錄不記錄密碼內容')
 
@@ -3181,6 +3181,103 @@ try {
     ok(rep.discountTotal === valid.reduce((n, c) => n + (c.discount?.amount ?? 0), 0) && rep.discounts.some((d) => d.name === '員工') && fee.discount === -rep.discountTotal,
       `日結：優免合計 ${rep.discountTotal} 元＝各收據減免加總，依類別列出`)
     ok(fee.reg + fee.basicCopay + fee.drugCopay + fee.selfPay + fee.discount === rep.patientTotal, '日結依費用類別（含優免負數）加總＝應收合計')
+
+    // 優免主管核准：主管當場輸入自己的帳密；核准一次性、綁這次掛號＋類別＋櫃台；失敗的嘗試留稽核
+    {
+      const C = api.chargeApi
+      ok(dbm.db.discounts.find((d) => d.code === 'DC05').needsApproval && dbm.db.users.find((u) => u.username === 'clerk02').approvesDiscount, '種子：專案減免需主管核准；櫃台組長 clerk02 可核准優免')
+      // 自己掛兩位、看完診（前面的測試已把待批價的病人結完）：不依賴種子當天剩下多少
+      const { addDays } = await load('/src/utils/date.ts')
+      const makeConsulted = async () => {
+        await as('clerk01')
+        const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
+        const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
+        const pt = dbm.db.patients.find((x) => !x.allergies.length && !dbm.db.visits.some((v) => v.date === sess.date && v.patientId === x.id))
+        const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+        await as(dbm.db.users.find((u) => u.doctorId === sess.doctorId).username)
+        const e = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
+        await api.opdApi.completeEncounter(e.id, { subjective: '測試', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'J06.9', name: '急性上呼吸道感染', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+        return dbm.db.visits.find((x) => x.id === v.id)
+      }
+      const pend = [await makeConsulted(), await makeConsulted()]
+      const [vA, vB] = pend
+      ok(vA.status === 'consulted' && vB.status === 'consulted', '兩位待批價的病人')
+      await as('clerk01')
+      const DC05 = { code: 'DC05', reason: '院長特准' }
+      try {
+        await C.pay(vA.id, { payMethod: 'cash', received: 9999, discount: DC05 })
+        ok(false, '沒有主管核准應被擋下')
+      } catch (e) {
+        ok(e.field === 'approval' && e.message.includes('需主管核准'), `沒有主管核准就結帳 → 「${e.message}」`)
+      }
+      await expectError(() => C.approveDiscount({ visitId: vA.id, code: 'DC01', username: 'clerk02', password: '1234' }), '不需核准的類別要求核准')
+      const bad = await C.approveDiscount({ visitId: vA.id, code: 'DC05', username: 'clerk02', password: 'wrong' })
+      ok(bad.ok === false && bad.field === 'password' && dbm.db.auditLogs[0].action === '優免核准失敗' && dbm.db.auditLogs[0].detail.includes('clerk02'), '密碼錯誤：回傳失敗（不丟錯），失敗的嘗試留在稽核')
+      const noRight = await C.approveDiscount({ visitId: vA.id, code: 'DC05', username: 'staff01', password: '1234' })
+      ok(noRight.ok === false && noRight.message.includes('沒有核准優免的權限'), `沒有權限的人核准 → 「${noRight.message}」`)
+      try {
+        await C.approveDiscount({ visitId: vA.id, code: 'DC05', username: '', password: '' })
+        ok(false, '空白帳密應被擋下')
+      } catch (e) {
+        ok(e.fields?.username && e.fields?.password, '帳號、密碼空白一次標出')
+      }
+      await as('clerk02')
+      const self = await C.approveDiscount({ visitId: vA.id, code: 'DC05', username: 'clerk02', password: '1234' })
+      ok(self.ok === false && self.message.includes('不能核准自己'), '主管自己結帳時不能核准自己')
+      await as('clerk01')
+      const ap = await C.approveDiscount({ visitId: vA.id, code: 'DC05', username: 'CLERK02 ', password: '1234' })
+      ok(ap.ok && ap.approverName === '鄭淑芬' && dbm.db.auditLogs[0].action === '優免核准' && dbm.db.auditLogs[0].detail.includes('馬文琪'), '主管核准：回傳一次性的核准、稽核記下主管與櫃台（帳號不分大小寫）')
+      try {
+        await C.pay(vB.id, { payMethod: 'cash', received: 9999, discount: { ...DC05, approval: ap.token } })
+        ok(false, '核准不能拿去別的病人用')
+      } catch (e) {
+        ok(e.field === 'approval', '核准綁這一次掛號：拿去別的病人結帳 → 擋下')
+      }
+      await as('clerk02')
+      await expectError(async () => {
+        try {
+          await C.pay(vA.id, { payMethod: 'cash', received: 9999, discount: { ...DC05, approval: ap.token } })
+        } catch (e) {
+          if (e.field === 'approval') throw e
+          throw new Error('應該是 approval 欄位的錯誤')
+        }
+      }, '別的櫃台拿這張核准結帳')
+      await as('clerk01')
+      clockBase += 11 * 60_000 // 過了 11 分鐘（失敗會回滾，不留任何紀錄，再撥回來）
+      try {
+        await C.pay(vA.id, { payMethod: 'cash', received: 9999, discount: { ...DC05, approval: ap.token } })
+        ok(false, '過期的核准應被擋下')
+      } catch (e) {
+        ok(e.field === 'approval' && e.message.includes('重新核准'), `核准超過 10 分鐘 → 「${e.message}」`)
+      } finally {
+        clockBase -= 11 * 60_000
+      }
+      const pvA = await C.previewCharge(vA.id, 'DC05')
+      const chA = await C.pay(vA.id, { payMethod: 'cash', received: pvA.patientTotal, discount: { ...DC05, approval: ap.token } })
+      ok(chA.discount?.approvedBy === 'U402' && chA.discount.approverName === '鄭淑芬' && dbm.db.auditLogs[0].detail.includes('鄭淑芬 核准'), '結帳：收據記下核准的主管（id 與當時的姓名），稽核也寫出來')
+      // 一次性：同一張核准不能再用（作廢後重新結帳要重新核准）
+      await C.voidCharge(chA.id, '測試：重新結帳')
+      try {
+        await C.pay(vA.id, { payMethod: 'cash', received: 9999, discount: { ...DC05, approval: ap.token } })
+        ok(false, '用過的核准應被擋下')
+      } catch (e) {
+        ok(e.field === 'approval', '核准用過就失效：作廢後重新結帳要重新核准')
+      }
+      // 管理：類別可設需核准、帳號可設可核准
+      await as('admin')
+      const dc1 = dbm.db.discounts.find((d) => d.code === 'DC01')
+      await api.adminApi.saveDiscount({ ...dc1, needsApproval: true })
+      ok(dc1.needsApproval === true && dbm.db.auditLogs[0].detail.includes('（需主管核准）'), '管理員把「員工」設成需主管核准（寫稽核）')
+      await api.adminApi.saveDiscount({ ...dc1, needsApproval: false })
+      ok(!('needsApproval' in dc1), '取消需核准')
+      const s1 = dbm.db.users.find((u) => u.username === 'staff01')
+      await api.adminApi.saveUser({ id: s1.id, username: s1.username, name: s1.name, roles: s1.roles, active: true, approvesDiscount: true })
+      ok(s1.approvesDiscount === true && dbm.db.auditLogs[0].detail.includes('可核准優免'), '帳號管理勾「可核准優免」（寫稽核）')
+      await api.adminApi.saveUser({ id: s1.id, username: s1.username, name: s1.name, roles: s1.roles, active: true })
+      ok(!('approvesDiscount' in s1) && dbm.db.auditLogs[0].detail.includes('取消核准優免'), '取消可核准優免')
+      ok(!Object.keys(api.chargeApi).includes('approvalFor'), '核准檢查是服務層內部函式，不對外')
+      await as('clerk01')
+    }
   }
 
   // U25：調劑窗口缺藥 → 申請補貨（只填數量）→ 到貨入庫（批號、效期）自動結案
