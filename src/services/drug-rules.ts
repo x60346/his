@@ -145,3 +145,25 @@ export function nextPriceChange(d: Priced, today: string): PriceChange | undefin
 export function applyPriceChange(d: Priced, change: PriceChange): PriceChange[] {
   return applyChange({ nhiPrice: d.nhiPrice, selfPrice: d.selfPrice }, d.priceChanges, change, PRICE_KEYS)
 }
+
+/**
+ * 管制藥殘餘量：管制藥、給藥單位就是調劑單位（例：Morphine 以 AMP 開）、劑量不是整數（0.5 AMP）——
+ * 給的時候整支扣（take），剩下的（residual）當場銷毀、另一位護理師見證。不是這種情況回傳 undefined
+ */
+export function residualOf(drug: { controlled?: number; unit: string; doseUnit?: string }, dose: number | undefined): { take: number; residual: number } | undefined {
+  if (!drug.controlled || (drug.doseUnit ?? drug.unit) !== drug.unit || !dose || dose <= 0 || Number.isInteger(dose)) return undefined
+  const take = Math.ceil(dose)
+  return { take, residual: Math.round((take - dose) * 100) / 100 }
+}
+
+/**
+ * 劑量換算成含量（規格是「10 mg/amp」、給藥單位就是調劑單位時）：0.5 AMP →「5 mg」。換算不了回傳空字串。
+ * 管制藥開不是整數的劑量時，醫囑、給藥紀錄都同時看得到 mg，不會只看到「0.5 AMP」
+ */
+export function doseStrengthText(drug: { spec: string; unit: string; doseUnit?: string }, dose: number | undefined): string {
+  if (!dose || (drug.doseUnit ?? drug.unit) !== drug.unit) return ''
+  const m = /^([\d.]+)\s*(mg|mcg|g|mL|U)\s*\/\s*\w+$/i.exec(drug.spec.trim())
+  if (!m) return ''
+  const n = Math.round(Number(m[1]) * dose * 1000) / 1000
+  return `${n} ${m[2]}`
+}

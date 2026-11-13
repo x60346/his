@@ -15,6 +15,7 @@ import SupplierPanel from './components/SupplierPanel.vue'
 import LocationPanel from './components/LocationPanel.vue'
 import QuarantinePanel from './components/QuarantinePanel.vue'
 import WardStockAdminPanel from './components/WardStockAdminPanel.vue'
+import ControlledLedgerPanel from './components/ControlledLedgerPanel.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
@@ -32,6 +33,7 @@ const viewTabs = computed(() => [
   { key: 'supplier', label: '供應商' },
   { key: 'stocktake', label: '盤點單' },
   { key: 'ward', label: '病房常備' },
+  { key: 'controlled', label: '管制藥簿冊' },
   { key: 'location', label: '庫存地點' },
 ])
 
@@ -100,6 +102,7 @@ const shown = computed(() => rows.value?.length ?? 0)
     <LocationPanel v-else-if="view === 'location'" />
     <QuarantinePanel v-else-if="view === 'quarantine' && work.multi.value" />
     <WardStockAdminPanel v-else-if="view === 'ward'" />
+    <ControlledLedgerPanel v-else-if="view === 'controlled'" />
     <StocktakePanel v-else-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
     <template v-else>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">

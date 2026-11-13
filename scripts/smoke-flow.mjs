@@ -48,10 +48,13 @@ try {
   const http = await load('/src/services/http.ts')
   const dbm = await load('/src/mock/db.ts')
   const api = await load('/src/services/index.ts')
-  const { today, now: nowStr } = await load('/src/utils/date.ts')
+  const dateUtil = await load('/src/utils/date.ts')
+  const { today, now: nowStr } = dateUtil
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  /** 今天前後 n 天（YYYY-MM-DD） */
+  const addDaysT = (n) => dateUtil.addDays(T, n)
   /** 退回藥庫：藥庫全部同意、藥局送出（申請 → 核准 → 運送中） */
   const approveAndShip = async (rt) => {
     await api.transferApi.approveReturn(rt.id, { approved: Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.requestedQty ?? x.qty)])) })
@@ -4468,6 +4471,103 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/services/opd.ts', 'utf8').includes('Object.assign(e, cleanDraft(draft))') && !readFileSync('src/services/opd.ts', 'utf8').includes('Object.assign(e, structuredClone(draft))') && readFileSync('src/pages/opd/OpdPage.vue', 'utf8').includes('const { notDone: _, ...rest } = p'),
       '「未執行」只能由批價標：存病歷、同前次、組套都拿掉')
+  }
+
+  // 管制藥簿冊與殘餘量：Morphine 0.5 AMP——整支扣、殘餘見證銷毀；簿冊逐筆收支結存、病人、醫師、見證，期初＋收−支＝期末＝帳上
+  console.log('\n[管制藥簿冊、殘餘量銷毀]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const DR = await load('/src/services/drug-rules.ts')
+    const CSV = await load('/src/services/report-csv.ts')
+    const morphine = db().drugs.find((d) => d.id === 'M039')
+    ok(DR.residualOf(morphine, 0.5)?.take === 1 && DR.residualOf(morphine, 0.5)?.residual === 0.5 && !DR.residualOf(morphine, 1) && !DR.residualOf(db().drugs.find((d) => d.id === 'M001'), 0.5), '殘餘量規則：管制藥不是整數的劑量才有（0.5 AMP → 扣 1、殘餘 0.5）；整數或非管制藥沒有')
+    ok(DR.doseStrengthText(morphine, 0.5) === '5 mg' && DR.doseStrengthText(morphine, 0.25) === '2.5 mg', '劑量換算含量：0.5 AMP ＝ 5 mg')
+    const w5 = db().stockLocations.find((l) => l.kind === 'ward' && l.ward.startsWith('5A'))
+    const a = db().admissions.find((x) => x.status === 'admitted' && db().beds.find((b) => b.id === x.bedId)?.ward === w5.ward)
+    const docUser = db().users.find((u) => u.doctorId === a.doctorId).username
+    const qty = () => db().drugLots.filter((l) => l.drugId === 'M039' && l.locationId === w5.id).reduce((n, l) => n + l.qty, 0)
+    await as(docUser)
+    const o = await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'medication', drugId: 'M039', content: '', dose: 0.5, freq: 'PRN', route: 'IM', allowDuplicate: true })
+    ok(o.doseStrength === '5 mg' && o.residualQty === 0.5, `醫囑「Morphine 每次 0.5 AMP（${o.doseStrength}）」標出每次殘餘 0.5 要見證銷毀`)
+    await as('nurse01')
+    const before = qty()
+    try {
+      await api.nursingApi.givePrn(o.id, '疼痛分數 8 分')
+      ok(false, '沒有見證應被擋下')
+    } catch (e) {
+      ok(e.field === 'witness' && e.message.includes('殘餘 0.5'), `沒有見證就給 → 「${e.message}」`)
+    }
+    const self = await api.witnessApi.approveWitness({ purpose: 'residual', orderId: o.id, username: 'nurse01', password: '1234' })
+    ok(!self.ok && self.message.includes('自己'), '見證人不能是自己')
+    const tok = await witnessOf({ purpose: 'residual', orderId: o.id }, 'nurse02')
+    const m = await api.nursingApi.givePrn(o.id, '疼痛分數 8 分', undefined, tok)
+    const txn = db().stockTxns.at(-1)
+    ok(qty() === before - 1 && m.residual?.qty === 0.5 && m.residual.witnessBy === 'U202' && txn.witnessBy === 'U202' && txn.patientId === a.patientId && txn.doctorId === a.doctorId && txn.reason.includes('殘餘 0.5'),
+      '給 0.5 AMP：病房常備扣整支（−1）；給藥紀錄與異動記下殘餘 0.5 銷毀、見證人、病人、開立醫師')
+    await expectError(() => api.nursingApi.givePrn(o.id, '再痛', undefined, tok), '同一張見證再用一次')
+    ok(ledgerBroken(db()).length === 0, '殘餘量不動帳：帳本對得起來')
+
+    // 簿冊
+    await expectError(() => api.controlledApi.controlledLedger({ drugId: 'M039', locationId: w5.id, from: addDaysT(-30), to: T }), '護理師查管制藥簿冊')
+    await as('ph01')
+    await expectError(() => api.controlledApi.controlledLedger({ drugId: 'M001', locationId: w5.id, from: addDaysT(-30), to: T }), '非管制藥查簿冊')
+    const L = await api.controlledApi.controlledLedger({ drugId: 'M039', locationId: w5.id, from: addDaysT(-30), to: T })
+    const sumIn = L.rows.filter((r) => r.kind === 'in').reduce((n, r) => n + r.qty, 0)
+    const sumOut = L.rows.filter((r) => r.kind === 'out').reduce((n, r) => n + r.qty, 0)
+    ok(L.opening + sumIn - sumOut === L.closing && L.closing === qty(), `簿冊：期初 ${L.opening} ＋收入 ${sumIn} −支出 ${sumOut} ＝期末 ${L.closing}＝帳上`)
+    const give = L.rows.find((r) => r.kind === 'out' && r.reason?.includes('殘餘'))
+    const res = L.rows.find((r) => r.kind === 'residual')
+    const pt = db().patients.find((x) => x.id === a.patientId)
+    ok(give?.patientName === pt.name && give.doctorName && give.witnessName === '孫佩君' && res?.qty === 0.5 && res.witnessName === '孫佩君' && res.balance === give.balance && L.rows.indexOf(res) === L.rows.indexOf(give) + 1,
+      '給藥那一筆列病人、開立醫師、見證；殘餘量銷毀緊接著另列一行（不動結存）')
+    ok(L.rows.some((r) => r.typeLabel === '撥入' || r.typeLabel === '調整'), '病房常備的補充（撥入）、點班（調整）也在簿冊上')
+    // 門診藥局的 Tramadol（第四級）：舊的發藥異動沒記病人，從調劑單回推
+    const opd = db().stockLocations.find((l) => l.dispensesOpd).id
+    const LT = await api.controlledApi.controlledLedger({ drugId: 'M031', locationId: opd, from: addDaysT(-30), to: T })
+    // 種子的「門診調劑（每日彙總）」是示範用的整天用量（不是某張處方），列不出病人。
+    // 自己開一張 Tramadol 門診處方、發藥，再把那筆異動的病人與醫師拿掉（模擬舊資料）：簿冊要從調劑單回推
+    {
+      const { addDays } = await load('/src/utils/date.ts')
+      await as('clerk01')
+      const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
+      const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
+      const ptx = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const vv = await api.bookingApi.register({ patientId: ptx.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
+      await as(drUser)
+      const ee = await api.opdApi.startConsult(vv.id, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(ee.id, { subjective: '腰痛', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M54.5', name: '下背痛', primary: true }], medications: [{ drugId: 'M031', dose: 1, freq: 'TID', route: 'PO', days: 3, qty: 9, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false })
+      await as('clerk01')
+      const pv = await api.chargeApi.previewCharge(vv.id)
+      await api.chargeApi.pay(vv.id, { payMethod: 'cash', received: pv.patientTotal })
+      await as('ph01')
+      const dpx = db().dispenses.find((x) => x.visitId === vv.id)
+      await api.pharmacyApi.verifyDispense(dpx.id)
+      await api.pharmacyApi.dispense(dpx.id, { birthMMDD: ptx.birthDate.slice(5).replace('-', '') })
+      const tx = db().stockTxns.find((x) => x.id === db().dispenses.find((d) => d.id === dpx.id).txnIds[0])
+      ok(tx.patientId === ptx.id && tx.doctorId === sess.doctorId, '新的門診發藥異動直接記下病人與開立醫師')
+      delete tx.patientId
+      delete tx.doctorId
+      const LX = await api.controlledApi.controlledLedger({ drugId: 'M031', locationId: opd, from: addDaysT(-30), to: addDays(T, 1) })
+      const row = LX.rows.find((r) => r.ref === tx.ref && r.kind === 'out')
+      ok(row?.patientName === ptx.name && row.doctorName === db().doctors.find((d) => d.id === sess.doctorId).name, '舊資料（異動沒記病人）：簿冊從調劑單回推出病人與開立醫師')
+    }
+    ok(LT.opening + LT.totalIn - LT.totalOut === LT.closing, '門診藥局的 Tramadol 簿冊：期初＋收−支＝期末')
+    const csv = CSV.controlledLedgerCsv(L)
+    ok(csv.startsWith('\uFEFF') && csv.includes('管制藥品收支結存簿冊') && csv.includes('殘餘量銷毀') && csv.includes('孫佩君') && csv.includes(`期末結存,${L.closing}`), '匯出 CSV：表頭、逐筆（含殘餘量、見證人）、期末')
+    const opts = await api.controlledApi.controlledLedgerOptions()
+    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 2 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
+    // STAT 也一樣
+    await as(docUser)
+    const st = await api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 0.5, freq: 'STAT', route: 'IM', allowDuplicate: true })
+    await as('nurse01')
+    const sm = db().mar.find((x) => x.orderId === st.id && x.status === 'pending')
+    await expectError(() => api.nursingApi.executeMar(sm.id, 'given'), 'STAT 管制藥 0.5 AMP 沒有見證就給')
+    const tok2 = await witnessOf({ purpose: 'residual', orderId: st.id }, 'nurse02')
+    const sg = await api.nursingApi.executeMar(sm.id, 'given', '', undefined, undefined, tok2)
+    ok(sg.residual?.qty === 0.5 && sg.stockFrom, 'STAT 給藥同樣：見證後給、記下殘餘量')
+    await as('clerk01')
   }
 
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班

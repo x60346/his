@@ -26,6 +26,7 @@ import * as permission from './permission'
 import * as consult from './consult'
 import * as wardStock from './ward-stock'
 import * as witness from './witness'
+import * as controlled from './controlled'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -52,6 +53,8 @@ export const permissionApi = overNetwork(permission)
 export const consultApi = overNetwork(consult)
 export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
+export const controlledApi = overNetwork(controlled)
+export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'

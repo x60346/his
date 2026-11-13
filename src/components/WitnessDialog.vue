@@ -41,8 +41,9 @@ async function onSubmit() {
     form.value.password = ''
     return
   }
-  open.value = false
+  // 先通知、再關：呼叫端常在「關閉」時清掉暫存的動作（例：要報廢哪一批、要給哪一劑），先關的話拿到見證時已經找不到要做什麼
   emit('approved', r.token, r.witnessName)
+  open.value = false
 }
 </script>
 

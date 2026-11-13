@@ -213,7 +213,7 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     assertStock(view)
     // 每個品項寫一筆發藥異動；任何一項失敗，mutate 會整筆回滾（不會只扣一半）
     // 記下扣庫存的那幾筆：日後退藥要退回同幾個批號
-    d.txnIds = view.items.map((item) => postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, locationId: stockLoc.opd(), qty: item.qty, ref: `領藥號 ${d.pickupNo}` }, ph.id).id)
+    d.txnIds = view.items.map((item) => postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, locationId: stockLoc.opd(), qty: item.qty, ref: `領藥號 ${d.pickupNo}`, patientId: d.patientId, doctorId: db.encounters.find((e) => e.id === d.encounterId)?.doctorId }, ph.id).id)
     d.status = 'dispensed'
     d.dispensedBy = ph.id
     d.dispensedAt = now()
@@ -298,8 +298,8 @@ export function returnDispense(id: string, input: ReturnInput): Promise<Dispense
       if (need) fail('退藥數量超過發出的批號，請重新整理', 'CONFLICT')
       for (const x of lots) {
         const lot = must(stockLoc.lots(tx.drugId, tx.locationId).find((y) => y.lotNo === x.lotNo), '批號')
-        postStock({ kind: 'in', type: 'return', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tx.ref, reason: `門診退藥：${why}` }, ph.id, t)
-        if (l.scrap) postStock({ kind: 'out', type: 'adjust', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lotId: lot.id, ref: tx.ref, reason: `門診退藥不可再用，報廢（覆核 ${witness!.witnessName}）`, includeExpired: true }, ph.id, t)
+        postStock({ kind: 'in', type: 'return', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tx.ref, reason: `門診退藥：${why}`, patientId: d.patientId }, ph.id, t)
+        if (l.scrap) postStock({ kind: 'out', type: 'adjust', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lotId: lot.id, ref: tx.ref, reason: `門診退藥不可再用，報廢（覆核 ${witness!.witnessName}）`, includeExpired: true, patientId: d.patientId, witnessBy: witness!.witnessId }, ph.id, t)
       }
       ret.lines.push({ idx: l.idx, qty: l.qty, ...(l.scrap ? { scrap: true } : {}), lots })
     }

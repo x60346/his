@@ -1,5 +1,6 @@
 // 收費報表匯出 CSV（純函式）：交給會計用 Excel 開。內容由服務層決定，頁面只負責觸發下載。
 import type { DailyReport } from './charge'
+import type { ControlledLedger } from './controlled'
 
 const PAY: Record<string, string> = { cash: '現金', card: '刷卡', mobile: '行動支付' }
 
@@ -77,3 +78,25 @@ export function dailyReportCsv(r: DailyReport): string {
 
 /** 下載檔名：日結_2026-11-12.csv、收費報表_2026-11-01_2026-11-30.csv */
 export const reportFileName = (r: Pick<DailyReport, 'date' | 'to'>) => (r.date === r.to ? `日結_${r.date}.csv` : `收費報表_${r.date}_${r.to}.csv`)
+
+/**
+ * 管制藥簿冊 → CSV：表頭（藥品、級別、地點、期間、期初）、逐筆（收入、支出、結存、病人、醫師、經手、見證）、合計（期末）。
+ * 和畫面同一份資料（controlled.controlledLedger）
+ */
+export function controlledLedgerCsv(r: ControlledLedger): string {
+  const out = [
+    line(['管制藥品收支結存簿冊']),
+    line(['藥品', `${r.drug.name}（${r.drug.nameZh}）`, `第 ${r.drug.controlled} 級`, r.drug.spec]),
+    line(['地點', r.locationName, '期間', `${r.from} ～ ${r.to}`, '單位', r.drug.unit]),
+    '',
+    line(['日期時間', '類別', '收入', '支出', '殘餘量銷毀', '結存', '單號', '病人', '病歷號', '開立醫師', '經手人', '見證人', '說明']),
+    line(['', '期初', '', '', '', r.opening]),
+  ]
+  for (const x of r.rows) {
+    out.push(line([x.at, x.typeLabel, x.kind === 'in' ? x.qty : '', x.kind === 'out' ? x.qty : '', x.kind === 'residual' ? x.qty : '', x.balance, x.ref, x.patientName, x.chartNo, x.doctorName, x.userName, x.witnessName, x.reason]))
+  }
+  out.push('', line(['收入合計', r.totalIn]), line(['支出合計', r.totalOut]), line(['殘餘量銷毀合計', r.residualTotal]), line(['期末結存', r.closing]))
+  return '﻿' + out.join('\r\n') + '\r\n'
+}
+
+export const controlledLedgerFileName = (r: Pick<ControlledLedger, 'drug' | 'locationName' | 'from' | 'to'>) => `管制藥簿冊_${r.drug.name.replace(/\s+/g, '')}_${r.locationName}_${r.from}_${r.to}.csv`

@@ -10,7 +10,7 @@ import type { User } from '@/types'
 import { db, newId } from '@/mock/db'
 import { audit, fieldErrors } from './http'
 
-export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap'
+export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual'
 export const WITNESS_MIN = 10
 
 export interface WitnessGrant {

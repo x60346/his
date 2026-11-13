@@ -6,7 +6,7 @@
 // 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
 import { computed, reactive, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { doseLevel, doseNote, doseUnitOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -190,7 +190,7 @@ ${doseNote(drug, input.dose ?? 0)}。
             type="number"
             min="0"
             step="0.5"
-            :hint="doseCheck.level === 'high' ? `⚠ 劑量偏高：${doseCheck.text}` : form.drug ? doseUnitOf(form.drug) : ''"
+            :hint="doseCheck.level === 'high' ? `⚠ 劑量偏高：${doseCheck.text}` : form.drug ? `${doseUnitOf(form.drug)}${doseStrengthText(form.drug, form.dose) ? `（＝${doseStrengthText(form.drug, form.dose)}）` : ''}${residualOf(form.drug, form.dose) ? `・管制藥：給藥時整支扣，殘餘 ${residualOf(form.drug, form.dose)!.residual} 要見證銷毀` : ''}` : ''"
             :error="doseCheck.level === 'absurd' ? `${doseCheck.text}，請確認是否打錯` : save.fieldErrors.value.dose"
           />
           <USelect v-model="form.freq" label="頻率" :options="freqOptions" />

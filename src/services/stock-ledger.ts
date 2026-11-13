@@ -10,11 +10,15 @@ import { now, today } from '@/utils/date'
 import { fail, failField, fieldErrors, must } from './http'
 import { allocateFefo, usableQty } from './stock-rules'
 import { udPerDose } from './ud-rules'
+import { residualOf } from './drug-rules'
 import { find, stockLoc } from './views'
 
-export type Post =
+/** 管制藥簿冊要的：哪位病人、哪位醫師開的、誰見證 */
+export type PostMeta = { patientId?: string; doctorId?: string; witnessBy?: string }
+export type Post = PostMeta & (
   | { kind: 'in'; drugId: string; locationId: string; qty: number; type: StockTxnType; lot: Pick<DrugLot, 'lotNo' | 'expiry'>; ref?: string; reason?: string }
   | { kind: 'out'; drugId: string; locationId: string; qty: number; type: StockTxnType; ref?: string; reason?: string; includeExpired?: boolean; lotId?: string }
+)
 
 /** 藥庫的待報廢區（第一次有東西要放才建立；停用過的重新啟用） */
 export function quarantineOf(wh: StockLocation): StockLocation {
@@ -62,7 +66,10 @@ export function postStock(p: Post, userId: string, at = now()): StockTxn {
   drug.stock += signed
   // 結存是「這個地點」的：異動後該地點所有批號的總和（和帳本逐筆累加一致）
   const balance = stockLoc.lots(drug.id, loc.id).reduce((s, l) => s + l.qty, 0)
-  const txn: StockTxn = { id: newId('ST'), drugId: drug.id, locationId: loc.id, at, type: p.type, qty: signed, balance, lots: moved, ref: p.ref, reason: p.reason, userId }
+  const txn: StockTxn = {
+    id: newId('ST'), drugId: drug.id, locationId: loc.id, at, type: p.type, qty: signed, balance, lots: moved, ref: p.ref, reason: p.reason, userId,
+    ...(p.patientId ? { patientId: p.patientId } : {}), ...(p.doctorId ? { doctorId: p.doctorId } : {}), ...(p.witnessBy ? { witnessBy: p.witnessBy } : {}),
+  }
   db.stockTxns.push(txn)
   return txn
 }
@@ -115,17 +122,19 @@ export function offsetRestock(drugId: string, txn: StockTxn, userId: string): { 
  * PRN、STAT 給藥用病房常備藥（屬住院藥局管）：給藥時直接扣住院藥局，不等藥局調劑——需要時就要給。
  * 無法逐劑換算的（整瓶、整支在病房）不扣，回傳 undefined。庫存不足照樣擋：帳上沒有，病房櫃裡多半也沒有
  */
-export function wardStockOut(o: IpdOrder, admitNo: string, userId: string): { txn: StockTxn; from: 'ward' | 'pharmacy' } | undefined {
+export function wardStockOut(o: IpdOrder, admitNo: string, userId: string, extra: { witnessBy?: string; reason?: string } = {}): { txn: StockTxn; from: 'ward' | 'pharmacy' } | undefined {
   const drug = must(find.drug(o.drugId ?? ''), '藥品')
-  const per = udPerDose(drug, o.dose)
+  // 管制藥不是整數的劑量（0.5 AMP）：整支扣，殘餘量另外見證銷毀（以前換算不了就沒扣帳，管制藥從帳上消失）
+  const per = udPerDose(drug, o.dose) ?? residualOf(drug, o.dose)?.take
   if (!per) return undefined
   // 扣病人所在病房的常備；不夠（或這個病房沒有常備）就改由住院藥局直送——不擋給藥，給藥紀錄標出來、藥師之後補充
   const a = find.admission(o.admissionId)
   const ward = a?.bedId ? find.bed(a.bedId)?.ward : undefined
   const wl = ward ? stockLoc.ward(ward) : undefined
   const at = now()
+  const meta = { patientId: a?.patientId, doctorId: o.doctorId, ...extra }
   if (wl && usableQty(stockLoc.lots(drug.id, wl.id), at) >= per) {
-    return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: wl.id, qty: per, ref: `病房常備 ${admitNo}` }, userId), from: 'ward' }
+    return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: wl.id, qty: per, ref: `病房常備 ${admitNo}`, ...meta }, userId), from: 'ward' }
   }
-  return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: stockLoc.ipd(), qty: per, ref: `藥局直送（病房常備不足） ${admitNo}` }, userId), from: 'pharmacy' }
+  return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: stockLoc.ipd(), qty: per, ref: `藥局直送（病房常備不足） ${admitNo}`, ...meta }, userId), from: 'pharmacy' }
 }

@@ -6,7 +6,7 @@ import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
-import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText } from './drug-rules'
+import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
@@ -53,6 +53,10 @@ export interface OrderView extends IpdOrder {
   /** 會診醫師開的：「會診：外科 張皓宇」；本科還沒按已閱的標 consultUnseen */
   consultLabel?: string
   consultUnseen?: boolean
+  /** 管制藥給不是整數的劑量：每次給藥要見證銷毀的殘餘量（PRN 給藥畫面用） */
+  residualQty?: number
+  /** 劑量換算成含量（0.5 AMP →「5 mg」）；只在不是整數的劑量時給 */
+  doseStrength?: string
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -68,6 +72,8 @@ export const orderView = (o: IpdOrder): OrderView => {
     unit: drug ? doseUnitOf(drug) : '',
     ...(o.replaces ? { replacesText: summaryOf(o.replaces) } : {}),
     ...(o.replacedBy ? { replacedByText: summaryOf(o.replacedBy) } : {}),
+    ...(drug && residualOf(drug, o.dose) ? { residualQty: residualOf(drug, o.dose)!.residual } : {}),
+    ...(drug && o.dose && !Number.isInteger(o.dose) && doseStrengthText(drug, o.dose) ? { doseStrength: doseStrengthText(drug, o.dose) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
 }
@@ -272,6 +278,11 @@ export interface MarView extends MarRecord {
   orderType: IpdOrder['type']
   highAlert: boolean
   nurseName: string
+  /** 管制藥給不是整數的劑量：給的時候要見證銷毀的殘餘量 */
+  residualQty?: number
+  residualWitnessName?: string
+  /** 劑量換算成含量（不是整數的劑量才給） */
+  doseStrength?: string
 }
 
 /** 組出某日的給藥紀錄檢視（服務層內部共用：不補排程、不包 query） */
@@ -297,6 +308,9 @@ export function marViews(admissionId: string, date: string): MarView[] {
         orderType: o?.type ?? 'long',
         highAlert: d?.highAlert ?? false,
         nurseName: nameOf.user(m.nurseId),
+        ...(d && residualOf(d, o?.dose) ? { residualQty: residualOf(d, o?.dose)!.residual } : {}),
+        ...(m.residual ? { residualWitnessName: nameOf.user(m.residual.witnessBy) } : {}),
+        ...(d && o?.dose && !Number.isInteger(o.dose) && doseStrengthText(d, o.dose) ? { doseStrength: doseStrengthText(d, o.dose) } : {}),
       }
     })
 }

@@ -181,11 +181,11 @@ export function countWard(ward: string, input: { lines: { drugId: string; book: 
         const lots = stockLoc.lots(l.drugId, loc.id)
         const takes = allocateFefo(lots, -diff, t, true)
         if (!takes) fail('帳上數量不足以調整，請重新整理', 'CONFLICT')
-        postStock({ kind: 'out', type: 'adjust', drugId: l.drugId, locationId: loc.id, qty: -diff, ref: `點班 ${ward}`, reason: why, includeExpired: true }, u.id, t)
+        postStock({ kind: 'out', type: 'adjust', drugId: l.drugId, locationId: loc.id, qty: -diff, ref: `點班 ${ward}`, reason: why, includeExpired: true, ...(witness ? { witnessBy: witness.witnessId } : {}) }, u.id, t)
       } else {
         const lot = stockLoc.lots(l.drugId, loc.id).sort((a, b) => b.expiry.localeCompare(a.expiry))[0]
         if (!lot) fail(`${find.drug(l.drugId)?.name}在病房沒有批號紀錄，多出來的藥請送回住院藥局確認`, 'CONFLICT')
-        postStock({ kind: 'in', type: 'adjust', drugId: l.drugId, locationId: loc.id, qty: diff, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: `點班 ${ward}`, reason: why }, u.id, t)
+        postStock({ kind: 'in', type: 'adjust', drugId: l.drugId, locationId: loc.id, qty: diff, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: `點班 ${ward}`, reason: why, ...(witness ? { witnessBy: witness.witnessId } : {}) }, u.id, t)
       }
     }
     const c: WardCount = {

@@ -6,7 +6,8 @@ import { computed, ref, watch } from 'vue'
 import { Check, CircleSlash, Clock, History, Pause } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
-import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
+import WitnessDialog from '@/components/WitnessDialog.vue'
+import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, witnessApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -58,7 +59,23 @@ const urgencyView = {
   upcoming: { label: '未到', tone: 'gray' },
 } as const
 
-const dose = (m: { dose?: number; unit: string; route?: string }) => `每次 ${m.dose ?? ''} ${m.unit}・${m.route ?? ''}`
+const dose = (m: { dose?: number; unit: string; route?: string; doseStrength?: string }) => `每次 ${m.dose ?? ''} ${m.unit}${m.doseStrength ? `（${m.doseStrength}）` : ''}・${m.route ?? ''}`
+
+// ---------- 管制藥殘餘量：給不是整數的劑量（Morphine 0.5 AMP），整支扣、剩下的當場銷毀——給之前請另一位護理師見證 ----------
+// 拿到見證才真的送出（go 帶著見證 token）；服務層沒有見證一樣擋（nursing.residualCheck）
+const residualFor = ref<{ orderId: string; subject: string; go: (witness: string) => Promise<unknown> } | null>(null)
+const residualOpen = computed({ get: () => !!residualFor.value, set: (v) => !v && (residualFor.value = null) })
+const approveResidual = (cred: { username: string; password: string }) => witnessApi.approveWitness({ purpose: 'residual', orderId: residualFor.value!.orderId, ...cred })
+async function onResidualApproved(token: string) {
+  const r = residualFor.value
+  residualFor.value = null
+  if (r) await r.go(token)
+}
+/** 有殘餘量就先見證，沒有就直接送出 */
+function withResidual(x: { residualQty?: number; unit: string; content: string; dose?: number }, orderId: string, go: (witness?: string) => Promise<unknown>) {
+  if (!x.residualQty) return go()
+  residualFor.value = { orderId, subject: `${x.content}：給 ${x.dose} ${x.unit}、殘餘 ${x.residualQty} ${x.unit} 當場銷毀\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}`, go }
+}
 
 // ---------- 執行 ----------
 const exec = useAction(nursingApi.executeMar, { success: (m) => (m.status === 'given' ? '已記錄給藥' : '已記錄') })
@@ -78,7 +95,7 @@ async function give(m: MarView) {
     })
     if (!ok) return
   }
-  exec.run(m.id, 'given')
+  withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', undefined, undefined, w))
 }
 
 // ---------- 補登給藥時間：先給藥、後登打（規則 checkGivenAt 與服務層共用） ----------
@@ -104,7 +121,13 @@ async function submitBackdate() {
     })
     if (!ok) return
   }
-  if (await exec.run(m.id, 'given', '', givenAt.value)) backdateFor.value = null
+  const at = givenAt.value
+  if (m.residualQty) {
+    backdateFor.value = null
+    withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', at, undefined, w))
+    return
+  }
+  if (await exec.run(m.id, 'given', '', at)) backdateFor.value = null
 }
 
 // 暫停、拒絕、PRN 共用一個原因對話框，以 reasonFor 記住「要做什麼」
@@ -122,7 +145,7 @@ const reasonConfig = computed(() => {
     const q = r.order.pendingQuery
     return q
       ? { title: 'PRN 給藥（醫囑有疑問、待醫師回覆）', subject: `${r.order.content}・疑問：${q.reason}`, label: '給藥原因，並寫明為何不等醫師回覆', presets: ['已電話請示醫師，口頭確認', '病人急需，依標準處置'], okText: '仍要給藥', danger: true }
-      : { title: 'PRN 給藥', subject: `${r.order.content}・每次 ${r.order.dose} ${r.order.unit}・${r.order.route}`, label: '給藥原因', presets: ['體溫 38.5°C', '疼痛分數 6 分', '噁心嘔吐', '無法入睡'], okText: '給藥' }
+      : { title: 'PRN 給藥', subject: `${r.order.content}・${dose(r.order)}`, label: '給藥原因', presets: ['體溫 38.5°C', '疼痛分數 6 分', '噁心嘔吐', '無法入睡'], okText: '給藥' }
   }
   if (r.kind === 'force-mar') {
     return { title: '醫囑有疑問、待醫師回覆', subject: `${r.mar.scheduledAt.slice(11)} ${r.mar.content}・疑問：${r.mar.queried}`, label: '仍要給藥的原因（會記在給藥紀錄與稽核）', presets: ['已電話請示醫師，口頭確認', '病人急需，依標準處置'], okText: '仍要給藥', danger: true }
@@ -147,6 +170,17 @@ async function confirmReason(note: string) {
   const r = reasonFor.value
   if (!r) return
   const force = { reason: note }
+  // 管制藥殘餘量：原因寫好了，接著請另一位護理師見證銷毀，見證後才送出
+  if (r.kind === 'prn' && r.order.residualQty) {
+    reasonFor.value = null
+    withResidual(r.order, r.order.id, (w) => prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined, w))
+    return
+  }
+  if (r.kind === 'force-mar' && r.mar.residualQty) {
+    reasonFor.value = null
+    withResidual(r.mar, r.mar.orderId, (w) => exec.run(r.mar.id, 'given', '', undefined, force, w))
+    return
+  }
   const ok =
     r.kind === 'prn' ? await prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined)
     : r.kind === 'force-mar' ? await exec.run(r.mar.id, 'given', '', undefined, force)
@@ -235,6 +269,7 @@ async function complete(o: OrderView) {
                 <UBadge :tone="statusView[m.status].tone">{{ statusView[m.status].label }}</UBadge>
                 <div class="tabular w-40 text-right text-xs">
                   {{ m.executedAt?.slice(11) }}<span v-if="m.recordedAt" class="text-amber-700">（{{ m.recordedAt.slice(11) }} 補登）</span>・{{ m.nurseName }}
+                  <div v-if="m.residual" class="text-purple-700">殘餘 {{ m.residual.qty }} {{ m.unit }} 銷毀・見證 {{ m.residualWitnessName }}</div>
                 </div>
               </template>
             </li>
@@ -249,7 +284,7 @@ async function complete(o: OrderView) {
             <li v-for="o in board.prn" :key="o.id" class="flex items-center gap-3 px-3 py-2 text-sm">
               <div class="min-w-0 flex-1">
                 <div class="font-medium text-slate-800">{{ o.content }}<UBadge v-if="o.pendingQuery" tone="yellow" class="ml-1">待醫師回覆</UBadge></div>
-                <div class="tabular text-xs text-slate-500">{{ dose(o) }}・PRN</div>
+                <div class="tabular text-xs text-slate-500">{{ dose(o) }}・PRN<template v-if="o.residualQty">・管制藥，殘餘 {{ o.residualQty }} {{ o.unit }} 要見證銷毀</template></div>
                 <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}</div>
               </div>
               <span class="flex items-center gap-1 text-xs text-slate-500">
@@ -301,5 +336,15 @@ async function complete(o: OrderView) {
         <UButton type="submit" variant="success" :disabled="!!backdateProblem" :loading="exec.pending.value">補登給藥</UButton>
       </template>
     </UDialog>
+    <WitnessDialog
+      v-model="residualOpen"
+      title="管制藥殘餘量銷毀見證"
+      who="見證護理師"
+      ok-text="見證並給藥"
+      :subject="residualFor?.subject"
+      note="見證人要當場看著殘餘量銷毀。"
+      :approve="approveResidual"
+      @approved="onResidualApproved"
+    />
   </div>
 </template>

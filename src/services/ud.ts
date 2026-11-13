@@ -408,7 +408,7 @@ export function verifyUdBox(dispenseId: string, admissionId: string): Promise<{ 
         else if (!alive.length) l.qty = 0
       }
       if (l.qty > 0) {
-        l.txnId = postStock({ kind: 'out', type: 'dispense', drugId: l.drugId, locationId: disp.locationId, qty: l.qty, ref: disp.no }, u.id, t).id
+        l.txnId = postStock({ kind: 'out', type: 'dispense', drugId: l.drugId, locationId: disp.locationId, qty: l.qty, ref: disp.no, patientId: find.admission(l.admissionId)?.patientId, doctorId: db.ipdOrders.find((o) => o.id === l.orderId)?.doctorId }, u.id, t).id
         sent++
       }
     }
@@ -493,7 +493,7 @@ export function receiveUdReturn(lineId: string, input: { qty: number; reason?: s
       const n = Math.min(left, room)
       if (n <= 0) continue
       const lot = must(stockLoc.lots(line.drugId, out.locationId).find((l) => l.lotNo === m.lotNo), '批號')
-      txnIds.push(postStock({ kind: 'in', type: 'return', drugId: line.drugId, locationId: out.locationId, qty: n, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: disp.no, reason: reason || undefined }, u.id, t).id)
+      txnIds.push(postStock({ kind: 'in', type: 'return', drugId: line.drugId, locationId: out.locationId, qty: n, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: disp.no, reason: reason || undefined, patientId: find.admission(line.admissionId)?.patientId }, u.id, t).id)
       left -= n
     }
     if (left) fail('退藥數量超過當初發出的量', 'CONFLICT')
@@ -638,7 +638,7 @@ export function resolveUdIssue(dispenseId: string, admissionId: string, input: {
     }
     failFields(errors)
     const t = now()
-    const txnIds = plan.map((p) => postStock({ kind: 'out', type: 'dispense', drugId: p.line.drugId, locationId: disp.locationId, qty: p.qty, ref: disp.no, reason: `藥盒不符補發（${box.issue!.cause}）` }, u.id, t).id)
+    const txnIds = plan.map((p) => postStock({ kind: 'out', type: 'dispense', drugId: p.line.drugId, locationId: disp.locationId, qty: p.qty, ref: disp.no, reason: `藥盒不符補發（${box.issue!.cause}）`, patientId: find.admission(p.line.admissionId)?.patientId, doctorId: db.ipdOrders.find((o) => o.id === p.line.orderId)?.doctorId }, u.id, t).id)
     Object.assign(box.issue!, { resolvedBy: u.id, resolvedAt: t, resolution: text, ...(txnIds.length ? { resupplyTxnIds: txnIds } : {}) })
     const what = plan.map((p) => `${find.drug(p.line.drugId)?.name} ${p.qty}`).join('、')
     audit('藥盒不符處理', `${disp.no} ${nameOf.patient(find.admission(admissionId)?.patientId)}：${text}${what ? `（補發 ${what}）` : ''}`)

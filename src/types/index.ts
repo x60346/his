@@ -824,6 +824,8 @@ export interface MarRecord {
    * PRN、STAT 用病房常備，給藥時直接扣，沒有這個欄位
    */
   udLineId?: string
+  /** 管制藥注射劑給不是整數的劑量（例：Morphine 0.5 AMP）：整支扣、剩下的當場銷毀，另一位護理師見證 */
+  residual?: { qty: number; witnessBy: string }
 }
 
 /**
@@ -1300,4 +1302,9 @@ export interface StockTxn {
   /** 盤點調整原因 */
   reason?: string
   userId: string
+  /** 給藥、發藥到哪位病人、哪位醫師開的（管制藥簿冊要列；舊資料沒有，簿冊從調劑單回推） */
+  patientId?: string
+  doctorId?: string
+  /** 見證、覆核的人（點班、報廢、管制藥殘餘量銷毀） */
+  witnessBy?: string
 }

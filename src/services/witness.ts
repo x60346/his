@@ -4,7 +4,8 @@
 import { db } from '@/mock/db'
 import { today } from '@/utils/date'
 import { fail, must, mutate, requireUser } from './http'
-import { find, stockLoc } from './views'
+import { find, nameOf, stockLoc } from './views'
+import { residualOf } from './drug-rules'
 import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, returnScrapRef, type WitnessResult } from './witness-core'
 
 export type WitnessTarget =
@@ -16,6 +17,8 @@ export type WitnessTarget =
   | { purpose: 'scrapQuarantine'; lotId: string }
   /** 門診退藥不可再用（退回後直接報廢）：另一位藥師或管理者覆核。items＝要報廢的品項說明（畫面上看得到的） */
   | { purpose: 'scrapReturn'; dispenseId: string; items: string }
+  /** 管制藥殘餘量銷毀（給不是整數的劑量，整支扣、剩下的當場銷毀）：另一位護理師見證 */
+  | { purpose: 'residual'; orderId: string }
 
 export type { WitnessResult }
 
@@ -38,6 +41,21 @@ export function approveWitness(input: WitnessTarget & { username: string; passwo
         selfMessage: '不能見證自己的點班，請另一位護理師見證',
         qualifies: (w) => (hasRole(w, ['nurse']) ? null : `${w.name} 不是護理師，不能見證病房點班`),
         auditAction: '管制藥點班見證', verb: '見證', what: `${ward} 點班（管制藥：${ctrl.map((d) => d!.name).join('、')}；點班 ${u.name}）`,
+      })
+    }
+    if (input.purpose === 'residual') {
+      const u = requireUser('nurse')
+      const o = must(db.ipdOrders.find((x) => x.id === input.orderId), '醫囑')
+      const drug = must(find.drug(o.drugId ?? ''), '藥品')
+      const r = residualOf(drug, o.dose)
+      if (!r) fail('這筆醫囑沒有殘餘量要銷毀（不是管制藥、或劑量是整數）')
+      if (o.status !== 'active') fail('這筆醫囑已停止或完成', 'CONFLICT')
+      return grantWitness({
+        purpose: 'residual', refId: o.id, actor: u, ...cred, who: '見證護理師',
+        selfMessage: '不能見證自己的殘餘量銷毀，請另一位護理師見證',
+        qualifies: (w) => (hasRole(w, ['nurse']) ? null : `${w.name} 不是護理師，不能見證殘餘量銷毀`),
+        auditAction: '管制藥殘餘量見證', verb: '見證',
+        what: `${nameOf.patient(find.admission(o.admissionId)?.patientId)} ${drug.name} 給 ${o.dose} ${drug.unit}、殘餘 ${r!.residual} ${drug.unit} 銷毀（給藥 ${u.name}）`,
       })
     }
     const u = requireUser('pharmacist')

@@ -246,7 +246,7 @@ export function scrapExpired(drugId: string, locationId?: string, witness?: stri
     const expired = stockLoc.lots(drugId, loc.id).filter((l) => l.qty > 0 && l.expiry < t)
     if (!expired.length) fail(`${loc.name}沒有已過期的批號`)
     const w = scrapWitness(witness, expiredScrapRef(drugId, loc.id), u.id)
-    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, locationId: loc.id, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}；覆核 ${w.witnessName}）` }, u.id))
+    const txns = expired.map((l) => postStock({ kind: 'out', type: 'adjust', drugId, locationId: loc.id, qty: l.qty, lotId: l.id, reason: `過期報廢（效期 ${l.expiry}；覆核 ${w.witnessName}）`, witnessBy: w.witnessId }, u.id))
     audit('過期藥品報廢', `${find.drug(drugId)?.name} ${loc.name} ${expired.map((l) => l.lotNo).join('、')}；覆核 ${w.witnessName}`)
     consumeWitness(witness)
     return txns
@@ -630,7 +630,7 @@ export function scrapQuarantine(lotId: string, reason: string, witness?: string)
     const why = reason?.trim()
     if (!why) failField('reason', '請寫報廢原因（例：過期、破損）')
     const w = scrapWitness(witness, quarantineScrapRef(lot.id), u.id)
-    const txn = postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty: lot.qty, lotId: lot.id, reason: `報廢（待報廢區）：${why}；覆核 ${w.witnessName}` }, u.id)
+    const txn = postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty: lot.qty, lotId: lot.id, reason: `報廢（待報廢區）：${why}；覆核 ${w.witnessName}`, witnessBy: w.witnessId }, u.id)
     audit('待報廢區報廢', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo} ${-txn.qty}：${why}；覆核 ${w.witnessName}`)
     consumeWitness(witness)
     return txn
