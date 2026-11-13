@@ -48,6 +48,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '護理師醫囑疑問', count: s.value.orderQueries ?? 0, hint: '我的住院病人，待回覆（回覆前給藥暫停）', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
+    { roles: ['clerk'], label: '待退費', count: s.value.pendingRefunds, hint: '藥局部分退藥後，退還病人差額（可能是前幾天看的診）', route: 'charge', icon: Receipt, urgent: true },
     { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
     { roles: ['pharmacist'], label: '住院補調劑', count: s.value.udExtra, hint: '今天的劑量還沒調劑（新開的醫囑），護理師在等', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院待核對', count: s.value.udVerify, hint: '已調劑的藥盒，核對通過才送病房', route: 'ud', icon: Pill, urgent: true },

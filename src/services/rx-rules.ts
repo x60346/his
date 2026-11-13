@@ -24,4 +24,13 @@ export function dispenseBlocker(d: { status: string; verifiedBy?: string }, user
 }
 
 /** 調劑單還沒結束（待調劑、已核對）：等著領藥、要算進缺藥需求的。已發藥、已退藥的都不算 */
+/** 處方第 idx 項已經退了多少（所有退藥紀錄加總） */
+export const returnedQty = (d: { returns?: { lines: { idx: number; qty: number }[] }[] }, idx: number) =>
+  (d.returns ?? []).reduce((n, r) => n + r.lines.filter((l) => l.idx === idx).reduce((s, l) => s + l.qty, 0), 0)
+
+/** 病人實際拿走的藥：處方數量扣掉已退的（退完的拿掉）。批價重算部分退費用 */
+export function keptMedications<T extends { qty: number }>(meds: T[], d?: { returns?: { lines: { idx: number; qty: number }[] }[] }): T[] {
+  return meds.map((m, i) => ({ ...m, qty: m.qty - (d ? returnedQty(d, i) : 0) })).filter((m) => m.qty > 0)
+}
+
 export const dispenseOpen = (d: { status: string }) => d.status === 'pending' || d.status === 'verified'

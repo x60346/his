@@ -379,6 +379,11 @@ export interface Charge {
    * 退款另開一張退款單、算在退款那天（負數）。有 refund 的收據 voided 也是 true（不再是這次就醫的有效收據）
    */
   refund?: Refund
+  /**
+   * 部分退費（部分退藥後）：收據不作廢、原本那天的帳不動；每次差額另記一筆，算在退費那天。
+   * 之後全部退完再整張退費時，會扣掉這裡已經退過的
+   */
+  partialRefunds?: PartialRefund[]
   /** 這張收據扣抵了多少掛號預收款（批價時「本次應收」＝ patientTotal − 這個） */
   prepaidApplied?: number
   /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列）；需主管核准的記下核准人（id 與當時的姓名） */
@@ -416,6 +421,24 @@ export interface Refund {
   at: string
 }
 
+/** 部分退費（一次）：病人實際拿走的藥重算後，應付減少的部分 */
+export interface PartialRefund {
+  /** 退款單號（有退錢或抵欠款才開；只有申報點數減少時沒有） */
+  receiptNo?: string
+  /** 應付減少多少（＝抵欠款＋退還的錢） */
+  amount: number
+  /** 先抵掉這張收據還沒收回的欠款 */
+  owedOffset: number
+  /** 退還的錢，依原付款方式 */
+  parts: { payMethod: PayMethod; amount: number }[]
+  /** 健保申報點數減少多少 */
+  nhiPoints: number
+  /** 退了哪些藥（當時的說明） */
+  reason: string
+  cashierId: string
+  at: string
+}
+
 /** 收回欠款（一次） */
 export interface Repayment {
   id: string
@@ -446,11 +469,25 @@ export interface Dispense {
   pickupCheck?: { method: 'birth' | 'proxy'; proxyName?: string; relation?: string }
   /** 發藥扣庫存的那幾筆異動：退藥時退回同幾個批號（舊資料沒有，用「領藥號＋發藥日」找） */
   txnIds?: string[]
-  /** 門診退藥 */
+  /** 門診退藥：全部退完時記下最後一次（狀態變 returned）；每一次退藥的明細在 returns */
   returnedBy?: string
   returnedAt?: string
   returnReason?: string
+  /** 退藥紀錄：可以分次、只退部分品項或數量 */
+  returns?: DispenseReturn[]
   createdAt: string
+}
+
+/** 門診退藥（一次）。idx＝處方第幾項（對應病歷的 medications 與調劑單的 txnIds） */
+export interface DispenseReturn {
+  id: string
+  at: string
+  by: string
+  reason: string
+  /** scrap：不可再用（已拆封、汙損）——退回後直接報廢；lots：退回哪幾個批號（發出時的批號） */
+  lines: { idx: number; qty: number; scrap?: boolean; lots: { lotNo: string; qty: number }[] }[]
+  /** 有報廢的：覆核藥師 */
+  witnessBy?: string
 }
 
 export type DrugCategory = '口服' | '外用' | '注射' | '吸入' | '眼用'

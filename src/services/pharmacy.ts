@@ -1,15 +1,16 @@
 // 門診藥局：調劑清單、核對、發藥（扣庫存）。
 // 扣庫存一律透過 inventory.postStock：寫異動帳、依 FEFO 扣批號；這裡不直接改 drug.stock。
 // 狀態：pending（待調劑）→ verified（已核對）→ dispensed（已發藥，掛號狀態同步為 dispensed）。
-import type { Dispense, DispenseStatus, Drug, StockTxn } from '@/types'
-import { db } from '@/mock/db'
+import type { Dispense, DispenseReturn, DispenseStatus, Drug, StockTxn } from '@/types'
+import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser, requirePermission } from './http'
+import { audit, fail, failField, failFields, fieldErrors, must, mutate, query, requireUser, sessionUser, requirePermission } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
-import { dispenseBlocker, dispenseOpen, rxExpired, rxValidUntil } from './rx-rules'
+import { dispenseBlocker, dispenseOpen, returnedQty, rxExpired, rxValidUntil } from './rx-rules'
+import { consumeWitness, returnScrapRef, WITNESS_MIN, witnessFor } from './witness-core'
 import { effectiveTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 
@@ -41,6 +42,8 @@ export interface DispenseItem {
   indication: string
   warning: string
   shortage: boolean
+  /** 已經退了多少（門診退藥，可分次） */
+  returned: number
   /** 門診藥局正在盤點這種藥（盲盤）：stock 不給看（0），畫面顯示「盤點中」；缺藥判斷 shortage 仍用真的量 */
   counting?: string
   /** 這種藥有待到貨的補貨申請：申請量、尚欠、何時申請、這張單是否已在等待名單上 */
@@ -73,7 +76,7 @@ export interface DispenseView extends Dispense, PatientBrief {
 function dispenseView(d: Dispense): DispenseView {
   const e = must(db.encounters.find((x) => x.id === d.encounterId), '病歷')
   const p = find.patient(d.patientId)
-  const items: DispenseItem[] = e.medications.map((m) => {
+  const items: DispenseItem[] = e.medications.map((m, i) => {
     const drug = find.drug(m.drugId)
     // 門診發藥的藥局（大型醫院藥庫裡有，不代表窗口發得出來）
     const usable = usableQty(stockLoc.lots(m.drugId, stockLoc.opd()), today())
@@ -100,6 +103,7 @@ function dispenseView(d: Dispense): DispenseView {
       indication: drug?.indication ?? '',
       warning: drug?.warning ?? '',
       shortage: dispenseOpen(d) && usable < m.qty,
+      returned: returnedQty(d, i),
       ...(req ? { restock: { qty: req.qty, outstanding: Math.max(0, req.qty - req.receivedQty), requestedAt: req.requestedAt, includesThis: req.dispenseIds.includes(d.id) } } : {}),
     }
   })
@@ -229,33 +233,85 @@ function dispenseTxns(d: Dispense): StockTxn[] {
   return (d.txnIds ?? []).map((id) => must(db.stockTxns.find((x) => x.id === id), '發藥異動'))
 }
 
+export interface ReturnInput {
+  reason: string
+  /** idx＝處方第幾項；qty＝這次退多少（0＝不退）；scrap＝不可再用，退回後直接報廢 */
+  lines: { idx: number; qty: number; scrap?: boolean }[]
+  /** 有不可再用的：另一位藥師的覆核（witness.approveWitness scrapReturn） */
+  witness?: string
+}
+
 /**
- * 門診退藥（整張）：病人過敏回診、醫師改處方……把已發出的藥收回，退回發出時的那幾個批號（效期跟著回來），
- * 調劑單標「已退藥」、掛號回到「已批價」——之後櫃台才能作廢或退費。盤點中的藥不能退（會打亂盲盤）
+ * 門診退藥（可以部分、可以分次）：病人過敏回診、醫師改處方、沒拆的藥拿回來……逐項填退多少，
+ * 退回發出時的那幾個批號（效期跟著回來；從效期晚的先退）。不可再用的退回後直接報廢（要另一位藥師覆核）。
+ * - 全部退完：調劑單標「已退藥」、掛號回到「已批價」——櫃台才能作廢或整張退費（醫師可改處方重新批價）
+ * - 只退一部分：調劑單照樣是已發藥；櫃台那張收據出現「待退費」（用病人實際拿走的藥重算差額，見 charge）
+ * 盤點中的藥不能退（會打亂盲盤）
  */
-export function returnDispense(id: string, reason: string): Promise<DispenseView> {
+export function returnDispense(id: string, input: ReturnInput): Promise<DispenseView> {
   return mutate(() => {
     const ph = requirePermission('dispense')
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
-    if (d.status === 'returned') fail('這張已經退藥了', 'CONFLICT')
+    if (d.status === 'returned') fail('這張已經全部退藥了', 'CONFLICT')
     if (dispenseOpen(d)) fail('還沒發藥，不需要退藥', 'CONFLICT')
-    const why = reason?.trim()
-    if (!why) failField('reason', '請寫退藥原因（例：病人過敏回診、醫師改處方）')
+    const e = must(db.encounters.find((x) => x.id === d.encounterId), '病歷')
     const txns = dispenseTxns(d)
     if (!txns.length) fail('這張是帳本開帳前發的藥，查不到發出的批號，不能用退藥退回；實物請用盤點單調整', 'CONFLICT')
-    for (const tx of txns) {
-      const counting = stockLoc.counting(tx.drugId, tx.locationId)
-      if (counting) fail(`${find.drug(tx.drugId)?.name}盤點中（${counting}），盤點完成前不能退藥`, 'CONFLICT')
+    const errors: Record<string, string> = {}
+    for (const l of input.lines ?? []) {
+      const m = e.medications[l.idx]
+      if (!m || !txns[l.idx]) fail('處方項目不存在，請重新整理')
+      const left = m.qty - returnedQty(d, l.idx)
+      if (!Number.isInteger(l.qty) || l.qty < 0) errors[`qty.${l.idx}`] = '退藥數量需為 0 以上的整數'
+      else if (l.qty > left) errors[`qty.${l.idx}`] = left ? `最多退 ${left}` : '這一項已經全部退了'
     }
+    const why = input.reason?.trim()
+    if (!why) errors.reason = '請寫退藥原因（例：病人過敏回診、醫師改處方）'
+    failFields(errors)
+    const lines = (input.lines ?? []).filter((l) => l.qty > 0)
+    if (!lines.length) failField('lines', '請填要退的數量')
+    for (const l of lines) {
+      const counting = stockLoc.counting(txns[l.idx].drugId, txns[l.idx].locationId)
+      if (counting) fail(`${find.drug(txns[l.idx].drugId)?.name}盤點中（${counting}），盤點完成前不能退藥`, 'CONFLICT')
+    }
+    // 不可再用的直接報廢：和其他報廢一樣要另一位藥師（或管理者）當場覆核
+    const scrapping = lines.some((l) => l.scrap)
+    const w = scrapping ? witnessFor(input.witness, 'scrap', returnScrapRef(d.id), ph.id) : undefined
+    if (w === null) failField('witness', '不可再用的要報廢，需另一位藥師覆核')
+    if (w === 'expired') failField('witness', `覆核已超過 ${WITNESS_MIN} 分鐘，請重新覆核`)
+    const witness = w || undefined
     const t = now()
-    for (const tx of txns)
-      for (const m of tx.lots) {
-        const lot = must(stockLoc.lots(tx.drugId, tx.locationId).find((l) => l.lotNo === m.lotNo), '批號')
-        postStock({ kind: 'in', type: 'return', drugId: tx.drugId, locationId: tx.locationId, qty: -m.qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tx.ref, reason: `門診退藥：${why}` }, ph.id, t)
+    const ret: DispenseReturn = { id: newId('DR'), at: t, by: ph.id, reason: why!, lines: [], ...(witness ? { witnessBy: witness.witnessId } : {}) }
+    for (const l of lines) {
+      const tx = txns[l.idx]
+      // 這一項發出的批號（發藥異動的 lots 是負數），扣掉之前退過的；從後面（效期晚的）先退
+      const back = (lotNo: string) => (d.returns ?? []).flatMap((r) => r.lines).filter((x) => x.idx === l.idx).flatMap((x) => x.lots).filter((x) => x.lotNo === lotNo).reduce((n, x) => n + x.qty, 0)
+      let need = l.qty
+      const lots: { lotNo: string; qty: number }[] = []
+      for (const m of [...tx.lots].reverse()) {
+        const can = Math.min(need, -m.qty - back(m.lotNo))
+        if (can <= 0) continue
+        lots.push({ lotNo: m.lotNo, qty: can })
+        need -= can
+        if (!need) break
       }
-    Object.assign(d, { status: 'returned', returnedBy: ph.id, returnedAt: t, returnReason: why })
-    must(find.visit(d.visitId), '掛號紀錄').status = 'charged'
-    audit('門診退藥', `領藥號 ${d.pickupNo} ${find.patient(d.patientId)?.name}：${why}`)
+      if (need) fail('退藥數量超過發出的批號，請重新整理', 'CONFLICT')
+      for (const x of lots) {
+        const lot = must(stockLoc.lots(tx.drugId, tx.locationId).find((y) => y.lotNo === x.lotNo), '批號')
+        postStock({ kind: 'in', type: 'return', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tx.ref, reason: `門診退藥：${why}` }, ph.id, t)
+        if (l.scrap) postStock({ kind: 'out', type: 'adjust', drugId: tx.drugId, locationId: tx.locationId, qty: x.qty, lotId: lot.id, ref: tx.ref, reason: `門診退藥不可再用，報廢（覆核 ${witness!.witnessName}）`, includeExpired: true }, ph.id, t)
+      }
+      ret.lines.push({ idx: l.idx, qty: l.qty, ...(l.scrap ? { scrap: true } : {}), lots })
+    }
+    ;(d.returns ??= []).push(ret)
+    const all = e.medications.every((m, i) => returnedQty(d, i) >= m.qty)
+    if (all) {
+      Object.assign(d, { status: 'returned', returnedBy: ph.id, returnedAt: t, returnReason: why })
+      must(find.visit(d.visitId), '掛號紀錄').status = 'charged'
+    }
+    const what = ret.lines.map((x) => `${find.drug(e.medications[x.idx].drugId)?.name} ${x.qty}${x.scrap ? '（不可再用，報廢）' : ''}`).join('、')
+    audit('門診退藥', `領藥號 ${d.pickupNo} ${find.patient(d.patientId)?.name}：${what}${all ? '（全部退完）' : ''}；${why}${witness ? `；覆核 ${witness.witnessName}` : ''}`)
+    if (witness) consumeWitness(input.witness)
     return dispenseView(d)
   })
 }

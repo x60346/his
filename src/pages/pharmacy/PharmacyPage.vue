@@ -8,7 +8,7 @@ import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState
 import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
-import ReasonDialog from '@/components/ReasonDialog.vue'
+import ReturnDispenseDialog from './components/ReturnDispenseDialog.vue'
 import { dispenseOpen, pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
@@ -70,12 +70,9 @@ watch(
 // ---------- 核對、發藥 ----------
 const verify = useAction(pharmacyApi.verifyDispense, { success: (x) => `領藥號 ${x.pickupNo} 核對完成` })
 const give = useAction(pharmacyApi.dispense, { success: (x) => `領藥號 ${x.pickupNo} 已發藥給 ${x.patientName}` })
-// 門診退藥（整張）：退回發出時的批號；之後櫃台才能作廢或退費
+// 門診退藥（可部分、可分次；ReturnDispenseDialog）：全部退完櫃台才能整張作廢或退費，只退一部分櫃台退差額
 const returnOpen = ref(false)
-const ret = useAction(pharmacyApi.returnDispense, { success: (x) => `領藥號 ${x.pickupNo} 已退藥：藥品退回原批號，請櫃台辦理作廢或退費` })
-async function confirmReturn(reason: string) {
-  if (d.value && (await ret.run(d.value.id, reason))) returnOpen.value = false
-}
+const returnsOf = computed(() => (d.value?.returns ?? []).map((r) => ({ ...r, text: r.lines.map((l) => `${d.value!.items[l.idx]?.drugName} ${l.qty}${l.scrap ? '（報廢）' : ''}`).join('、') })))
 
 /** 下一張待處理的單：發藥後自動帶到下一位，減少點擊 */
 const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x) && x.id !== selectedId.value))
@@ -197,7 +194,7 @@ const print = () => window.print()
               </td>
               <td class="px-3 py-2 text-slate-700">{{ it.dose }} {{ it.doseUnit }}・{{ it.freq }}・{{ it.route }}<span v-if="it.timingShort" :class="['ml-1 rounded px-1 text-xs', it.timingShort === '飯前飯後皆可' ? 'text-slate-500' : 'bg-amber-100 font-medium text-amber-800']">{{ it.timingShort }}</span><span v-if="it.timingByDoctor" class="ml-1 rounded bg-sky-100 px-1 text-xs font-medium text-sky-800" title="醫師為這張處方指定的服用時機，和藥品主檔不同">醫師指定</span></td>
               <td class="px-3 py-2 text-right">{{ it.days }}</td>
-              <td class="px-3 py-2 text-right font-semibold">{{ it.qty }}</td>
+              <td class="px-3 py-2 text-right font-semibold">{{ it.qty }}<div v-if="it.returned" class="text-xs font-normal text-red-700">已退 {{ it.returned }}</div></td>
               <td :class="['px-3 py-2 text-right', it.shortage ? 'font-semibold text-red-600' : 'text-slate-500']">
                 <!-- 盲盤：盤點中不顯示庫存數字（服務層已遮掉）；缺不缺仍照實提示 -->
                 <template v-if="it.counting"><span class="text-xs text-violet-700">盤點中</span><div v-if="it.shortage" class="text-xs">不足</div></template>
@@ -233,7 +230,8 @@ const print = () => window.print()
         <span class="text-xs text-slate-500">
           <template v-if="d.verifiedAt">核對：{{ d.verifiedAt.slice(11) }}　</template>
           <template v-if="d.dispensedAt">發藥：{{ d.dispensedAt.slice(11) }}</template>
-          <template v-if="d.returnedAt">　退藥：{{ d.returnedAt.slice(5).replace('-', '/') }}（{{ d.returnReason }}）</template>
+          <template v-for="r in returnsOf" :key="r.id">　退藥 {{ r.at.slice(5, 16).replace('-', '/') }}：{{ r.text }}（{{ r.reason }}）</template>
+          <template v-if="d.returnedAt && !returnsOf.length">　退藥：{{ d.returnedAt.slice(5).replace('-', '/') }}（{{ d.returnReason }}）</template>
         </span>
         <div class="ml-auto flex gap-2">
           <UButton variant="secondary" :icon="Printer" @click="bagOpen = true">藥袋</UButton>
@@ -249,18 +247,7 @@ const print = () => window.print()
     <!-- 補貨申請：與藥品庫存頁共用；建議量依用量算（stock-rules 的 suggestRestockQty），不再固定「缺量＋500」 -->
     <RestockRequestDialog v-model="restockOpen" :drug-id="restockItem?.drugId" :dispense-id="d?.id" :pickup-no="d?.pickupNo" />
 
-    <ReasonDialog
-      v-model="returnOpen"
-      title="門診退藥"
-      :subject="d ? `領藥號 ${d.pickupNo} ${d.patientName}・${d.items.length} 項（整張退）` : ''"
-      label="退藥原因"
-      :presets="['病人過敏回診', '醫師修改處方', '病人不需要了']"
-      ok-text="退藥"
-      danger
-      :pending="ret.pending.value"
-      :error="ret.fieldErrors.value.reason"
-      @confirm="confirmReturn"
-    />
+    <ReturnDispenseDialog v-if="d" v-model="returnOpen" :dispense="d" />
     <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
       <div v-if="d" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">

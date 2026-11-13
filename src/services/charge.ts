@@ -1,19 +1,21 @@
 // 批價：試算、結帳、作廢、日結報表。
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
-import type { Charge, ChargeLine, DiscountRule, PayMethod, Refund, Repayment } from '@/types'
+import type { Charge, ChargeLine, DiscountRule, PayMethod, Repayment } from '@/types'
 import { permDef, permits } from './permission-rules'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, diffDays, now, today } from '@/utils/date'
 import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError, requirePermission } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
-import { nextReceiptNo, nextRefundNo, prepayAvailable, refundPrepay } from './money'
+import { nextReceiptNo, nextRefundNo, pendingRefundOf, prepayAvailable, refundParts, refundPrepay, type PendingRefund } from './money'
 import { consumeWitness, grantWitness, WITNESS_MIN, witnessFor } from './witness-core'
 
 export interface ChargeListItem extends VisitView {
   charge?: Charge
   /** 待批價者的應收（與結帳試算同一個計算 buildPreview）：清單上就看得到要收多少，不必一個個點進去 */
   estimate?: number
+  /** 部分退藥後待退費的金額（0＝只有申報點數要改） */
+  pendingRefund?: number
 }
 
 const pickupNoOf = (visitId: string) => db.dispenses.find((d) => d.visitId === visitId)?.pickupNo
@@ -28,6 +30,10 @@ export function listChargeQueue(date: string): Promise<ChargeListItem[]> {
         charge: db.charges.find((c) => c.visitId === v.id && !c.voided),
         estimate: v.status === 'consulted' ? buildPreview(v.id).patientTotal : undefined,
       }))
+      .map((x) => {
+        const pr = x.charge && pendingRefundOf(x.charge)
+        return pr ? { ...x, pendingRefund: pr.amount } : x
+      })
       .sort((a, b) => Number(!!a.charge) - Number(!!b.charge) || a.seqNo - b.seqNo),
   )
 }
@@ -198,18 +204,48 @@ export interface CancelMode {
 // 內部函式（不 export：services 裡 export 的都會變成 API）
 function cancelModeOf(c: Charge): CancelMode {
   const dispensed = db.dispenses.find((d) => d.visitId === c.visitId && d.status === 'dispensed')
-  const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length ? 'void' : 'refund'
-  return { mode, refundAmount: refundParts(c).reduce((n, p) => n + p.amount, 0), ...(dispensed ? { blocked: '藥品已發出：請先到藥局辦理退藥（藥局「已發藥」那張按「退藥」）' } : {}) }
+  // 部分退費過的不能作廢（退款單已經開出去了）
+  const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length && !c.partialRefunds?.length ? 'void' : 'refund'
+  return { mode, refundAmount: refundParts(c).reduce((n, p) => n + p.amount, 0), ...(dispensed ? { blocked: dispensed.returns?.length ? '還有藥在病人手上（已部分退藥）：要整張作廢或退費，請藥局把剩下的也退藥' : '藥品已發出：請先到藥局辦理退藥（藥局「已發藥」那張按「退藥」）' } : {}) }
 }
 
-/** 病人實際付過的錢，依付款方式：結帳時付的（應收 − 記欠款）＋ 每次收回欠款 */
-function refundParts(c: Charge): Refund['parts'] {
-  const by = new Map<PayMethod, number>()
-  const add = (m: PayMethod, n: number) => n > 0 && by.set(m, (by.get(m) ?? 0) + n)
-  // 預收扣抵的部分不在這裡退：預收款屬於這次就醫，收據退費後重新批價時再扣抵
-  add(c.payMethod, c.patientTotal - (c.owed ?? 0) - (c.prepaidApplied ?? 0))
-  for (const r of c.repayments ?? []) add(r.payMethod, r.amount)
-  return [...by.entries()].map(([payMethod, amount]) => ({ payMethod, amount }))
+export type { PendingRefund }
+
+// 部分退費的差額計算（pendingRefundOf）與可退的錢（refundParts）在 money.ts：首頁待辦也要用
+
+/** 待退費的收據（部分退藥後，可能是好幾天前看的診）：批價頁另外列出，不只看當天 */
+export function listPendingRefunds(): Promise<(VisitView & { chargeId: string; receiptNo: string; pending: PendingRefund })[]> {
+  return query(() => {
+    requireUser()
+    return db.charges
+      .map((c) => ({ c, pending: pendingRefundOf(c) }))
+      .filter((x): x is { c: Charge; pending: PendingRefund } => !!x.pending)
+      .map(({ c, pending }) => ({ ...visitView(must(find.visit(c.visitId), '掛號紀錄')), chargeId: c.id, receiptNo: c.receiptNo, pending }))
+  })
+}
+
+/**
+ * 部分退費：退部分退藥的差額。收據不作廢、原本那天的帳不動；先抵這張收據還沒收回的欠款，剩下的依原付款方式退，
+ * 開一張退款單算在今天。金額由服務層算（pendingRefundOf），畫面只顯示、確認
+ */
+export function refundReturnedDrugs(chargeId: string): Promise<Charge> {
+  return mutate(() => {
+    const cashier = requirePermission('charge.pay')
+    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
+    if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
+    const pr = pendingRefundOf(c)
+    if (!pr) fail('這張收據沒有待退費（藥局部分退藥後才有）', 'CONFLICT')
+    const t = now()
+    const money = pr!.amount > 0
+    ;(c.partialRefunds ??= []).push({
+      ...(money ? { receiptNo: nextRefundNo(t.slice(0, 10)) } : {}),
+      amount: pr!.amount, owedOffset: pr!.owedOffset, parts: pr!.parts, nhiPoints: pr!.nhiPoints,
+      reason: `部分退藥：${pr!.items.join('、')}`, cashierId: cashier.id, at: t,
+    })
+    const last = c.partialRefunds.at(-1)!
+    audit('部分退費', `${last.receiptNo ?? '（不需退款）'} 原收據 ${c.receiptNo}：應付減少 ${pr!.amount} 元${pr!.owedOffset ? `（抵欠款 ${pr!.owedOffset}）` : ''}，退還 ${pr!.cash} 元，申報點數 −${pr!.nhiPoints}；${last.reason}`)
+    return c
+  })
 }
 
 /** 取消後的共同處理：調劑單拿掉（已退藥的也拿掉——退藥紀錄留在庫存帳與稽核）、掛號回到待批價，醫師可修改病歷 */
@@ -229,6 +265,7 @@ export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
     if (m.blocked) fail(`收據無法作廢：${m.blocked}`, 'CONFLICT')
     // 作廢會讓這張收據從那天的日結消失：只有當天（還沒交帳）可以；其餘改走退費，原本那天的帳不動
     if (c.repayments?.length) fail('這張收據的欠款已收回過，不能作廢：請改用「退費」（收回的錢一起退）', 'CONFLICT')
+    if (c.partialRefunds?.length) fail('這張收據部分退費過，不能作廢：請改用「退費」（扣掉已退的）', 'CONFLICT')
     if (m.mode === 'refund') fail(`這張是 ${c.paidAt.slice(0, 10)} 收的，已算進那天的日結，不能作廢：請改用「退費」`, 'CONFLICT')
     c.voided = true
     reopenVisit(c)
@@ -316,6 +353,8 @@ export interface ReceiptView extends Charge {
   /** 怎麼取消這張（作廢或退費、退多少、為什麼不行）：頁面依它顯示按鈕，不自己判斷日期 */
   cancel?: CancelMode
   refundCashierName?: string
+  /** 部分退藥後的待退費 */
+  pendingRefund?: PendingRefund
   /** 有開藥時的領藥號 */
   pickupNo?: number
 }
@@ -329,6 +368,7 @@ export function getReceipt(chargeId: string): Promise<ReceiptView> {
       cashierName: nameOf.user(c.cashierId),
       pickupNo: c.voided ? undefined : pickupNoOf(c.visitId),
       ...(c.voided ? {} : { cancel: cancelModeOf(c) }),
+      ...(pendingRefundOf(c) ? { pendingRefund: pendingRefundOf(c) } : {}),
       ...(c.refund ? { refundCashierName: nameOf.user(c.refund.cashierId) } : {}),
     }
   })
@@ -377,7 +417,7 @@ export function getChargeDetail(visitId: string, discountCode?: string): Promise
       preview,
       ...(discountError ? { discountError } : {}),
       receipt: charge
-        ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId), cancel: cancelModeOf(charge) }
+        ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId), cancel: cancelModeOf(charge), ...(pendingRefundOf(charge) ? { pendingRefund: pendingRefundOf(charge) } : {}) }
         : undefined,
       debts: debtsOf(v.patientId),
       ...(() => {
@@ -414,7 +454,7 @@ export interface DailyReport {
   prepaidApplied: number
   prepays: { receiptNo: string; at: string; patientName: string; chartNo: string; amount: number; payMethod: PayMethod; cashierName: string; visitDate: string }[]
   /** 當日退款明細（退費、退還預收款） */
-  refunds: { receiptNo: string; at: string; kind: '退費' | '退預收'; patientName: string; chartNo: string; amount: number; payMethods: string; originalReceiptNo: string; originalDate: string; reason: string; cashierName: string }[]
+  refunds: { receiptNo: string; at: string; kind: '退費' | '退預收' | '部分退費'; patientName: string; chartNo: string; amount: number; payMethods: string; originalReceiptNo: string; originalDate: string; reason: string; cashierName: string }[]
   /** 依付款方式：實際收到的錢（加總 = 實收） */
   byPayMethod: Record<PayMethod, number>
   /** 當日收回欠款明細 */
@@ -453,6 +493,8 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
     const all = db.charges.filter((c) => inRange(c.paidAt))
     // 有效＝沒作廢的，加上「已退費」的：退費的收據照算在原本那天（退款另算在退款那天），那天的帳不會事後改變
     const valid = all.filter((c) => !c.voided || c.refund)
+    // 申報點數：部分退藥減少的點數扣掉（健保只申報病人實際拿走的藥）
+    const nhiOf = (c: Charge) => c.nhiPoints - (c.partialRefunds ?? []).reduce((n, x) => n + x.nhiPoints, 0)
     const byPayMethod: Record<PayMethod, number> = { cash: 0, card: 0, mobile: 0 }
     const dept = new Map<string, DailyReport['byDept'][number]>()
     for (const c of valid) {
@@ -461,7 +503,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       const row = dept.get(deptName) ?? { deptName, count: 0, patientTotal: 0, nhiPoints: 0 }
       row.count++
       row.patientTotal += c.patientTotal
-      row.nhiPoints += c.nhiPoints
+      row.nhiPoints += nhiOf(c)
       dept.set(deptName, row)
     }
     const cashier = new Map<string, DailyReport['byCashier'][number]>()
@@ -522,6 +564,19 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       row.collected -= rf.amount
       const p = find.patient(c.patientId)
       refunds.push({ receiptNo: rf.receiptNo, at: rf.at, kind: '退費', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: rf.amount, payMethods: rf.parts.map((x) => `${PM[x.payMethod]} ${x.amount}`).join('、'), originalReceiptNo: c.receiptNo, originalDate: c.paidAt.slice(0, 10), reason: rf.reason, cashierName: nameOf.user(rf.cashierId) })
+    }
+    // 部分退費：退還的錢算在退費那天；抵欠款的部分不是現金（只是少收），不算進退款
+    for (const c of db.charges) {
+      for (const pr of c.partialRefunds ?? []) {
+        if (!inRange(pr.at) || !pr.receiptNo) continue
+        const cash = pr.parts.reduce((n, x) => n + x.amount, 0)
+        for (const x of pr.parts) byPayMethod[x.payMethod] -= x.amount
+        const row = cashierRow(pr.cashierId)
+        row.refundCount++
+        row.collected -= cash
+        const p = find.patient(c.patientId)
+        refunds.push({ receiptNo: pr.receiptNo, at: pr.at, kind: '部分退費', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: cash, payMethods: pr.parts.map((x) => `${PM[x.payMethod]} ${x.amount}`).join('、') + (pr.owedOffset ? `（另抵欠款 ${pr.owedOffset}）` : ''), originalReceiptNo: c.receiptNo, originalDate: c.paidAt.slice(0, 10), reason: pr.reason, cashierName: nameOf.user(pr.cashierId) })
+      }
     }
     // 掛號預收：算在收的那天；退還（退掛、停診、多收的差額）算在退的那天，從原付款方式扣
     const prepays: DailyReport['prepays'] = []
@@ -594,7 +649,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       collected: patientTotal - newDebt - prepaidApplied + repaid + prepaidIn - refunded,
       repayments,
       refunds,
-      nhiPoints: valid.reduce((s, c) => s + c.nhiPoints, 0),
+      nhiPoints: valid.reduce((s, c) => s + nhiOf(c), 0),
       byPayMethod,
       byDept: [...dept.values()].sort((a, b) => b.patientTotal - a.patientTotal),
       charges: all

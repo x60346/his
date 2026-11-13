@@ -52,6 +52,11 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
       <div class="flex justify-between"><span>已退費（退款單 {{ receipt.refund.receiptNo }}，{{ receipt.refund.at.slice(0, 16) }}）</span><span class="tabular font-semibold">−{{ receipt.refund.amount.toLocaleString() }}</span></div>
       <div class="text-xs">{{ receipt.refund.reason }}</div>
     </div>
+    <!-- 部分退費（部分退藥後的差額）：收據不作廢，每次差額一張退款單 -->
+    <div v-for="(pr, i) in receipt.partialRefunds ?? []" :key="i" class="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+      <div class="flex justify-between"><span>部分退費<template v-if="pr.receiptNo">（退款單 {{ pr.receiptNo }}，{{ pr.at.slice(0, 16) }}）</template><template v-else>（{{ pr.at.slice(0, 16) }}，不需退款）</template></span><span class="tabular font-semibold">−{{ pr.amount.toLocaleString() }}</span></div>
+      <div class="text-xs">{{ pr.reason }}<template v-if="pr.owedOffset">；抵欠款 {{ pr.owedOffset }} 元</template><template v-if="pr.nhiPoints">；申報點數 −{{ pr.nhiPoints }}</template></div>
+    </div>
     <!-- 記欠款的收據：印出欠多少，病人帶回去也知道下次要補多少 -->
     <div v-if="receipt.owed" class="mt-2 flex justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
       <span>欠款（{{ receipt.oweReason }}）</span>

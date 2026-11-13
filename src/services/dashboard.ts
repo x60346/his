@@ -5,6 +5,7 @@ import { query, sessionRole, sessionUser } from './http'
 import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
 import { nameOf, openDeptTransfer, stockLoc } from './views'
 import { usableQty } from './stock-rules'
+import { pendingRefundOf } from './money'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
@@ -37,6 +38,8 @@ export interface DashboardStats {
   udSendBack: number
   /** 病房常備：低於基準量待補充的品項（住院藥局）；本班還沒點班的病房數（護理站，全院） */
   wardRefillDue: number
+  /** 部分退藥後、櫃台還沒退差額的收據（不限哪天看的診） */
+  pendingRefunds: number
   wardCountDue: number
   /** 藥車交接：已核對送出、病房還沒點收的藥盒（護理站，全院）；病房回報不符、藥局還沒處理的（住院藥局） */
   udToReceive: number
@@ -94,6 +97,7 @@ export function getDashboard(): Promise<DashboardStats> {
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
+      pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,
       wardCountDue: (() => {
         const t = now()

@@ -46,7 +46,7 @@ export function dailyReportCsv(r: DailyReport): string {
     ...r.refunds.map((x) => ({
       at: x.at,
       key: x.receiptNo,
-      cells: [x.kind === '退預收' ? '退還預收' : '退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
+      cells: [x.kind === '退預收' ? '退還預收' : x.kind === '部分退費' ? '部分退費' : '退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
     })),
   ].sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key))
   const period = r.date === r.to ? r.date : `${r.date} ~ ${r.to}`

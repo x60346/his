@@ -180,6 +180,20 @@ async function onRefund() {
   if (await refundAction.run(receipt.value.id, refundReason.value)) refundOpen.value = false
 }
 
+// ---------- 部分退費：藥局部分退藥後，退差額（金額由服務層重算；可能是前幾天看的診，所以另外列一張清單） ----------
+const { data: pendingRefunds } = useQuery(() => chargeApi.listPendingRefunds())
+const partialOpen = ref(false)
+const partialAction = useAction(chargeApi.refundReturnedDrugs, {
+  success: (c) => {
+    const r = c.partialRefunds?.at(-1)
+    const cash = r ? r.parts.reduce((n, x) => n + x.amount, 0) : 0
+    return r?.receiptNo ? `已部分退費：退還 ${cash} 元${r.owedOffset ? `、抵欠款 ${r.owedOffset} 元` : ''}（退款單 ${r.receiptNo}）` : '已更正申報點數（不需退款）'
+  },
+})
+async function onPartialRefund() {
+  if (receipt.value && (await partialAction.run(receipt.value.id))) partialOpen.value = false
+}
+
 // ---------- 更正身分（只限待批價；已開收據的先作廢）。更正後試算經 dbVersion 自動重算 ----------
 const identityOpen = ref(false)
 </script>
@@ -196,6 +210,13 @@ const identityOpen = ref(false)
         <template #title><span class="text-sm font-semibold text-slate-800">批價清單</span></template>
         <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
         <div class="border-b border-slate-100 px-3 py-2"><UInput v-model="kw" placeholder="姓名、病歷號（Enter 選取）" aria-label="搜尋批價清單" @keydown.enter.prevent="onSearchEnter" /></div>
+        <div v-if="pendingRefunds?.length" class="border-b border-red-100 bg-red-50/60 px-3 py-2">
+          <div class="mb-1 text-xs font-semibold text-red-800">待退費（部分退藥）{{ pendingRefunds.length }} 筆</div>
+          <button v-for="r in pendingRefunds" :key="r.chargeId" :class="['flex w-full items-center gap-2 rounded px-1 py-1 text-left text-sm hover:bg-red-100', r.id === visitId && 'bg-red-100']" @click="visitId = r.id">
+            <span class="min-w-0 flex-1 truncate">{{ r.patientName }} <span class="tabular text-xs text-slate-500">{{ r.date.slice(5).replace('-', '/') }} {{ r.deptName }}</span></span>
+            <span class="tabular text-xs font-semibold text-red-800">{{ r.pending.amount ? `退 $${r.pending.amount}` : '改點數' }}</span>
+          </button>
+        </div>
         <UQueryState :loading="listLoading" :ready="!!shown.length" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的病人` : '沒有看診完成的病人'">
         <ul class="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">
           <li v-for="v in shown" :key="v.id">
@@ -207,6 +228,7 @@ const identityOpen = ref(false)
               <span class="text-right">
                 <UStatusBadge :map="visitStatus" :value="v.status" />
                 <span v-if="v.charge" class="tabular block text-xs text-slate-500">${{ v.charge.patientTotal }}</span>
+                <span v-if="v.pendingRefund !== undefined" class="block text-xs font-medium text-red-700">待退費</span>
                 <span v-else-if="v.estimate !== undefined" class="tabular block text-xs font-medium text-slate-700">約 ${{ v.estimate }}</span>
               </span>
             </button>
@@ -323,13 +345,21 @@ const identityOpen = ref(false)
         <!-- 已批價：收據 -->
         <template v-else-if="receipt">
           <div class="no-print flex flex-wrap items-center gap-2">
-            <UBadge v-if="receipt.cancel?.blocked" tone="green">{{ receipt.cancel.blocked }}</UBadge>
+            <UBadge v-if="receipt.cancel?.blocked" tone="green" class="!whitespace-normal">{{ receipt.cancel.blocked }}</UBadge>
             <span v-else-if="receipt.cancel?.mode === 'refund'" class="text-xs text-slate-500">{{ receipt.paidAt.slice(0, 10) === todayStr ? '收回過欠款的收據' : `${receipt.paidAt.slice(0, 10)} 的收據已算進那天的日結` }}：不能作廢，只能退費</span>
             <div class="ml-auto flex gap-2">
               <UButton v-if="receipt.cancel?.mode === 'void'" variant="danger" :icon="Ban" :disabled="!!receipt.cancel?.blocked" :title="receipt.cancel?.blocked ?? ''" @click="openVoid">作廢</UButton>
               <UButton v-else variant="danger" :icon="Undo2" :disabled="!!receipt.cancel?.blocked" :title="receipt.cancel?.blocked ?? ''" @click="openRefund">退費</UButton>
               <UButton variant="secondary" :icon="Printer" @click="print">列印收據</UButton>
             </div>
+          </div>
+          <div v-if="receipt.pendingRefund" class="no-print flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
+            <Undo2 class="h-4 w-4 shrink-0" />
+            <span class="min-w-0 flex-1">
+              <b>藥局部分退藥，待退費</b>：{{ receipt.pendingRefund.items.join('、') }}
+              <span class="block text-xs text-red-800">用病人實際拿走的藥重算：應付 {{ receipt.pendingRefund.patientTotalAfter.toLocaleString() }} 元<template v-if="receipt.pendingRefund.nhiPoints">、申報點數 −{{ receipt.pendingRefund.nhiPoints }}</template></span>
+            </span>
+            <UButton variant="danger" @click="partialOpen = true">{{ receipt.pendingRefund.amount ? `退費 $${receipt.pendingRefund.amount}` : '更正申報點數' }}</UButton>
           </div>
           <ReceiptCard :receipt="receipt" />
         </template>
@@ -375,7 +405,8 @@ const identityOpen = ref(false)
         <div class="rounded-md bg-red-50 px-3 py-2">
           <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ (receipt.cancel?.refundAmount ?? 0).toLocaleString() }}</span></div>
           <div class="text-xs text-red-700">依原付款方式：結帳時 {{ PM_LABEL[receipt.payMethod] }}<template v-if="receipt.repayments?.length">；收回的欠款依當時的方式</template></div>
-          <div v-if="receipt.owed && receipt.owed - (receipt.repayments ?? []).reduce((n, r) => n + r.amount, 0) > 0" class="text-xs text-red-700">還沒收回的欠款一併取消</div>
+          <div v-if="receipt.owed && receipt.owed - (receipt.repayments ?? []).reduce((n, r) => n + r.amount, 0) - (receipt.partialRefunds ?? []).reduce((n, r) => n + r.owedOffset, 0) > 0" class="text-xs text-red-700">還沒收回的欠款一併取消</div>
+          <div v-if="receipt.partialRefunds?.length" class="text-xs text-red-700">已部分退費的不再退（已扣掉）</div>
           <div v-if="receipt.prepaidApplied" class="text-xs text-red-700">掛號預收的 {{ receipt.prepaidApplied }} 元不在這裡退：留在這次就醫，重新批價時再扣抵（退掛才退還）</div>
         </div>
         <UTextarea v-model="refundReason" label="退費原因" required placeholder="例：醫師改處方、病人過敏回診" :rows="2" :error="refundAction.fieldErrors.value.reason" />
@@ -383,6 +414,23 @@ const identityOpen = ref(false)
       <template #footer>
         <UButton variant="secondary" @click="refundOpen = false">取消</UButton>
         <UButton variant="danger" :disabled="!refundReason.trim()" :loading="refundAction.pending.value" @click="onRefund">確定退費</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="partialOpen" title="部分退費" size="sm">
+      <div v-if="receipt?.pendingRefund" class="space-y-3 text-sm">
+        <p class="text-slate-600">藥局退回：{{ receipt.pendingRefund.items.join('、') }}。收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span> 不作廢、原本那天的帳不動<template v-if="receipt.pendingRefund.amount">；差額另開退款單、算在今天</template>。</p>
+        <div class="space-y-1 rounded-md bg-red-50 px-3 py-2">
+          <div class="flex justify-between text-red-800"><span>應付減少</span><span class="tabular">$ {{ receipt.pendingRefund.amount.toLocaleString() }}</span></div>
+          <div v-if="receipt.pendingRefund.owedOffset" class="flex justify-between text-xs text-red-700"><span>先抵還沒收回的欠款</span><span class="tabular">− {{ receipt.pendingRefund.owedOffset.toLocaleString() }}</span></div>
+          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ receipt.pendingRefund.cash.toLocaleString() }}</span></div>
+          <div v-for="x in receipt.pendingRefund.parts" :key="x.payMethod" class="text-xs text-red-700">{{ PM_LABEL[x.payMethod] }} {{ x.amount.toLocaleString() }} 元</div>
+          <div v-if="!receipt.pendingRefund.amount" class="text-xs text-red-700">部分負擔沒有變：不需退款，只更正健保申報點數（−{{ receipt.pendingRefund.nhiPoints }}）</div>
+        </div>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="partialOpen = false">取消</UButton>
+        <UButton variant="danger" :loading="partialAction.pending.value" @click="onPartialRefund">確定</UButton>
       </template>
     </UDialog>
 

@@ -148,9 +148,10 @@ export function checkCash(total: number, received: number | undefined, owe = fal
 }
 
 /** 這張收據還欠多少：結帳時的欠款 − 已收回（作廢的收據不算欠） */
-export function outstandingOf(c: Pick<Charge, 'owed' | 'repayments' | 'voided'>): number {
+export function outstandingOf(c: Pick<Charge, 'owed' | 'repayments' | 'voided' | 'partialRefunds'>): number {
   if (c.voided) return 0
-  return (c.owed ?? 0) - (c.repayments ?? []).reduce((s, r) => s + r.amount, 0)
+  // 部分退費會先抵欠款（見 charge.pendingRefundOf）
+  return (c.owed ?? 0) - (c.repayments ?? []).reduce((s, r) => s + r.amount, 0) - (c.partialRefunds ?? []).reduce((s, r) => s + r.owedOffset, 0)
 }
 
 /** 收回欠款金額檢查：整數、大於 0、不超過尚欠（多收的錢沒有地方放） */

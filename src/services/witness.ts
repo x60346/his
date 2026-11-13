@@ -5,7 +5,7 @@ import { db } from '@/mock/db'
 import { today } from '@/utils/date'
 import { fail, must, mutate, requireUser } from './http'
 import { find, stockLoc } from './views'
-import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, type WitnessResult } from './witness-core'
+import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, returnScrapRef, type WitnessResult } from './witness-core'
 
 export type WitnessTarget =
   /** 病房點班（含管制藥）：另一位護理師見證 */
@@ -14,6 +14,8 @@ export type WitnessTarget =
   | { purpose: 'scrapExpired'; drugId: string; locationId?: string }
   /** 報廢待報廢區的一個批號：另一位藥師或管理者覆核 */
   | { purpose: 'scrapQuarantine'; lotId: string }
+  /** 門診退藥不可再用（退回後直接報廢）：另一位藥師或管理者覆核。items＝要報廢的品項說明（畫面上看得到的） */
+  | { purpose: 'scrapReturn'; dispenseId: string; items: string }
 
 export type { WitnessResult }
 
@@ -55,6 +57,11 @@ export function approveWitness(input: WitnessTarget & { username: string; passwo
       if (lot.qty <= 0) fail('這個批號已經處理完了', 'CONFLICT')
       const drug = find.drug(lot.drugId)
       return grantWitness({ ...base, refId: quarantineScrapRef(lot.id), what: `${drug?.name} 批號 ${lot.lotNo} 待報廢區報廢 ${lot.qty} ${drug?.unit ?? ''}（${u.name}）` })
+    }
+    if (input.purpose === 'scrapReturn') {
+      const d = must(db.dispenses.find((x) => x.id === input.dispenseId), '調劑單')
+      if (d.status !== 'dispensed') fail('這張調劑單沒有可以退的藥', 'CONFLICT')
+      return grantWitness({ ...base, refId: returnScrapRef(d.id), what: `領藥號 ${d.pickupNo} 退藥不可再用、報廢：${String(input.items ?? '').slice(0, 200)}（${u.name}）` })
     }
     fail('不支援的確認類型')
   })

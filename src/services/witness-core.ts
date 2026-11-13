@@ -83,6 +83,8 @@ export function consumeWitness(token: string | undefined): void {
 /** 報廢確認綁定的對象：某藥在某地點的過期批號；待報廢區的一個批號 */
 export const expiredScrapRef = (drugId: string, locationId: string) => `E|${drugId}|${locationId}`
 export const quarantineScrapRef = (lotId: string) => `Q|${lotId}`
+/** 門診退藥不可再用、退回後直接報廢：綁那張調劑單 */
+export const returnScrapRef = (dispenseId: string) => `R|${dispenseId}`
 
 /** 資格：帳號任一角色符合（第二人用的是帳號，不是某個分頁的作業角色） */
 export const hasRole = (u: User, roles: User['roles'][number][]) => u.roles.some((r) => roles.includes(r))
