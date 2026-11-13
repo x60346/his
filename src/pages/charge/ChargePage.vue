@@ -12,7 +12,8 @@ import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
 import { chargeApi, checkCash, checkRepay, discountSummary } from '@/services'
-import type { DebtItem } from '@/services/charge'
+import type { DebtItem, ReceiptProcedure } from '@/services/charge'
+import ReasonDialog from '@/components/ReasonDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
 import { periodLabel, today } from '@/utils/date'
@@ -194,6 +195,14 @@ async function onPartialRefund() {
   if (receipt.value && (await partialAction.run(receipt.value.id))) partialOpen.value = false
 }
 
+// ---------- 檢驗、處置未執行：標記後同一個「待退費」流程退差額（服務層 money.pendingRefundOf 重算）----------
+const notDoneTarget = ref<ReceiptProcedure | null>(null)
+const markAction = useAction(chargeApi.markProcedureNotDone, { success: () => '已標記未執行：收據上方出現待退費' })
+const unmarkAction = useAction(chargeApi.unmarkProcedureNotDone, { success: '已撤銷未執行' })
+async function onMarkNotDone(reason: string) {
+  if (receipt.value && notDoneTarget.value && (await markAction.run(receipt.value.id, notDoneTarget.value.idx, reason))) notDoneTarget.value = null
+}
+
 // ---------- 更正身分（只限待批價；已開收據的先作廢）。更正後試算經 dbVersion 自動重算 ----------
 const identityOpen = ref(false)
 </script>
@@ -211,7 +220,7 @@ const identityOpen = ref(false)
         <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
         <div class="border-b border-slate-100 px-3 py-2"><UInput v-model="kw" placeholder="姓名、病歷號（Enter 選取）" aria-label="搜尋批價清單" @keydown.enter.prevent="onSearchEnter" /></div>
         <div v-if="pendingRefunds?.length" class="border-b border-red-100 bg-red-50/60 px-3 py-2">
-          <div class="mb-1 text-xs font-semibold text-red-800">待退費（部分退藥）{{ pendingRefunds.length }} 筆</div>
+          <div class="mb-1 text-xs font-semibold text-red-800">待退費（部分退藥、未執行）{{ pendingRefunds.length }} 筆</div>
           <button v-for="r in pendingRefunds" :key="r.chargeId" :class="['flex w-full items-center gap-2 rounded px-1 py-1 text-left text-sm hover:bg-red-100', r.id === visitId && 'bg-red-100']" @click="visitId = r.id">
             <span class="min-w-0 flex-1 truncate">{{ r.patientName }} <span class="tabular text-xs text-slate-500">{{ r.date.slice(5).replace('-', '/') }} {{ r.deptName }}</span></span>
             <span class="tabular text-xs font-semibold text-red-800">{{ r.pending.amount ? `退 $${r.pending.amount}` : '改點數' }}</span>
@@ -356,10 +365,25 @@ const identityOpen = ref(false)
           <div v-if="receipt.pendingRefund" class="no-print flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
             <Undo2 class="h-4 w-4 shrink-0" />
             <span class="min-w-0 flex-1">
-              <b>藥局部分退藥，待退費</b>：{{ receipt.pendingRefund.items.join('、') }}
+              <b>待退費</b>：{{ receipt.pendingRefund.items.join('、') }}
               <span class="block text-xs text-red-800">用病人實際拿走的藥重算：應付 {{ receipt.pendingRefund.patientTotalAfter.toLocaleString() }} 元<template v-if="receipt.pendingRefund.nhiPoints">、申報點數 −{{ receipt.pendingRefund.nhiPoints }}</template></span>
             </span>
             <UButton variant="danger" @click="partialOpen = true">{{ receipt.pendingRefund.amount ? `退費 $${receipt.pendingRefund.amount}` : '更正申報點數' }}</UButton>
+          </div>
+          <!-- 檢驗、處置：病人沒做就離開，標「未執行」（醫令照留，櫃台退差額；健保項目通常只更正申報點數） -->
+          <div v-if="receipt.procedures.length && !receipt.voided" class="no-print rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
+            <div class="mb-1 text-xs font-semibold text-slate-600">檢驗、處置（沒做的標「未執行」，退差額）</div>
+            <ul class="divide-y divide-slate-100">
+              <li v-for="x in receipt.procedures" :key="x.idx" class="flex flex-wrap items-center gap-2 py-1.5">
+                <span :class="['min-w-0 flex-1', x.notDone && 'text-slate-400 line-through']">{{ x.name }}<UBadge v-if="x.selfPay" tone="yellow" class="ml-1">自費</UBadge></span>
+                <template v-if="x.notDone">
+                  <span class="text-xs text-red-700">未執行：{{ x.notDone.reason }}（{{ x.notDone.byName }}）</span>
+                  <UButton v-if="!x.notDone.settled" size="sm" variant="ghost" :loading="unmarkAction.pending.value" @click="unmarkAction.run(receipt.id, x.idx)">撤銷</UButton>
+                  <UBadge v-else tone="gray">已退費</UBadge>
+                </template>
+                <UButton v-else size="sm" variant="ghost" @click="notDoneTarget = x">未執行</UButton>
+              </li>
+            </ul>
           </div>
           <ReceiptCard :receipt="receipt" />
         </template>
@@ -417,9 +441,23 @@ const identityOpen = ref(false)
       </template>
     </UDialog>
 
+    <ReasonDialog
+      :model-value="!!notDoneTarget"
+      title="標記未執行"
+      :subject="notDoneTarget ? `${notDoneTarget.name}${notDoneTarget.selfPay ? '（自費）' : ''}` : ''"
+      label="原因"
+      :presets="['病人未抽血即離開', '病人拒絕檢查', '證明書不需要了', '醫師取消']"
+      ok-text="標記未執行"
+      danger
+      :pending="markAction.pending.value"
+      :error="markAction.fieldErrors.value.reason"
+      @update:model-value="(v: boolean) => !v && (notDoneTarget = null)"
+      @confirm="onMarkNotDone"
+    />
+
     <UDialog v-model="partialOpen" title="部分退費" size="sm">
       <div v-if="receipt?.pendingRefund" class="space-y-3 text-sm">
-        <p class="text-slate-600">藥局退回：{{ receipt.pendingRefund.items.join('、') }}。收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span> 不作廢、原本那天的帳不動<template v-if="receipt.pendingRefund.amount">；差額另開退款單、算在今天</template>。</p>
+        <p class="text-slate-600">{{ receipt.pendingRefund.items.join('、') }}。收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span> 不作廢、原本那天的帳不動<template v-if="receipt.pendingRefund.amount">；差額另開退款單、算在今天</template>。</p>
         <div class="space-y-1 rounded-md bg-red-50 px-3 py-2">
           <div class="flex justify-between text-red-800"><span>應付減少</span><span class="tabular">$ {{ receipt.pendingRefund.amount.toLocaleString() }}</span></div>
           <div v-if="receipt.pendingRefund.owedOffset" class="flex justify-between text-xs text-red-700"><span>先抵還沒收回的欠款</span><span class="tabular">− {{ receipt.pendingRefund.owedOffset.toLocaleString() }}</span></div>

@@ -234,23 +234,27 @@ export function refundReturnedDrugs(chargeId: string): Promise<Charge> {
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
     const pr = pendingRefundOf(c)
-    if (!pr) fail('這張收據沒有待退費（藥局部分退藥後才有）', 'CONFLICT')
+    if (!pr) fail('這張收據沒有待退費（藥局部分退藥、或標了未執行的檢驗處置才有）', 'CONFLICT')
     const t = now()
     const money = pr!.amount > 0
     ;(c.partialRefunds ??= []).push({
       ...(money ? { receiptNo: nextRefundNo(t.slice(0, 10)) } : {}),
       amount: pr!.amount, owedOffset: pr!.owedOffset, parts: pr!.parts, nhiPoints: pr!.nhiPoints,
-      reason: `部分退藥：${pr!.items.join('、')}`, cashierId: cashier.id, at: t,
+      reason: `部分退費：${pr!.items.join('、')}`, cashierId: cashier.id, at: t,
     })
+    // 算進這次退費的「未執行」：之後不能撤銷（錢已經退出去了）
+    for (const x of find.encounterOfVisit(c.visitId)?.procedures ?? []) if (x.notDone && !x.notDone.settledAt) x.notDone.settledAt = t
     const last = c.partialRefunds.at(-1)!
     audit('部分退費', `${last.receiptNo ?? '（不需退款）'} 原收據 ${c.receiptNo}：應付減少 ${pr!.amount} 元${pr!.owedOffset ? `（抵欠款 ${pr!.owedOffset}）` : ''}，退還 ${pr!.cash} 元，申報點數 −${pr!.nhiPoints}；${last.reason}`)
     return c
   })
 }
 
-/** 取消後的共同處理：調劑單拿掉（已退藥的也拿掉——退藥紀錄留在庫存帳與稽核）、掛號回到待批價，醫師可修改病歷 */
+/** 取消後的共同處理：調劑單拿掉（已退藥的也拿掉——退藥紀錄留在庫存帳與稽核）、掛號回到待批價，醫師可修改病歷。
+ * 「未執行」也清掉：重新批價時由醫師決定醫令（沒做的刪掉），不然重新批價會照收 */
 function reopenVisit(c: Charge) {
   db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
+  for (const x of find.encounterOfVisit(c.visitId)?.procedures ?? []) delete x.notDone
   must(find.visit(c.visitId), '掛號紀錄').status = 'consulted'
 }
 
@@ -347,31 +351,89 @@ export function repayDebt(chargeId: string, input: { payMethod: PayMethod; amoun
   })
 }
 
+/** 收據上的檢驗、處置（批價頁標「未執行」用） */
+export interface ReceiptProcedure {
+  idx: number
+  name: string
+  selfPay: boolean
+  notDone?: { reason: string; byName: string; at: string; settled: boolean }
+}
+
+function receiptProcedures(c: Charge): ReceiptProcedure[] {
+  const e = find.encounterOfVisit(c.visitId)
+  return (e?.procedures ?? []).map((x, idx) => ({
+    idx, name: find.procedure(x.procId)?.name ?? x.procId, selfPay: x.selfPay,
+    ...(x.notDone ? { notDone: { reason: x.notDone.reason, byName: nameOf.user(x.notDone.by), at: x.notDone.at, settled: !!x.notDone.settledAt } } : {}),
+  }))
+}
+
+/**
+ * 標「未執行」：門診開了檢驗、處置，病人沒做就離開（或證明書不需要了）。醫令照留（病歷標未執行），櫃台退差額——
+ * 健保項目病人沒另外付錢，通常只更正申報點數；自費項目才退錢。整項標，寫原因、寫稽核。
+ * 收據作廢或整張退費過的不行；藥已全部退完的請整張退費
+ */
+export function markProcedureNotDone(chargeId: string, idx: number, reason: string): Promise<ReceiptView> {
+  return mutate(() => {
+    const cashier = requirePermission('charge.pay')
+    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
+    if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
+    const e = must(find.encounterOfVisit(c.visitId), '病歷')
+    const x = e.procedures[idx]
+    if (!x) fail('找不到這項檢驗或處置，請重新整理')
+    if (x.notDone) fail('這一項已經標未執行了', 'CONFLICT')
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫原因（例：病人未抽血即離開、證明書不需要了）')
+    x.notDone = { reason: why!, by: cashier.id, at: now() }
+    audit('標記未執行', `${c.receiptNo} ${nameOf.patient(c.patientId)}：${find.procedure(x.procId)?.name}（${why}）`)
+    return receiptOf(c)
+  })
+}
+
+/** 撤銷「未執行」（標錯了）：還沒退費前才可以 */
+export function unmarkProcedureNotDone(chargeId: string, idx: number): Promise<ReceiptView> {
+  return mutate(() => {
+    requirePermission('charge.pay')
+    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
+    if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
+    const x = must(find.encounterOfVisit(c.visitId), '病歷').procedures[idx]
+    if (!x?.notDone) fail('這一項沒有標未執行', 'CONFLICT')
+    if (x.notDone.settledAt) fail('已經退費了，不能撤銷（錢已經退出去了）', 'CONFLICT')
+    delete x.notDone
+    audit('撤銷未執行', `${c.receiptNo} ${nameOf.patient(c.patientId)}：${find.procedure(x.procId)?.name}`)
+    return receiptOf(c)
+  })
+}
+
 export interface ReceiptView extends Charge {
   visit: VisitView
   cashierName: string
   /** 怎麼取消這張（作廢或退費、退多少、為什麼不行）：頁面依它顯示按鈕，不自己判斷日期 */
   cancel?: CancelMode
   refundCashierName?: string
-  /** 部分退藥後的待退費 */
+  /** 部分退藥、未執行的檢驗處置的待退費 */
   pendingRefund?: PendingRefund
+  /** 檢驗、處置（標未執行用） */
+  procedures: ReceiptProcedure[]
   /** 有開藥時的領藥號 */
   pickupNo?: number
 }
 
+function receiptOf(c: Charge): ReceiptView {
+  const pr = pendingRefundOf(c)
+  return {
+    ...c,
+    visit: visitView(must(find.visit(c.visitId), '掛號紀錄')),
+    cashierName: nameOf.user(c.cashierId),
+    pickupNo: c.voided ? undefined : pickupNoOf(c.visitId),
+    ...(c.voided ? {} : { cancel: cancelModeOf(c) }),
+    ...(pr ? { pendingRefund: pr } : {}),
+    ...(c.refund ? { refundCashierName: nameOf.user(c.refund.cashierId) } : {}),
+    procedures: receiptProcedures(c),
+  }
+}
+
 export function getReceipt(chargeId: string): Promise<ReceiptView> {
-  return query(() => {
-    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
-    return {
-      ...c,
-      visit: visitView(must(find.visit(c.visitId), '掛號紀錄')),
-      cashierName: nameOf.user(c.cashierId),
-      pickupNo: c.voided ? undefined : pickupNoOf(c.visitId),
-      ...(c.voided ? {} : { cancel: cancelModeOf(c) }),
-      ...(pendingRefundOf(c) ? { pendingRefund: pendingRefundOf(c) } : {}),
-      ...(c.refund ? { refundCashierName: nameOf.user(c.refund.cashierId) } : {}),
-    }
-  })
+  return query(() => receiptOf(must(db.charges.find((x) => x.id === chargeId), '收費紀錄')))
 }
 
 export interface ChargeDetail {
@@ -417,7 +479,7 @@ export function getChargeDetail(visitId: string, discountCode?: string): Promise
       preview,
       ...(discountError ? { discountError } : {}),
       receipt: charge
-        ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId), cancel: cancelModeOf(charge), ...(pendingRefundOf(charge) ? { pendingRefund: pendingRefundOf(charge) } : {}) }
+        ? receiptOf(charge)
         : undefined,
       debts: debtsOf(v.patientId),
       ...(() => {

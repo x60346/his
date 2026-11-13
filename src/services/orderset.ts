@@ -103,7 +103,7 @@ export function saveOrderSet(input: OrderSetInput): Promise<OrderSetView> {
     const content = {
       diagnoses: structuredClone(input.diagnoses),
       medications,
-      procedures: structuredClone(input.procedures),
+      procedures: structuredClone(input.procedures).map(({ notDone: _, ...p }) => p),
       subjective: input.subjective?.trim() || undefined,
       plan: input.plan?.trim() || undefined,
     }

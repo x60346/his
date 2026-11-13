@@ -294,7 +294,8 @@ function mergeIntoDraft(src: ExpandedOrders, title: string, only?: 'medications'
   if (only !== 'medications') {
     for (const p of src.procedures) {
       if (draft.value.procedures.some((y) => y.procId === p.procId)) continue
-      draft.value.procedures.push({ ...p })
+      const { notDone: _, ...rest } = p // 上次沒做的不帶「未執行」
+      draft.value.procedures.push(rest)
       procs++
     }
     if (!draft.value.diagnoses.length && src.diagnoses.length) {

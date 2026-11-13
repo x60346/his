@@ -4386,6 +4386,90 @@ try {
     await as('clerk01')
   }
 
+  // 檢驗、處置未執行：櫃台標記（醫令照留）→ 同一個待退費流程退差額；退費前可撤銷
+  console.log('\n[檢驗處置未執行、部分退費]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const C = api.chargeApi
+    const B = await load('/src/services/billing.ts')
+    const V = await load('/src/services/views.ts')
+    const encOf = (c) => db().encounters.find((e) => e.visitId === c.visitId)
+    const chargeOf = (id) => db().charges.find((c) => c.id === id)
+    // 用同一組計算：拿掉沒做的處置重算
+    const totalWithout = (c, idxs) => {
+      const v = db().visits.find((x) => x.id === c.visitId)
+      const e = encOf(c)
+      const base = B.calcChargeLines(v, { ...e, procedures: e.procedures.filter((_, i) => !idxs.includes(i)) }, V.billingLookup(v.identityCode))
+      const rule = c.discount ? db().discounts.find((x) => x.code === c.discount.code) : undefined
+      return B.summarize(rule ? B.applyDiscount(base, rule) : base)
+    }
+    const withProc = db().charges.filter((c) => !c.voided && !c.partialRefunds && encOf(c)?.procedures.length && db().dispenses.find((d) => d.visitId === c.visitId)?.status !== 'returned')
+    const c1 = withProc.find((c) => encOf(c).procedures.some((x) => !x.selfPay))
+    ok(!!c1, '種子有開了檢驗處置的收據')
+    const k = encOf(c1).procedures.findIndex((x) => !x.selfPay)
+    await as('nurse01')
+    await expectError(() => C.markProcedureNotDone(c1.id, k, '病人未抽血'), '護理師標未執行（只有批價）')
+    await as('clerk01')
+    try {
+      await C.markProcedureNotDone(c1.id, k, ' ')
+      ok(false, '沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', '標未執行要寫原因')
+    }
+    let r = await C.markProcedureNotDone(c1.id, k, '病人未抽血即離開')
+    const exp = totalWithout(c1, [k])
+    ok(r.procedures[k].notDone?.reason === '病人未抽血即離開' && r.pendingRefund?.nhiPoints === c1.nhiPoints - exp.nhiPoints && r.pendingRefund.amount === c1.patientTotal - exp.patientTotal && r.pendingRefund.items.some((x) => x.includes('（未執行）')),
+      `標未執行（健保項目）：待退 ${r.pendingRefund?.amount} 元、申報點數 −${r.pendingRefund?.nhiPoints}（用做了的重算）`)
+    ok(encOf(c1).procedures[k].procId && db().auditLogs[0].action === '標記未執行', '醫令照留（只標執行狀態），寫稽核')
+    await expectError(() => C.markProcedureNotDone(c1.id, k, '再標'), '同一項標兩次')
+    r = await C.unmarkProcedureNotDone(c1.id, k)
+    ok(!r.procedures[k].notDone && !r.pendingRefund, '退費前可以撤銷：待退費消失')
+    await C.markProcedureNotDone(c1.id, k, '病人未抽血即離開')
+    ok((await C.listPendingRefunds()).some((x) => x.chargeId === c1.id), '列在批價頁「待退費」（不限哪天）')
+    const done = await C.refundReturnedDrugs(c1.id)
+    const last = done.partialRefunds.at(-1)
+    ok(last.reason.startsWith('部分退費：') && last.reason.includes('未執行') && encOf(c1).procedures[k].notDone.settledAt, '退差額：退費紀錄寫出未執行的項目，該項標「已退費」')
+    await expectError(() => C.unmarkProcedureNotDone(c1.id, k), '已退費的未執行撤銷')
+    ok((await C.getReceipt(c1.id)).procedures[k].notDone.settled && !(await C.getReceipt(c1.id)).pendingRefund, '收據上該項標已退費、沒有待退費了')
+    // 醫師的就診紀錄看得到未執行
+    await as(db().users.find((u) => u.doctorId === encOf(c1).doctorId)?.username ?? 'dr01')
+    const pt = db().visits.find((v) => v.id === c1.visitId).patientId
+    const hist = await api.opdApi.patientHistory(pt)
+    ok(hist.some((h) => h.procedureNames.some((n) => n.includes('未執行：病人未抽血即離開'))), '醫師看就診紀錄：處置標「未執行：原因」')
+    // 自費項目：自己掛號、看診開一項自費流感快篩、結帳 → 標未執行 → 退錢、開退款單
+    {
+      const { addDays } = await load('/src/utils/date.ts')
+      await as('clerk01')
+      const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
+      const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
+      const pt2 = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const v2 = await api.bookingApi.register({ patientId: pt2.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
+      const e2 = await api.opdApi.startConsult(v2.id, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(e2.id, { subjective: '測試', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'J06.9', name: '急性上呼吸道感染', primary: true }], medications: [], procedures: [{ procId: 'P012', qty: 1, selfPay: true, notDone: { reason: '偷塞', by: 'x', at: T } }], refillTimes: 0, admissionRequested: false })
+      ok(!db().encounters.find((x) => x.id === e2.id).procedures[0].notDone, '醫師送來的病歷帶「未執行」：存的時候拿掉')
+      await as('clerk01')
+      const pv = await C.previewCharge(v2.id)
+      const c2 = await C.pay(v2.id, { payMethod: 'cash', received: pv.patientTotal })
+      const r2 = await C.markProcedureNotDone(c2.id, 0, '病人不做快篩了')
+      const ex2 = totalWithout(chargeOf(c2.id), [0])
+      ok(r2.pendingRefund?.amount === c2.patientTotal - ex2.patientTotal && r2.pendingRefund.amount === 500, `自費項目未執行：退 ${r2.pendingRefund?.amount} 元（自費價）`)
+      const d2 = await C.refundReturnedDrugs(c2.id)
+      ok(d2.partialRefunds.at(-1).receiptNo?.startsWith('RF') && d2.partialRefunds.at(-1).parts[0].amount === 500 && (await C.dailyReport(T)).refunds.some((x) => x.receiptNo === d2.partialRefunds.at(-1).receiptNo), '自費退錢：開退款單、日結列出')
+    }
+    // 整張作廢或退費後重新批價：未執行清掉（由醫師決定醫令）
+    const c3 = db().charges.find((c) => !c.voided && !c.partialRefunds && encOf(c)?.procedures.length && c.paidAt.slice(0, 10) === T && !c.repayments?.length && !db().dispenses.some((d) => d.visitId === c.visitId && d.status === 'dispensed'))
+    if (c3) {
+      await C.markProcedureNotDone(c3.id, 0, '醫師取消')
+      await C.voidCharge(c3.id, '重新批價')
+      ok(!encOf(c3).procedures[0].notDone, '收據作廢、重新批價：未執行清掉（醫師改醫令再批價）')
+    } else ok(true, '今天沒有可作廢、有處置的收據（不測重新批價）')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/services/opd.ts', 'utf8').includes('Object.assign(e, cleanDraft(draft))') && !readFileSync('src/services/opd.ts', 'utf8').includes('Object.assign(e, structuredClone(draft))') && readFileSync('src/pages/opd/OpdPage.vue', 'utf8').includes('const { notDone: _, ...rest } = p'),
+      '「未執行」只能由批價標：存病歷、同前次、組套都拿掉')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

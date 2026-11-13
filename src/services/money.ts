@@ -91,10 +91,13 @@ export interface PendingRefund {
 export function pendingRefundOf(c: Charge): PendingRefund | undefined {
   if (c.voided) return undefined
   const d = db.dispenses.find((x) => x.visitId === c.visitId)
-  if (!d?.returns?.length || d.status === 'returned') return undefined
-  const v = must(find.visit(c.visitId), '掛號紀錄')
+  if (d?.status === 'returned') return undefined // 藥全部退完：整張作廢或退費
   const e = must(find.encounterOfVisit(c.visitId), '病歷')
-  const base = calcChargeLines(v, { ...e, medications: keptMedications(e.medications, d) }, billingLookup(v.identityCode))
+  const notDone = e.procedures.filter((p) => p.notDone)
+  if (!d?.returns?.length && !notDone.length) return undefined
+  const v = must(find.visit(c.visitId), '掛號紀錄')
+  // 病人實際拿走的藥＋實際做了的檢驗處置
+  const base = calcChargeLines(v, { ...e, medications: keptMedications(e.medications, d), procedures: e.procedures.filter((p) => !p.notDone) }, billingLookup(v.identityCode))
   // 優免用結帳時的類別（之後被停用也照用，不必重新核准）
   const rule = c.discount ? db.discounts.find((x) => x.code === c.discount!.code) : undefined
   const sum = summarize(rule ? applyDiscount(base, rule) : base)
@@ -115,9 +118,10 @@ export function pendingRefundOf(c: Charge): PendingRefund | undefined {
   }
   if (left > 0) parts.push({ payMethod: c.payMethod, amount: left })
   const items = e.medications
-    .map((m, i) => ({ name: find.drug(m.drugId)?.name ?? m.drugId, qty: returnedQty(d, i), unit: find.drug(m.drugId)?.unit ?? '' }))
+    .map((m, i) => ({ name: find.drug(m.drugId)?.name ?? m.drugId, qty: d ? returnedQty(d, i) : 0, unit: find.drug(m.drugId)?.unit ?? '' }))
     .filter((x) => x.qty > 0)
     .map((x) => `${x.name} ${x.qty} ${x.unit}`)
+    .concat(notDone.map((p) => `${find.procedure(p.procId)?.name ?? p.procId}（未執行）`))
   return { amount, owedOffset, cash, parts, nhiPoints, patientTotalAfter: sum.patientTotal, items }
 }
 

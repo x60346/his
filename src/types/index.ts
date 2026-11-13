@@ -266,6 +266,11 @@ export interface ProcedureOrder {
   qty: number
   selfPay: boolean
   note?: string
+  /**
+   * 門診批價後標「未執行」（病人沒做就離開、證明書不需要了）：醫令照留，這是執行狀態；櫃台退差額。
+   * settledAt＝已經算進部分退費（之後不能撤銷）。只有 charge.markProcedureNotDone 能設，存病歷時一律拿掉
+   */
+  notDone?: { reason: string; by: string; at: string; settledAt?: string }
 }
 
 export type EncounterStatus = 'draft' | 'completed'

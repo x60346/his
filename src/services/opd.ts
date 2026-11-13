@@ -88,11 +88,18 @@ export type EncounterDraft = Pick<
   'subjective' | 'objective' | 'assessment' | 'plan' | 'vitals' | 'diagnoses' | 'medications' | 'procedures' | 'refillTimes' | 'admissionRequested'
 >
 
+/** 病歷草稿：「未執行」只能由批價標（charge.markProcedureNotDone），醫師送來的一律拿掉（例：「同前次」帶入舊的醫令） */
+const cleanDraft = (d: EncounterDraft): EncounterDraft => {
+  const c = structuredClone(d)
+  if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, ...p }) => p)
+  return c
+}
+
 export function saveDraft(encounterId: string, draft: EncounterDraft): Promise<Encounter> {
   return mutate(() => {
     requireUser('doctor')
     const e = editableEncounter(encounterId)
-    Object.assign(e, structuredClone(draft))
+    Object.assign(e, cleanDraft(draft))
     return e
   })
 }
@@ -122,7 +129,7 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     requirePermission('order.write')
     const e = editableEncounter(encounterId)
     const v = must(find.visit(e.visitId), '掛號紀錄')
-    Object.assign(e, structuredClone(draft))
+    Object.assign(e, cleanDraft(draft))
 
     if (!e.diagnoses.length) fail('請至少輸入一個診斷')
     if (!e.diagnoses.some((d) => d.primary)) e.diagnoses[0].primary = true
@@ -230,7 +237,7 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
         doctorName: nameOf.doctor(e.doctorId),
         deptName: nameOf.dept(e.deptId),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),
-        procedureNames: e.procedures.map((p) => find.procedure(p.procId)?.name ?? p.procId),
+        procedureNames: e.procedures.map((p) => `${find.procedure(p.procId)?.name ?? p.procId}${p.notDone ? `（未執行：${p.notDone.reason}）` : ''}`),
       })),
   )
 }
