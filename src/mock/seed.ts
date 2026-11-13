@@ -38,6 +38,7 @@ import type {
   Visit,
   VitalRecord,
   WeeklySlot,
+  Consult,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
@@ -814,7 +815,46 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         id: 'DT-SEED-1', fromDeptId: stroke.deptId, fromDoctorId: stroke.doctorId, toDeptId: 'D08',
         reason: '急性期已穩定，右側肢體無力，轉復健科接續住院復健', requestedBy: doctorUser(stroke.doctorId),
         requestedAt: `${addDays(T, -1)} 16:20`, status: 'pending',
+        summary: {
+          course: '入院時右側肢體無力、言語不清，MRI 證實左側內囊梗塞；給予抗血小板與降血脂治療，生命徵象穩定、未再惡化。',
+          problems: '右側肢體肌力 3 分，需協助轉位；吞嚥評估可進食軟質飲食；血壓控制中。',
+          pending: '一週後追蹤血脂；持續監測血壓，目標 < 140/90。',
+        },
       }]
+      progressNotes.push({
+        id: 'PN-SEED-DT1', admissionId: stroke.id, at: `${addDays(T, -1)} 16:20`, doctorId: stroke.doctorId, subjective: '', objective: '', assessment: '', plan: '', kind: 'transferOut',
+        items: [
+          { label: '轉入', text: '復健科' },
+          { label: '原因', text: '急性期已穩定，右側肢體無力，轉復健科接續住院復健' },
+          { label: '住院經過', text: stroke.deptTransfers[0].summary!.course },
+          { label: '目前問題', text: stroke.deptTransfers[0].summary!.problems },
+          { label: '待追蹤', text: stroke.deptTransfers[0].summary!.pending! },
+        ],
+      })
+    }
+  }
+
+  // 住院會診（不抽亂數）：糖尿病那位今天早上會診外科（待回覆——外科 dr04 首頁待辦「待回覆會診」就有一張）；
+  // 肺炎那位昨天會診耳鼻喉科，dr08 已回覆（主治 dr02 在醫囑頁看得到回覆）
+  const consults: Consult[] = []
+  {
+    const dm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11.65'))
+    if (dm) {
+      const at = notFuture(`${T} 09:10`, 10)
+      consults.push({ id: 'CS-SEED-1', admissionId: dm.id, fromDeptId: dm.deptId, fromDoctorId: dm.doctorId, toDeptId: 'D03', question: '左足大拇趾傷口紅腫滲液三天，請評估是否需要清創', urgent: false, requestedAt: at, status: 'pending' })
+      progressNotes.push({ id: 'PN-SEED-CS1', admissionId: dm.id, at, doctorId: dm.doctorId, subjective: '', objective: '', assessment: '', plan: '', kind: 'consult', items: [{ label: '會診', text: '外科' }, { label: '目的', text: consults[0].question }] })
+    }
+    const pn = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18.9'))
+    if (pn) {
+      const at = `${addDays(T, -1)} 10:00`
+      const ans = `${addDays(T, -1)} 15:30`
+      const c: Consult = {
+        id: 'CS-SEED-2', admissionId: pn.id, fromDeptId: pn.deptId, fromDoctorId: pn.doctorId, toDeptId: 'D07', question: '咽喉疼痛、吞嚥時加劇，請評估有無扁桃腺周圍膿瘍', urgent: false, requestedAt: at,
+        status: 'answered', answeredBy: 'DR08', answeredAt: ans, findings: '雙側扁桃腺輕度紅腫、無膿點，懸雍垂居中，無膿瘍跡象。', recommendation: '續用目前抗生素；溫鹽水漱口；若三天後吞嚥仍困難請再會診。',
+      }
+      consults.push(c)
+      progressNotes.push({ id: 'PN-SEED-CS2', admissionId: pn.id, at, doctorId: pn.doctorId, subjective: '', objective: '', assessment: '', plan: '', kind: 'consult', items: [{ label: '會診', text: '耳鼻喉科' }, { label: '目的', text: c.question }] })
+      progressNotes.push({ id: 'PN-SEED-CS2R', admissionId: pn.id, at: ans, doctorId: 'DR08', subjective: '', objective: '', assessment: '', plan: '', kind: 'consultReply', items: [{ label: '會診回覆', text: `耳鼻喉科（申請：${at.slice(5)}，${c.question}）` }, { label: '評估', text: c.findings! }, { label: '建議', text: c.recommendation! }] })
     }
   }
 
@@ -1286,6 +1326,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     vitals,
     nursingNotes,
     progressNotes,
+    consults,
     handovers,
     preventItems: structuredClone(codes.preventItems),
     preventRecords,

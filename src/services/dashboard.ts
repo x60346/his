@@ -27,6 +27,9 @@ export interface DashboardStats {
   orderQueries?: number
   /** 醫師：轉入我科、等我接的轉科申請 */
   transferIncoming?: number
+  /** 醫師：待我（我這科）回覆的會診；其中急會診幾張 */
+  consultIncoming?: number
+  consultUrgent?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   udReturns: number
@@ -103,6 +106,11 @@ export function getDashboard(): Promise<DashboardStats> {
             const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined
             return x && x.toDeptId === myDept && (!x.toDoctorId || x.toDoctorId === me.doctorId)
           }).length,
+          ...(() => {
+            // 待我（我這科）回覆的會診：急會診另外算（首頁標紅）
+            const cs = db.consults.filter((c) => c.status === 'pending' && c.toDeptId === myDept && (!c.toDoctorId || c.toDoctorId === me.doctorId) && db.admissions.find((a) => a.id === c.admissionId)?.status === 'admitted')
+            return { consultIncoming: cs.length, consultUrgent: cs.filter((c) => c.urgent).length }
+          })(),
         }
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,

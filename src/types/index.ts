@@ -615,6 +615,42 @@ export interface DeptTransfer {
   stoppedOrderIds?: string[]
   fromBedId?: string
   toBedId?: string
+  /** 轉出摘要（申請時原科寫，必填）：新科決定接不接之前就看得到；也寫進病程紀錄 */
+  summary?: { course: string; problems: string; pending?: string }
+  /** 接收評估（新科接受時寫，必填）：也寫進病程紀錄 */
+  acceptNote?: string
+  /** 依哪一張會診單的建議申請的 */
+  consultId?: string
+}
+
+/**
+ * 住院會診單：主治請別科「來看看」——多數只是要建議，不一定轉科。
+ * 會診醫師看的是會診單附上的病人摘要（不是整份病歷）；回覆可以「建議轉本科」，原科一鍵帶入轉科申請
+ */
+export interface Consult {
+  id: string
+  admissionId: string
+  fromDeptId: string
+  /** 申請的醫師 */
+  fromDoctorId: string
+  toDeptId: string
+  /** 指定會診醫師；沒指定＝該科任一位醫師都能回覆 */
+  toDoctorId?: string
+  /** 會診目的 */
+  question: string
+  urgent: boolean
+  requestedAt: string
+  status: 'pending' | 'answered' | 'cancelled'
+  answeredBy?: string
+  answeredAt?: string
+  /** 評估（所見） */
+  findings?: string
+  /** 建議 */
+  recommendation?: string
+  /** 會診醫師建議轉入本科 */
+  suggestTransfer?: boolean
+  cancelledAt?: string
+  cancelReason?: string
 }
 
 /** 出院病摘 */
@@ -835,6 +871,12 @@ export interface ProgressNote {
   admissionId: string
   at: string
   doctorId: string
+  /**
+   * 特殊紀錄（系統依動作寫入，內容在 items）：轉出摘要、接收評估、會診申請、會診回覆。
+   * 沒有 kind 的是一般 SOAP 病程紀錄
+   */
+  kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply'
+  items?: { label: string; text: string }[]
   subjective: string
   objective: string
   assessment: string

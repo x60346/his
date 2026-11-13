@@ -44,6 +44,7 @@ import type {
   Room,
   WeeklySlot,
   Role,
+  Consult,
 } from '@/types'
 import { today } from '@/utils/date'
 import { buildSeed } from './seed'
@@ -96,6 +97,8 @@ export interface Database {
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
+  /** 住院會診單 */
+  consults: Consult[]
   handovers: HandoverNote[]
   preventItems: PreventItem[]
   preventRecords: PreventRecord[]
@@ -125,7 +128,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 56
+export const SCHEMA_VERSION = 57
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

@@ -8,7 +8,7 @@ import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, 
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
-import { stopOrderRecord } from './order-ops'
+import { stopOrderRecord, addChartNote } from './order-ops'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -310,8 +310,20 @@ function requireReceiver(x: DeptTransfer) {
   return { u, me: me! }
 }
 
-/** 申請轉科：目標科別、可指定接手醫師、原因 */
-export function requestDeptTransfer(admissionId: string, input: { toDeptId: string; toDoctorId?: string; reason: string }): Promise<AdmissionView> {
+export interface TransferRequestInput {
+  toDeptId: string
+  toDoctorId?: string
+  reason: string
+  /** 轉出摘要：住院經過、目前問題（必填）、待追蹤事項（選填） */
+  course: string
+  problems: string
+  pending?: string
+  /** 依會診建議申請（會診單 id） */
+  consultId?: string
+}
+
+/** 申請轉科：目標科別、可指定接手醫師、原因、轉出摘要（新科決定前就看得到，也寫進病程紀錄） */
+export function requestDeptTransfer(admissionId: string, input: TransferRequestInput): Promise<AdmissionView> {
   return mutate(() => {
     const a = admittedForTransfer(admissionId)
     const { u } = requireFromDept(a)
@@ -327,13 +339,27 @@ export function requestDeptTransfer(admissionId: string, input: { toDeptId: stri
       if (!d || !d.active || d.deptId !== input.toDeptId) v.add('toDoctorId', '指定的醫師不是該科在職醫師')
     }
     if (!input.reason?.trim()) v.add('reason', '請填寫轉科原因')
+    if (!input.course?.trim()) v.add('course', '請填寫住院經過（新科接手要看）')
+    if (!input.problems?.trim()) v.add('problems', '請填寫目前的問題')
+    const consult = input.consultId ? db.consults.find((c) => c.id === input.consultId && c.admissionId === a.id) : undefined
+    if (input.consultId && (!consult || consult.status !== 'answered' || !consult.suggestTransfer)) v.add('toDeptId', '這張會診單沒有建議轉科')
+    else if (consult && consult.toDeptId !== input.toDeptId) v.add('toDeptId', `會診建議轉的是${nameOf.dept(consult.toDeptId)}`)
     v.done()
     const x: DeptTransfer = {
       id: newId('DT'), fromDeptId: a.deptId, fromDoctorId: a.doctorId, toDeptId: dept!.id,
       ...(input.toDoctorId ? { toDoctorId: input.toDoctorId } : {}),
       reason: input.reason.trim(), requestedBy: u.id, requestedAt: now(), status: 'pending',
+      summary: { course: input.course.trim(), problems: input.problems.trim(), ...(input.pending?.trim() ? { pending: input.pending.trim() } : {}) },
+      ...(consult ? { consultId: consult.id } : {}),
     }
     a.deptTransfers = [...(a.deptTransfers ?? []), x]
+    addChartNote(a.id, u.doctorId ?? a.doctorId, 'transferOut', [
+      { label: '轉入', text: `${dept!.name}${x.toDoctorId ? `（指定 ${nameOf.doctor(x.toDoctorId)}）` : ''}` },
+      { label: '原因', text: x.reason },
+      { label: '住院經過', text: x.summary!.course },
+      { label: '目前問題', text: x.summary!.problems },
+      { label: '待追蹤', text: x.summary!.pending ?? '' },
+    ], x.requestedAt)
     audit('申請轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：${nameOf.dept(a.deptId)} → ${dept!.name}${x.toDoctorId ? `（指定 ${nameOf.doctor(x.toDoctorId)}）` : ''}：${x.reason}`)
     return admissionView(a)
   })
@@ -396,12 +422,13 @@ export function listIncomingTransfers(): Promise<IncomingTransfer[]> {
  * 接受轉科：我成為主治、科別改為我科；stopOrderIds 的醫囑停止（其餘延續，仍記原開立者）；bedId 有給就一併轉床。
  * shownOrderIds＝接受畫面上列出的執行中長期醫囑：原科在這之後又開的，新主治沒看過，不能默默延續——要重新整理再接受。
  */
-export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: string[]; stopOrderIds: string[]; bedId?: string }): Promise<AdmissionView> {
+export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: string[]; stopOrderIds: string[]; bedId?: string; acceptNote: string }): Promise<AdmissionView> {
   return mutate(() => {
     const a = admittedForTransfer(admissionId)
     const x = openDeptTransfer(a)
     if (!x) fail('沒有申請中的轉科（可能已被撤回）', 'CONFLICT')
     const { u, me } = requireReceiver(x!)
+    if (!input.acceptNote?.trim()) failField('acceptNote', '請寫接收評估（接手時的狀況與計畫，會寫進病程紀錄）')
     const active = db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'long' && o.status === 'active')
     const shown = new Set(input.shownOrderIds ?? [])
     const unseen = active.filter((o) => !shown.has(o.id))
@@ -425,7 +452,12 @@ export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: 
     }
     const reason = `轉科：${nameOf.dept(a.deptId)} → ${nameOf.dept(me.deptId)}（${x!.reason}）`
     a.attendingHistory = [...(a.attendingHistory ?? []), { from: a.doctorId, to: me.id, at: t, by: u.id, reason }]
-    Object.assign(x!, { status: 'accepted', decidedBy: u.id, decidedAt: t, acceptedDoctorId: me.id, stoppedOrderIds: stops.map((o) => o.id) })
+    Object.assign(x!, { status: 'accepted', decidedBy: u.id, decidedAt: t, acceptedDoctorId: me.id, stoppedOrderIds: stops.map((o) => o.id), acceptNote: input.acceptNote.trim() })
+    addChartNote(a.id, me.id, 'transferIn', [
+      { label: '轉入', text: `${nameOf.dept(x!.fromDeptId)} → ${nameOf.dept(me.deptId)}${bedNote ? bedNote.replace('；', '，') : ''}` },
+      { label: '接收評估', text: input.acceptNote.trim() },
+      { label: '醫囑', text: `延續 ${active.length - stops.length} 筆${stops.length ? `、停止 ${stops.length} 筆（${stops.map((o) => o.content).join('、')}）` : ''}` },
+    ], t)
     a.deptId = me.deptId
     a.doctorId = me.id
     audit('接受轉科', `${a.admitNo} ${nameOf.patient(a.patientId)}：${reason}；醫囑延續 ${active.length - stops.length}、停止 ${stops.length}${bedNote}`)

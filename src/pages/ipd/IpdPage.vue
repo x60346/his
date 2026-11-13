@@ -4,7 +4,7 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { ArrowRightLeft, LogOut, Plus, Square, Pencil } from 'lucide-vue-next'
+import { ArrowRightLeft, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
@@ -15,6 +15,9 @@ import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
 import RequestTransferDialog from './components/RequestTransferDialog.vue'
 import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
+import RequestConsultDialog from './components/RequestConsultDialog.vue'
+import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
+import { consultApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
 import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
@@ -56,6 +59,25 @@ async function onCancelTransfer() {
   const a = adm.value
   if (a && (await ui.confirm({ title: '撤回轉科申請', message: `撤回「轉${a.lastTransfer?.toDeptName}」的申請？病人繼續由您負責。`, okText: '撤回' }))) cancelTransfer.run(a.id)
 }
+
+// ---------- 會診 ----------
+// 待我回覆（我這科）：清單上方，急會診在前；這位病人的會診單：看回覆、會診建議轉科就一鍵帶入轉科申請
+const { data: incomingConsults } = useQuery(async () => (isAdmin ? [] : consultApi.listIncomingConsults()))
+const answering = ref<IncomingConsult | null>(null)
+const consultOpen = ref(false)
+const { data: consults } = useQuery(async () => (admissionId.value && !isAdmin ? consultApi.listConsults(admissionId.value) : []), [admissionId])
+const transferFromConsult = ref<ConsultView>()
+function openTransfer(c?: ConsultView) {
+  transferFromConsult.value = c
+  requestOpen.value = true
+}
+const cancelConsult = useAction(consultApi.cancelConsult, { success: '已撤回會診' })
+const cancelling = ref<ConsultView | null>(null)
+const cancelConsultOpen = computed({ get: () => !!cancelling.value, set: (v) => !v && (cancelling.value = null) })
+async function confirmCancelConsult(reason: string) {
+  if (cancelling.value && (await cancelConsult.run(cancelling.value.id, reason))) cancelling.value = null
+}
+const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', consult: '會診申請', consultReply: '會診回覆' } as const
 
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
@@ -170,6 +192,18 @@ async function submitNote() {
       <div v-if="isAdmin" class="border-b border-slate-100 p-3">
         <USelect v-model="doctorFilter" :options="[{ label: '全部醫師', value: '' }, ...(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))]" />
       </div>
+      <div v-if="incomingConsults?.length" class="border-b border-rose-200 bg-rose-50 p-2">
+        <div class="px-1 pb-1 text-xs font-semibold text-rose-900">待回覆會診（{{ incomingConsults.length }}）</div>
+        <button v-for="it in incomingConsults" :key="it.consult.id" class="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-rose-100" @click="answering = it">
+          <div class="flex items-center gap-2">
+            <span class="tabular rounded bg-white px-1.5 text-xs font-medium text-slate-700">{{ it.summary.admission.bed?.bedNo }}</span>
+            <span class="font-medium text-slate-800">{{ it.summary.admission.patientName }}</span>
+            <UBadge v-if="it.consult.urgent" tone="red">急</UBadge>
+            <span class="ml-auto text-xs text-rose-800">{{ it.consult.fromDeptName }}・{{ it.consult.waitingHours }} 小時</span>
+          </div>
+          <div class="truncate text-xs text-slate-600">{{ it.consult.question }}</div>
+        </button>
+      </div>
       <div v-if="incoming?.length" class="border-b border-amber-200 bg-amber-50 p-2">
         <div class="px-1 pb-1 text-xs font-semibold text-amber-900">轉入申請（{{ incoming.length }}）</div>
         <button v-for="it in incoming" :key="it.admission.id" class="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-amber-100" @click="accepting = it">
@@ -205,7 +239,8 @@ async function submitNote() {
       <PatientBanner :patient="adm">
         <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
         <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.deptName }}</span>
-        <UButton v-if="!isAdmin && transfer?.status !== 'pending' && !adm.dischargeReady" size="sm" variant="secondary" class="ml-auto" :icon="ArrowRightLeft" @click="requestOpen = true">申請轉科</UButton>
+        <UButton v-if="!isAdmin" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="consultOpen = true">會診</UButton>
+        <UButton v-if="!isAdmin && transfer?.status !== 'pending' && !adm.dischargeReady" size="sm" variant="secondary" :icon="ArrowRightLeft" @click="openTransfer()">申請轉科</UButton>
       </PatientBanner>
       <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <ArrowRightLeft class="h-4 w-4" />
@@ -214,6 +249,22 @@ async function submitNote() {
       </div>
       <div v-else-if="transfer?.status === 'declined'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
         轉 {{ transfer.toDeptName }} 的申請被婉拒（{{ transfer.decidedByName }} {{ transfer.decidedAt?.slice(5) }}）：{{ transfer.decisionNote }}
+      </div>
+      <!-- 這位病人的會診單：待回覆的可撤回；已回覆的看建議，建議轉科就一鍵帶入轉科申請 -->
+      <div v-if="consults?.some((c) => c.status !== 'cancelled')" class="space-y-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
+        <div class="text-xs font-semibold text-slate-600">會診</div>
+        <div v-for="c in consults.filter((x) => x.status !== 'cancelled')" :key="c.id" class="flex flex-wrap items-start gap-2">
+          <UBadge :tone="c.status === 'answered' ? 'green' : c.urgent ? 'red' : 'yellow'">{{ c.status === 'answered' ? '已回覆' : c.urgent ? '急・待回覆' : '待回覆' }}</UBadge>
+          <div class="min-w-0 flex-1">
+            <div class="text-slate-800">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }} <span class="text-xs text-slate-400">{{ c.requestedAt.slice(5) }}</span></div>
+            <div v-if="c.status === 'answered'" class="text-xs text-slate-700">
+              {{ c.answeredByName }} {{ c.answeredAt?.slice(5) }}：{{ c.findings }}／<b>建議</b> {{ c.recommendation }}
+              <UBadge v-if="c.suggestTransfer" tone="blue" class="ml-1">建議轉{{ c.toDeptName }}</UBadge>
+            </div>
+          </div>
+          <UButton v-if="c.status === 'answered' && c.suggestTransfer && transfer?.status !== 'pending' && adm.deptId !== c.toDeptId" size="sm" :icon="ArrowRightLeft" @click="openTransfer(c)">依會診申請轉科</UButton>
+          <UButton v-if="c.status === 'pending'" size="sm" variant="ghost" @click="cancelling = c">撤回</UButton>
+        </div>
       </div>
       <div class="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
         <span class="text-slate-500">入院診斷</span><span class="text-slate-800">{{ adm.diagnosis }}</span>
@@ -316,8 +367,14 @@ async function submitNote() {
             <div class="mt-2 text-right"><UButton size="sm" :loading="addNote.pending.value" @click="submitNote">儲存病程紀錄</UButton></div>
           </div>
           <article v-for="n in notes" :key="n.id" class="rounded-md border border-slate-200 p-3 text-sm">
-            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at }}</span><span>{{ n.doctorName }}</span></header>
-            <dl class="grid gap-1">
+            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at }}<UBadge v-if="n.kind" tone="blue" class="ml-2">{{ noteKind[n.kind] }}</UBadge></span><span>{{ n.doctorName }}</span></header>
+            <!-- 轉科、會診的紀錄：系統依動作寫入，逐項列出 -->
+            <dl v-if="n.kind" class="grid gap-1">
+              <div v-for="it in n.items ?? []" :key="it.label" class="flex gap-2">
+                <dt class="w-16 shrink-0 text-xs font-semibold text-brand-700">{{ it.label }}</dt><dd class="text-slate-700">{{ it.text }}</dd>
+              </div>
+            </dl>
+            <dl v-else class="grid gap-1">
               <div v-for="[k, v] in [['S', n.subjective], ['O', n.objective], ['A', n.assessment], ['P', n.plan]]" :key="k" class="flex gap-2">
                 <dt class="w-4 font-bold text-brand-700">{{ k }}</dt><dd class="text-slate-700">{{ v || '—' }}</dd>
               </div>
@@ -340,7 +397,10 @@ async function submitNote() {
     />
     <OrderDialog v-model="orderOpen" :admission="adm" />
     <ReviseOrderDialog :order="revising" @close="revising = null" />
-    <RequestTransferDialog v-model="requestOpen" :admission="adm" />
+    <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />
+    <RequestConsultDialog v-model="consultOpen" :admission="adm" />
+    <AnswerConsultDialog :item="answering" @close="answering = null" />
+    <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回" :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">
       <div class="space-y-3 text-sm">

@@ -3875,7 +3875,7 @@ try {
     await as(userOf(fromDoc))
     await expectError(() => A.changeAttending(stroke.id, 'DR03', '交班'), '轉科申請中變更主治')
     await expectError(() => api.ipdApi.saveDischargeSummary(stroke.id, { diagnosis: 'x', course: 'x', condition: 'x', followUp: 'x', dischargeType: '治癒出院' }, true), '轉科申請中簽准予出院')
-    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D03', reason: '再申請一次' }), '已有申請中的轉科又申請')
+    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D03', reason: '再申請一次', course: '入院後抗血小板治療，生命徵象穩定', problems: '右側肌力 3 分', pending: '追蹤血脂' }), '已有申請中的轉科又申請')
     // 婉拒
     await as('dr09')
     try {
@@ -3889,18 +3889,18 @@ try {
     // 重新申請：欄位檢查一次標出
     await as(userOf(fromDoc))
     try {
-      await A.requestDeptTransfer(stroke.id, { toDeptId: 'D02', toDoctorId: 'DR04', reason: '' })
+      await A.requestDeptTransfer(stroke.id, { toDeptId: 'D02', toDoctorId: 'DR04', reason: '', course: '', problems: ' ' })
       ok(false, '申請欄位錯誤應被擋下')
     } catch (e) {
-      ok(e.fields?.toDeptId && e.fields?.reason && e.fields?.toDoctorId, `申請轉科欄位錯誤一次標出：${Object.values(e.fields ?? {}).join('／')}`)
+      ok(e.fields?.toDeptId && e.fields?.reason && e.fields?.toDoctorId && e.fields?.course && e.fields?.problems, `申請轉科欄位錯誤一次標出（含轉出摘要必填）：${Object.values(e.fields ?? {}).join('／')}`)
     }
     await as('dr04')
-    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', reason: '外科代申請' }), '別科醫師替這位病人申請轉科')
+    await expectError(() => A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', reason: '外科代申請', course: '入院後抗血小板治療，生命徵象穩定', problems: '右側肌力 3 分', pending: '追蹤血脂' }), '別科醫師替這位病人申請轉科')
     await as(userOf(fromDoc))
-    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科' })
+    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科', course: '入院後抗血小板治療，生命徵象穩定', problems: '右側肌力 3 分', pending: '追蹤血脂' })
     v = await A.cancelDeptTransfer(stroke.id)
     ok(v.lastTransfer?.status === 'cancelled', '原科可以撤回申請')
-    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科' })
+    await A.requestDeptTransfer(stroke.id, { toDeptId: 'D08', toDoctorId: 'DR09', reason: '急性期穩定，轉復健科', course: '入院後抗血小板治療，生命徵象穩定', problems: '右側肌力 3 分', pending: '追蹤血脂' })
     // 接受：只能對畫面上看到的醫囑做決定
     await as('dr09')
     inc = await A.listIncomingTransfers()
@@ -3911,10 +3911,19 @@ try {
     await as('dr09')
     const shown = item.orders.map((o) => o.id)
     const med = item.orders.find((o) => o.category === 'medication' && db().mar.some((m) => m.orderId === o.id && m.status === 'pending' && m.udLineId))
-    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: shown, stopOrderIds: [] }), '原科剛又開的醫囑新主治沒看過就接受')
+    try {
+      await A.acceptDeptTransfer(stroke.id, { shownOrderIds: [...shown, late.id], stopOrderIds: [], acceptNote: ' ' })
+      ok(false, '沒寫接收評估應被擋下')
+    } catch (e) {
+      ok(e.field === 'acceptNote', '接受轉科要寫接收評估')
+    }
+    ok(item.transfer.summary?.problems === '右側肌力 3 分', '新科的轉入申請看得到轉出摘要（決定接不接之前）')
+    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: shown, stopOrderIds: [], acceptNote: '接手' }), '原科剛又開的醫囑新主治沒看過就接受')
     const bed = db().beds.find((b) => b.status === 'empty' && b.ward !== db().beds.find((x) => x.id === stroke.bedId).ward)
     const oldBed = stroke.bedId
-    v = await A.acceptDeptTransfer(stroke.id, { shownOrderIds: [...shown, late.id], stopOrderIds: [med.id, late.id], bedId: bed.id })
+    v = await A.acceptDeptTransfer(stroke.id, { shownOrderIds: [...shown, late.id], stopOrderIds: [med.id, late.id], bedId: bed.id, acceptNote: '意識清楚，右側肌力 3 分；開始物理與職能治療' })
+    const notesNow = db().progressNotes.filter((n) => n.admissionId === stroke.id && n.kind)
+    ok(notesNow.some((n) => n.kind === 'transferOut' && n.items.some((i) => i.label === '目前問題' && i.text === '右側肌力 3 分')) && notesNow.some((n) => n.kind === 'transferIn' && n.doctorId === 'DR09' && n.items.some((i) => i.text.includes('開始物理'))), '轉出摘要、接收評估都寫進病程紀錄（病歷看得到交接）')
     const a2 = db().admissions.find((a) => a.id === stroke.id)
     const x = a2.deptTransfers.at(-1)
     ok(v.deptId === 'D08' && v.doctorId === 'DR09' && a2.attendingHistory.at(-1).reason.startsWith('轉科：內科 → 復健科') && x.status === 'accepted' && db().auditLogs[0].action === '接受轉科',
@@ -3929,7 +3938,76 @@ try {
     ok((await api.nursingApi.listNursingOrders(stroke.id)).flatMap((g) => g.orders).some((o) => o.id === med.id && o.needsAck), '護理站：轉科停止的醫囑要核對')
     await as('dr09')
     ok((await api.dashboardApi.getDashboard()).transferIncoming === 0 && (await A.listAdmissions({ status: ['admitted'] })).some((a) => a.id === stroke.id && a.doctorId === 'DR09'), '接受後：待辦清空，病人出現在新主治的住院病人清單')
-    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: [], stopOrderIds: [] }), '已接受的轉科再接受一次')
+    await expectError(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: [], stopOrderIds: [], acceptNote: 'x' }), '已接受的轉科再接受一次')
+  }
+
+  // 住院會診：主治開單 → 會診科回覆（看摘要）→ 建議轉科 → 一鍵帶入轉科申請；申請與回覆寫進病程紀錄
+  console.log('\n[住院會診]')
+  {
+    dbm.resetDatabase('small')
+    const CS = api.consultApi
+    const db = () => dbm.db
+    const seed1 = db().consults.find((c) => c.id === 'CS-SEED-1')
+    const seed2 = db().consults.find((c) => c.id === 'CS-SEED-2')
+    ok(seed1?.status === 'pending' && seed1.toDeptId === 'D03' && seed2?.status === 'answered' && db().progressNotes.some((n) => n.id === 'PN-SEED-CS2R' && n.kind === 'consultReply'), '種子：一張待外科回覆的會診、一張耳鼻喉科已回覆（病程紀錄有回覆）')
+    ok(db().admissions.some((a) => a.deptTransfers?.[0]?.summary?.course), '種子：申請中的轉科有轉出摘要')
+    await as('dr04')
+    const inc = await CS.listIncomingConsults()
+    const it = inc.find((x) => x.consult.id === 'CS-SEED-1')
+    ok(it && it.summary.admission.diagnosis.startsWith('E11.65') && it.summary.orders.length > 0 && it.consult.waitingHours >= 0 && (await api.dashboardApi.getDashboard()).consultIncoming >= 1,
+      `外科 dr04：待回覆會診（附病人摘要：${it?.summary.orders.length} 筆執行中醫囑、最近病程），首頁待辦也有`)
+    await as('dr05')
+    ok(!(await CS.listIncomingConsults()).some((x) => x.consult.id === 'CS-SEED-1'), '別科（小兒科）看不到外科的會診')
+    await expectError(() => CS.answerConsult('CS-SEED-1', { findings: 'x', recommendation: 'y' }), '別科醫師回覆')
+    // 主治開會診：欄位與規則
+    const dm = db().admissions.find((a) => a.id === seed1.admissionId)
+    const fromUser = db().users.find((u) => u.doctorId === dm.doctorId).username
+    await as('dr04')
+    await expectError(() => CS.requestConsult(dm.id, { toDeptId: 'D06', question: '外科代開' }), '別科醫師替這位病人開會診')
+    await as(fromUser)
+    try {
+      await CS.requestConsult(dm.id, { toDeptId: dm.deptId, question: '' })
+      ok(false, '欄位錯誤應被擋下')
+    } catch (e) {
+      ok(e.fields?.toDeptId && e.fields?.question, '會診欄位一次標出：同科不能會診、要寫目的')
+    }
+    await expectError(() => CS.requestConsult(dm.id, { toDeptId: 'D03', question: '再問一次' }), '同一科還有待回覆的會診又開一張')
+    const urgent = await CS.requestConsult(dm.id, { toDeptId: 'D06', toDoctorId: 'DR07', question: '右膝腫痛，請評估是否痛風', urgent: true })
+    ok(urgent.urgent && db().progressNotes.some((n) => n.admissionId === dm.id && n.kind === 'consult' && n.items.some((i) => i.text.includes('急會診'))) && db().auditLogs[0].action === '會診申請', '急會診：寫進病程紀錄、稽核')
+    await as('dr07')
+    const inc7 = await CS.listIncomingConsults()
+    ok(inc7[0]?.consult.id === urgent.id && (await api.dashboardApi.getDashboard()).consultUrgent >= 1, '急會診排最前面，首頁待辦標急')
+    await as('dr04')
+    try {
+      await CS.answerConsult('CS-SEED-1', { findings: '', recommendation: '' })
+      ok(false, '回覆空白應被擋下')
+    } catch (e) {
+      ok(e.fields?.findings && e.fields?.recommendation, '回覆要寫評估與建議（一次標出）')
+    }
+    const ans = await CS.answerConsult('CS-SEED-1', { findings: '左足大拇趾蜂窩性組織炎合併局部膿瘍', recommendation: '需清創，建議轉外科處理', suggestTransfer: true })
+    ok(ans.status === 'answered' && ans.answeredBy === 'DR04' && db().progressNotes.some((n) => n.admissionId === dm.id && n.kind === 'consultReply' && n.doctorId === 'DR04' && n.items.some((i) => i.text === '建議轉入外科')), '回覆：寫進病程紀錄（記在會診醫師名下），建議轉本科')
+    await expectError(() => CS.answerConsult('CS-SEED-1', { findings: 'x', recommendation: 'y' }), '已回覆的再回覆')
+    // 主治依會診申請轉科：會診單號帶進申請；科別不符擋下
+    await as(fromUser)
+    const mine = await CS.listConsults(dm.id)
+    ok(mine.find((c) => c.id === 'CS-SEED-1')?.suggestTransfer && mine[0].requestedAt >= mine.at(-1).requestedAt, '主治看得到回覆與「建議轉科」（新到舊）')
+    const sum = { course: '血糖控制不佳入院，胰島素調整中', problems: '左足傷口感染需清創' }
+    await expectError(() => api.admissionApi.requestDeptTransfer(dm.id, { toDeptId: 'D06', reason: '依會診', ...sum, consultId: 'CS-SEED-1' }), '依外科會診卻申請轉骨科')
+    const v = await api.admissionApi.requestDeptTransfer(dm.id, { toDeptId: 'D03', toDoctorId: 'DR04', reason: '依外科會診建議清創', ...sum, consultId: 'CS-SEED-1' })
+    ok(v.lastTransfer?.consultId === 'CS-SEED-1' && v.lastTransfer.summary?.problems === '左足傷口感染需清創', '依會診申請轉科：記下會診單號與轉出摘要')
+    // 撤回：只能撤回待回覆的、要寫原因
+    try {
+      await CS.cancelConsult(urgent.id, ' ')
+      ok(false, '撤回沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.fields?.reason, '撤回會診要寫原因')
+    }
+    await CS.cancelConsult(urgent.id, '病情已改善')
+    ok(db().consults.find((c) => c.id === urgent.id).status === 'cancelled', '撤回待回覆的會診')
+    await expectError(() => CS.cancelConsult('CS-SEED-1', '改主意'), '撤回已回覆的會診')
+    await as('dr07')
+    ok(!(await CS.listIncomingConsults()).some((x) => x.consult.id === urgent.id), '撤回後骨科清單不再有這張')
+    await as('clerk01')
   }
 
   console.log('\n[住院調劑（UD）]')

@@ -15,12 +15,14 @@ const stops = reactive<Record<string, boolean>>({})
 const bed = reactive({ ward: '' as string | number | undefined, bedId: '' as string | number | undefined })
 const declining = ref(false)
 const declineReason = ref('')
+const acceptNote = ref('')
 watch(open, (v) => {
   if (!v) return
   for (const k of Object.keys(stops)) delete stops[k]
   Object.assign(bed, { ward: '', bedId: '' })
   declining.value = false
   declineReason.value = ''
+  acceptNote.value = ''
   accept.fieldErrors.value = {}
   decline.fieldErrors.value = {}
 })
@@ -45,6 +47,7 @@ async function onAccept() {
     shownOrderIds: it.orders.map((o) => o.id),
     stopOrderIds: it.orders.filter((o) => stops[o.id]).map((o) => o.id),
     ...(bed.bedId ? { bedId: String(bed.bedId) } : {}),
+    acceptNote: acceptNote.value,
   })
   if (r) {
     open.value = false
@@ -68,6 +71,13 @@ async function onDecline() {
         <div class="mt-1 text-slate-700">原因：{{ item.transfer.reason }}</div>
         <div class="text-xs text-slate-500">{{ item.transfer.requestedAt.slice(5) }} {{ item.transfer.requestedByName }} 申請</div>
       </div>
+      <!-- 轉出摘要：原科寫的交接（決定接不接之前先看） -->
+      <section v-if="item.transfer.summary" class="space-y-1 rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2">
+        <h3 class="text-xs font-semibold text-sky-800">轉出摘要</h3>
+        <p><span class="text-xs text-slate-500">住院經過　</span>{{ item.transfer.summary.course }}</p>
+        <p><span class="text-xs text-slate-500">目前問題　</span>{{ item.transfer.summary.problems }}</p>
+        <p v-if="item.transfer.summary.pending"><span class="text-xs text-slate-500">待追蹤　</span>{{ item.transfer.summary.pending }}</p>
+      </section>
 
       <template v-if="!declining">
         <section>
@@ -88,6 +98,7 @@ async function onDecline() {
           </ul>
           <p class="mt-1 text-xs text-slate-500">延續的醫囑仍記原開立醫師；停止的，之後還沒給的排程刪除（已調劑的藥自動列入住院藥局待退藥）。</p>
         </section>
+        <UTextarea v-model="acceptNote" label="接收評估（接手時的狀況與計畫，寫進病程紀錄）" required :rows="2" placeholder="例：意識清楚，右側肌力 3 分；開始物理與職能治療，每日評估" :error="accept.fieldErrors.value.acceptNote" />
         <section class="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-3">
           <USelect :model-value="bed.ward" label="一併轉床：病房" :options="[{ label: '不轉床', value: '' }, ...wards.map((w) => ({ label: w, value: w }))]" @update:model-value="onWard" />
           <USelect v-model="bed.bedId" label="空床" :options="bedOptions" :disabled="!bed.ward" />
