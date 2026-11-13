@@ -64,6 +64,9 @@ async function onCancelTransfer() {
 // 待我回覆（我這科）：清單上方，急會診在前；這位病人的會診單：看回覆、會診建議轉科就一鍵帶入轉科申請
 const { data: incomingConsults } = useQuery(async () => (isAdmin ? [] : consultApi.listIncomingConsults()))
 const answering = ref<IncomingConsult | null>(null)
+// 開了醫囑、停了醫囑，清單會重新查詢：對話框用最新那一份（摘要裡的醫囑跟著更新）
+const answeringLive = computed(() => (answering.value ? incomingConsults.value?.find((x) => x.consult.id === answering.value!.consult.id) ?? answering.value : null))
+const pendingConsults = computed(() => (incomingConsults.value ?? []).filter((x) => x.consult.status === 'pending').length)
 const consultOpen = ref(false)
 const { data: consults } = useQuery(async () => (admissionId.value && !isAdmin ? consultApi.listConsults(admissionId.value) : []), [admissionId])
 const transferFromConsult = ref<ConsultView>()
@@ -81,6 +84,8 @@ const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', cons
 
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
+const consultUnseen = computed(() => (orders.value ?? []).filter((o) => o.consultUnseen))
+const ackConsult = useAction(ipdApi.ackConsultOrders, { success: (r) => `已閱 ${r.count} 筆會診醫囑` })
 const longOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'long'))
 const statOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'stat'))
 
@@ -193,13 +198,14 @@ async function submitNote() {
         <USelect v-model="doctorFilter" :options="[{ label: '全部醫師', value: '' }, ...(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))]" />
       </div>
       <div v-if="incomingConsults?.length" class="border-b border-rose-200 bg-rose-50 p-2">
-        <div class="px-1 pb-1 text-xs font-semibold text-rose-900">待回覆會診（{{ incomingConsults.length }}）</div>
+        <div class="px-1 pb-1 text-xs font-semibold text-rose-900">會診（待回覆 {{ pendingConsults }}<template v-if="incomingConsults.length > pendingConsults">・追蹤中 {{ incomingConsults.length - pendingConsults }}</template>）</div>
         <button v-for="it in incomingConsults" :key="it.consult.id" class="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-rose-100" @click="answering = it">
           <div class="flex items-center gap-2">
             <span class="tabular rounded bg-white px-1.5 text-xs font-medium text-slate-700">{{ it.summary.admission.bed?.bedNo }}</span>
             <span class="font-medium text-slate-800">{{ it.summary.admission.patientName }}</span>
             <UBadge v-if="it.consult.urgent" tone="red">急</UBadge>
-            <span class="ml-auto text-xs text-rose-800">{{ it.consult.fromDeptName }}・{{ it.consult.waitingHours }} 小時</span>
+            <span v-if="it.consult.status === 'answered'" class="ml-auto text-xs text-emerald-700">已回覆・可開醫囑</span>
+            <span v-else class="ml-auto text-xs text-rose-800">{{ it.consult.fromDeptName }}・{{ it.consult.waitingHours }} 小時</span>
           </div>
           <div class="truncate text-xs text-slate-600">{{ it.consult.question }}</div>
         </button>
@@ -223,9 +229,11 @@ async function submitNote() {
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
                 <span class="font-medium text-slate-800">{{ a.patientName }}</span>
                 <UBadge v-if="a.lastTransfer?.status === 'pending'" tone="blue" :title="`已申請轉${a.lastTransfer.toDeptName}`">轉科中</UBadge>
-                <UBadge v-if="a.openQueries" tone="yellow" class="ml-auto" :title="`護理師有 ${a.openQueries} 筆醫囑疑問待回覆`">疑問 {{ a.openQueries }}</UBadge>
-                <UBadge v-if="a.dischargeReady" tone="green" :class="!a.openQueries && 'ml-auto'">准出院</UBadge>
-                <span :class="['text-xs text-slate-500', !a.dischargeReady && !a.openQueries && 'ml-auto']">第 {{ a.days }} 天</span>
+                <span class="ml-auto" />
+                <UBadge v-if="a.consultOrdersUnseen" tone="purple" :title="`會診醫師新開了 ${a.consultOrdersUnseen} 筆醫囑，待已閱`">會診醫囑 {{ a.consultOrdersUnseen }}</UBadge>
+                <UBadge v-if="a.openQueries" tone="yellow" :title="`護理師有 ${a.openQueries} 筆醫囑疑問待回覆`">疑問 {{ a.openQueries }}</UBadge>
+                <UBadge v-if="a.dischargeReady" tone="green">准出院</UBadge>
+                <span class="text-xs text-slate-500">第 {{ a.days }} 天</span>
               </div>
               <div class="mt-0.5 truncate text-xs text-slate-500">{{ a.diagnosis }}<template v-if="isAdmin">・{{ a.doctorName }}</template></div>
             </button>
@@ -286,6 +294,11 @@ async function submitNote() {
           <UButton v-if="tab === 'orders'" class="ml-auto" size="sm" :icon="Plus" @click="orderOpen = true">新增醫囑</UButton>
         </div>
 
+        <!-- 會診醫師開了醫囑：本科醫師看過按「已閱」才消失（首頁待辦也有） -->
+        <div v-if="consultUnseen.length" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-sm text-purple-900">
+          <span class="min-w-0 flex-1">會診醫師新開了 <b>{{ consultUnseen.length }}</b> 筆醫囑：{{ consultUnseen.map((o) => `${o.content}（${o.consultLabel?.replace('會診：', '')}）`).join('、') }}</span>
+          <UButton size="sm" variant="secondary" :loading="ackConsult.pending.value" @click="adm && ackConsult.run(adm.id)">已閱</UButton>
+        </div>
         <!-- 醫囑 -->
         <div v-if="tab === 'orders'" class="space-y-5 p-4">
           <UQueryState :loading="ordersLoading" :ready="!!orders">
@@ -299,6 +312,7 @@ async function submitNote() {
                     <div :class="['font-medium', o.status === 'active' && 'text-slate-800', o.status === 'stopped' && 'line-through']">
                       {{ o.content }}
                       <UBadge v-if="o.highAlert && o.status === 'active'" tone="purple" class="ml-1">高警訊</UBadge>
+                      <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>
                     </div>
                     <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template><span v-if="o.timingSet" class="ml-1 rounded bg-sky-100 px-1 text-sky-800">醫師指定</span></div>
                     <div v-if="o.replacesText" class="text-xs text-sky-700" :title="o.reviseReason">修改自：{{ o.replacesText }}（{{ o.reviseReason }}）</div>
@@ -399,7 +413,7 @@ async function submitNote() {
     <ReviseOrderDialog :order="revising" @close="revising = null" />
     <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />
     <RequestConsultDialog v-model="consultOpen" :admission="adm" />
-    <AnswerConsultDialog :item="answering" @close="answering = null" />
+    <AnswerConsultDialog :item="answeringLive" @close="answering = null" />
     <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回" :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">

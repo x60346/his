@@ -227,6 +227,8 @@ export interface AdmissionView extends Admission, PatientBrief {
   summaryDoctorName?: string
   /** 待醫師回覆的醫囑疑問數 */
   openQueries: number
+  /** 會診醫師開的、本科還沒按已閱的醫囑數（醫師的住院病人清單標出來） */
+  consultOrdersUnseen: number
   /** 最近一筆轉科申請（申請中、或剛被婉拒／接受／撤回的那筆）；從未申請過沒有 */
   lastTransfer?: DeptTransferView
 }
@@ -266,6 +268,7 @@ export function admissionView(a: Admission): AdmissionView {
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
     // 護理師提出、待醫師回覆的醫囑疑問（醫師的住院病人清單標出來）
     openQueries: db.ipdOrders.filter((o) => o.admissionId === a.id && !!openQuery(o)).length,
+    consultOrdersUnseen: db.ipdOrders.filter((o) => o.admissionId === a.id && o.consultId && !o.consultSeenAt).length,
     ...(a.deptTransfers?.length ? { lastTransfer: deptTransferView(a.deptTransfers[a.deptTransfers.length - 1]) } : {}),
   }
 }

@@ -760,6 +760,10 @@ export interface IpdOrder {
   replacedBy?: string
   /** 修改原因（新醫囑上） */
   reviseReason?: string
+  /** 會診醫師開的（哪一張會診單）：主治要按「已閱」 */
+  consultId?: string
+  consultSeenAt?: string
+  consultSeenBy?: string
 }
 
 export interface OrderQuery {

@@ -1022,7 +1022,8 @@ try {
   console.log('\n[住院] 預約 → 報到 → 醫囑 → 給藥 → 出院')
   await as('nurse01')
   const resvList = await api.admissionApi.listAdmissions({ status: ['reserved'] })
-  const resv = resvList[0]
+  // 內科的那一筆：下面用 dr02（內科）開醫囑——同科醫師才能寫（care-team）
+  const resv = resvList.find((r) => r.deptId === 'D02') ?? resvList[0]
   const bed = dbm.db.beds.find((b) => b.status === 'empty')
   // U21：保留床要指定病人；那位病人報到時可以直接選，別人不行；報到在別床、預約取消時自動解除保留
   {
@@ -1037,7 +1038,8 @@ try {
     await api.admissionApi.setBedStatus(spare.id, 'reserved', resv.id)
     const shown = (await api.admissionApi.listBeds(bed.ward)).find((b) => b.id === bed.id)
     ok(shown.reservedForName === resv.patientName, `床位圖顯示「保留：${shown.reservedForName}」`)
-    if (resvList[1]) await expectError(() => api.admissionApi.checkIn(resvList[1].id, bed.id), `別的病人報到在保留給 ${resv.patientName} 的床`)
+    const otherResv = resvList.find((r) => r.id !== resv.id)
+    if (otherResv) await expectError(() => api.admissionApi.checkIn(otherResv.id, bed.id), `別的病人報到在保留給 ${resv.patientName} 的床`)
     // 新建一筆預約、保留一床，再取消預約：保留的床要放回空床
     const someone = dbm.db.patients.find((p) => !dbm.db.admissions.some((a) => a.patientId === p.id && ['reserved', 'admitted'].includes(a.status)) && p.birthDate < '2000-01-01')
     const r2 = await api.admissionApi.reserve({ patientId: someone.id, deptId: resv.deptId, doctorId: resv.doctorId, preferBedClass: '健保床', reason: '測試', diagnosis: 'J18.9 肺炎', expectedDate: T })
@@ -4286,6 +4288,101 @@ try {
     await expectError(() => api.chargeApi.dailyReport(T), '藥師直接呼叫日結報表')
     await as('admin')
     ok(typeof (await api.chargeApi.dailyReport(T)).collected === 'number', '管理員可以看日結')
+    await as('clerk01')
+  }
+
+  // 誰能寫住院病人（care-team）：本科（主治、同科值班代理）、會診醫師（範圍內、只能動自己開的）；會診醫囑主治要已閱
+  console.log('\n[住院寫入權限、會診醫師開醫囑]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const I = api.ipdApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const deptOf = (doctorId) => db().doctors.find((d) => d.id === doctorId).deptId
+    const c1 = db().consults.find((c) => c.id === 'CS-SEED-1')
+    const a1 = db().admissions.find((a) => a.id === c1.admissionId)
+    const attending = userOf(a1.doctorId)
+    const sameDept = db().doctors.find((d) => d.deptId === a1.deptId && d.id !== a1.doctorId && d.active && db().users.some((u) => u.doctorId === d.id))
+    const outsider = db().doctors.find((d) => d.deptId !== a1.deptId && d.deptId !== c1.toDeptId && d.active && db().users.some((u) => u.doctorId === d.id))
+    const med = { admissionId: a1.id, type: 'long', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'PRN', route: 'PO', allowDuplicate: true }
+    // 別科醫師（不是會診）什麼都不能寫
+    await as(userOf(outsider.id))
+    try {
+      await I.addOrder(med)
+      ok(false, '別科醫師開醫囑應被擋下')
+    } catch (e) {
+      ok(e.code === 'FORBIDDEN' && e.message.includes('會診醫師'), `別科醫師（${outsider.name}）開醫囑 → 「${e.message}」`)
+    }
+    await expectError(() => I.addProgressNote({ admissionId: a1.id, subjective: 'x', objective: '', assessment: '', plan: '' }), '別科醫師寫病程紀錄')
+    await expectError(() => I.saveDischargeSummary(a1.id, { diagnosis: 'x', course: '', condition: '', followUp: '', dischargeType: '' }, false), '別科醫師寫出院病摘')
+    const someOrder = db().ipdOrders.find((o) => o.admissionId === a1.id && o.status === 'active')
+    await expectError(() => I.stopOrder(someOrder.id), '別科醫師停醫囑')
+    // 同科醫師（值班、代理）可以
+    await as(userOf(sameDept.id))
+    const so = await I.addOrder(med)
+    ok(so.doctorId === sameDept.id && !so.consultLabel, `同科醫師（${sameDept.name}，不是主治）可以開醫囑——值班代理`)
+    await I.stopOrder(so.id)
+    // 會診醫師（CS-SEED-1：沒指定醫師、待回覆——被會診那科的醫師都算）
+    const consultant = userOf(c1.toDoctorId ?? db().doctors.find((d) => d.deptId === c1.toDeptId && d.active && db().users.some((u) => u.doctorId === d.id)).id)
+    // 有指定醫師的會診：同科其他醫師不算
+    const twoDoc = db().departments.find((dp) => dp.id !== a1.deptId && dp.id !== c1.toDeptId && db().doctors.filter((d) => d.deptId === dp.id && d.active && db().users.some((u) => u.doctorId === d.id)).length >= 2)
+    if (twoDoc) {
+      const [docA, docB] = db().doctors.filter((d) => d.deptId === twoDoc.id && d.active && db().users.some((u) => u.doctorId === d.id))
+      await as(attending)
+      await api.consultApi.requestConsult(a1.id, { toDeptId: twoDoc.id, toDoctorId: docA.id, question: '請評估' })
+      await as(userOf(docB.id))
+      await expectError(() => I.addOrder(med), '會診指定了別人：同科其他醫師開醫囑')
+      await as(userOf(docA.id))
+      ok((await I.addOrder({ ...med, drugId: 'M026' })).consultId, '被指定的會診醫師可以開')
+    }
+    // 指定醫師的規則（純函式；示範資料除了病人本科，沒有兩位醫師的科）：內科兩位醫師，指定 DR02 時 DR03 不算
+    {
+      const CT = await load('/src/services/care-team.ts')
+      const fake = { id: 'X', admissionId: 'X', fromDeptId: 'D01', fromDoctorId: 'DR01', toDeptId: 'D02', toDoctorId: 'DR02', question: 'x', urgent: false, requestedAt: nowStr(), status: 'pending' }
+      ok(CT.consultOpenFor(fake, 'DR02') && !CT.consultOpenFor(fake, 'DR03') && CT.consultOpenFor({ ...fake, toDoctorId: undefined }, 'DR03'), '指定了會診醫師：只有他；沒指定：該科醫師都算')
+      ok(!CT.consultOpenFor({ ...fake, status: 'answered', answeredBy: 'DR03', answeredAt: nowStr() }, 'DR02') && CT.consultOpenFor({ ...fake, status: 'answered', answeredBy: 'DR02', answeredAt: nowStr() }, 'DR02'), '已回覆的：只有回覆的那位醫師')
+    }
+    await as(consultant)
+    const inc = (await api.consultApi.listIncomingConsults()).find((x) => x.consult.id === c1.id)
+    ok(inc?.canOrder, '待回覆的會診：會診醫師看得到「可以開醫囑」')
+    const co = await I.addOrder({ ...med, drugId: 'M010', freq: 'TID' })
+    ok(co.consultId === c1.id && co.consultLabel?.startsWith('會診：') && co.consultUnseen && db().auditLogs[0].detail.includes('會診'), `會診醫師開醫囑：標「${co.consultLabel}」、待主治已閱、稽核寫出會診`)
+    await expectError(() => I.stopOrder(someOrder.id), '會診醫師停主治開的醫囑')
+    await expectError(() => I.saveDischargeSummary(a1.id, { diagnosis: 'x', course: '', condition: '', followUp: '', dischargeType: '' }, false), '會診醫師寫出院病摘')
+    await expectError(() => I.ackConsultOrders(a1.id), '會診醫師自己按已閱')
+    ok(!!(await I.addProgressNote({ admissionId: a1.id, subjective: '', objective: '傷口癒合良好', assessment: '', plan: '' })).id, '會診醫師可以寫病程紀錄（追蹤）')
+    const co2 = await I.addOrder({ ...med, drugId: 'M022', freq: 'QD' })
+    ok((await I.stopOrder(co2.id)).status === 'stopped', '會診醫師可以停止自己開的醫囑')
+    // 主治：首頁待辦、已閱
+    await as(attending)
+    let d = await api.dashboardApi.getDashboard()
+    ok(d.consultOrdersUnseen >= 1, `主治首頁：會診醫師新開的醫囑（${d.consultOrdersUnseen} 位病人）`)
+    const ack = await I.ackConsultOrders(a1.id)
+    ok(ack.count === 2 && !(await I.listOrders(a1.id)).some((o) => o.consultUnseen) && db().auditLogs[0].action === '已閱會診醫囑', '主治按已閱：會診醫師開的（含已停止的）都標已閱，寫稽核')
+    d = await api.dashboardApi.getDashboard()
+    ok(!d.consultOrdersUnseen, '已閱後首頁待辦消失')
+    await expectError(() => I.ackConsultOrders(a1.id), '沒有待確認的再按已閱')
+
+    // 已回覆的會診：回覆的醫師 72 小時內還能開，之後不行
+    const c2 = db().consults.find((c) => c.id === 'CS-SEED-2')
+    const a2 = db().admissions.find((a) => a.id === c2.admissionId)
+    await as(userOf(c2.answeredBy))
+    const hrs = (Date.parse(nowStr().replace(' ', 'T')) - Date.parse(c2.answeredAt.replace(' ', 'T'))) / 3_600_000
+    const med2 = { ...med, admissionId: a2.id }
+    if (hrs <= 72) {
+      ok((await api.consultApi.listIncomingConsults()).some((x) => x.consult.id === c2.id && x.canOrder), '已回覆 72 小時內：會診追蹤清單看得到、可以開醫囑')
+      const o2 = await I.addOrder(med2)
+      ok(o2.consultId === c2.id, '回覆後 72 小時內：會診醫師還能開醫囑')
+    }
+    clockBase += (73 - Math.min(hrs, 0)) * 3_600_000
+    try {
+      await expectError(() => I.addOrder(med2), '會診回覆超過 72 小時再開醫囑')
+      ok(!(await api.consultApi.listIncomingConsults()).some((x) => x.consult.id === c2.id), '超過 72 小時：會診追蹤清單不再列')
+    } finally {
+      clockBase -= (73 - Math.min(hrs, 0)) * 3_600_000
+    }
+    const { readFileSync } = await import('node:fs')
+    ok(!readFileSync('src/services/index.ts', 'utf8').includes('care-team'), 'care-team 是內部模組（不是 API）')
     await as('clerk01')
   }
 

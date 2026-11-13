@@ -9,6 +9,7 @@ import { audit, fail, failFields, fieldErrors, must, mutate, query, requireUser 
 import { addChartNote } from './order-ops'
 import { orderView, type OrderView } from './ipd'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
+import { consultOpenFor } from './care-team'
 
 function me() {
   const u = requireUser('doctor')
@@ -125,17 +126,22 @@ export function cancelConsult(id: string, reason: string): Promise<ConsultView> 
 export interface IncomingConsult {
   consult: ConsultView
   summary: ConsultPatientSummary
+  /** 會診範圍內：可以開醫囑（待回覆，或我回覆後 72 小時內） */
+  canOrder: boolean
 }
 
-/** 待我（我這科）回覆的會診：急會診在前，再依申請時間 */
+/**
+ * 待我（我這科）回覆的會診：急會診在前，再依申請時間。後面接著我已回覆、還在開醫囑範圍內的（回覆後 72 小時）：
+ * 會診醫師可能要追蹤、調整自己開的醫囑
+ */
 export function listIncomingConsults(): Promise<IncomingConsult[]> {
   return query(() => {
     const { d } = me()
     return db.consults
-      .filter((c) => c.status === 'pending' && c.toDeptId === d.deptId && (!c.toDoctorId || c.toDoctorId === d.id))
+      .filter((c) => (c.status === 'pending' && c.toDeptId === d.deptId && (!c.toDoctorId || c.toDoctorId === d.id)) || (c.status === 'answered' && consultOpenFor(c, d.id)))
       .filter((c) => find.admission(c.admissionId)?.status === 'admitted')
-      .sort((p, q) => Number(q.urgent) - Number(p.urgent) || p.requestedAt.localeCompare(q.requestedAt))
-      .map((c) => ({ consult: consultView(c), summary: summaryOf(find.admission(c.admissionId)!) }))
+      .sort((p, q) => Number(p.status === 'answered') - Number(q.status === 'answered') || Number(q.urgent) - Number(p.urgent) || p.requestedAt.localeCompare(q.requestedAt))
+      .map((c) => ({ consult: consultView(c), summary: summaryOf(find.admission(c.admissionId)!), canOrder: consultOpenFor(c, d.id) }))
   })
 }
 

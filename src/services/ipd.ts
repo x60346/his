@@ -8,6 +8,7 @@ import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
+import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
@@ -49,6 +50,9 @@ export interface OrderView extends IpdOrder {
   /** 修改前／修改後那一筆的摘要（「每次 1 TAB BID PO」） */
   replacesText?: string
   replacedByText?: string
+  /** 會診醫師開的：「會診：外科 張皓宇」；本科還沒按已閱的標 consultUnseen */
+  consultLabel?: string
+  consultUnseen?: boolean
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -64,6 +68,7 @@ export const orderView = (o: IpdOrder): OrderView => {
     unit: drug ? doseUnitOf(drug) : '',
     ...(o.replaces ? { replacesText: summaryOf(o.replaces) } : {}),
     ...(o.replacedBy ? { replacedByText: summaryOf(o.replacedBy) } : {}),
+    ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
 }
 
@@ -173,8 +178,9 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
   return mutate(() => {
     const user = requirePermission('order.write')
     const a = activeAdmission(input.admissionId)
-    const o = createOrder(user, a, input, now())
-    audit('開立住院醫囑', `${a.admitNo} ${o.content}`)
+    const role = requireCare(user.doctorId, a, '開這位病人的醫囑', { consult: true })
+    const o = createOrder(user, a, input, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}`)
     return orderView(o)
   })
 }
@@ -207,6 +213,8 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
     if (old.status !== 'active') fail('此醫囑已停止或完成', 'CONFLICT')
     if (old.category !== 'medication' || old.type !== 'long') fail('只有長期給藥醫囑（含需要時）可以修改；其他請停止後另開')
     const a = activeAdmission(old.admissionId)
+    const role = requireCare(user.doctorId, a, '修改這位病人的醫囑', { consult: true })
+    if (role.kind === 'consult' && old.doctorId !== user.doctorId) fail('會診醫師只能修改自己開的醫囑', 'FORBIDDEN')
     const reason = input.reason?.trim()
     if (!reason) failField('reason', '請寫修改原因（例：依腎功能調整劑量）')
     const timingNow = old.timingSet ? old.timing : undefined
@@ -222,7 +230,7 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
       admissionId: a.id, type: 'long', category: 'medication', drugId: old.drugId, content: '',
       dose: input.dose, freq: input.freq, route: input.route, ...(input.timing ? { timing: input.timing } : {}),
       allowDuplicate: true, ...(input.confirmHighDose ? { confirmHighDose: true } : {}),
-    }, t, { startAt, replaces: old.id, reviseReason: reason })
+    }, t, { startAt, replaces: old.id, reviseReason: reason, ...(role.kind === 'consult' ? { consultId: role.consult.id } : {}) })
     old.replacedBy = o.id
     const change = `${orderSummary(old, unit)} → ${orderSummary(o, unit)}`
     if (q) Object.assign(q, { reply: `已修改：${change}（${reason}）`, resolution: 'modified' })
@@ -237,6 +245,8 @@ export function stopOrder(orderId: string): Promise<OrderView> {
     const user = requirePermission('order.write')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (o.status !== 'active') fail('此醫囑已停止或完成')
+    const role = requireCare(user.doctorId, must(find.admission(o.admissionId), '住院紀錄'), '停止這位病人的醫囑', { consult: true })
+    if (role.kind === 'consult' && o.doctorId !== user.doctorId) fail('會診醫師只能停止自己開的醫囑', 'FORBIDDEN')
     // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）
     const q = stopOrderRecord(o, user.id, now())
     audit('停止住院醫囑', `${o.content}${q ? `（回覆護理師疑問：${q.reason}）` : ''}`)
@@ -312,6 +322,7 @@ export function addProgressNote(input: Pick<ProgressNote, 'admissionId' | 'subje
   return mutate(() => {
     const user = requireUser('doctor')
     const a = activeAdmission(input.admissionId)
+    requireCare(user.doctorId, a, '寫這位病人的病程紀錄', { consult: true })
     if (![input.subjective, input.objective, input.assessment, input.plan].some((x) => x.trim())) fail('病程紀錄不可空白')
     const n: ProgressNote = { ...input, id: newId('PN'), at: now(), doctorId: user.doctorId ?? a.doctorId }
     db.progressNotes.push(n)
@@ -342,6 +353,7 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
   return mutate(() => {
     const user = requireUser('doctor')
     const a = activeAdmission(admissionId)
+    requireCare(user.doctorId, a, '寫出院病摘、准予出院', { consult: false })
     if (a.dischargeSummary?.signedAt) fail('已准予出院，要修改病摘請先取消准予出院', 'CONFLICT')
     if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
@@ -360,8 +372,9 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
 /** 取消准予出院（例：病人又發燒）：簽署取消，內容保留成草稿 */
 export function cancelDischargeOrder(admissionId: string, reason: string): Promise<DischargeSummary> {
   return mutate(() => {
-    requireUser('doctor')
+    const user = requireUser('doctor')
     const a = activeAdmission(admissionId)
+    requireCare(user.doctorId, a, '取消准予出院', { consult: false })
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('病人尚未准予出院', 'CONFLICT')
     if (!reason.trim()) failField('reason', '請輸入取消原因')
@@ -379,6 +392,8 @@ export function replyOrderQuery(orderId: string, reply: string): Promise<OrderVi
   return mutate(() => {
     const user = requireUser('doctor')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
+    const role = requireCare(user.doctorId, must(find.admission(o.admissionId), '住院紀錄'), '回覆這位病人的醫囑疑問', { consult: true })
+    if (role.kind === 'consult' && o.doctorId !== user.doctorId) fail('會診醫師只能回覆自己開的醫囑', 'FORBIDDEN')
     const q = openQuery(o)
     if (!q) fail('這筆醫囑沒有待回覆的疑問', 'CONFLICT')
     const text = reply?.trim()
@@ -391,3 +406,24 @@ export function replyOrderQuery(orderId: string, reply: string): Promise<OrderVi
     return orderView(o)
   })
 }
+
+/**
+ * 主治（或同科醫師）看過會診醫師開的醫囑：按「已閱」。會診醫師開的藥會影響主治的治療計畫，
+ * 只標在醫囑上不夠——住院頁那位病人上方、首頁待辦都提醒，直到本科醫師看過
+ */
+export function ackConsultOrders(admissionId: string): Promise<{ count: number }> {
+  return mutate(() => {
+    const user = requirePermission('order.write')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    requireCare(user.doctorId, a, '按會診醫囑的「已閱」', { consult: false })
+    const list = db.ipdOrders.filter((o) => o.admissionId === a.id && o.consultId && !o.consultSeenAt)
+    if (!list.length) fail('沒有待確認的會診醫囑', 'CONFLICT')
+    const t = now()
+    for (const o of list) Object.assign(o, { consultSeenAt: t, consultSeenBy: user.id })
+    audit('已閱會診醫囑', `${a.admitNo} ${find.patient(a.patientId)?.name}：${list.map((o) => o.content).join('、')}`)
+    return { count: list.length }
+  })
+}
+
+/** 會診醫師回覆後還能開醫囑的時數（畫面說明用） */
+export const consultOrderHours = (): Promise<number> => query(() => CONSULT_ORDER_HOURS)
