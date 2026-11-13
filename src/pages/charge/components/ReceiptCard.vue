@@ -43,6 +43,11 @@ const repaidTotal = computed(() => (props.receipt.repayments ?? []).reduce((s, x
       <span class="tabular font-semibold">−{{ receipt.discount.amount.toLocaleString() }}</span>
     </div>
 
+    <!-- 已退費：原收據照算在原本那天，退款單另開、算在退款那天 -->
+    <div v-if="receipt.refund" class="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+      <div class="flex justify-between"><span>已退費（退款單 {{ receipt.refund.receiptNo }}，{{ receipt.refund.at.slice(0, 16) }}）</span><span class="tabular font-semibold">−{{ receipt.refund.amount.toLocaleString() }}</span></div>
+      <div class="text-xs">{{ receipt.refund.reason }}</div>
+    </div>
     <!-- 記欠款的收據：印出欠多少，病人帶回去也知道下次要補多少 -->
     <div v-if="receipt.owed" class="mt-2 flex justify-between rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
       <span>欠款（{{ receipt.oweReason }}）</span>

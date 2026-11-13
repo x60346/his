@@ -3,7 +3,7 @@
 // 金額全部來自服務層（previewCharge / pay），頁面只算「實收 − 應收 = 找零」。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
-import { Ban, CreditCard, Printer, ShieldCheck, Smartphone, Wallet } from 'lucide-vue-next'
+import { Ban, CreditCard, Printer, ShieldCheck, Smartphone, Undo2, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
@@ -177,6 +177,21 @@ async function onVoid() {
   if (await voidAction.run(receipt.value.id, voidReason.value)) voidOpen.value = false
 }
 
+// ---------- 退費（隔天以後、或收回過欠款的收據）：原收據照算在原本那天，退款算在今天。作廢或退費由服務層決定（receipt.cancel）----------
+const refundOpen = ref(false)
+const refundReason = ref('')
+const refundAction = useAction(chargeApi.refundCharge, { success: (c) => `已退費 ${c.refund?.amount ?? 0} 元（退款單 ${c.refund?.receiptNo}），病人回到待批價` })
+const PM_LABEL: Record<PayMethod, string> = { cash: '現金', card: '刷卡（刷退）', mobile: '行動支付（退回原帳戶）' }
+function openRefund() {
+  refundReason.value = ''
+  refundAction.fieldErrors.value = {}
+  refundOpen.value = true
+}
+async function onRefund() {
+  if (!receipt.value) return
+  if (await refundAction.run(receipt.value.id, refundReason.value)) refundOpen.value = false
+}
+
 // ---------- 更正身分（只限待批價；已開收據的先作廢）。更正後試算經 dbVersion 自動重算 ----------
 const identityOpen = ref(false)
 </script>
@@ -318,9 +333,11 @@ const identityOpen = ref(false)
         <!-- 已批價：收據 -->
         <template v-else-if="receipt">
           <div class="no-print flex flex-wrap items-center gap-2">
-            <UBadge v-if="item.status === 'dispensed'" tone="green">藥品已發出：要作廢請先到藥局退藥</UBadge>
+            <UBadge v-if="receipt.cancel?.blocked" tone="green">{{ receipt.cancel.blocked }}</UBadge>
+            <span v-else-if="receipt.cancel?.mode === 'refund'" class="text-xs text-slate-500">{{ receipt.paidAt.slice(0, 10) === todayStr ? '收回過欠款的收據' : `${receipt.paidAt.slice(0, 10)} 的收據已算進那天的日結` }}：不能作廢，只能退費</span>
             <div class="ml-auto flex gap-2">
-              <UButton variant="danger" :icon="Ban" :disabled="item.status === 'dispensed'" :title="item.status === 'dispensed' ? '已領藥：請先到藥局退藥' : ''" @click="openVoid">作廢</UButton>
+              <UButton v-if="receipt.cancel?.mode === 'void'" variant="danger" :icon="Ban" :disabled="!!receipt.cancel?.blocked" :title="receipt.cancel?.blocked ?? ''" @click="openVoid">作廢</UButton>
+              <UButton v-else variant="danger" :icon="Undo2" :disabled="!!receipt.cancel?.blocked" :title="receipt.cancel?.blocked ?? ''" @click="openRefund">退費</UButton>
               <UButton variant="secondary" :icon="Printer" @click="print">列印收據</UButton>
             </div>
           </div>
@@ -366,6 +383,24 @@ const identityOpen = ref(false)
       <template #footer>
         <UButton variant="secondary" @click="apOpen = false">取消</UButton>
         <UButton type="submit" :loading="approve.pending.value">核准</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="refundOpen" title="退費" size="sm">
+      <div v-if="receipt" class="space-y-3 text-sm">
+        <p class="text-slate-600">
+          收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span>（{{ receipt.paidAt.slice(0, 10) }}）照算在原本那天的日結；退款另開退款單、算在今天。退費後病人回到「待批價」，醫師可以修改後重新批價。
+        </p>
+        <div class="rounded-md bg-red-50 px-3 py-2">
+          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ (receipt.cancel?.refundAmount ?? 0).toLocaleString() }}</span></div>
+          <div class="text-xs text-red-700">依原付款方式：結帳時 {{ PM_LABEL[receipt.payMethod] }}<template v-if="receipt.repayments?.length">；收回的欠款依當時的方式</template></div>
+          <div v-if="receipt.owed && receipt.owed - (receipt.repayments ?? []).reduce((n, r) => n + r.amount, 0) > 0" class="text-xs text-red-700">還沒收回的欠款一併取消</div>
+        </div>
+        <UTextarea v-model="refundReason" label="退費原因" required placeholder="例：醫師改處方、病人過敏回診" :rows="2" :error="refundAction.fieldErrors.value.reason" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="refundOpen = false">取消</UButton>
+        <UButton variant="danger" :disabled="!refundReason.trim()" :loading="refundAction.pending.value" @click="onRefund">確定退費</UButton>
       </template>
     </UDialog>
 

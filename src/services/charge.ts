@@ -1,6 +1,6 @@
 // 批價：試算、結帳、作廢、日結報表。
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
-import type { Charge, ChargeLine, DiscountRule, PayMethod, Repayment } from '@/types'
+import type { Charge, ChargeLine, DiscountRule, PayMethod, Refund, Repayment } from '@/types'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, diffDays, now, today } from '@/utils/date'
 import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
@@ -182,23 +182,84 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
   })
 }
 
-/** 作廢：已發藥的不可作廢（需先退藥）；作廢後掛號回到待批價，醫師可修改病歷 */
+/**
+ * 這張收據怎麼取消：當天、沒收回過欠款的可以「作廢」（當天的帳直接不算）；
+ * 隔天以後（那天的日結已交給會計）或收回過欠款的只能「退費」（原收據照算、退款算在退款那天）。
+ * 藥已發出的兩種都不行，要先到藥局退藥
+ */
+export interface CancelMode {
+  mode: 'void' | 'refund'
+  /** 為什麼兩種都不行（藥已發出） */
+  blocked?: string
+  /** 退費會退多少 */
+  refundAmount: number
+}
+
+// 內部函式（不 export：services 裡 export 的都會變成 API）
+function cancelModeOf(c: Charge): CancelMode {
+  const dispensed = db.dispenses.find((d) => d.visitId === c.visitId && d.status === 'dispensed')
+  const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length ? 'void' : 'refund'
+  return { mode, refundAmount: refundParts(c).reduce((n, p) => n + p.amount, 0), ...(dispensed ? { blocked: '藥品已發出：請先到藥局辦理退藥（藥局「已發藥」那張按「退藥」）' } : {}) }
+}
+
+/** 病人實際付過的錢，依付款方式：結帳時付的（應收 − 記欠款）＋ 每次收回欠款 */
+function refundParts(c: Charge): Refund['parts'] {
+  const by = new Map<PayMethod, number>()
+  const add = (m: PayMethod, n: number) => n > 0 && by.set(m, (by.get(m) ?? 0) + n)
+  add(c.payMethod, c.patientTotal - (c.owed ?? 0))
+  for (const r of c.repayments ?? []) add(r.payMethod, r.amount)
+  return [...by.entries()].map(([payMethod, amount]) => ({ payMethod, amount }))
+}
+
+/** 取消後的共同處理：調劑單拿掉（已退藥的也拿掉——退藥紀錄留在庫存帳與稽核）、掛號回到待批價，醫師可修改病歷 */
+function reopenVisit(c: Charge) {
+  db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
+  must(find.visit(c.visitId), '掛號紀錄').status = 'consulted'
+}
+
+/** 作廢（只限當天、沒收回過欠款）：已發藥的不可作廢（需先退藥）；作廢後掛號回到待批價，醫師可修改病歷 */
 export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
   return mutate(() => {
     requireUser('clerk')
     if (!reason.trim()) fail('請輸入作廢原因')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢')
-    const dp = db.dispenses.find((d) => d.visitId === c.visitId)
-    // 訊息不能指向不存在的功能：本系統沒有退藥，要明說，使用者才不會到處找「退藥」按鈕
-    if (dp?.status === 'dispensed') fail('藥品已發出，收據無法作廢：請先到藥局辦理退藥（藥局「已發藥」那張按「退藥」）', 'CONFLICT')
-    // 已收回過欠款：作廢後那筆收回的錢就沒有對應的帳。要先退還，本系統未提供退款
-    if (c.repayments?.length) fail('這張收據的欠款已收回過，無法作廢。實務上需先辦理退款，本展示系統未提供退款功能。', 'CONFLICT')
+    const m = cancelModeOf(c)
+    if (m.blocked) fail(`收據無法作廢：${m.blocked}`, 'CONFLICT')
+    // 作廢會讓這張收據從那天的日結消失：只有當天（還沒交帳）可以；其餘改走退費，原本那天的帳不動
+    if (c.repayments?.length) fail('這張收據的欠款已收回過，不能作廢：請改用「退費」（收回的錢一起退）', 'CONFLICT')
+    if (m.mode === 'refund') fail(`這張是 ${c.paidAt.slice(0, 10)} 收的，已算進那天的日結，不能作廢：請改用「退費」`, 'CONFLICT')
     c.voided = true
-    db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
-    const v = must(find.visit(c.visitId), '掛號紀錄')
-    v.status = 'consulted'
+    reopenVisit(c)
     audit('作廢收據', `${c.receiptNo}：${reason}`)
+    return c
+  })
+}
+
+/** 退款單號：RF＋退款日＋流水號（和收據分開編，日結一眼分得出收與退） */
+const nextRefundNo = (date: string) => `RF${date.replace(/-/g, '')}${String(nextCounter(`refund:${date}`)).padStart(4, '0')}`
+
+/**
+ * 退費：病人付過的錢全部退（依原付款方式），原收據照算在原本那天、退款算在今天；
+ * 還沒收回的欠款一併取消。掛號回到待批價（醫師可改，再重新批價）。藥已發出要先退藥
+ */
+export function refundCharge(chargeId: string, reason: string): Promise<Charge> {
+  return mutate(() => {
+    const cashier = requireUser('clerk')
+    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
+    if (c.voided) fail(c.refund ? '這張已經退費了' : '此收據已作廢', 'CONFLICT')
+    const m = cancelModeOf(c)
+    if (m.blocked) fail(`無法退費：${m.blocked}`, 'CONFLICT')
+    if (m.mode === 'void') fail('當天、沒收回過欠款的收據請用「作廢」（當天的帳直接不算，不必開退款單）', 'CONFLICT')
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫退費原因（例：醫師改處方、病人過敏回診）')
+    const t = now()
+    const parts = refundParts(c)
+    c.refund = { receiptNo: nextRefundNo(t.slice(0, 10)), amount: parts.reduce((n, p) => n + p.amount, 0), parts, reason: why!, cashierId: cashier.id, at: t }
+    const cancelledDebt = outstandingOf(c)
+    c.voided = true
+    reopenVisit(c)
+    audit('退費', `${c.refund.receiptNo} 退 ${c.refund.amount} 元（原收據 ${c.receiptNo}，${c.paidAt.slice(0, 10)}）${cancelledDebt ? `，取消未收欠款 ${cancelledDebt} 元` : ''}：${why}`)
     return c
   })
 }
@@ -253,6 +314,9 @@ export function repayDebt(chargeId: string, input: { payMethod: PayMethod; amoun
 export interface ReceiptView extends Charge {
   visit: VisitView
   cashierName: string
+  /** 怎麼取消這張（作廢或退費、退多少、為什麼不行）：頁面依它顯示按鈕，不自己判斷日期 */
+  cancel?: CancelMode
+  refundCashierName?: string
   /** 有開藥時的領藥號 */
   pickupNo?: number
 }
@@ -265,6 +329,8 @@ export function getReceipt(chargeId: string): Promise<ReceiptView> {
       visit: visitView(must(find.visit(c.visitId), '掛號紀錄')),
       cashierName: nameOf.user(c.cashierId),
       pickupNo: c.voided ? undefined : pickupNoOf(c.visitId),
+      ...(c.voided ? {} : { cancel: cancelModeOf(c) }),
+      ...(c.refund ? { refundCashierName: nameOf.user(c.refund.cashierId) } : {}),
     }
   })
 }
@@ -312,7 +378,7 @@ export function getChargeDetail(visitId: string, discountCode?: string): Promise
       preview,
       ...(discountError ? { discountError } : {}),
       receipt: charge
-        ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId) }
+        ? { ...charge, visit: visitView(v), cashierName: nameOf.user(charge.cashierId), pickupNo: pickupNoOf(visitId), cancel: cancelModeOf(charge) }
         : undefined,
       debts: debtsOf(v.patientId),
       ...(() => {
@@ -329,7 +395,7 @@ export interface DailyReport {
   date: string
   to: string
   /** 依日期小計（區間報表用；單日只有一列）：加總 = 各合計 */
-  byDay: { date: string; count: number; patientTotal: number; newDebt: number; repaid: number; collected: number }[]
+  byDay: { date: string; count: number; patientTotal: number; newDebt: number; repaid: number; refunded: number; collected: number }[]
   count: number
   voidedCount: number
   /** 應收合計：當日有效收據的金額（含記欠款的部分）。依科別、依費用類別都以這個為準 */
@@ -339,8 +405,12 @@ export interface DailyReport {
   newDebt: number
   /** 當日收回的欠款（不論原本是哪一天欠的） */
   repaid: number
-  /** 實收 = 應收 − 新欠款 + 收回欠款：錢箱、刷卡機加起來應該是這個數 */
+  /** 當日退款（不論原收據是哪一天的） */
+  refunded: number
+  /** 實收 = 應收 − 新欠款 + 收回欠款 − 退款：錢箱、刷卡機加起來應該是這個數 */
   collected: number
+  /** 當日退款明細 */
+  refunds: { receiptNo: string; at: string; patientName: string; chartNo: string; amount: number; payMethods: string; originalReceiptNo: string; originalDate: string; reason: string; cashierName: string }[]
   /** 依付款方式：實際收到的錢（加總 = 實收） */
   byPayMethod: Record<PayMethod, number>
   /** 當日收回欠款明細 */
@@ -350,7 +420,7 @@ export interface DailyReport {
   /** 作廢收據的金額合計（以前只有張數） */
   voidedTotal: number
   /** 依收費人員：交班時各自對自己的錢箱，所以是實際收到的錢；加總 = 實收 */
-  byCashier: { cashierName: string; count: number; repayCount: number; collected: number }[]
+  byCashier: { cashierName: string; count: number; repayCount: number; refundCount: number; collected: number }[]
   /** 依費用類別（取自收據當時存下的明細，不用現在的設定重算）；加總 = 收入合計 */
   byFeeType: { reg: number; basicCopay: number; drugCopay: number; selfPay: number; discount: number }
   /** 優免：依類別的筆數與減免金額（正數）；合計 = discountTotal */
@@ -377,7 +447,8 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
     v.done()
     const inRange = (at: string) => at.slice(0, 10) >= date && at.slice(0, 10) <= to
     const all = db.charges.filter((c) => inRange(c.paidAt))
-    const valid = all.filter((c) => !c.voided)
+    // 有效＝沒作廢的，加上「已退費」的：退費的收據照算在原本那天（退款另算在退款那天），那天的帳不會事後改變
+    const valid = all.filter((c) => !c.voided || c.refund)
     const byPayMethod: Record<PayMethod, number> = { cash: 0, card: 0, mobile: 0 }
     const dept = new Map<string, DailyReport['byDept'][number]>()
     for (const c of valid) {
@@ -392,7 +463,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
     const cashier = new Map<string, DailyReport['byCashier'][number]>()
     const cashierRow = (id: string) => {
       const name = nameOf.user(id)
-      const row = cashier.get(name) ?? { cashierName: name, count: 0, repayCount: 0, collected: 0 }
+      const row = cashier.get(name) ?? { cashierName: name, count: 0, repayCount: 0, refundCount: 0, collected: 0 }
       cashier.set(name, row)
       return row
     }
@@ -435,6 +506,21 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       }
     }
     repayments.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo))
+    // 退款：算在退款那天（負數），依原付款方式從各自的錢箱、刷卡機扣
+    const PM: Record<PayMethod, string> = { cash: '現金', card: '刷卡', mobile: '行動支付' }
+    const refunds: DailyReport['refunds'] = []
+    for (const c of db.charges) {
+      const rf = c.refund
+      if (!rf || !inRange(rf.at)) continue
+      for (const p of rf.parts) byPayMethod[p.payMethod] -= p.amount
+      const row = cashierRow(rf.cashierId)
+      row.refundCount++
+      row.collected -= rf.amount
+      const p = find.patient(c.patientId)
+      refunds.push({ receiptNo: rf.receiptNo, at: rf.at, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: rf.amount, payMethods: rf.parts.map((x) => `${PM[x.payMethod]} ${x.amount}`).join('、'), originalReceiptNo: c.receiptNo, originalDate: c.paidAt.slice(0, 10), reason: rf.reason, cashierName: nameOf.user(rf.cashierId) })
+    }
+    refunds.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo))
+    const refunded = refunds.reduce((s, x) => s + x.amount, 0)
     const patientTotal = valid.reduce((s, c) => s + c.patientTotal, 0)
     const newDebt = valid.reduce((s, c) => s + (c.owed ?? 0), 0)
     const repaid = repayments.reduce((s, x) => s + x.amount, 0)
@@ -452,7 +538,8 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       const total = dayValid.reduce((s, c) => s + c.patientTotal, 0)
       const debt = dayValid.reduce((s, c) => s + (c.owed ?? 0), 0)
       const back = repayments.filter((x) => x.at.startsWith(d)).reduce((s, x) => s + x.amount, 0)
-      byDay.push({ date: d, count: dayValid.length, patientTotal: total, newDebt: debt, repaid: back, collected: total - debt + back })
+      const rf = refunds.filter((x) => x.at.startsWith(d)).reduce((s, x) => s + x.amount, 0)
+      byDay.push({ date: d, count: dayValid.length, patientTotal: total, newDebt: debt, repaid: back, refunded: rf, collected: total - debt + back - rf })
     }
     return {
       date,
@@ -460,7 +547,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       byDay,
       count: valid.length,
       voidedCount: all.length - valid.length,
-      voidedTotal: all.filter((c) => c.voided).reduce((s, c) => s + c.patientTotal, 0),
+      voidedTotal: all.filter((c) => c.voided && !c.refund).reduce((s, c) => s + c.patientTotal, 0),
       byCashier: [...cashier.values()].sort((a, b) => b.collected - a.collected),
       byFeeType,
       discounts: [...disc.values()].sort((a, b) => b.amount - a.amount),
@@ -469,8 +556,10 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       patientTotal,
       newDebt,
       repaid,
-      collected: patientTotal - newDebt + repaid,
+      refunded,
+      collected: patientTotal - newDebt + repaid - refunded,
       repayments,
+      refunds,
       nhiPoints: valid.reduce((s, c) => s + c.nhiPoints, 0),
       byPayMethod,
       byDept: [...dept.values()].sort((a, b) => b.patientTotal - a.patientTotal),

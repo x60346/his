@@ -3061,11 +3061,26 @@ try {
     const db = () => dbm.db
     const lotSum = (drugId, loc) => db().drugLots.filter((l) => l.drugId === drugId && l.locationId === loc).reduce((n, l) => n + l.qty, 0)
     // 舊資料（種子發的藥沒記 txnIds）：用「領藥號＋發藥日」找回發藥異動
-    const old = db().dispenses.find((d) => d.status === 'dispensed' && !d.txnIds && db().stockTxns.some((x) => x.ref === `領藥號 ${d.pickupNo}` && x.at === d.dispensedAt) &&
+    // 種子：帳本期間內發的藥都記著發藥異動，異動上的領藥號＝最後編好的領藥號（以前種子重編領藥號後沒跟著改，帳上的單號指到別人的處方）
+    const ledgerStart = (await load('/src/utils/date.ts')).addDays(T, -30)
+    const inLedger = db().dispenses.filter((d) => d.status === 'dispensed' && d.dispensedAt >= ledgerStart)
+    ok(inLedger.length > 0 && inLedger.every((d) => d.txnIds?.length === db().encounters.find((e) => e.id === d.encounterId).medications.length && d.txnIds.every((id) => db().stockTxns.find((x) => x.id === id)?.ref === `領藥號 ${d.pickupNo}`)),
+      `種子：帳本期間內 ${inLedger.length} 張已發藥的單都記著發藥異動，異動單號＝領藥號`)
+    const pre = db().dispenses.find((d) => d.status === 'dispensed' && !d.txnIds)
+    if (pre) {
+      await as('ph01')
+      try {
+        await api.pharmacyApi.returnDispense(pre.id, '測試')
+        ok(false, '開帳前發的藥應不能退藥')
+      } catch (e) {
+        ok(e.message.includes('開帳前'), `帳本開帳前發的藥 → 「${e.message}」（不猜批號）`)
+      }
+    }
+    const old = db().dispenses.find((d) => d.status === 'dispensed' && d.txnIds?.length &&
       db().encounters.find((e) => e.id === d.encounterId).medications.every((m) => !db().stocktakes.some((st) => (st.status === 'counting' || st.status === 'submitted') && st.lines.some((l) => l.drugId === m.drugId))))
-    ok(!!old, '有一張種子資料裡已發藥（沒記發藥異動 id）的調劑單')
+    ok(!!old, '有一張種子資料裡已發藥的調劑單')
     const meds = db().encounters.find((e) => e.id === old.encounterId).medications
-    const loc = db().stockTxns.find((x) => x.ref === `領藥號 ${old.pickupNo}` && x.at === old.dispensedAt).locationId
+    const loc = db().stockTxns.find((x) => x.id === old.txnIds[0]).locationId
     const before = Object.fromEntries(meds.map((m) => [m.drugId, lotSum(m.drugId, loc)]))
     await as('clerk01')
     const ch = db().charges.find((c) => c.visitId === old.visitId && !c.voided)
@@ -3090,14 +3105,15 @@ try {
       '退藥：調劑單標「已退藥」、掛號回到「已批價」、寫稽核')
     ok(meds.every((m) => lotSum(m.drugId, loc) === before[m.drugId] + m.qty), `藥退回原地點（${meds.map((m) => `${m.drugId} +${m.qty}`).join('、')}）`)
     const backTx = db().stockTxns.filter((x) => x.type === 'return' && x.reason?.startsWith('門診退藥'))
-    const outTx = db().stockTxns.filter((x) => x.type === 'dispense' && x.ref === `領藥號 ${old.pickupNo}` && x.at === old.dispensedAt)
+    const outTx = old.txnIds.map((id) => db().stockTxns.find((x) => x.id === id))
     ok(outTx.every((o) => o.lots.every((m) => backTx.some((b) => b.drugId === o.drugId && b.lots.some((x) => x.lotNo === m.lotNo && x.qty === -m.qty)))), '退回發出時的同幾個批號（效期跟著回來）')
     ok(ledgerBroken(db()).length === 0, '退藥後帳本仍對得起來')
     await expectError(() => PH.returnDispense(old.id, '再退一次'), '已退藥的再退一次')
     ok(!(await PH.listDispenses({ date: old.dispensedAt.slice(0, 10) })).some((x) => x.id === old.id && x.status !== 'returned'), '已退藥不算待領（不是「還沒發藥」）')
     await as('clerk01')
-    await api.chargeApi.voidCharge(ch.id, '病人過敏，醫師改處方')
-    ok(db().charges.find((c) => c.id === ch.id).voided && db().visits.find((v) => v.id === old.visitId).status === 'consulted', '退藥後收據可以作廢，回到待批價')
+    await expectError(() => api.chargeApi.voidCharge(ch.id, '病人過敏'), '作廢以前的收據（已算進那天的日結）')
+    await api.chargeApi.refundCharge(ch.id, '病人過敏，醫師改處方')
+    ok(db().charges.find((c) => c.id === ch.id).refund && db().visits.find((v) => v.id === old.visitId).status === 'consulted', '退藥後以前的收據可以退費，回到待批價')
     // 新發的藥記下發藥異動
     await as('ph01')
     const ver = db().dispenses.find((d) => d.status === 'verified' && db().encounters.find((e) => e.id === d.encounterId).medications.every((m) => db().drugLots.filter((l) => l.drugId === m.drugId && l.locationId === db().stockLocations.find((x) => x.dispensesOpd).id && l.expiry >= T).reduce((n, l) => n + l.qty, 0) >= m.qty))
@@ -3110,6 +3126,76 @@ try {
     const { readFileSync } = await import('node:fs')
     const usesOpen = ['src/services/inventory.ts', 'src/services/purchase.ts', 'src/services/transfer.ts', 'src/services/pharmacy.ts', 'src/pages/pharmacy/PharmacyPage.vue'].map((f) => readFileSync(f, 'utf8'))
     ok(usesOpen.every((t) => !t.includes("!== 'dispensed'")), '「還在等領藥」一律用 dispenseOpen（已退藥不能被當成還沒發藥）')
+  }
+
+  // 退費：隔天以後、或收回過欠款的收據不能作廢，只能退費。原收據照算在原本那天，退款算在退款那天
+  console.log('\n[退費]')
+  {
+    const C = api.chargeApi
+    const db = () => dbm.db
+    const chOf = (id) => db().charges.find((c) => c.id === id)
+    // 以前欠款的收據（種子：林俊傑 100005）：藥已發出要先退藥
+    const pt = db().patients.find((x) => x.chartNo === '100005')
+    let debt = db().charges.find((c) => c.patientId === pt.id && !c.voided && (c.owed ?? 0) > 0 && c.paidAt.slice(0, 10) < T)
+    ok(!!debt, '有一張以前記欠款的收據')
+    const day = debt.paidAt.slice(0, 10)
+    await as('clerk01')
+    const dayBefore = await C.dailyReport(day)
+    const dp = db().dispenses.find((d) => d.visitId === debt.visitId && d.status === 'dispensed')
+    if (dp) {
+      const r0 = await C.getReceipt(debt.id)
+      ok(!!r0.cancel?.blocked && r0.cancel.mode === 'refund', `藥已發出：收據標「${r0.cancel?.blocked}」`)
+      await expectError(() => C.refundCharge(debt.id, '測試'), '藥已發出就退費')
+      await as('ph01')
+      await api.pharmacyApi.returnDispense(dp.id, '醫師改處方')
+      await as('clerk01')
+    }
+    // 今天收回一部分欠款（現金 50）
+    const repaid0 = (debt.repayments ?? []).reduce((n, r) => n + r.amount, 0)
+    if (debt.owed - repaid0 > 0) await C.repayDebt(debt.id, { payMethod: 'cash', amount: Math.min(50, debt.owed - repaid0) })
+    debt = chOf(debt.id)
+    const rc = await C.getReceipt(debt.id)
+    ok(rc.cancel?.mode === 'refund' && !rc.cancel.blocked, '以前的收據：只能退費（不能作廢）')
+    try {
+      await C.voidCharge(debt.id, '測試')
+      ok(false, '以前的收據作廢應被擋下')
+    } catch (e) {
+      ok(e.message.includes('退費'), `作廢以前的收據 → 「${e.message}」`)
+    }
+    try {
+      await C.refundCharge(debt.id, ' ')
+      ok(false, '退費沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', '退費要寫原因')
+    }
+    const paid = debt.patientTotal - debt.owed + (debt.repayments ?? []).reduce((n, r) => n + r.amount, 0)
+    ok(rc.cancel.refundAmount === paid, `退多少：實收 ${debt.patientTotal - debt.owed} ＋ 收回 ${paid - (debt.patientTotal - debt.owed)} ＝ ${paid}`)
+    const todayBefore = await C.dailyReport(T)
+    const done = await C.refundCharge(debt.id, '醫師改處方，重新批價')
+    const rf = done.refund
+    ok(rf.amount === paid && rf.receiptNo.startsWith('RF' + T.replace(/-/g, '')) && rf.parts.reduce((n, x) => n + x.amount, 0) === paid && rf.parts.length === new Set([...(debt.patientTotal - debt.owed > 0 ? [debt.payMethod] : []), ...(debt.repayments ?? []).map((x) => x.payMethod)]).size && rf.amount > 0,
+      `退款單 ${rf.receiptNo}：退 ${rf.amount}，依原付款方式（${rf.parts.map((x) => x.payMethod + ' ' + x.amount).join('、')}）`)
+    ok(chOf(debt.id).voided && db().visits.find((v) => v.id === debt.visitId).status === 'consulted' && !(await C.listDebts(pt.id)).some((d) => d.chargeId === debt.id) && db().auditLogs[0].action === '退費',
+      '退費後：病人回到待批價、未收回的欠款一併取消、寫稽核')
+    const dayAfter = await C.dailyReport(day)
+    ok(dayAfter.collected === dayBefore.collected && dayAfter.count === dayBefore.count && dayAfter.patientTotal === dayBefore.patientTotal, `原本那天（${day}）的日結完全不變：實收 ${dayAfter.collected}`)
+    const todayAfter = await C.dailyReport(T)
+    ok(todayAfter.refunded === todayBefore.refunded + paid && todayAfter.collected === todayBefore.collected - paid && todayAfter.refunds.some((x) => x.receiptNo === rf.receiptNo && x.originalDate === day),
+      `今天的日結：退款 −${paid}，實收跟著少 ${paid}`)
+    ok(Object.values(todayAfter.byPayMethod).reduce((n, x) => n + x, 0) === todayAfter.collected && todayAfter.byCashier.reduce((n, x) => n + x.collected, 0) === todayAfter.collected && todayAfter.byDay.reduce((n, x) => n + x.collected, 0) === todayAfter.collected,
+      '依付款方式、收費人員、日期加總都＝實收（退款從原付款方式扣）')
+    const csv = (await load('/src/services/report-csv.ts')).dailyReportCsv(todayAfter)
+    ok(csv.includes(`退款,${rf.receiptNo}`) && csv.includes(`退款合計,${-todayAfter.refunded}`), '匯出 CSV：退款列（負數）與退款合計')
+    await expectError(() => C.refundCharge(debt.id, '再退一次'), '已退費的再退一次')
+    // 當天的收據：作廢就好，不開退款單
+    const todayCh = db().charges.find((c) => !c.voided && c.paidAt.startsWith(T) && !c.repayments?.length && !db().dispenses.some((d) => d.visitId === c.visitId && d.status === 'dispensed'))
+    if (todayCh) {
+      ok((await C.getReceipt(todayCh.id)).cancel?.mode === 'void', '當天的收據：作廢')
+      await expectError(() => C.refundCharge(todayCh.id, '測試'), '當天的收據退費（請用作廢）')
+    }
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/charge/ChargePage.vue', 'utf8')
+    ok(page.includes("receipt.cancel?.mode === 'void'") && !/paidAt\.slice\(0, 10\) [!=]== todayStr \?/.test(page.replace(/receipt\.paidAt\.slice\(0, 10\) === todayStr \? '收回過欠款的收據'/, '')), '作廢還是退費由服務層決定（receipt.cancel），頁面不自己比日期')
   }
 
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則

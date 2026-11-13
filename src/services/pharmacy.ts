@@ -222,16 +222,11 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
 }
 
 /**
- * 發藥時扣庫存的那幾筆異動。新資料記在調劑單上（txnIds）；舊資料沒記，只能比對：
- * 領藥號依「看診日」編，跨日才領的單和當天的單可能同一個號——所以要「同一個發藥時間、同樣的藥與數量」都對上，
- * 對不上就不退（寧可請人工處理，也不能退到別人的批號）
+ * 發藥時扣庫存的那幾筆異動（發藥時記在調劑單上）。沒有的是帳本開帳前發的藥——當時的扣帳已經算進期初數量，
+ * 查不到是哪幾個批號：不能猜（領藥號依看診日編，跨日才領的單可能同號，猜錯就退到別人的批號）
  */
 function dispenseTxns(d: Dispense): StockTxn[] {
-  if (d.txnIds?.length) return d.txnIds.map((id) => must(db.stockTxns.find((x) => x.id === id), '發藥異動'))
-  const meds = must(db.encounters.find((e) => e.id === d.encounterId), '病歷').medications
-  const txns = db.stockTxns.filter((x) => x.type === 'dispense' && x.ref === `領藥號 ${d.pickupNo}` && x.at === d.dispensedAt)
-  const same = txns.length === meds.length && meds.every((m) => txns.some((x) => x.drugId === m.drugId && -x.qty === m.qty))
-  return same ? txns : []
+  return (d.txnIds ?? []).map((id) => must(db.stockTxns.find((x) => x.id === id), '發藥異動'))
 }
 
 /**
@@ -247,7 +242,7 @@ export function returnDispense(id: string, reason: string): Promise<DispenseView
     const why = reason?.trim()
     if (!why) failField('reason', '請寫退藥原因（例：病人過敏回診、醫師改處方）')
     const txns = dispenseTxns(d)
-    if (!txns.length) fail('找不到這張的發藥紀錄，無法退回批號', 'CONFLICT')
+    if (!txns.length) fail('這張是帳本開帳前發的藥，查不到發出的批號，不能用退藥退回；實物請用盤點單調整', 'CONFLICT')
     for (const tx of txns) {
       const counting = stockLoc.counting(tx.drugId, tx.locationId)
       if (counting) fail(`${find.drug(tx.drugId)?.name}盤點中（${counting}），盤點完成前不能退藥`, 'CONFLICT')

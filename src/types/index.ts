@@ -355,6 +355,11 @@ export interface Charge {
   oweReason?: string
   /** 收回欠款紀錄：可分次，每次一張收據號，日結算在收回那天 */
   repayments?: Repayment[]
+  /**
+   * 退費（隔天以後、或已收回過欠款的收據不能作廢，只能退費）：這張收據照算在原本那天的日結，
+   * 退款另開一張退款單、算在退款那天（負數）。有 refund 的收據 voided 也是 true（不再是這次就醫的有效收據）
+   */
+  refund?: Refund
   /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列）；需主管核准的記下核准人（id 與當時的姓名） */
   discount?: { code: string; name: string; reason?: string; amount: number; approvedBy?: string; approverName?: string }
 }
@@ -377,6 +382,17 @@ export interface DiscountRule {
   /** 需主管核准：結帳時另一位有「可核准優免」權限的人當場輸入帳密 */
   needsApproval?: boolean
   active: boolean
+}
+
+/** 退款（一次）：病人付過的錢依原付款方式退（現金退現金、刷卡刷退） */
+export interface Refund {
+  /** 退款單號 RF+日期+流水號 */
+  receiptNo: string
+  amount: number
+  parts: { payMethod: PayMethod; amount: number }[]
+  reason: string
+  cashierId: string
+  at: string
 }
 
 /** 收回欠款（一次） */

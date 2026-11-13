@@ -904,12 +904,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const ipdLoc = stockLocations.find((l) => l.dispensesIpd)!.id
   for (const u of udDispenses) u.locationId = ipdLoc
   const safetyStocks: SafetyStock[] = []
-  const realOut = new Map<string, { at: string; qty: number; ref: string }[]>()
+  const realOut = new Map<string, { at: string; qty: number; ref: string; disp?: Dispense }[]>()
   for (const d of dispenses.filter((x) => x.status === 'dispensed')) {
     const e = encounters.find((x) => x.id === d.encounterId)!
     for (const m of e.medications) {
       const list = realOut.get(m.drugId) ?? []
-      list.push({ at: d.dispensedAt!, qty: m.qty, ref: `領藥號 ${d.pickupNo}` })
+      list.push({ at: d.dispensedAt!, qty: m.qty, ref: `領藥號 ${d.pickupNo}`, disp: d })
       realOut.set(m.drugId, list)
     }
   }
@@ -944,7 +944,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       receive = outAfterExpiry + 20
       opening = Math.max(target + totalOut - receive, outBefore + 20)
     }
-    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string; loc?: string; line?: UdLine })[] = [
+    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string; loc?: string; line?: UdLine; disp?: Dispense })[] = [
       { kind: 'lot' as const, at: `${addDays(T, -31)} 08:00`, type: 'opening' as const, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year - 1).slice(2)}${String(di).padStart(3, '0')}A`, expiry: oldExpiry, qty: opening, receivedAt: `${addDays(T, -31)} 08:00` } },
       ...(receive > 0 ? [{ kind: 'lot' as const, at: receiveAt, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}B`, expiry: `${year + 2}-0${int(1, 9)}-28`, qty: receive, receivedAt: receiveAt } }] : []),
       // 大型：藥庫的備量比單一藥局多——一般的藥另外進一批（安全庫存 5 倍：撥給藥局後仍高於藥庫自己的 3 倍安全量；固定批號效期、不抽亂數）。
@@ -1010,6 +1010,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       for (const t of takes) lots.find((l) => l.id === t.lotId)!.qty -= t.qty
       post(outLoc, 'dispense', ev.at, -ev.qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ev.ref)
       if (ev.line) ev.line.txnId = stockTxns.at(-1)!.id
+      // 門診發藥：調劑單記下扣庫存的異動（退藥時退回同幾個批號）
+      if (ev.disp) (ev.disp.txnIds ??= []).push(stockTxns.at(-1)!.id)
     }
     drug.stock = Object.values(balance).reduce((a, b) => a + b, 0)
     drugLots.push(...lots)
@@ -1225,6 +1227,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   })
   // 領藥號：同一天依開單（批價）時間
   renumber(dispenses, (d) => visitById.get(d.visitId)!.date, (d) => d.createdAt, (d) => d.id, (d, n) => (d.pickupNo = n))
+  // 庫存帳重播時領藥號還沒重編：異動的單號跟著改成最後的領藥號（以前這裡沒改，帳上的「領藥號 N」指到別人的處方）
+  {
+    const txById = new Map(stockTxns.map((x) => [x.id, x]))
+    for (const d of dispenses) for (const id of d.txnIds ?? []) txById.get(id)!.ref = `領藥號 ${d.pickupNo}`
+  }
 
   // 報到時間（不抽亂數）：叫過號的，在叫號前 15 分鐘報到（現場掛號的就是掛號那一刻）；
   // 今天還在候診的：當天現場掛的已報到，事先預約的還沒到（還沒到他的掛號時段，或是上面那位預約未到的）
