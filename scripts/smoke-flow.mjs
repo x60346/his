@@ -3410,7 +3410,9 @@ try {
     // 原始碼：受控的動作都走 requirePermission（不能繞過目錄自己寫角色）
     const { readFileSync } = await import('node:fs')
     const keysInCode = new Set()
-    for (const f of ['booking', 'patient', 'admission', 'schedule', 'purchase', 'stocktake', 'inventory', 'ipd', 'opd', 'pharmacy', 'charge', 'admin', 'nursing', 'permission']) {
+    // 掃全部服務模組（新增的模組不會漏掉）
+    const { readdirSync } = await import('node:fs')
+    for (const f of readdirSync('src/services').filter((x) => x.endsWith('.ts')).map((x) => x.slice(0, -3))) {
       for (const m of readFileSync(`src/services/${f}.ts`, 'utf8').matchAll(/requirePermission\('([a-zA-Z.]+)'\)/g)) keysInCode.add(m[1])
     }
     const unused = PR.PERMISSIONS.filter((d) => !d.grantOnly && !keysInCode.has(d.key)).map((d) => d.key)
@@ -4173,6 +4175,84 @@ try {
     ok(typeof R.keptMedications === 'function' && R.keptMedications([{ qty: 3 }, { qty: 2 }], { returns: [{ lines: [{ idx: 1, qty: 2 }] }] }).length === 1, 'keptMedications：退完的品項拿掉（批價重算只算病人拿走的）')
     const { readFileSync } = await import('node:fs')
     ok(!readFileSync('src/pages/charge/ChargePage.vue', 'utf8').match(/calcChargeLines|summarize\(/), '差額由服務層算，批價頁不自己算')
+    await as('clerk01')
+  }
+
+  // 停診搬到掛號頁＋可設定；藥庫作業（撥發、審核退回）可限定給個人；日結報表只限櫃台與管理員
+  console.log('\n[停診權限、藥庫作業權限、日結報表]')
+  {
+    dbm.resetDatabase('large')
+    const db = () => dbm.db
+    const PM = api.permissionApi
+    const S = api.scheduleApi
+    const uid = (name) => db().users.find((u) => u.username === name).id
+    const { addDays } = await load('/src/utils/date.ts')
+    const future = async () => {
+      for (let i = 1; i < 10; i++) {
+        const ss = (await S.listSessions({ date: addDays(T, i) })).filter((x) => !x.suspended && !x.closed)
+        if (ss.length) return ss[0]
+      }
+    }
+    await as('clerk01')
+    const s1 = await future()
+    await expectError(() => S.getSessionImpact(s1.id), '櫃台預設不能停診（只有管理員）')
+    await as('admin')
+    await expectError(() => PM.savePermissionRoles('schedule.suspend', { roles: ['admin', 'nurse'], reason: 'x' }), '停診給護理師（不在範圍）')
+    await PM.setPermissionGrant('schedule.suspend', uid('clerk02'), { on: true, reason: '櫃台組長' })
+    await as('clerk02')
+    const imp = await S.getSessionImpact(s1.id)
+    const list = await S.suspendSession(s1.id, '醫師病假')
+    ok(imp.session.id === s1.id && Array.isArray(list) && !!(await S.listSessions({ date: s1.date })).find((x) => x.id === s1.id).suspended, '指定給櫃台組長（clerk02）：在掛號頁可以停診')
+    await as('clerk01')
+    const s3 = await future()
+    await expectError(() => S.substituteSession(s3.id, 'x', '請假'), '沒被指定的櫃台還是不能代診')
+    await as('admin')
+    await PM.savePermissionRoles('schedule.suspend', { roles: ['admin', 'clerk'], reason: '櫃台都能停診' })
+    await as('clerk01')
+    const s2 = await future()
+    ok((await S.getSessionImpact(s2.id)).session.id === s2.id, '整個櫃台角色打開後，clerk01 也可以')
+    const { readFileSync } = await import('node:fs')
+    const bp = readFileSync('src/pages/booking/BookingPage.vue', 'utf8')
+    ok(bp.includes("can('schedule.suspend')") && bp.includes('<DailyAdjust') && readFileSync('src/pages/admin/components/SchedulePanel.vue', 'utf8').includes("@/components/DailyAdjust.vue"), '掛號頁與系統管理用同一個停診元件，按鈕跟權限走')
+
+    // 藥庫作業：只指定給 ph02
+    await as('admin')
+    const PR2 = await load('/src/services/permission-rules.ts')
+    try {
+      await PM.savePermissionRoles('transfer.warehouse', { roles: [], reason: '只給藥庫藥師', confirm: true })
+      ok(false, '還沒指定給任何人就取消全部角色應被擋下')
+    } catch (e) {
+      ok(e.fields?.roles?.includes('先指定給個人'), `還沒指定給任何人就取消全部角色 → 「${e.fields?.roles}」`)
+    }
+    await PM.setPermissionGrant('transfer.warehouse', uid('ph02'), { on: true, reason: '藥庫藥師' })
+    await PM.savePermissionRoles('transfer.warehouse', { roles: [], reason: '只給藥庫藥師', confirm: true })
+    await expectError(() => PM.setPermissionGrant('transfer.warehouse', uid('ph02'), { on: false, reason: '調職' }), '收回最後一位（沒有角色時）')
+    const ph2 = db().users.find((u) => u.username === 'ph02')
+    await expectError(() => api.adminApi.saveUser({ id: ph2.id, username: 'ph02', name: ph2.name, roles: ['pharmacist'], active: false }), '停用最後一位被指定藥庫作業的帳號')
+    ok(PR2.checkPermissionRoles(PR2.permDef('schedule.suspend'), ['nurse'])?.includes('系統管理員、掛號批價'), '「只能給」的訊息寫角色名稱（不是英文代碼）')
+    const reqT = db().transfers.find((x) => x.status === 'requested' && x.kind !== 'return')
+    const issued = Object.fromEntries(reqT.lines.map((l) => [l.id, 0]))
+    issued[reqT.lines.find((l) => l.drugId === 'M001')?.id ?? reqT.lines[0].id] = 1
+    await as('ph01')
+    await expectError(() => api.transferApi.issueTransfer(reqT.id, issued), '沒被指定的藥師撥發')
+    const cand = (await api.transferApi.returnCandidates('LOC-OPD')).find((c) => c.qty >= 2 && c.flag !== 'expired')
+    const rq = await api.transferApi.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: cand.lotId, qty: 1 }] })
+    ok(rq.status === 'requested', '藥局端申請退回不受影響（ph01 照樣可以）')
+    await expectError(() => api.transferApi.approveReturn(rq.id, { approved: { [rq.lines[0].id]: [1] } }), '沒被指定的藥師審核退回')
+    await as('ph02')
+    const ap = await api.transferApi.approveReturn(rq.id, { approved: { [rq.lines[0].id]: [1] } })
+    const it = await api.transferApi.issueTransfer(reqT.id, issued)
+    ok(ap.status === 'approved' && it.status === 'issued', '指定的藥庫藥師（ph02）可以撥發、審核退回')
+    await as('ph01')
+    ok((await api.transferApi.shipReturn(rq.id)).status === 'issued', '核准後的送出仍由藥局（ph01）')
+
+    // 日結報表：只有櫃台與管理員
+    await as('nurse01')
+    await expectError(() => api.chargeApi.dailyReport(T), '護理師直接呼叫日結報表')
+    await as('ph01')
+    await expectError(() => api.chargeApi.dailyReport(T), '藥師直接呼叫日結報表')
+    await as('admin')
+    ok(typeof (await api.chargeApi.dailyReport(T)).collected === 'number', '管理員可以看日結')
     await as('clerk01')
   }
 

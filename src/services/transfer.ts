@@ -12,7 +12,7 @@ import type { TransferLine, TransferOrder } from '@/types'
 import { dispenseOpen } from './rx-rules'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { offsetRestock, openRestockOf, outstandingOf, postStock, quarantineOf } from './stock-ledger'
 import type { ReturnDisposition } from '@/types'
@@ -193,7 +193,7 @@ export function requestTransfer(input: { toLocationId: string; note?: string; li
  */
 export function issueTransfer(id: string, issued: Record<string, number>): Promise<TransferView> {
   return mutate(() => {
-    const u = requireUser('pharmacist')
+    const u = requirePermission('transfer.warehouse')
     const tr = trOf(id)
     if (tr.kind === 'return') fail('退回藥庫要由藥庫審核、藥局送出，不是撥發', 'CONFLICT')
     if (tr.status !== 'requested') fail('只有請領中的撥補單可以撥發', 'CONFLICT')
@@ -417,7 +417,7 @@ const returnOf = (id: string, status: TransferOrder['status'], what: string) => 
  */
 export function approveReturn(id: string, input: { approved: Record<string, number[]>; reasons?: Record<string, string> }): Promise<TransferView> {
   return mutate(() => {
-    const u = requireUser('pharmacist')
+    const u = requirePermission('transfer.warehouse')
     const tr = returnOf(id, 'requested', '審核')
     const errors: Record<string, string> = {}
     for (const l of tr.lines) {
@@ -447,7 +447,7 @@ export function approveReturn(id: string, input: { approved: Record<string, numb
 /** 藥庫整張不收（寫原因）：藥還在藥局，單子結束 */
 export function declineReturn(id: string, reason: string): Promise<TransferView> {
   return mutate(() => {
-    const u = requireUser('pharmacist')
+    const u = requirePermission('transfer.warehouse')
     const tr = returnOf(id, 'requested', '不收')
     const why = reason?.trim()
     if (!why) failField('reason', '請寫不收的原因（例：近效期請藥局自行用完、改向廠商退貨）')

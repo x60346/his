@@ -483,6 +483,8 @@ export const REPORT_MAX_DAYS = 31
  */
 export function dailyReport(date: string, to: string = date): Promise<DailyReport> {
   return query(() => {
+    // 收入報表：只有櫃台（批價頁）與管理員看得到——以前只靠畫面藏，直接呼叫 API 誰都拿得到
+    requireUser('clerk', 'admin')
     const v = fieldErrors()
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) v.add('from', '請選擇起始日期')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to ?? '')) v.add('to', '請選擇結束日期')

@@ -3,7 +3,7 @@
 import { ref } from 'vue'
 import { UTabs } from '@/components/ui'
 import WeeklyGrid from './WeeklyGrid.vue'
-import DailyAdjust from './DailyAdjust.vue'
+import DailyAdjust from '@/components/DailyAdjust.vue'
 import RoomsPanel from './RoomsPanel.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
 import { scheduleApi } from '@/services'

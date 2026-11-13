@@ -13,6 +13,7 @@ import { today } from '@/utils/date'
 import type { ReturnDisposition } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
+import { useCan } from '@/composables/useCan'
 import { useUi } from '@/stores/ui'
 import { transferStatusOf } from './transferStatus'
 
@@ -21,6 +22,9 @@ const emit = defineEmits<{ created: [id: string] }>()
 const auth = useAuth()
 const ui = useUi()
 const isPharmacist = computed(() => auth.user?.role === 'pharmacist')
+// 藥庫端（撥發、審核退回）跟權限走（transfer.warehouse，可只指定給藥庫藥師）
+const can = useCan()
+const isWarehouse = computed(() => isPharmacist.value && can('transfer.warehouse'))
 
 const { data, loading } = useQuery(async () => (props.transferId ? transferApi.getTransfer(props.transferId) : undefined), [() => props.transferId])
 const tr = computed(() => data.value)
@@ -215,7 +219,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
                 <td class="px-2 text-right">{{ l.qty }} <span class="text-xs text-slate-400">{{ l.unit }}</span></td>
                 <td v-if="tr.status === 'requested' && tr.kind !== 'return'" class="px-2 text-right text-slate-600">{{ l.available ?? '盤點中' }}</td>
                 <td v-if="tr.kind !== 'return'" class="whitespace-nowrap px-2 text-right">
-                  <template v-if="tr.status === 'requested' && isPharmacist">
+                  <template v-if="tr.status === 'requested' && isWarehouse">
                     <input v-model.number="issueQty[l.id]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 實撥數量`" />
                     <div v-if="err(`issue-${l.id}`)" class="text-xs text-red-600">{{ err(`issue-${l.id}`) }}</div>
                   </template>
@@ -225,7 +229,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
                   <div v-for="(x, k) in l.lots ?? []" :key="x.lotNo" class="flex flex-wrap items-center gap-2 text-xs">
                     <span class="w-28 text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
                     <span class="text-slate-500">申請 {{ x.requestedQty ?? x.qty }}</span>
-                    <template v-if="tr.status === 'requested' && isPharmacist && approveQty[l.id]">
+                    <template v-if="tr.status === 'requested' && isWarehouse && approveQty[l.id]">
                       <span class="text-slate-400">→</span>
                       <input v-model.number="approveQty[l.id][k]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 批號 ${x.lotNo} 同意收`" />
                       <span v-if="err(`approve-${l.id}-${k}`)" class="text-red-600">{{ err(`approve-${l.id}-${k}`) }}</span>
@@ -236,7 +240,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
                     <span v-if="l.lotsOnHand" :class="(l.lotsOnHand[k] ?? 0) < (x.approvedQty ?? x.requestedQty ?? x.qty) ? 'font-medium text-red-700' : 'text-slate-400'">藥局現有 {{ l.lotsOnHand[k] }}</span>
                     <UBadge v-if="x.expiry < todayStr" tone="red">已過期</UBadge>
                   </div>
-                  <template v-if="tr.status === 'requested' && isPharmacist && lessThanAsked(l.id)">
+                  <template v-if="tr.status === 'requested' && isWarehouse && lessThanAsked(l.id)">
                     <input v-model="approveReasons[l.id]" type="text" placeholder="少收原因：藥庫也滿了、請藥局自行用完…" :class="['form-control mt-1 w-64 text-xs', err(`reason-${l.id}`) && 'form-control-error']" :aria-label="`${l.drugName} 少收原因`" />
                     <div v-if="err(`reason-${l.id}`)" class="text-xs text-red-600">{{ err(`reason-${l.id}`) }}</div>
                   </template>
@@ -279,8 +283,8 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
           </table>
         </div>
         <div v-if="isPharmacist" class="flex justify-end gap-2">
-          <UButton v-if="tr.status === 'requested' && tr.kind !== 'return'" size="sm" :icon="Truck" :loading="issue.pending.value" @click="onIssue">撥發</UButton>
-          <template v-if="tr.status === 'requested' && tr.kind === 'return'">
+          <UButton v-if="tr.status === 'requested' && tr.kind !== 'return' && isWarehouse" size="sm" :icon="Truck" :loading="issue.pending.value" @click="onIssue">撥發</UButton>
+          <template v-if="tr.status === 'requested' && tr.kind === 'return' && isWarehouse">
             <UButton size="sm" variant="secondary" :icon="Ban" @click="(declineReason = ''), (declineOpen = true)">不收</UButton>
             <UButton size="sm" :icon="Check" :loading="approve.pending.value" @click="onApprove">核准</UButton>
           </template>

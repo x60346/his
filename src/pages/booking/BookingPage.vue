@@ -2,7 +2,7 @@
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { useCan } from '@/composables/useCan'
 import { computed, nextTick, ref, watch } from 'vue'
-import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X } from 'lucide-vue-next'
+import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X, CalendarX } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
@@ -10,6 +10,7 @@ import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import RegistrationSlip from '@/components/RegistrationSlip.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
+import DailyAdjust from '@/components/DailyAdjust.vue'
 import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
@@ -31,6 +32,8 @@ const can = useCan()
 const { data: notices } = useQuery(async () => (canNotify.value ? scheduleApi.listSuspendNotices() : []), [canNotify])
 const pendingNotices = computed(() => (notices.value ?? []).filter((n) => !n.notifiedAt))
 const noticesOpen = ref(false)
+// 停診、代診（權限 schedule.suspend：預設管理員，可指定給櫃台組長）：和系統管理 → 排班共用同一個元件
+const adjustOpen = ref(false)
 /** 哪幾診停診（同一診只列一次）：例「11/14 下午診 黃柏翰」 */
 const noticeSessions = computed(() => [...new Set(pendingNotices.value.map((n) => `${n.date.slice(5).replace('-', '/')} ${periodLabel[n.period]} ${n.doctorName}`))].join('、'))
 
@@ -298,6 +301,10 @@ function openIdentity(v: VisitView) {
       <UButton size="sm" variant="secondary" @click="noticesOpen = true">開啟名單</UButton>
     </div>
     <UDialog v-model="noticesOpen" title="停診通知" size="lg"><SuspendNotices /></UDialog>
+    <div v-if="can('schedule.suspend')" class="flex justify-end">
+      <UButton size="sm" variant="secondary" :icon="CalendarX" @click="adjustOpen = true">停診／代診</UButton>
+    </div>
+    <UDialog v-model="adjustOpen" title="停診／代診" size="xl"><DailyAdjust /></UDialog>
     <!--
       元素依 1 → 2 → 3 的順序排在同一層：手機依序往下堆疊，步驟就是 1、2、3。
       桌機用 col-start / row-start 排成左右兩欄（左：1、3、看診號；右：2）。

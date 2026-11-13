@@ -4,9 +4,10 @@
 import type { Role } from '@/types'
 import { db } from '@/mock/db'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission } from './http'
-import { checkPermissionRoles, PERMISSIONS, permDef, permits, rolesOf, type PermDef, type PermKey } from './permission-rules'
+import { checkPermissionRoles, PERMISSIONS, permDef, permits, ROLE_NAME as ROLE, rolesOf, type PermDef, type PermKey } from './permission-rules'
 
-const ROLE: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
+/** 被指定這項權限、帳號啟用中、而且有法規範圍內角色的人數 */
+const granteesOf = (d: PermDef) => db.users.filter((u) => u.active && u.grants?.includes(d.key) && u.roles.some((r) => d.candidates.includes(r))).length
 const roleList = (rs: Role[]) => (rs.length ? rs.map((r) => ROLE[r]).join('、') : '（無）')
 const settings = () => db.permissionSettings as Partial<Record<PermKey, Role[]>> | undefined
 
@@ -48,7 +49,7 @@ export function savePermissionRoles(key: PermKey, input: { roles: Role[]; reason
     const d = permDef(key)
     const roles = d.candidates.filter((r) => input.roles?.includes(r)) // 依目錄的順序存
     const errors: Record<string, string> = {}
-    const problem = checkPermissionRoles(d, (input.roles ?? []) as Role[])
+    const problem = checkPermissionRoles(d, (input.roles ?? []) as Role[], granteesOf(d))
     if (problem) errors.roles = problem
     if (!input.reason?.trim()) errors.reason = '請寫調整原因（會記在稽核紀錄）'
     failFields(errors)
@@ -81,6 +82,8 @@ export function setPermissionGrant(key: PermKey, userId: string, input: { on: bo
       u.grants = [...(u.grants ?? []), key]
     } else {
       if (!has) fail(`${u.name} 沒有被指定這項權限`, 'CONFLICT')
+      // 角色全部取消、只靠指定個人的：最後一個人不能收回（不然沒有人能做）
+      if (!rolesOf(d, settings()).length && u.active && granteesOf(d) <= 1) fail(`${u.name} 是最後一位能做「${d.label}」的人：請先開放角色或指定給別人`, 'CONFLICT')
       u.grants = u.grants!.filter((g) => g !== key)
       if (!u.grants.length) delete u.grants
     }

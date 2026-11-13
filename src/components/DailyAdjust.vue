@@ -1,16 +1,16 @@
 <script setup lang="ts">
-// 單日調整：某天某診的停診或代診。
-// 動手之前先看「會影響誰」：對話框先列出已掛號的病人，再讓管理員選擇代診（病人轉給同科醫師）或停診（退掛＋通知）。
+// 單日調整：某天某診的停診或代診（系統管理 → 排班、掛號頁共用；權限 schedule.suspend，可設定）。
+// 動手之前先看「會影響誰」：對話框先列出已掛號的病人，再選擇代診（病人轉給同科醫師）或停診（退掛＋通知）。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect } from '@/components/ui'
-import { adminApi, scheduleApi, type AffectedVisit, type SessionImpact, type SessionView } from '@/services'
+import { masterApi, scheduleApi, type AffectedVisit, type SessionImpact, type SessionView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, periodLabel, today, weekdayLabel } from '@/utils/date'
 
 const emit = defineEmits<{ suspended: [] }>()
 const date = ref(addDays(today(), 1))
 const deptId = ref<string | number | undefined>('')
-const { data: depts } = useQuery(() => adminApi.listDepartments())
+const { data: depts } = useQuery(() => masterApi.listDepartments())
 const { data, loading } = useQuery(
   async () => {
     const d = date.value
@@ -24,7 +24,7 @@ const sessions = computed(() => (data.value?.d === date.value ? data.value.list 
 const open = ref(false)
 const impact = ref<SessionImpact>()
 const form = reactive({ mode: 'substitute' as 'substitute' | 'suspend', doctorId: undefined as string | number | undefined, reason: '' })
-/** 停診完成後的通知名單（留在對話框裡讓管理員看到要打給誰） */
+/** 停診完成後的通知名單（留在對話框裡，看得到要打給誰） */
 const result = ref<AffectedVisit[] | null>(null)
 async function openAdjust(s: SessionView) {
   impact.value = await scheduleApi.getSessionImpact(s.id)

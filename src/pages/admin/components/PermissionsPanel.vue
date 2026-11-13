@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 權限：頁面存取（從路由表產生）＋操作權限（從權限目錄 permission-rules 產生，服務層 requirePermission 讀同一份）。
-// 只能在目錄允許的範圍內調整：固定的不能改；可調整的只能在「法規允許的角色」裡勾、至少留一個；主管型的可以指定給個人。
+// 只能在目錄允許的範圍內調整：固定的不能改；可調整的只能在「法規允許的角色」裡勾、至少留一個（可指定個人的，已指定了人就可以全部取消）；主管型的可以指定給個人。
 // 每次調整都要寫原因（稽核）；會讓人失去權限的，服務層先回 CONFLICT 列出帳號，這裡確認後帶 confirm 重送。
 import { computed, reactive, ref } from 'vue'
 import { Check, Lock, Minus, Pencil, UserPlus, X } from 'lucide-vue-next'

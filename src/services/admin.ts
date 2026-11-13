@@ -12,6 +12,7 @@ import { checkDiscountRule, copayOn, COPAY_KEYS, discountSummary, pickCopay, reg
 import { applyChange, checkFrom, nextChange } from './dated-rules'
 import { PASSWORD_HISTORY_MAX, passwordProblem } from './password-rules'
 import { rolesProblem } from './role-rules'
+import { PERMISSIONS, rolesOf } from './permission-rules'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
 
@@ -97,6 +98,17 @@ export function saveUser(input: UserInput): Promise<SafeUser> {
     if (old && old.roles.includes('admin') && old.active && (!roles.includes('admin') || !input.active)) {
       const admins = db.users.filter((u) => u.roles.includes('admin') && u.active)
       if (admins.length <= 1) fail('系統至少要保留一個啟用中的管理員帳號', 'CONFLICT')
+    }
+    // 只靠指定個人的權限（角色全部取消，例：藥庫作業只給藥庫藥師）：最後一位不能停用或拿掉相關角色，不然沒有人能做
+    if (old?.active && old.grants?.length) {
+      const settings = db.permissionSettings as never
+      for (const key of old.grants) {
+        const d = PERMISSIONS.find((x) => x.key === key)
+        if (!d || rolesOf(d, settings).length) continue
+        const stillHas = input.active && roles.some((r) => d.candidates.includes(r))
+        const others = db.users.filter((u) => u.id !== old.id && u.active && u.grants?.includes(key) && u.roles.some((r) => d.candidates.includes(r))).length
+        if (!stillHas && !others) fail(`${old.name} 是最後一位能做「${d.label}」的人：請先在權限設定開放角色或指定給別人`, 'CONFLICT')
+      }
     }
 
     const password = old ? old.password : input.password
