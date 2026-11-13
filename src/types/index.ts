@@ -732,6 +732,25 @@ export interface OrderQuery {
   resolution?: 'confirmed' | 'stopped' | 'modified'
 }
 
+/** 病房常備品項與基準量（藥師維護，藥劑部與護理部協議的清單）：低於基準量就補 */
+export interface WardStockItem {
+  ward: string
+  drugId: string
+  par: number
+}
+
+/** 病房點班（每班一次）：逐項實點，差異寫原因、自動調帳 */
+export interface WardCount {
+  id: string
+  ward: string
+  shift: '白班' | '小夜' | '大夜'
+  /** 這一班的日期（小夜跨午夜寫的算前一天） */
+  date: string
+  countedBy: string
+  at: string
+  lines: { drugId: string; book: number; counted: number; reason?: string }[]
+}
+
 /** 給藥紀錄（MAR） */
 export interface MarRecord {
   id: string
@@ -740,6 +759,8 @@ export interface MarRecord {
   /** 預計給藥時間 YYYY-MM-DD HH:mm */
   scheduledAt: string
   status: 'pending' | 'given' | 'held' | 'refused'
+  /** PRN、STAT 給藥扣哪裡：ward 病房常備；pharmacy 病房常備不足、改由住院藥局直送 */
+  stockFrom?: 'ward' | 'pharmacy'
   /** 實際給藥（或決定暫停、拒絕）的時間 */
   executedAt?: string
   /** 補登時才有：實際登打的時間（與 executedAt 不同時，畫面標示「補登」）。兩個都是事實，誰也不覆蓋誰 */
@@ -974,9 +995,11 @@ export interface StockLocation {
    * quarantine＝待報廢區：藥庫底下獨立的一區（退回的過期、破損品）。另開地點是因為同一個批號可能一半可用、一半是退回的破損品——
    * 在批號上標記會把好的那一半也鎖住。FEFO、開藥可用量、撥補、盤點都不會用到它；只能報廢或放回可用
    */
-  kind: 'warehouse' | 'pharmacy' | 'quarantine'
+  kind: 'warehouse' | 'pharmacy' | 'quarantine' | 'ward'
   /** 待報廢區屬於哪個藥庫 */
   parentId?: string
+  /** 病房常備（kind = ward）：哪個病房（病床的 ward） */
+  ward?: string
   /** 採購到貨入庫的地點（大型＝藥庫；小型＝唯一的藥局） */
   receivesPurchase: boolean
   /** 門診發藥從這裡扣（醫師開藥看的「可用量」也是這裡的） */

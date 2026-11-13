@@ -14,6 +14,7 @@ import VitalsPanel from './components/VitalsPanel.vue'
 import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
+import WardStockPanel from './components/WardStockPanel.vue'
 import { masterApi, nursingApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
@@ -50,6 +51,7 @@ const tabs = computed(() =>
   !adm.value
     ? [
         { key: 'tasks', label: '本班待辦' },
+        { key: 'stock', label: '常備點班' },
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -63,7 +65,7 @@ const tabs = computed(() =>
 // 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
 watch(admissionId, (id) => {
   if (id && tab.value === 'tasks') tab.value = 'mar'
-  else if (!id && tab.value !== 'handover') tab.value = 'tasks'
+  else if (!id && tab.value !== 'handover' && tab.value !== 'stock') tab.value = 'tasks'
 })
 
 // 本班待辦：取消選取病人就回到全病房清單；點清單的一列跳到該病人的對應分頁
@@ -153,6 +155,7 @@ const wardTotals = computed(() => ({
           <!-- 交班是病房層級，不必先選病人 -->
           <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
           <!-- 沒選病人時顯示全病房的本班待辦（以前是空白的「請選擇病人」）；點一列跳到該病人的對應分頁 -->
+          <WardStockPanel v-else-if="!adm && tab === 'stock'" :ward="ward" :clock="clock" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />

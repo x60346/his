@@ -464,7 +464,7 @@ export function listStockLocations(q: { includeInactive?: boolean } = {}): Promi
   return query(() => ({
     scale: db.hospitalScale,
     locations: db.stockLocations
-      .filter((l) => q.includeInactive || (l.active && l.kind !== 'quarantine'))
+      .filter((l) => q.includeInactive || (l.active && stockLoc.isWork(l)))
       .map((l) => ({ ...l, drugCount: drugCountAt(l.id), roles: rolesOf(l), ...(q.includeInactive ? { blockers: l.active ? locationBlockers(l) : [] } : {}) })),
     opd: stockLoc.opd(),
     receiving: stockLoc.receiving(),

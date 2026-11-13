@@ -2,7 +2,7 @@
 import { db } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { query, sessionRole, sessionUser } from './http'
-import { openQuery } from './nursing-rules'
+import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
 import { nameOf, openDeptTransfer, stockLoc } from './views'
 import { usableQty } from './stock-rules'
 import { suspendNoticeVisits } from './schedule'
@@ -35,6 +35,9 @@ export interface DashboardStats {
   udReturns: number
   udVerify: number
   udSendBack: number
+  /** 病房常備：低於基準量待補充的品項（住院藥局）；本班還沒點班的病房數（護理站，全院） */
+  wardRefillDue: number
+  wardCountDue: number
   /** 藥車交接：已核對送出、病房還沒點收的藥盒（護理站，全院）；病房回報不符、藥局還沒處理的（住院藥局） */
   udToReceive: number
   udIssues: number
@@ -91,6 +94,12 @@ export function getDashboard(): Promise<DashboardStats> {
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
+      wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,
+      wardCountDue: (() => {
+        const t = now()
+        const cur = shiftInstanceOf(shiftOf(t), t)
+        return db.stockLocations.filter((l) => l.kind === 'ward' && l.active && !db.wardCounts.some((c) => c.ward === l.ward && c.shift === cur.shift && c.date === cur.date)).length
+      })(),
       udToReceive: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'verified' && !b.receivedAt).length, 0),
       udIssues: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.issue && !b.issue.resolvedAt).length, 0),
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
@@ -114,7 +123,7 @@ export function getDashboard(): Promise<DashboardStats> {
         }
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
-      ...(db.stockLocations.length > 1
+      ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? { transferRequested: db.transfers.filter((x) => x.status === 'requested').length, transferIssued: db.transfers.filter((x) => x.status === 'issued').length }
         : {}),
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),

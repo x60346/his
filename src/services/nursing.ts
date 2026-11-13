@@ -272,7 +272,8 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
     const forced = status === 'given' ? holdForQuery(order, force) : undefined
     // 臨時（STAT）給藥用病房常備藥：給的時候扣住院藥局
-    if (status === 'given' && order.type === 'stat') wardStockOut(order, admitted(m.admissionId).admitNo, nurse.id)
+    const stock = status === 'given' && order.type === 'stat' ? wardStockOut(order, admitted(m.admissionId).admitNo, nurse.id) : undefined
+    if (stock) m.stockFrom = stock.from
     const noteText = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
     Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
@@ -295,10 +296,10 @@ export function givePrn(orderId: string, note: string, force?: { reason: string 
     if (!note.trim()) failField('note', '請註明給藥原因（例：體溫 38.5°C）')
     const forced = holdForQuery(o, force)
     // PRN 用病房常備藥：給的時候扣住院藥局
-    wardStockOut(o, admitted(o.admissionId).admitNo, nurse.id)
+    const stock = wardStockOut(o, admitted(o.admissionId).admitNo, nurse.id)
     const t = now()
     const text = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
-    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text }
+    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text, ...(stock ? { stockFrom: stock.from } : {}) }
     db.mar.push(m)
     audit(forced ? '疑問期間仍給藥' : 'PRN 給藥', `${o.content}：${text}`)
     return m

@@ -93,12 +93,18 @@ export const stockLoc = {
   ipd: () => (db.stockLocations.find((l) => l.dispensesIpd && l.active) ?? db.stockLocations.find((l) => l.dispensesOpd && l.active) ?? db.stockLocations[0]).id,
   /** 採購到貨入庫的地點 */
   receiving: () => (db.stockLocations.find((l) => l.receivesPurchase && l.active) ?? db.stockLocations[0]).id,
+  /** 病房常備地點（沒有就 undefined） */
+  ward: (ward: string) => db.stockLocations.find((l) => l.kind === 'ward' && l.ward === ward && l.active),
+  /** 一般作業的地點（不含待報廢區、病房常備）：地點選單、「是不是多地點」都看這個 */
+  isWork: (l: { kind: string }) => l.kind === 'warehouse' || l.kind === 'pharmacy',
   /** 指定的地點（沒指定＝門診藥局）；不存在或停用就擋 */
   usable(id?: string, opts: { quarantine?: boolean } = {}) {
     const loc = must(db.stockLocations.find((l) => l.id === (id || stockLoc.opd())), '庫存地點')
     if (!loc.active) fail(`${loc.name}已停用`)
-    // 待報廢區只能報廢或放回可用：進貨、盤點、撥補、查庫存清單都不行（記帳本身 postStock 帶 quarantine 才能進出）
+    // 待報廢區只能報廢或放回可用；病房常備只能補充、點班、給藥扣帳——進貨、盤點、撥補、查庫存清單都不行
+    // （記帳本身 postStock 帶 quarantine 才能進出）
     if (loc.kind === 'quarantine' && !opts.quarantine) fail(`${loc.name}只能報廢或放回可用`)
+    if (loc.kind === 'ward' && !opts.quarantine) fail(`${loc.name}只能補充、點班、給藥扣帳（在護理站與住院藥局操作）`)
     return loc
   },
   /** 某藥在某地點的批號 */

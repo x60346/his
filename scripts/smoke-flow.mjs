@@ -191,7 +191,7 @@ try {
   }
   ok(dbm.db.drugs.find((d) => d.id === 'M001').stock === stockBefore - 9, `發藥扣庫存 ${stockBefore} → ${stockBefore - 9}`)
   const lastTxn = dbm.db.stockTxns.filter((t) => t.drugId === 'M001').at(-1)
-  ok(lastTxn.type === 'dispense' && lastTxn.qty === -9 && lastTxn.ref === `領藥號 ${dp.pickupNo}` && lastTxn.balance === stockBefore - 9, `發藥寫入異動帳（${lastTxn.ref}，${lastTxn.qty}，結存 ${lastTxn.balance}）`)
+  ok(lastTxn.type === 'dispense' && lastTxn.qty === -9 && lastTxn.ref === `領藥號 ${dp.pickupNo}` && lastTxn.balance === dbm.db.drugLots.filter((l) => l.drugId === 'M001' && l.locationId === lastTxn.locationId).reduce((n, l) => n + l.qty, 0), `發藥寫入異動帳（結存是這個地點的）（${lastTxn.ref}，${lastTxn.qty}，結存 ${lastTxn.balance}）`)
   // B5：沒領的單跨日要帶著走；已發藥依「發藥日」算
   {
     const { addDays } = await load('/src/utils/date.ts')
@@ -2273,8 +2273,9 @@ try {
     const SR = await load('/src/services/stock-rules.ts')
     await as('dr01')
     const rows = await api.masterApi.listDrugs({ includeInactive: true })
-    const bad = rows.filter((d) => d.usable !== SR.usableQty(dbm.db.drugLots.filter((l) => l.drugId === d.id), T))
-    ok(rows.length > 0 && !bad.length, `藥品清單的可用量 = 未過期批號總和（和藥局發藥同一個 usableQty）${bad.length ? '：' + bad.map((d) => d.id).join('、') : ''}`)
+    const opdLoc = dbm.db.stockLocations.find((l) => l.dispensesOpd).id
+    const bad = rows.filter((d) => d.usable !== SR.usableQty(dbm.db.drugLots.filter((l) => l.drugId === d.id && l.locationId === opdLoc), T))
+    ok(rows.length > 0 && !bad.length, `藥品清單的可用量 = 門診藥局未過期批號總和（和藥局發藥同一個 usableQty；病房常備不算）${bad.length ? '：' + bad.map((d) => d.id).join('、') : ''}`)
     // 造一批過期品：帳上總量變多，可用量不變——開藥提示不能被它灌水
     const d0 = dbm.db.drugs.find((d) => d.id === 'M001')
     const before = rows.find((d) => d.id === 'M001')
@@ -4010,6 +4011,85 @@ try {
     await as('clerk01')
   }
 
+  // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
+  console.log('\n[病房常備]')
+  {
+    dbm.resetDatabase('small')
+    const W = api.wardStockApi
+    const db = () => dbm.db
+    const wards = db().stockLocations.filter((l) => l.kind === 'ward')
+    const w1 = wards[0]
+    const qtyAt = (drugId, loc) => db().drugLots.filter((l) => l.drugId === drugId && l.locationId === loc).reduce((n, l) => n + l.qty, 0)
+    ok(wards.length === 3 && db().wardStockItems.filter((x) => x.ward === w1.ward).length === 4 && qtyAt('M001', w1.id) === 25 && db().wardCounts.length === 3, `種子：3 個病房常備、各 4 個品項；${w1.name} Acetaminophen 25（基準 40，待補充）；昨天小夜都點過班`)
+    ok(ledgerBroken(db()).length === 0, '加上病房常備後帳本仍對得起來')
+    await as('ph01')
+    await expectError(() => api.inventoryApi.listInventory({ locationId: w1.id }), '把病房常備當一般地點查庫存')
+    await expectError(() => api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: 'M001', locationId: w1.id, qty: 1, lotNo: 'X', expiry: '2030-01-01' }), '進貨進病房常備')
+    ok(!(await api.inventoryApi.listStockLocations()).locations.some((l) => l.kind === 'ward'), '庫存頁的地點選單沒有病房常備')
+    ok((await api.dashboardApi.getDashboard()).wardRefillDue === 1, '首頁待辦（藥師）：病房常備待補充 1 項')
+    await as('nurse01')
+    let v = await W.getWardStock(w1.ward)
+    ok(v.rows.find((r) => r.drugId === 'M001')?.below && !v.shift.counted && v.lastCount?.shift === '小夜', '護理站：看得到存量、低於基準量、本班還沒點班（上次是昨天小夜）')
+    ok((await api.dashboardApi.getDashboard()).wardCountDue === 3, '首頁待辦（護理師）：3 個病房本班未點班')
+    await expectError(() => W.refillWard(w1.ward, [{ drugId: 'M001', qty: 15 }]), '護理師補充病房常備')
+    // 藥師補充：不能超過基準量；補到基準量
+    await as('ph01')
+    try {
+      await W.refillWard(w1.ward, [{ drugId: 'M001', qty: 20 }])
+      ok(false, '超過基準量應被擋下')
+    } catch (e) {
+      ok(e.fields?.['qty.M001']?.includes('超過基準量'), '補了會超過基準量 → 擋下')
+    }
+    const ipd = db().stockLocations.find((l) => l.dispensesIpd).id
+    const ipdBefore = qtyAt('M001', ipd)
+    const rf = await W.refillWard(w1.ward, [{ drugId: 'M001', qty: 15 }])
+    ok(qtyAt('M001', w1.id) === 40 && qtyAt('M001', ipd) === ipdBefore - 15 && db().stockTxns.filter((x) => x.ref === rf.no).length === 2 && db().auditLogs[0].action === '病房常備補充',
+      `補充 ${rf.no}：住院藥局 −15、${w1.name} +15（同批號），一步完成`)
+    ok((await api.dashboardApi.getDashboard()).wardRefillDue === 0 && ledgerBroken(db()).length === 0, '補完：待補充歸零，帳本仍對得起來')
+    // 常備品項維護
+    await expectError(() => W.saveWardStockItem(w1.ward, 'M001', 0), '櫃子裡還有就移除常備品項')
+    await expectError(() => W.saveWardStockItem(w1.ward, 'M010', 1.5), '基準量不是整數')
+    await W.saveWardStockItem(w1.ward, 'M010', 12)
+    ok(db().wardStockItems.some((x) => x.ward === w1.ward && x.drugId === 'M010' && x.par === 12) && (await W.getWardStock(w1.ward)).rows.find((r) => r.drugId === 'M010')?.below, '新增常備品項（還沒補，標低於基準量）')
+    await W.saveWardStockItem(w1.ward, 'M010', 0)
+    ok(!db().wardStockItems.some((x) => x.ward === w1.ward && x.drugId === 'M010'), '還沒放藥的品項可以移除')
+
+    // 點班：每一項都要點；差異要原因；帳上在點的時候變了要重來
+    await as('nurse01')
+    v = await W.getWardStock(w1.ward)
+    const all = (over = {}) => v.rows.map((r) => ({ drugId: r.drugId, book: r.onHand, counted: r.onHand, ...(over[r.drugId] ?? {}) }))
+    await expectError(() => W.countWard(w1.ward, { lines: all().slice(1) }), '漏點一項')
+    try {
+      await W.countWard(w1.ward, { lines: all({ M031: { counted: v.rows.find((r) => r.drugId === 'M031').onHand - 2 } }) })
+      ok(false, '差異沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.fields?.['reason.M031']?.includes('差 -2'), '有差異要寫原因（標在那一項）')
+    }
+    await expectError(() => W.countWard(w1.ward, { lines: all({ M001: { book: 39, counted: 39 } }) }), '帳上數量在點的時候變了')
+    const m31 = qtyAt('M031', w1.id)
+    const m26 = qtyAt('M026', w1.id)
+    const c = await W.countWard(w1.ward, { lines: all({ M031: { counted: m31 - 2, reason: '找不到，已通報' }, M026: { counted: m26 + 1, reason: '上一班補充未登打' } }) })
+    ok(qtyAt('M031', w1.id) === m31 - 2 && qtyAt('M026', w1.id) === m26 + 1 && c.lines.filter((l) => l.reason).length === 2 && db().auditLogs[0].detail.includes('找不到'), '點班差異自動調帳（盤虧 −2、盤盈 +1），原因寫進點班紀錄與稽核')
+    ok((await W.getWardStock(w1.ward)).shift.counted && (await api.dashboardApi.getDashboard()).wardCountDue === 2 && ledgerBroken(db()).length === 0, '本班已點班：首頁未點班的病房少一個；帳本仍對得起來')
+
+    // 給藥：扣病人所在病房；不夠改住院藥局直送（不擋給藥）
+    const prn = db().ipdOrders.find((o) => o.freq === 'PRN' && o.status === 'active' && o.drugId === 'M001' && db().admissions.find((a) => a.id === o.admissionId)?.status === 'admitted')
+    const pw = db().beds.find((b) => b.id === db().admissions.find((a) => a.id === prn.admissionId).bedId).ward
+    const pl = db().stockLocations.find((l) => l.kind === 'ward' && l.ward === pw)
+    const g1 = await api.nursingApi.givePrn(prn.id, '頭痛')
+    ok(g1.stockFrom === 'ward' && db().stockTxns.at(-1).locationId === pl.id, `PRN 給藥扣${pl.name}`)
+    // 把這個病房的 Acetaminophen 點成 0（全被拿走）→ 再給藥改由藥局直送
+    const pv = await W.getWardStock(pw)
+    await W.countWard(pw, { lines: pv.rows.map((r) => ({ drugId: r.drugId, book: r.onHand, counted: r.drugId === 'M001' ? 0 : r.onHand, reason: r.drugId === 'M001' ? '測試：櫃子空了' : undefined })) })
+    const ipdB = qtyAt('M001', ipd)
+    const g2 = await api.nursingApi.givePrn(prn.id, '再次頭痛')
+    ok(g2.stockFrom === 'pharmacy' && qtyAt('M001', ipd) === ipdB - prn.dose && db().stockTxns.at(-1).ref.startsWith('藥局直送'), '病房常備不夠：不擋給藥，改由住院藥局直送（給藥紀錄標「藥局直送」）')
+    ok(db().mar.find((m) => m.id === g2.id).stockFrom === 'pharmacy', '給藥紀錄記下扣哪裡')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/services/nursing.ts', 'utf8').includes('wardStockOut(') && !/stockLoc\.ipd\(\)/.test(readFileSync('src/services/nursing.ts', 'utf8')), 'PRN、STAT 扣帳只走 wardStockOut（護理站不自己決定扣哪裡）')
+    await as('clerk01')
+  }
+
   console.log('\n[住院調劑（UD）]')
   {
     dbm.resetDatabase('small')
@@ -4228,13 +4308,19 @@ try {
     await U.receiveUdReturn(extraRow.lineId, { qty: extraRow.expected })
     await expectError(() => U.receiveUdReturn(extraRow.lineId, { qty: 1 }), '已點收的再點收一次')
     ok(!(await U.getUdWork()).returns.some((x) => x.lineId === extraRow.lineId || x.lineId === stopRow.lineId), '點收後離開待退藥清單')
-    // PRN：病房常備，給的時候扣住院藥局
+    // PRN：病房常備，給的時候扣病人所在病房的常備（不在常備清單上的藥改由住院藥局直送）
     await as('nurse01')
     const prn = db().ipdOrders.find((o) => o.freq === 'PRN' && o.status === 'active' && db().drugs.find((d) => d.id === o.drugId && !d.doseUnit))
+    const prnWard = db().beds.find((b) => b.id === db().admissions.find((a) => a.id === prn.admissionId).bedId).ward
+    const wl = db().stockLocations.find((l) => l.kind === 'ward' && l.ward === prnWard)
+    const inWard = db().wardStockItems.some((x) => x.ward === prnWard && x.drugId === prn.drugId)
+    const wardQty = () => db().drugLots.filter((l) => l.drugId === prn.drugId && l.locationId === wl.id).reduce((n, l) => n + l.qty, 0)
     const bp = usableAt(prn.drugId)
-    await api.nursingApi.givePrn(prn.id, '體溫 38.5°C')
+    const bw = wardQty()
+    const mPrn = await api.nursingApi.givePrn(prn.id, '體溫 38.5°C')
     const last = db().stockTxns.at(-1)
-    ok(usableAt(prn.drugId) === bp - prn.dose && last.ref.startsWith('病房常備') && last.locationId === ipd, `PRN 給藥扣住院藥局（病房常備 ${prn.dose}）`)
+    ok(inWard ? wardQty() === bw - prn.dose && last.locationId === wl.id && last.ref.startsWith('病房常備') && mPrn.stockFrom === 'ward' && usableAt(prn.drugId) === bp : usableAt(prn.drugId) === bp - prn.dose && mPrn.stockFrom === 'pharmacy',
+      `PRN 給藥扣${inWard ? `病房常備（${wl.name} −${prn.dose}），住院藥局不動` : '住院藥局（不在常備清單：藥局直送）'}`)
     ok(!('wardStockOut' in api.nursingApi) && !('pendingReturn' in api.udApi) && !('wardStockOut' in api.udApi), '病房常備扣帳、待退計算都不對外（服務層內部）')
     // 出院：已調好、還沒給的劑量（出院時取消的排程、逾時沒給的）都要退
     {
@@ -4260,7 +4346,8 @@ try {
     const { buildSeed } = await load('/src/mock/seed.ts')
     const small = buildSeed({ scale: 'small' })
     const large = buildSeed({ scale: 'large' })
-    ok(small.stockLocations.length === 1 && large.stockLocations.map((l) => l.name).join('、') === '藥庫、門診藥局、住院藥局', `小型 1 個地點；大型 ${large.stockLocations.map((l) => l.name).join('、')}`)
+    const work = (x) => x.stockLocations.filter((l) => l.kind === 'warehouse' || l.kind === 'pharmacy')
+    ok(work(small).length === 1 && work(large).map((l) => l.name).join('、') === '藥庫、門診藥局、住院藥局' && small.stockLocations.filter((l) => l.kind === 'ward').length === 3, `小型 1 個作業地點；大型 ${work(large).map((l) => l.name).join('、')}；兩種規模都有 3 個病房常備`)
     // 全院總量：大型＝小型＋藥庫多進的那一批（示範用偏低、缺貨的藥沒有多進，兩邊一樣）
     const extra = (d) => large.stockTxns.filter((t) => t.drugId === d.id && t.type === 'receive' && t.lots[0]?.lotNo.endsWith('W')).reduce((a, t) => a + t.qty, 0)
     ok(large.drugs.every((d) => d.stock === small.drugs.find((x) => x.id === d.id).stock + extra(d)), '兩種規模的全院總量只差藥庫多進的那一批（其餘事件完全相同）')
@@ -4273,7 +4360,7 @@ try {
     ok(ledgerBroken(large).length === 0, '大型：每個地點的批號、帳本、結存都對得起來')
     const byType = (t) => [...new Set(large.stockTxns.filter((x) => x.type === t).map((x) => x.locationId))].join()
     ok(byType('dispense') === 'LOC-OPD,LOC-IPD' && large.stockTxns.filter((x) => x.type === 'dispense' && x.locationId === 'LOC-IPD').every((x) => x.ref.startsWith('UD')) && byType('receive') === 'LOC-WH' && byType('opening') === 'LOC-WH', '門診發藥從門診藥局扣、住院調劑從住院藥局扣；期初、進貨只進藥庫')
-    const outs = large.stockTxns.filter((x) => x.type === 'transfer-out')
+    const outs = large.stockTxns.filter((x) => x.type === 'transfer-out' && !x.ref?.startsWith('WR'))
     const unpaired = outs.filter((o) => {
       const i = large.stockTxns.find((x) => x.type === 'transfer-in' && x.ref === o.ref && x.drugId === o.drugId)
       return !i || i.qty !== -o.qty || JSON.stringify(i.lots.map((l) => [l.lotNo, l.qty])) !== JSON.stringify(o.lots.map((l) => [l.lotNo, -l.qty]))
@@ -4326,7 +4413,7 @@ try {
     ok(ledgerBroken(dbm.db).length === 0, '大型操作後，各地點帳本仍對得起來')
     // ---- 撥補單（大型醫院）：藥局請領 → 藥庫撥發（運送中）→ 藥局逐批簽收 ----
     const TRA = api.transferApi
-    const trTxns = dbm.db.stockTxns.filter((t) => t.type === 'transfer-out' || t.type === 'transfer-in')
+    const trTxns = dbm.db.stockTxns.filter((t) => (t.type === 'transfer-out' || t.type === 'transfer-in') && !t.ref?.startsWith('WR'))
     const orphanTr = trTxns.filter((t) => !dbm.db.transfers.some((x) => x.no === t.ref && x.status === 'received'))
     const dupLine = dbm.db.transfers.filter((x) => new Set(x.lines.map((l) => l.drugId)).size !== x.lines.length)
     ok(trTxns.length > 0 && !orphanTr.length && !dupLine.length, `種子：${trTxns.length} 筆撥出／撥入都對得到已簽收的撥補單（單號＝異動單號；一張單同一種藥只有一行）`)
@@ -4588,7 +4675,7 @@ try {
     ok(dashL.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested').length && dashL.transferIssued === 0, '首頁待辦（大型）：撥補待撥發、待簽收')
     ok(!Object.values(api).some((m) => m && typeof m === 'object' && ('inTransit' in m || 'inTransitTo' in m)), '內部查詢（運送中數量）不經 Api 對外')
     dbm.resetDatabase('small')
-    ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.length === 1, '再重建回小型')
+    ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.filter((l) => l.kind === 'pharmacy' || l.kind === 'warehouse').length === 1, '再重建回小型')
     await as('ph01')
     await expectError(() => api.transferApi.requestTransfer({ toLocationId: 'LOC-PH', lines: [{ drugId: 'M001', qty: 1 }] }), '小型醫院（只有一個藥局）請領')
     await expectError(() => api.transferApi.returnCandidates('LOC-PH'), '小型醫院（只有一個藥局）退回藥庫')

@@ -39,6 +39,8 @@ import type {
   VitalRecord,
   WeeklySlot,
   Consult,
+  WardStockItem,
+  WardCount,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
@@ -939,6 +941,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           { id: 'LOC-OPD', name: '門診藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: true, dispensesIpd: false, active: true },
           { id: 'LOC-IPD', name: '住院藥局', kind: 'pharmacy', receivesPurchase: false, dispensesOpd: false, dispensesIpd: true, active: true },
         ]
+  // 病房常備（每個病房一個地點）：PRN、STAT 從這裡扣。品項與基準量是藥劑部與護理部協議的清單（各病房相同，固定、不抽亂數）
+  codes.wards.forEach((w, i) => stockLocations.push({ id: `LOC-W${i + 1}`, name: `${w.split(' ')[0]} 病房常備`, kind: 'ward', ward: w, receivesPurchase: false, dispensesOpd: false, dispensesIpd: false, active: true }))
+  const WARD_PAR: [string, number][] = [['M001', 40], ['M031', 20], ['M039', 5], ['M026', 10]]
+  const wardStockItems: WardStockItem[] = codes.wards.flatMap((w) => WARD_PAR.map(([drugId, par]) => ({ ward: w, drugId, par })))
+  // 兩天前住院藥局補滿；第一個病房的 Acetaminophen 這兩天用掉 15 顆（示範「低於基準量、待補充」）
+  const wardRefillAt = `${addDays(T, -2)} 14:00`
+  const wardRefillNo = (i: number) => `WR${addDays(T, -2).replace(/-/g, '')}-0${i + 1}`
+  const wardStartQty = (wi: number, drugId: string, par: number) => (wi === 0 && drugId === 'M001' ? par - 15 : par)
   const recvLoc = stockLocations.find((l) => l.receivesPurchase)!.id
   const opdLoc = stockLocations.find((l) => l.dispensesOpd)!.id
   const ipdLoc = stockLocations.find((l) => l.dispensesIpd)!.id
@@ -967,6 +977,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // 住院調劑：從住院藥局扣（小型就是同一個藥局）
       ...udLines.filter((l) => l.drugId === drug.id && l.qty > 0).map((l) => ({ at: udVerifiedAt, qty: l.qty, ref: udNo, loc: ipdLoc, line: l })),
     ]
+    // 病房常備補充（住院藥局 → 病房）：不改變全院總量，只換地點
+    const wardMoves = codes.wards.flatMap((w, wi) => wardStockItems.filter((x) => x.ward === w && x.drugId === drug.id).map((x) => ({ kind: 'ward' as const, at: wardRefillAt, qty: wardStartQty(wi, x.drugId, x.par), ref: wardRefillNo(wi), loc: `LOC-W${wi + 1}` })))
     const udNeed = udLines.filter((l) => l.drugId === drug.id).reduce((n, l) => n + l.qty, 0)
     const receiveAt = `${addDays(T, -14)} 10:00`
     const totalOut = outs.reduce((s, o) => s + o.qty, 0)
@@ -984,7 +996,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       receive = outAfterExpiry + 20
       opening = Math.max(target + totalOut - receive, outBefore + 20)
     }
-    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string; loc?: string; line?: UdLine; disp?: Dispense })[] = [
+    const events: ({ kind: 'lot'; at: string; lot: Omit<DrugLot, 'locationId'>; type: StockTxn['type']; ref?: string } | { kind: 'out'; at: string; qty: number; ref: string; loc?: string; line?: UdLine; disp?: Dispense } | { kind: 'ward'; at: string; qty: number; ref: string; loc: string })[] = [
       { kind: 'lot' as const, at: `${addDays(T, -31)} 08:00`, type: 'opening' as const, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year - 1).slice(2)}${String(di).padStart(3, '0')}A`, expiry: oldExpiry, qty: opening, receivedAt: `${addDays(T, -31)} 08:00` } },
       ...(receive > 0 ? [{ kind: 'lot' as const, at: receiveAt, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}B`, expiry: `${year + 2}-0${int(1, 9)}-28`, qty: receive, receivedAt: receiveAt } }] : []),
       // 大型：藥庫的備量比單一藥局多——一般的藥另外進一批（安全庫存 5 倍：撥給藥局後仍高於藥庫自己的 3 倍安全量；固定批號效期、不抽亂數）。
@@ -993,6 +1005,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         ? [{ kind: 'lot' as const, at: `${addDays(T, -7)} 10:00`, type: 'receive' as const, ref: `PO${T.replace(/-/g, '').slice(2, 6)}${String(di).padStart(3, '0')}W`, lot: { id: id('LOT'), drugId: drug.id, lotNo: `L${String(year).slice(2)}${String(di).padStart(3, '0')}W`, expiry: `${year + 2}-06-30`, qty: drug.safetyStock * 5, receivedAt: `${addDays(T, -7)} 10:00` } }]
         : []),
       ...outs.map((o) => ({ kind: 'out' as const, ...o })),
+      ...wardMoves,
     ].sort((a, b) => a.at.localeCompare(b.at))
 
     // 各地點的批號與結存（小型只有一個地點，recvLoc === opdLoc，行為和以前完全相同）
@@ -1003,12 +1016,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       balance[loc] = (balance[loc] ?? 0) + qty
       stockTxns.push({ id: id('ST'), drugId: drug.id, locationId: loc, at: when, type, qty, balance: balance[loc], lots: moved, ref, userId: 'U301' })
     }
-    /** 從藥庫撥 qty 到 to（FEFO），兩筆異動同一個單號 */
-    const transfer = (to: string, qty: number, when: string, ref: string) => {
-      const takes = allocateFefo(at(recvLoc), qty, when)
-      if (!takes) throw new Error(`種子資料撥補錯誤：${drug.id} 於 ${when} 藥庫可用量不足（需 ${qty}）`)
+    /** 從 from 撥 qty 到 to（FEFO），兩筆異動同一個單號 */
+    const move = (from: string, to: string, qty: number, when: string, ref: string) => {
+      const takes = allocateFefo(at(from), qty, when)
+      if (!takes) throw new Error(`種子資料撥補錯誤：${drug.id} 於 ${when} ${from} 可用量不足（需 ${qty}）`)
       for (const t of takes) lots.find((l) => l.id === t.lotId)!.qty -= t.qty
-      post(recvLoc, 'transfer-out', when, -qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ref)
+      post(from, 'transfer-out', when, -qty, takes.map((t) => ({ lotNo: t.lotNo, qty: -t.qty })), ref)
       for (const t of takes) {
         const src = lots.find((l) => l.id === t.lotId)!
         let dst = lots.find((l) => l.locationId === to && l.lotNo === src.lotNo)
@@ -1020,9 +1033,20 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       }
       post(to, 'transfer-in', when, qty, takes.map((t) => ({ lotNo: t.lotNo, qty: t.qty })), ref)
     }
+    /** 從藥庫撥 qty 到 to（FEFO） */
+    const transfer = (to: string, qty: number, when: string, ref: string) => move(recvLoc, to, qty, when, ref)
     let xfer = 0
     const xferRef = () => `撥補 TR${drug.id}-${String(++xfer).padStart(2, '0')}`
     for (const ev of events) {
+      if (ev.kind === 'ward') {
+        // 大型：住院藥局不夠補，先向藥庫請領
+        if (ipdLoc !== recvLoc) {
+          const have = usableQty(at(ipdLoc), ev.at)
+          if (have < ev.qty) transfer(ipdLoc, ev.qty - have + 10, ev.at, xferRef())
+        }
+        move(ipdLoc, ev.loc, ev.qty, ev.at, ev.ref)
+        continue
+      }
       if (ev.kind === 'lot') {
         lots.push({ ...ev.lot, locationId: recvLoc })
         post(recvLoc, ev.type, ev.at, ev.lot.qty, [{ lotNo: ev.lot.lotNo, qty: ev.lot.qty }], ev.ref)
@@ -1141,7 +1165,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   //   2. 請領中：門診藥局為上面那張補貨申請向藥庫請領（藥庫打開就有東西可撥）
   const transfers: TransferOrder[] = []
   if (scale === 'large') {
-    const outs = stockTxns.filter((t) => t.type === 'transfer-out').sort((x, y) => x.at.localeCompare(y.at))
+    // 病房常備補充（WR）不是撥補單：住院藥局 → 病房，另有自己的單號
+    const outs = stockTxns.filter((t) => t.type === 'transfer-out' && !t.ref?.startsWith('WR')).sort((x, y) => x.at.localeCompare(y.at))
     // 同一天、同一個藥局合成一張；同一種藥同一天撥兩次就另開一張（一張單裡同一種藥只有一行）
     const groups: { day: string; to: string; list: StockTxn[] }[] = []
     for (const o of outs) {
@@ -1327,6 +1352,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     nursingNotes,
     progressNotes,
     consults,
+    wardStockItems,
+    wardCounts: codes.wards.map((w, wi): WardCount => ({
+      id: `WC-SEED-${wi + 1}`, ward: w, shift: '小夜', date: addDays(T, -1), countedBy: 'U202', at: `${addDays(T, -1)} 23:30`,
+      lines: wardStockItems.filter((x) => x.ward === w).map((x) => ({ drugId: x.drugId, book: wardStartQty(wi, x.drugId, x.par), counted: wardStartQty(wi, x.drugId, x.par) })),
+    })),
     handovers,
     preventItems: structuredClone(codes.preventItems),
     preventRecords,

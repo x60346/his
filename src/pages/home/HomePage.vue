@@ -54,6 +54,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['pharmacist'], label: '住院待退藥', count: s.value.udReturns, hint: '病房已送回，待點收入庫', route: 'ud', icon: Pill },
     { roles: ['pharmacist'], label: '病房回報不符', count: s.value.udIssues, hint: '藥車點收時發現短少、破損，待藥局處理', route: 'ud', icon: AlertTriangle, urgent: true },
     { roles: ['nurse'], label: '藥車待點收', count: s.value.udToReceive, hint: '藥局已核對送出的藥盒（全院），在護理站本班待辦點收', route: 'nursing', icon: Pill },
+    { roles: ['pharmacist'], label: '病房常備待補充', count: s.value.wardRefillDue, hint: '各病房低於基準量的品項，在住院藥局補充', route: 'ud', icon: Pill },
+    { roles: ['nurse'], label: '本班未點班', count: s.value.wardCountDue, hint: '病房常備還沒點班的病房（全院），在護理站「常備點班」', route: 'nursing', icon: Pill },
     { roles: ['nurse'], label: '待送回藥局', count: s.value.udSendBack, hint: '沒給的 UD 藥（含出院病人），在護理站本班待辦送回', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },

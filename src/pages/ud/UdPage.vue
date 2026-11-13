@@ -11,6 +11,7 @@ import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Undo2 } from '
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/components/ui'
 import { udApi, type UdIssueRow, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
 import ReasonDialog from '@/components/ReasonDialog.vue'
+import WardRefillCard from './components/WardRefillCard.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 
@@ -196,6 +197,8 @@ async function confirmReturn() {
             </ul>
           </div>
         </UCard>
+
+        <WardRefillCard />
 
         <UCard :padded="false">
           <template #title>

@@ -301,7 +301,7 @@ export function savePreventItem(input: PreventItem): Promise<PreventItem> {
 
 // ---------- 展示資料 ----------
 export function seedInfo(): { seededAt: string; stale: boolean; schema: number; scale: HospitalScale; locations: string[] } {
-  return { seededAt: db.seededAt, stale: isSeedStale(), schema: SCHEMA_VERSION, scale: db.hospitalScale, locations: db.stockLocations.filter((l) => l.active).map((l) => l.name) }
+  return { seededAt: db.seededAt, stale: isSeedStale(), schema: SCHEMA_VERSION, scale: db.hospitalScale, locations: db.stockLocations.filter((l) => l.active && (l.kind === 'warehouse' || l.kind === 'pharmacy')).map((l) => l.name) }
 }
 
 /** 重置為今天的展示資料；可選醫院規模（不給就沿用目前的）。登入狀態保留，因為使用者 id 在種子中固定 */

@@ -14,7 +14,7 @@ const ui = useUi()
 const can = useCan()
 const { data, loading } = useQuery(() => inventoryApi.listStockLocations({ includeInactive: true }))
 const locations = computed(() => data.value?.locations ?? [])
-const kindLabel = (k: StockLocationView['kind']) => (k === 'warehouse' ? '藥庫' : k === 'quarantine' ? '待報廢區' : '藥局')
+const kindLabel = (k: StockLocationView['kind']) => (k === 'warehouse' ? '藥庫' : k === 'quarantine' ? '待報廢區' : k === 'ward' ? '病房常備' : '藥局')
 const roleLabel = (r: LocationRole) => LOCATION_ROLES.find((x) => x.key === r)!.label
 
 // ---------- 新增／編輯 ----------
@@ -35,7 +35,7 @@ async function submit() {
 const picks = reactive<Record<LocationRole, string>>({ opd: '', ipd: '', receiving: '' })
 const holderOf = (r: (typeof LOCATION_ROLES)[number]) => locations.value.find((l) => l.active && l[r.flag])
 const optionsFor = (r: (typeof LOCATION_ROLES)[number]) =>
-  locations.value.filter((l) => l.active && !l[r.flag] && l.kind !== 'quarantine' && (!r.pharmacyOnly || l.kind === 'pharmacy')).map((l) => ({ label: `${l.name}（${kindLabel(l.kind)}）`, value: l.id }))
+  locations.value.filter((l) => l.active && !l[r.flag] && l.kind !== 'quarantine' && l.kind !== 'ward' && (!r.pharmacyOnly || l.kind === 'pharmacy')).map((l) => ({ label: `${l.name}（${kindLabel(l.kind)}）`, value: l.id }))
 async function moveRole(input: { role: LocationRole; locationId: string }) {
   try {
     return await inventoryApi.setLocationRole(input)

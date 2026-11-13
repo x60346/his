@@ -115,9 +115,17 @@ export function offsetRestock(drugId: string, txn: StockTxn, userId: string): { 
  * PRN、STAT 給藥用病房常備藥（屬住院藥局管）：給藥時直接扣住院藥局，不等藥局調劑——需要時就要給。
  * 無法逐劑換算的（整瓶、整支在病房）不扣，回傳 undefined。庫存不足照樣擋：帳上沒有，病房櫃裡多半也沒有
  */
-export function wardStockOut(o: IpdOrder, admitNo: string, userId: string): StockTxn | undefined {
+export function wardStockOut(o: IpdOrder, admitNo: string, userId: string): { txn: StockTxn; from: 'ward' | 'pharmacy' } | undefined {
   const drug = must(find.drug(o.drugId ?? ''), '藥品')
   const per = udPerDose(drug, o.dose)
   if (!per) return undefined
-  return postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: stockLoc.ipd(), qty: per, ref: `病房常備 ${admitNo}` }, userId)
+  // 扣病人所在病房的常備；不夠（或這個病房沒有常備）就改由住院藥局直送——不擋給藥，給藥紀錄標出來、藥師之後補充
+  const a = find.admission(o.admissionId)
+  const ward = a?.bedId ? find.bed(a.bedId)?.ward : undefined
+  const wl = ward ? stockLoc.ward(ward) : undefined
+  const at = now()
+  if (wl && usableQty(stockLoc.lots(drug.id, wl.id), at) >= per) {
+    return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: wl.id, qty: per, ref: `病房常備 ${admitNo}` }, userId), from: 'ward' }
+  }
+  return { txn: postStock({ kind: 'out', type: 'dispense', drugId: drug.id, locationId: stockLoc.ipd(), qty: per, ref: `藥局直送（病房常備不足） ${admitNo}` }, userId), from: 'pharmacy' }
 }
