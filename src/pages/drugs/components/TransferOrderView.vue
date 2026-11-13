@@ -3,9 +3,10 @@
 //   新請領（藥局）：從需求清單（低於安全庫存、門診藥局的補貨申請）勾選或自行加品項 → 送出請領
 //   請領中：藥庫每一行填實撥（預設＝請領量與藥庫可用的較小者，可少撥、0＝這次不撥）→ 撥發；或取消（寫原因）
 //   運送中：藥局逐批填實收（預設＝撥發量），短少寫原因 → 簽收入帳
+// 退回藥庫：待審核（藥庫逐批填同意收多少，少收寫原因；或整張不收）→ 已核准（藥局送出才扣帳）→ 運送中 → 藥庫簽收
 // 數量能不能撥、能不能收由服務層判斷；這裡照資料顯示、把欄位錯誤標在那一列。
 import { computed, reactive, ref, watch } from 'vue'
-import { PackageCheck, Plus, Send, Trash2, Truck } from 'lucide-vue-next'
+import { Ban, Check, PackageCheck, Plus, Send, Trash2, Truck } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { masterApi, transferApi } from '@/services'
 import { today } from '@/utils/date'
@@ -13,7 +14,7 @@ import type { ReturnDisposition } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
-import { TRANSFER_STATUS } from './transferStatus'
+import { transferStatusOf } from './transferStatus'
 
 const props = defineProps<{ transferId?: string; toLocationId: string; toLocationName?: string }>()
 const emit = defineEmits<{ created: [id: string] }>()
@@ -93,6 +94,36 @@ async function onReceive() {
   await receive.run(t.id, { received, shortReasons: { ...shortReasons }, ...(t.kind === 'return' ? { dispositions: { ...disp }, rejectReasons: { ...rejectReasons } } : {}) })
 }
 
+// ---------- 退回藥庫：審核、不收、送出 ----------
+const approveQty = reactive<Record<string, number[]>>({})
+const approveReasons = reactive<Record<string, string>>({})
+watch(tr, (t) => {
+  if (t?.kind !== 'return' || t.status !== 'requested') return
+  for (const l of t.lines) if (!approveQty[l.id]) approveQty[l.id] = (l.lots ?? []).map((x) => x.requestedQty ?? x.qty)
+}, { immediate: true })
+const lessThanAsked = (lineId: string) => (tr.value?.lines.find((l) => l.id === lineId)?.lots ?? []).some((x, k) => (Number(approveQty[lineId]?.[k]) || 0) < (x.requestedQty ?? x.qty))
+const approve = useAction(transferApi.approveReturn, { success: (t) => `已核准 ${t.no}：等${t.fromName}送出` })
+async function onApprove() {
+  const t = tr.value
+  if (!t) return
+  const approved = Object.fromEntries(Object.entries(approveQty).map(([k, v]) => [k, v.map((x) => Number(x))]))
+  await approve.run(t.id, { approved, reasons: { ...approveReasons } })
+}
+const declineOpen = ref(false)
+const declineReason = ref('')
+const decline = useAction(transferApi.declineReturn, { success: (t) => `${t.no} 不收：藥留在${t.fromName}` })
+async function onDecline() {
+  if (tr.value && (await decline.run(tr.value.id, declineReason.value))) declineOpen.value = false
+}
+const ship = useAction(transferApi.shipReturn, { success: (t) => `${t.no} 已送出：運送中，等${t.toName}簽收` })
+async function onShip() {
+  const t = tr.value
+  if (!t) return
+  const short = t.lines.some((l) => (l.lots ?? []).some((x, k) => (x.approvedQty ?? 0) > (l.lotsOnHand?.[k] ?? 0)))
+  const ok = await ui.confirm({ title: '送出退回', message: `從${t.fromName}送出藥庫同意收的批號，這時才扣帳（運送中）。${short ? '\n有批號已經發掉一些，照現有的少送。' : ''}`, okText: '送出' })
+  if (ok) await ship.run(t.id)
+}
+
 // ---------- 取消 ----------
 const cancelOpen = ref(false)
 const cancelReason = ref('')
@@ -100,7 +131,8 @@ const cancel = useAction(transferApi.cancelTransfer, { success: (t) => `已取�
 async function onCancel() {
   if (tr.value && (await cancel.run(tr.value.id, cancelReason.value))) cancelOpen.value = false
 }
-const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.value[k] || ''
+const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.value[k] || approve.fieldErrors.value[k] || ''
+const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.status === 'requested' || tr.value.status === 'approved'))
 </script>
 
 <template>
@@ -146,8 +178,12 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
       <template v-else-if="tr">
         <header class="flex flex-wrap items-start gap-2">
           <div class="min-w-0 flex-1">
-            <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ tr.no }}<UBadge v-if="tr.kind === 'return'" tone="gray">退回藥庫</UBadge><UBadge :tone="TRANSFER_STATUS[tr.status].tone">{{ TRANSFER_STATUS[tr.status].label }}</UBadge></h2>
-            <p v-if="tr.kind === 'return'" class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 退回・原因：{{ tr.returnReason }}</p>
+            <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ tr.no }}<UBadge v-if="tr.kind === 'return'" tone="gray">退回藥庫</UBadge><UBadge :tone="transferStatusOf(tr).tone">{{ transferStatusOf(tr).label }}</UBadge></h2>
+            <template v-if="tr.kind === 'return'">
+              <p class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 申請退回・原因：{{ tr.returnReason }}</p>
+              <p v-if="tr.approvedByName" class="text-xs text-slate-500">{{ tr.approvedByName }} {{ md(tr.approvedAt) }} 核准</p>
+              <p v-if="tr.issuedByName" class="text-xs text-slate-500">{{ tr.issuedByName }} {{ md(tr.issuedAt) }} 送出</p>
+            </template>
             <template v-else>
               <p class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 請領<template v-if="tr.note">・{{ tr.note }}</template></p>
               <p v-if="tr.issuedByName" class="text-xs text-slate-500">{{ tr.issuedByName }} {{ md(tr.issuedAt) }} 撥發</p>
@@ -155,7 +191,7 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
             <p v-if="tr.receivedByName" class="text-xs text-emerald-700">{{ tr.receivedByName }} {{ md(tr.receivedAt) }} 簽收</p>
             <p v-if="tr.status === 'cancelled'" class="text-xs text-slate-500">{{ tr.cancelledByName }} 取消：{{ tr.cancelReason }}</p>
           </div>
-          <UButton v-if="tr.status === 'requested' && isPharmacist" size="sm" variant="ghost" @click="(cancelReason = ''), (cancelOpen = true)">取消</UButton>
+          <UButton v-if="(tr.status === 'requested' || (tr.kind === 'return' && tr.status === 'approved')) && isPharmacist" size="sm" variant="ghost" @click="(cancelReason = ''), (cancelOpen = true)">{{ tr.kind === 'return' ? '取消申請' : '取消' }}</UButton>
         </header>
 
         <div class="overflow-x-auto rounded-md border border-slate-200">
@@ -164,9 +200,10 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
               <tr>
                 <th class="px-3 py-1.5 text-left font-medium">藥品</th>
                 <th class="px-2 text-right font-medium">{{ tr.kind === 'return' ? '退回' : '請領' }}</th>
-                <th v-if="tr.status === 'requested'" class="px-2 text-right font-medium">藥庫可用</th>
+                <th v-if="tr.status === 'requested' && tr.kind !== 'return'" class="px-2 text-right font-medium">藥庫可用</th>
                 <th v-if="tr.kind !== 'return'" class="px-2 text-right font-medium">{{ tr.status === 'requested' ? '實撥' : '撥發' }}</th>
-                <th v-if="tr.status !== 'requested'" class="px-3 text-left font-medium">批號（效期）・{{ tr.status === 'issued' ? '實收' : '已收' }}</th>
+                <th v-if="isOpenReturn" class="px-3 text-left font-medium">批號（效期）・申請 → 同意收<template v-if="tr.status === 'approved'">・藥局現有</template></th>
+                <th v-else-if="tr.status !== 'requested'" class="px-3 text-left font-medium">批號（效期）・{{ tr.status === 'issued' ? '實收' : '已收' }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
@@ -176,7 +213,7 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
                   <div class="text-xs text-slate-500">{{ l.drugNameZh }}・{{ l.spec }}<template v-if="l.restockId">・補貨申請</template></div>
                 </td>
                 <td class="px-2 text-right">{{ l.qty }} <span class="text-xs text-slate-400">{{ l.unit }}</span></td>
-                <td v-if="tr.status === 'requested'" class="px-2 text-right text-slate-600">{{ l.available ?? '盤點中' }}</td>
+                <td v-if="tr.status === 'requested' && tr.kind !== 'return'" class="px-2 text-right text-slate-600">{{ l.available ?? '盤點中' }}</td>
                 <td v-if="tr.kind !== 'return'" class="whitespace-nowrap px-2 text-right">
                   <template v-if="tr.status === 'requested' && isPharmacist">
                     <input v-model.number="issueQty[l.id]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 實撥數量`" />
@@ -184,7 +221,28 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
                   </template>
                   <span v-else>{{ l.issuedQty ?? '' }}</span>
                 </td>
-                <td v-if="tr.status !== 'requested'" class="px-3 py-1.5">
+                <td v-if="isOpenReturn" class="px-3 py-1.5">
+                  <div v-for="(x, k) in l.lots ?? []" :key="x.lotNo" class="flex flex-wrap items-center gap-2 text-xs">
+                    <span class="w-28 text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
+                    <span class="text-slate-500">申請 {{ x.requestedQty ?? x.qty }}</span>
+                    <template v-if="tr.status === 'requested' && isPharmacist && approveQty[l.id]">
+                      <span class="text-slate-400">→</span>
+                      <input v-model.number="approveQty[l.id][k]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 批號 ${x.lotNo} 同意收`" />
+                      <span v-if="err(`approve-${l.id}-${k}`)" class="text-red-600">{{ err(`approve-${l.id}-${k}`) }}</span>
+                    </template>
+                    <template v-if="tr.status === 'approved'">
+                      <span :class="(x.approvedQty ?? 0) < (x.requestedQty ?? x.qty) ? 'font-medium text-amber-800' : 'text-slate-600'">→ 同意 {{ x.approvedQty }}</span>
+                    </template>
+                    <span v-if="l.lotsOnHand" :class="(l.lotsOnHand[k] ?? 0) < (x.approvedQty ?? x.requestedQty ?? x.qty) ? 'font-medium text-red-700' : 'text-slate-400'">藥局現有 {{ l.lotsOnHand[k] }}</span>
+                    <UBadge v-if="x.expiry < todayStr" tone="red">已過期</UBadge>
+                  </div>
+                  <template v-if="tr.status === 'requested' && isPharmacist && lessThanAsked(l.id)">
+                    <input v-model="approveReasons[l.id]" type="text" placeholder="少收原因：藥庫也滿了、請藥局自行用完…" :class="['form-control mt-1 w-64 text-xs', err(`reason-${l.id}`) && 'form-control-error']" :aria-label="`${l.drugName} 少收原因`" />
+                    <div v-if="err(`reason-${l.id}`)" class="text-xs text-red-600">{{ err(`reason-${l.id}`) }}</div>
+                  </template>
+                  <p v-if="l.declineReason" class="text-xs text-amber-800">少收：{{ l.declineReason }}</p>
+                </td>
+                <td v-else-if="tr.status !== 'requested'" class="px-3 py-1.5">
                   <div v-for="(x, k) in l.lots ?? []" :key="x.lotNo" class="flex items-center gap-2 text-xs">
                     <span class="w-28 text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
                     <template v-if="tr.status === 'issued' && isPharmacist && recv[l.id]">
@@ -213,18 +271,34 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
                   </template>
                   <p v-if="l.shortReason" class="text-xs text-amber-800">短少 {{ l.shortQty }}：{{ l.shortReason }}</p>
                   <p v-if="l.rejectReason" class="text-xs text-amber-800">拒收：{{ l.rejectReason }}（退回{{ tr.fromName }}）</p>
+                  <p v-if="l.declineReason" class="text-xs text-slate-500">審核少收：{{ l.declineReason }}</p>
+                  <p v-if="l.shipNote" class="text-xs text-amber-800">送出：{{ l.shipNote }}</p>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
         <div v-if="isPharmacist" class="flex justify-end gap-2">
-          <UButton v-if="tr.status === 'requested'" size="sm" :icon="Truck" :loading="issue.pending.value" @click="onIssue">撥發</UButton>
+          <UButton v-if="tr.status === 'requested' && tr.kind !== 'return'" size="sm" :icon="Truck" :loading="issue.pending.value" @click="onIssue">撥發</UButton>
+          <template v-if="tr.status === 'requested' && tr.kind === 'return'">
+            <UButton size="sm" variant="secondary" :icon="Ban" @click="(declineReason = ''), (declineOpen = true)">不收</UButton>
+            <UButton size="sm" :icon="Check" :loading="approve.pending.value" @click="onApprove">核准</UButton>
+          </template>
+          <UButton v-if="tr.status === 'approved'" size="sm" :icon="Send" :loading="ship.pending.value" @click="onShip">送出</UButton>
           <UButton v-if="tr.status === 'issued'" size="sm" :icon="PackageCheck" :loading="receive.pending.value" @click="onReceive">簽收入帳</UButton>
         </div>
+        <p v-if="tr.kind === 'return' && tr.status === 'requested'" class="text-xs text-slate-500">待{{ tr.toName }}審核：逐批填同意收多少（少收或不收寫原因），或整張「不收」。藥還在{{ tr.fromName }}、還沒扣帳，期間照常發藥。</p>
+        <p v-if="tr.status === 'approved'" class="text-xs text-slate-500">{{ tr.toName }}已同意：{{ tr.fromName }}按「送出」才扣帳（運送中）。批號申請後已發掉一些的，照現有的少送。</p>
         <p v-if="tr.status === 'issued'" class="text-xs text-slate-500">運送中：{{ tr.fromName }}已扣、{{ tr.toName }}還沒入帳。照實物逐批填實收，短少寫原因。<template v-if="tr.kind === 'return'">退回的每一批選「入庫」（可用）、「待報廢」（放待報廢區，過期的只能這樣）或「拒收退回」（寫原因，帳回到{{ tr.fromName }}）。</template></p>
       </template>
 
+      <UDialog v-model="declineOpen" title="不收這張退回" size="sm" @submit="onDecline">
+        <UTextarea v-model="declineReason" label="不收的原因" :rows="2" placeholder="例：近效期請藥局自行用完、改向廠商退貨" :error="decline.fieldErrors.value.reason" />
+        <template #footer>
+          <UButton variant="secondary" @click="declineOpen = false">返回</UButton>
+          <UButton type="submit" variant="danger" :loading="decline.pending.value">不收</UButton>
+        </template>
+      </UDialog>
       <UDialog v-model="cancelOpen" title="取消撥補單" size="sm" @submit="onCancel">
         <UTextarea v-model="cancelReason" label="取消原因" :rows="2" :error="cancel.fieldErrors.value.reason" />
         <template #footer>

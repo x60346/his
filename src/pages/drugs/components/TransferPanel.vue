@@ -10,7 +10,7 @@ import { useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import TransferOrderView from './TransferOrderView.vue'
 import ReturnToWarehouse from './ReturnToWarehouse.vue'
-import { TRANSFER_STATUS } from './transferStatus'
+import { transferStatusOf } from './transferStatus'
 
 const props = defineProps<{ locationId: string; locationName?: string; isPharmacy: boolean }>()
 const auth = useAuth()
@@ -38,7 +38,7 @@ const selectedId = ref<string>()
               <span class="block truncate text-xs text-slate-500">{{ t.fromName }} → {{ t.toName }}・{{ t.lines.length }} 項・{{ t.requestedAt.slice(5, 16).replace('-', '/') }}</span>
               <span v-if="t.note || t.returnReason" class="block truncate text-xs text-slate-500">{{ t.returnReason ?? t.note }}</span>
             </span>
-            <UBadge :tone="TRANSFER_STATUS[t.status].tone">{{ TRANSFER_STATUS[t.status].label }}</UBadge>
+            <UBadge :tone="transferStatusOf(t).tone">{{ transferStatusOf(t).label }}</UBadge>
           </button>
         </li>
       </ul>

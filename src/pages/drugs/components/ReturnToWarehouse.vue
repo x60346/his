@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 退回藥庫（藥局）：逐批勾選要退的（過期、近效期、存太多的排前面），填數量、寫原因 → 送出就從這個藥局扣、運送中；
-// 藥庫在同一張撥補單簽收入帳。能不能退、數量夠不夠由服務層判斷，錯誤標在那一列。
+// 退回藥庫（藥局）：逐批勾選要退的（過期、近效期、存太多的排前面），填數量、寫原因 → 送出申請（不扣帳）；
+// 藥庫審核（逐批同意、少收、不收）→ 藥局送出才扣、運送中 → 藥庫簽收入帳。能不能退、數量夠不夠由服務層判斷，錯誤標在那一列。
 import { computed, reactive, ref } from 'vue'
 import { Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UQueryState, UTextarea } from '@/components/ui'
@@ -28,7 +28,7 @@ const pickedList = computed(() => (cands.value ?? []).filter(isPicked))
 const reason = ref('')
 const presets = ['近效期，退回藥庫統一處理', '請領過多', '已過期，送藥庫集中報廢', '品質疑慮（外觀異常）']
 
-const send = useAction(transferApi.returnToWarehouse, { success: (t) => `已退回 ${t.no}：運送中，等${t.toName}簽收` })
+const send = useAction(transferApi.returnToWarehouse, { success: (t) => `已申請退回 ${t.no}：等${t.toName}審核（還沒扣帳）` })
 // 服務層的列錯誤用送出的順序（line-0…）；換算回批號，標在那一列
 const errOf = (c: ReturnCandidate) => {
   const i = pickedList.value.findIndex((x) => x.lotId === c.lotId)
@@ -38,7 +38,7 @@ async function onSend() {
   const lines = pickedList.value.map((c) => ({ lotId: c.lotId, qty: Number(picked[c.lotId]) }))
   if (lines.length) {
     const total = lines.reduce((n, l) => n + l.qty, 0)
-    const ok = await ui.confirm({ title: '退回藥庫', message: `從${props.fromLocationName ?? '這個藥局'}退回 ${lines.length} 個批號（共 ${total}）？送出就從這裡扣帳，藥庫簽收後入帳。`, okText: '退回' })
+    const ok = await ui.confirm({ title: '退回藥庫', message: `從${props.fromLocationName ?? '這個藥局'}退回 ${lines.length} 個批號（共 ${total}）？這是申請：藥庫同意後再送出，送出時才扣帳。`, okText: '送出申請' })
     if (!ok) return
   }
   const t = await send.run({ fromLocationId: props.fromLocationId, reason: reason.value, lines })
@@ -49,7 +49,7 @@ async function onSend() {
 <template>
   <div class="space-y-3">
     <h2 class="text-lg font-bold text-slate-800">退回藥庫<template v-if="fromLocationName">（{{ fromLocationName }}）</template></h2>
-    <p class="text-xs text-slate-500">勾選要退的批號（批號、效期跟著藥走）。過期的也能退，送藥庫集中報廢。送出就從這個藥局扣帳，藥庫簽收才入。</p>
+    <p class="text-xs text-slate-500">勾選要退的批號（批號、效期跟著藥走）。過期的也能退，送藥庫集中報廢。先送申請（不扣帳、照常發藥），藥庫同意後再送出，送出時才扣帳；藥庫簽收才入。</p>
     <UQueryState :loading="loading && !cands" :ready="!!cands?.length" empty-title="這個藥局沒有庫存可以退">
       <div class="overflow-x-auto rounded-md border border-slate-200">
         <table class="tabular w-full text-sm">
@@ -81,7 +81,7 @@ async function onSend() {
     </div>
     <UTextarea v-model="reason" label="退回原因" required :rows="2" :error="send.fieldErrors.value.reason" />
     <div class="flex justify-end">
-      <UButton size="sm" :icon="Undo2" :loading="send.pending.value" @click="onSend">退回藥庫（{{ pickedList.length }} 個批號）</UButton>
+      <UButton size="sm" :icon="Undo2" :loading="send.pending.value" @click="onSend">申請退回（{{ pickedList.length }} 個批號）</UButton>
     </div>
   </div>
 </template>

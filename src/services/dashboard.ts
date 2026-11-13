@@ -47,6 +47,9 @@ export interface DashboardStats {
   /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
   transferRequested?: number
   transferIssued?: number
+  /** 退回藥庫：待藥庫審核、已核准待藥局送出 */
+  returnToReview?: number
+  returnToShip?: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
 }
@@ -128,7 +131,12 @@ export function getDashboard(): Promise<DashboardStats> {
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
-        ? { transferRequested: db.transfers.filter((x) => x.status === 'requested').length, transferIssued: db.transfers.filter((x) => x.status === 'issued').length }
+        ? {
+            transferRequested: db.transfers.filter((x) => x.status === 'requested' && x.kind !== 'return').length,
+            transferIssued: db.transfers.filter((x) => x.status === 'issued').length,
+            returnToReview: db.transfers.filter((x) => x.kind === 'return' && x.status === 'requested').length,
+            returnToShip: db.transfers.filter((x) => x.kind === 'return' && x.status === 'approved').length,
+          }
         : {}),
       byDept: [...dept.entries()].map(([id, c]) => ({ deptName: nameOf.dept(id), count: c })).sort((a, b) => b.count - a.count),
       trend: Array.from({ length: 7 }, (_, i) => {

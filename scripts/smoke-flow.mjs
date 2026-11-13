@@ -52,6 +52,11 @@ try {
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  /** 退回藥庫：藥庫全部同意、藥局送出（申請 → 核准 → 運送中） */
+  const approveAndShip = async (rt) => {
+    await api.transferApi.approveReturn(rt.id, { approved: Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.requestedQty ?? x.qty)])) })
+    return api.transferApi.shipReturn(rt.id)
+  }
   /** 門診退藥：把還沒退的全部退掉（整張退藥） */
   const returnAll = (id, reason, extra = {}) => {
     const d = dbm.db.dispenses.find((x) => x.id === id)
@@ -4751,7 +4756,7 @@ try {
     }
     await I.setSafetyStock('M001', 'LOC-WH', 7777)
     ok((await I.listInventory({ locationId: 'LOC-WH' })).find((r) => r.id === 'M001').safetyStock === 7777 && (await I.listInventory({ locationId: 'LOC-OPD' })).find((r) => r.id === 'M001').safetyStock !== 7777, '各地點的安全庫存各自改（藥庫改了、門診藥局不變）')
-    // 退回藥庫：藥局逐批選、送出就扣（運送中），藥庫簽收入帳
+    // 退回藥庫：藥局逐批申請（不扣帳）→ 藥庫核准 → 藥局送出才扣（運送中）→ 藥庫簽收入帳
     {
       const cands = await TRA.returnCandidates('LOC-OPD')
       const T0 = T
@@ -4772,9 +4777,11 @@ try {
       const before = { opd: lotNow().qty, wh: whLot() }
       const expired = cands.find((c) => c.flag === 'expired')
       const lines = [{ lotId: pick.lotId, qty: 3 }, ...(expired ? [{ lotId: expired.lotId, qty: expired.qty }] : [])]
-      const rt = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines })
-      ok(rt.kind === 'return' && rt.status === 'issued' && rt.fromLocationId === 'LOC-OPD' && rt.toLocationId === 'LOC-WH' && lotNow().qty === before.opd - 3 && whLot() === before.wh && dbm.db.auditLogs[0].action === '退回藥庫',
-        `退回 ${rt.no}：送出就從門診藥局扣（指定批號 ${lot.lotNo}），運送中、藥庫還沒入${expired ? '；過期批號也能退' : ''}`)
+      const req = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines })
+      ok(req.kind === 'return' && req.status === 'requested' && lotNow().qty === before.opd && dbm.db.auditLogs[0].action === '退回藥庫申請', `退回申請 ${req.no}：待藥庫審核，還沒扣帳（藥還在門診藥局）`)
+      const rt = await approveAndShip(req)
+      ok(rt.kind === 'return' && rt.status === 'issued' && rt.fromLocationId === 'LOC-OPD' && rt.toLocationId === 'LOC-WH' && lotNow().qty === before.opd - 3 && whLot() === before.wh && dbm.db.auditLogs[0].action === '退回藥庫送出',
+        `藥庫核准、藥局送出才從門診藥局扣（指定批號 ${lot.lotNo}），運送中、藥庫還沒入${expired ? '；過期批號也能退' : ''}`)
       const ln = rt.lines.find((l) => l.drugId === lot.drugId)
       const recvd = Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
       recvd[ln.id] = ln.lots.map((x, k) => (x.lotNo === lot.lotNo ? x.qty - 1 : x.qty))
@@ -4805,7 +4812,7 @@ try {
       const lotQty = (loc, drugId, lotNo) => dbm.db.drugLots.find((l) => l.locationId === loc && l.drugId === drugId && l.lotNo === lotNo)?.qty ?? 0
       const cands = (await TRA.returnCandidates('LOC-OPD')).filter((c) => c.qty >= 4 && c.flag !== 'expired')
       const [c1, c2] = [cands[0], cands.find((c) => c.drugId !== cands[0].drugId)]
-      const rt2 = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: c1.lotId, qty: 2 }, { lotId: c2.lotId, qty: 2 }] })
+      const rt2 = await approveAndShip(await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: c1.lotId, qty: 2 }, { lotId: c2.lotId, qty: 2 }] }))
       const l1 = rt2.lines.find((l) => l.drugId === c1.drugId)
       const l2 = rt2.lines.find((l) => l.drugId === c2.drugId)
       const recv2 = Object.fromEntries(rt2.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
@@ -4858,6 +4865,81 @@ try {
       // 一般撥補不能選待報廢、拒收
       const wh0 = (await TRA.listTransfers()).find((x) => x.status === 'issued' && x.kind !== 'return')
       if (wh0) await expectError(() => TRA.receiveTransfer(wh0.id, { received: Object.fromEntries(wh0.lines.map((l) => [l.id, (l.lots ?? []).map((x) => x.qty)])), dispositions: { [wh0.lines[0].id]: ['quarantine'] } }), '一般撥補簽收選待報廢')
+    }
+    // ---- 退回藥庫先申請：藥庫逐批同意、少收、不收；送出才扣，申請後用掉的照現有的少送 ----
+    {
+      await as('ph01')
+      const lotQ = (loc, drugId, lotNo) => dbm.db.drugLots.find((l) => l.locationId === loc && l.drugId === drugId && l.lotNo === lotNo)?.qty ?? 0
+      const open = (await TRA.listTransfers()).filter((x) => x.kind === 'return' && ['requested', 'approved'].includes(x.status)).flatMap((x) => x.lines.flatMap((l) => (l.lots ?? []).map((y) => `${l.drugId}|${y.lotNo}`)))
+      const cs = (await TRA.returnCandidates('LOC-OPD')).filter((c) => c.qty >= 6 && c.flag !== 'expired' && !open.includes(`${c.drugId}|${c.lotNo}`) && !dbm.db.stocktakes.some((st) => ['counting', 'submitted'].includes(st.status) && st.lines.some((l) => l.drugId === c.drugId)))
+      const a = cs[0]
+      const b = cs.find((c) => c.drugId !== a.drugId)
+      const opd0 = { a: lotQ('LOC-OPD', a.drugId, a.lotNo), b: lotQ('LOC-OPD', b.drugId, b.lotNo) }
+      const req = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '近效期，退回藥庫統一處理', lines: [{ lotId: a.lotId, qty: 4 }, { lotId: b.lotId, qty: 3 }] })
+      ok(req.status === 'requested' && lotQ('LOC-OPD', a.drugId, a.lotNo) === opd0.a && req.lines.every((l) => l.lotsOnHand?.length === l.lots.length), '申請：不扣帳，單上看得到每個批號藥局現有多少')
+      let d = await api.dashboardApi.getDashboard()
+      ok(d.returnToReview >= 1 && d.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested' && x.kind !== 'return').length, '首頁：退回待藥庫審核另外算（不混進「撥補待撥發」）')
+      try {
+        await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '再退一次', lines: [{ lotId: a.lotId, qty: 1 }] })
+        ok(false, '同一批號已在申請中應被擋下')
+      } catch (e) {
+        ok(e.fields?.['line-0']?.includes(req.no), `同一批號已在另一張退回申請 → 「${e.fields?.['line-0']}」`)
+      }
+      await expectError(() => TRA.issueTransfer(req.id, Object.fromEntries(req.lines.map((l) => [l.id, l.qty]))), '退回申請用「撥發」')
+      await expectError(() => TRA.shipReturn(req.id), '還沒核准就送出')
+      const la = req.lines.find((l) => l.drugId === a.drugId)
+      const lb = req.lines.find((l) => l.drugId === b.drugId)
+      const errsOf = async (input) => {
+        try {
+          await TRA.approveReturn(req.id, input)
+          return {}
+        } catch (e) {
+          return e.fields ?? { _: e.message }
+        }
+      }
+      let e1 = await errsOf({ approved: { [la.id]: [5], [lb.id]: [1] } })
+      ok(e1[`approve-${la.id}-0`]?.includes('不能多於申請的 4') && e1[`reason-${lb.id}`], '核准：多於申請量、少收沒寫原因，一次標在各列')
+      e1 = await errsOf({ approved: { [la.id]: [0], [lb.id]: [0] }, reasons: { [la.id]: 'x', [lb.id]: 'x' } })
+      ok(e1._?.includes('不收'), '每一批都是 0 → 請用「不收」')
+      const ap = await TRA.approveReturn(req.id, { approved: { [la.id]: [4], [lb.id]: [1] }, reasons: { [lb.id]: '藥庫也滿了，其餘請藥局自行用完' } })
+      ok(ap.status === 'approved' && ap.lines.find((l) => l.id === lb.id).declineReason?.includes('藥庫也滿了') && ap.lines.find((l) => l.id === la.id).lots[0].approvedQty === 4 && lotQ('LOC-OPD', a.drugId, a.lotNo) === opd0.a && dbm.db.auditLogs[0].action === '退回藥庫核准',
+        '核准：逐批記下同意收多少、少收的原因；仍不扣帳')
+      d = await api.dashboardApi.getDashboard()
+      ok(d.returnToShip >= 1, '首頁：退回已核准待送出')
+      // 核准後照常發藥：a 這批被用掉只剩 2（用盤點模擬）
+      await takeStock([a.drugId], (l, lot) => (lot.lotNo === a.lotNo ? 2 : l.bookQty ?? lot.qty), '發藥用掉', 'LOC-OPD')
+      ok(lotQ('LOC-OPD', a.drugId, a.lotNo) === 2, `模擬申請後已發掉：${a.lotNo} 只剩 2`)
+      const shp = await TRA.shipReturn(req.id)
+      const sa = shp.lines.find((l) => l.id === la.id)
+      ok(shp.status === 'issued' && sa.issuedQty === 2 && sa.shipNote?.includes('核准 4、只剩 2') && lotQ('LOC-OPD', a.drugId, a.lotNo) === 0 && lotQ('LOC-OPD', b.drugId, b.lotNo) === opd0.b - 1 && dbm.db.auditLogs[0].action === '退回藥庫送出',
+        '送出才扣：用掉的照現有的少送（2／核准 4，單上註明）；少收的那批只送同意的 1')
+      const recv = Object.fromEntries(shp.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
+      const done = await TRA.receiveTransfer(shp.id, { received: recv })
+      ok(done.status === 'received' && ledgerBroken(dbm.db).length === 0, '藥庫照實送的量簽收；帳本對得起來')
+
+      // 不收：整張退回，藥留在藥局
+      const req2 = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: b.lotId, qty: 1 }] })
+      try {
+        await TRA.declineReturn(req2.id, ' ')
+        ok(false, '不收沒寫原因應被擋下')
+      } catch (e) {
+        ok(e.field === 'reason', '不收要寫原因')
+      }
+      const before2 = lotQ('LOC-OPD', b.drugId, b.lotNo)
+      const dc = await TRA.declineReturn(req2.id, '近效期請藥局自行用完')
+      ok(dc.status === 'cancelled' && dc.cancelReason === '藥庫不收：近效期請藥局自行用完' && lotQ('LOC-OPD', b.drugId, b.lotNo) === before2, '藥庫不收：單子結束、寫原因，藥留在藥局（帳沒動）')
+      // 核准後藥局可以取消（還沒送出）
+      const req3 = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: b.lotId, qty: 1 }] })
+      await TRA.approveReturn(req3.id, { approved: { [req3.lines[0].id]: [1] } })
+      const cc = await TRA.cancelTransfer(req3.id, '病人量變多，自己用')
+      ok(cc.status === 'cancelled' && lotQ('LOC-OPD', b.drugId, b.lotNo) === before2, '已核准、還沒送出：藥局可以取消申請')
+      // 全部用完：不能送
+      const req4 = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: b.lotId, qty: 1 }] })
+      await TRA.approveReturn(req4.id, { approved: { [req4.lines[0].id]: [1] } })
+      await takeStock([b.drugId], (l, lot) => (lot.lotNo === b.lotNo ? 0 : l.bookQty ?? lot.qty), '發藥用掉', 'LOC-OPD')
+      await expectError(() => TRA.shipReturn(req4.id), '核准的批號全用完了還送出')
+      await TRA.cancelTransfer(req4.id, '已用完')
+      ok(ledgerBroken(dbm.db).length === 0, '申請、核准、不收、取消都不動帳；帳本對得起來')
     }
     // ---- 庫存地點維護（大型）：新增、改名、停用；三項工作改由哪個地點負責 ----
     {

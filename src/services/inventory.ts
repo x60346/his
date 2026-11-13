@@ -454,7 +454,7 @@ function locationBlockers(l: StockLocation): string[] {
   if (n) out.push(`還有 ${n} 種藥的庫存（請先撥出、退回藥庫或報廢）`)
   const st = db.stocktakes.filter((s) => s.locationId === l.id && (s.status === 'counting' || s.status === 'submitted')).map((s) => s.no)
   if (st.length) out.push(`盤點中：${st.join('、')}`)
-  const tr = db.transfers.filter((t) => (t.status === 'requested' || t.status === 'issued') && (t.fromLocationId === l.id || t.toLocationId === l.id)).map((t) => t.no)
+  const tr = db.transfers.filter((t) => (t.status === 'requested' || t.status === 'approved' || t.status === 'issued') && (t.fromLocationId === l.id || t.toLocationId === l.id)).map((t) => t.no)
   if (tr.length) out.push(`撥補進行中：${tr.join('、')}`)
   const po = db.purchaseOrders.filter((p) => p.status === 'ordered' && p.locationId === l.id).map((p) => p.no)
   if (po.length) out.push(`採購待到貨：${po.join('、')}`)

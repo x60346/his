@@ -66,7 +66,9 @@ const todos = computed<Todo[]>(() => {
     ...(s.value.transferRequested !== undefined
       ? [
           { roles: ['pharmacist'], label: '撥補待撥發', count: s.value.transferRequested, hint: '藥局請領、等藥庫撥發', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
-          { roles: ['pharmacist'], label: '撥補待簽收', count: s.value.transferIssued ?? 0, hint: '運送中，藥局簽收才入帳', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
+          { roles: ['pharmacist'], label: '撥補待簽收', count: s.value.transferIssued ?? 0, hint: '運送中，簽收才入帳', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
+          { roles: ['pharmacist'], label: '退回待藥庫審核', count: s.value.returnToReview ?? 0, hint: '藥局申請退回藥庫，藥庫逐批同意、少收或不收', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
+          { roles: ['pharmacist'], label: '退回已核准待送出', count: s.value.returnToShip ?? 0, hint: '藥庫已同意，藥局送出才扣帳', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },
         ]
       : []),
     { roles: ['pharmacist'], label: '採購單待到貨', count: s.value.purchaseOrdered, hint: '已核准訂購，貨到了對品項入庫', route: 'drugs', query: { tab: 'purchase' }, icon: Truck },

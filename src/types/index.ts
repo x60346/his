@@ -1163,7 +1163,8 @@ export interface PurchaseOrder {
  * 撥補單（大型醫院）：藥局向藥庫請領 → 藥庫依 FEFO 撥發（運送中，藥庫已扣、藥局還沒入）→ 藥局逐批簽收才入帳。
  * 簽收數量可以少於撥發（短少要寫原因：破損、遺失…）；運送中的藥不屬於任何地點。
  */
-export type TransferStatus = 'requested' | 'issued' | 'received' | 'cancelled'
+/** approved 只有退回藥庫有：藥庫同意了、藥局還沒送出 */
+export type TransferStatus = 'requested' | 'approved' | 'issued' | 'received' | 'cancelled'
 
 export interface TransferLine {
   id: string
@@ -1178,11 +1179,25 @@ export interface TransferLine {
    * 撥發的批號（批號、效期跟著藥走）；簽收時逐批填實收。
    * 退回藥庫簽收時逐批決定 disposition：stock 入可用庫存、quarantine 放待報廢區、rejected 拒收退回原藥局
    */
-  lots?: { lotNo: string; expiry: string; qty: number; receivedQty?: number; disposition?: ReturnDisposition }[]
+  lots?: {
+    lotNo: string
+    expiry: string
+    /** 撥發（送出）的量；退回申請中＝申請退的量 */
+    qty: number
+    receivedQty?: number
+    disposition?: ReturnDisposition
+    /** 退回藥庫：申請退多少、藥庫同意收多少（送出後 qty 是實際送的） */
+    requestedQty?: number
+    approvedQty?: number
+  }[]
   /** 簽收短少的原因 */
   shortReason?: string
   /** 退回藥庫：拒收的原因（這一行有拒收的批號時） */
   rejectReason?: string
+  /** 退回藥庫：審核時少收、不收的原因 */
+  declineReason?: string
+  /** 退回藥庫：送出時批號已經用掉（照少的送）的說明 */
+  shipNote?: string
 }
 
 export type ReturnDisposition = 'stock' | 'quarantine' | 'rejected'
@@ -1192,7 +1207,8 @@ export interface TransferOrder {
   /** 單號：TR20261112-01 */
   no: string
   /**
-   * return＝藥局退回藥庫（近效期、請領過多、停用…）：藥局逐批選、送出就扣（運送中），藥庫簽收才入。
+   * return＝藥局退回藥庫（近效期、請領過多、停用…）：藥局逐批申請（不扣帳）→ 藥庫審核（逐批同意、少收、不收）→
+   * 藥局送出才扣（運送中）→ 藥庫簽收才入（仍可逐批入庫、待報廢、拒收）。
    * 沒有＝一般撥補（藥局請領 → 藥庫撥發 → 藥局簽收）
    */
   kind?: 'return'
@@ -1205,6 +1221,9 @@ export interface TransferOrder {
   note?: string
   requestedBy: string
   requestedAt: string
+  /** 退回藥庫：藥庫審核同意 */
+  approvedBy?: string
+  approvedAt?: string
   issuedBy?: string
   issuedAt?: string
   receivedBy?: string
