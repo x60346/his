@@ -31,6 +31,22 @@ export function udStage(m: Pick<MarRecord, 'udLineId'>): 'verified' | 'prepared'
   return st === 'verified' ? 'verified' : st === 'prepared' ? 'prepared' : undefined
 }
 
+/** 已核對送出的這一劑，病房點收了沒：'notReceived' 藥車還沒點收、'issue' 點收不符（藥局處理中）；點收了回 undefined */
+export function udDelivery(m: Pick<MarRecord, 'udLineId'>): 'notReceived' | 'issue' | undefined {
+  if (!m.udLineId) return undefined
+  const box = udLineHome(m.udLineId)?.box
+  if (box?.status !== 'verified') return undefined
+  if (box.issue && !box.issue.resolvedAt) return 'issue'
+  return box.receivedAt ? undefined : 'notReceived'
+}
+
+/** 藥盒送到哪個病房：調劑時記下的；舊資料沒記就看病人目前的床 */
+export function udBoxWard(b: UdBox): string {
+  if (b.ward) return b.ward
+  const a = find.admission(b.admissionId)
+  return (a?.bedId ? find.bed(a.bedId)?.ward : undefined) ?? ''
+}
+
 /** 發出去的這一劑為什麼不會給了（還會給的回 undefined） */
 function returnCause(marId: string, line: UdLine): UdReturnCause | undefined {
   const m = db.mar.find((x) => x.id === marId)

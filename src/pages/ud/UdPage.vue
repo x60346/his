@@ -4,11 +4,12 @@
 //   - 每日調劑（明天）：每天下午把明天整天的劑量調好
 //   - 待核對：逐位病人的藥盒核對，通過才扣帳、送病房；發現錯誤退回重調（雙人核對開啟時調劑的人不能自己核對）
 //   - 待退藥：病房送回來的（暫停、拒絕、醫囑停止、出院）由藥師點收入庫；還沒送回的另外列出供參考
+//   - 病房回報：藥車點收時發現不符（短少、破損、不是這位病人的），藥師處理後寫說明（補發走上面的調劑流程）
 // 每劑幾個、哪些要退都由服務層算（ud-rules、ud-work）；頁面送出的是畫面上看得到的那幾劑。
 import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/components/ui'
-import { udApi, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
+import { udApi, type UdIssueRow, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -53,6 +54,24 @@ async function confirmReject(reason: string) {
   if (rejecting.value && (await reject.run(rejecting.value.dispenseId, rejecting.value.admissionId, reason))) rejecting.value = null
 }
 
+// ---------- 病房回報（藥盒不符）：寫處理說明，需要時逐行補發（扣住院藥局；那幾劑不會再出現在補調劑）----------
+const resolving = ref<UdIssueRow | null>(null)
+const resolveOpen = computed({ get: () => !!resolving.value, set: (v) => !v && (resolving.value = null) })
+const rsForm = reactive<{ resolution: string; resupply: Record<string, number | undefined> }>({ resolution: '', resupply: {} })
+function openResolve(i: UdIssueRow) {
+  Object.assign(rsForm, { resolution: '', resupply: {} })
+  resolve.fieldErrors.value = {}
+  resolving.value = i
+}
+const resolve = useAction(udApi.resolveUdIssue, { success: (r) => `已處理 ${r.no} 的病房回報${r.resupplied ? `，補發 ${r.resupplied}` : ''}` })
+async function confirmResolve() {
+  const x = resolving.value
+  if (!x) return
+  const resupply: Record<string, number> = {}
+  for (const [k, v] of Object.entries(rsForm.resupply)) if (v !== undefined && String(v) !== '') resupply[k] = Number(v)
+  if (await resolve.run(x.dispenseId, x.admissionId, { resolution: rsForm.resolution, resupply })) resolving.value = null
+}
+
 // ---------- 退藥點收 ----------
 const returning = ref<UdReturnRow | null>(null)
 const returnOpen = computed({ get: () => !!returning.value, set: (v) => !v && (returning.value = null) })
@@ -72,6 +91,23 @@ async function confirmReturn() {
         <p class="text-sm text-slate-600">
           扣帳地點：<b>{{ w.locationName }}</b>・PRN 與臨時（STAT）給藥用病房常備藥，護理師給藥時直接扣，不在這裡調劑
         </p>
+
+        <UCard v-if="w.issues.length" :padded="false" class="border-red-300">
+          <template #title>
+            <div class="flex items-center gap-2 text-sm font-semibold text-red-800"><AlertTriangle class="h-4 w-4" />病房回報：藥盒不符<UBadge tone="red">{{ w.issues.length }} 盒</UBadge></div>
+            <div class="text-xs text-slate-500">藥車點收時發現的問題：處理時可以補發（從{{ w.locationName }}扣），寫處理說明</div>
+          </template>
+          <ul class="divide-y divide-slate-100">
+            <li v-for="i in w.issues" :key="`${i.dispenseId}|${i.admissionId}`" class="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
+              <span class="tabular w-24 text-xs font-semibold text-brand-700">{{ i.ward.split(' ')[0] }} {{ i.bedNo }}</span>
+              <div class="min-w-0 flex-1">
+                <div class="font-medium text-slate-800">{{ i.patientName }}・<UBadge tone="red">{{ i.cause }}</UBadge> {{ i.note }}</div>
+                <div class="text-xs text-slate-500">{{ i.no }}・{{ i.items.join('、') }}・{{ i.reportedByName }} {{ i.reportedAt.slice(5, 16).replace('-', '/') }} 回報</div>
+              </div>
+              <UButton size="sm" variant="secondary" @click="openResolve(i)">處理</UButton>
+            </li>
+          </ul>
+        </UCard>
 
         <UCard v-for="sec in sections" :key="sec.kind" :padded="false" :class="sec.kind === 'extra' && sec.groups.length ? 'border-amber-300' : ''">
           <template #title>
@@ -234,6 +270,27 @@ async function confirmReturn() {
       :error="reject.fieldErrors.value.reason"
       @confirm="confirmReject"
     />
+    <UDialog v-model="resolveOpen" title="處理病房回報" size="sm" @submit="confirmResolve">
+      <div v-if="resolving" class="space-y-3 text-sm">
+        <div class="rounded-md bg-red-50 px-3 py-2">
+          <div class="font-semibold text-slate-800">{{ resolving.bedNo }} {{ resolving.patientName }}・{{ resolving.no }}</div>
+          <div class="text-xs text-red-800">{{ resolving.cause }}<template v-if="resolving.note">：{{ resolving.note }}</template>（{{ resolving.reportedByName }} 回報）</div>
+        </div>
+        <div>
+          <p class="mb-1 text-xs font-medium text-slate-600">補發（選填；從{{ w?.locationName }}扣，同一張單號）</p>
+          <div v-for="l in resolving.lines" :key="l.lineId" class="flex items-center gap-2 py-0.5">
+            <span class="min-w-0 flex-1 truncate">{{ l.drugName }}<span class="ml-1 text-xs text-slate-400">原發 {{ l.qty }} {{ l.unit }}</span></span>
+            <div class="w-20"><UInput v-model="rsForm.resupply[l.lineId]" type="number" min="0" placeholder="0" :error="resolve.fieldErrors.value[`resupply.${l.lineId}`]" /></div>
+            <span class="w-10 text-xs text-slate-500">{{ l.unit }}</span>
+          </div>
+        </div>
+        <UInput v-model="rsForm.resolution" label="處理說明" required placeholder="例：已補發 1 顆、已更換藥盒、病房已找到" :error="resolve.fieldErrors.value.resolution" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="resolving = null">取消</UButton>
+        <UButton type="submit" :loading="resolve.pending.value">處理完成</UButton>
+      </template>
+    </UDialog>
     <UDialog v-model="returnOpen" title="退藥點收" size="sm" @submit="confirmReturn">
       <div v-if="returning" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">

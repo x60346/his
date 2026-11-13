@@ -695,6 +695,25 @@ export interface UdBox {
   rejectedBy?: string
   rejectedAt?: string
   rejectReason?: string
+  /** 送到哪個病房：調劑時病人所在的病房（之後轉床不跟著改——藥盒已經送去那裡了） */
+  ward?: string
+  /** 病房點收（護理師）：核對送出後藥車到病房，逐盒點收。點收前照樣可以給藥（不能因為少按一個鍵延誤用藥） */
+  receivedBy?: string
+  receivedAt?: string
+  /** 點收時發現不符（短少、破損、不是這位病人的）：藥局處理後填處理說明 */
+  issue?: UdBoxIssue
+}
+
+export interface UdBoxIssue {
+  cause: string
+  note?: string
+  by: string
+  at: string
+  resolvedBy?: string
+  resolvedAt?: string
+  resolution?: string
+  /** 處理時補發的藥（扣住院藥局的異動）：那幾劑已經在這張調劑單上，不會再出現在補調劑 */
+  resupplyTxnIds?: string[]
 }
 
 export interface UdLine {

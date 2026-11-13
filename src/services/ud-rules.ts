@@ -28,3 +28,13 @@ export const UD_RETURN_CAUSE: Record<UdReturnCause, string> = {
 export function udVerifyBlocker(preparedBy: string, userId: string, twoPerson: boolean): string | undefined {
   return twoPerson && preparedBy === userId ? '本院規定調劑與核對須由不同藥師：請由另一位藥師核對' : undefined
 }
+
+/** 病房點收藥盒時的不符原因 */
+export const UD_ISSUE_CAUSES = ['短少', '破損', '不是這位病人的', '其他'] as const
+/** 點收不符的欄位檢查：原因要是清單裡的；「其他」要寫說明 */
+export function checkUdIssue(input: { cause?: string; note?: string }): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!UD_ISSUE_CAUSES.includes(input.cause as (typeof UD_ISSUE_CAUSES)[number])) e.cause = '請選擇不符的原因'
+  else if (input.cause === '其他' && !input.note?.trim()) e.note = '選「其他」請寫說明'
+  return e
+}

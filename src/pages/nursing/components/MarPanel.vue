@@ -211,6 +211,8 @@ async function complete(o: OrderView) {
                   <UBadge v-if="m.highAlert" tone="purple">高警訊</UBadge>
                   <UBadge v-if="m.orderType === 'stat'" tone="blue">STAT</UBadge>
                   <UBadge v-if="m.queried" tone="yellow" :title="`疑問：${m.queried}`">待醫師回覆</UBadge>
+                  <UBadge v-if="m.udDelivery === 'notReceived'" tone="cyan" title="藥局已核對送出，病房還沒點收這一盒（「本班待辦」點收）；照樣可以給">藥車未點收</UBadge>
+                  <UBadge v-else-if="m.udDelivery === 'issue'" tone="red" title="點收時回報不符，藥局處理中；請確認藥品正確再給">藥盒不符</UBadge>
                   <UBadge v-if="m.awaitingUd" tone="gray" :title="m.awaitingUd === 'checking' ? '藥局已調劑、核對中，送出後才能給' : '住院藥局還沒調劑這一劑，藥還沒到病房'">{{ m.awaitingUd === 'checking' ? '藥局核對中' : '待藥局調劑' }}</UBadge>
                 </div>
                 <div v-if="m.awaitingUd && urgencyOf(m) !== 'upcoming'" class="text-xs text-slate-600">{{ m.awaitingUd === 'checking' ? '藥局已調劑、核對中，送到病房後才能給' : '藥局還沒調劑這一劑：請聯絡住院藥局補調劑' }}（暫停、拒絕照常可記）</div>

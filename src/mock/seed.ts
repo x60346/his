@@ -874,7 +874,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const udNo = `UD${addDays(T, -1).replace(/-/g, '')}-01`
   const udDispenses: UdDispense[] = udLines.length ? [{
     id: 'UD-SEED-1', no: udNo, locationId: '', kind: 'daily', dispensedBy: 'U301', dispensedAt: udAt, lines: udLines,
-    boxes: [...new Set(udLines.map((l) => l.admissionId))].map((admissionId) => ({ admissionId, status: 'verified' as const, verifiedBy: 'U302', verifiedAt: udVerifiedAt })),
+    // 藥車 15:50 到病房，護理師逐盒點收（昨天的藥車早就點收完了；今天新送的才會出現在護理站「藥車待點收」）
+    boxes: [...new Set(udLines.map((l) => l.admissionId))].map((admissionId) => {
+      const bedId = admissions.find((x) => x.id === admissionId)?.bedId
+      const ward = beds.find((b) => b.id === bedId)?.ward
+      return { admissionId, status: 'verified' as const, verifiedBy: 'U302', verifiedAt: udVerifiedAt, ...(ward ? { ward } : {}), receivedBy: 'U202', receivedAt: `${addDays(T, -1)} 15:50` }
+    }),
   }] : []
 
   // ---------- 藥品庫存帳 ----------

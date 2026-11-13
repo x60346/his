@@ -19,8 +19,8 @@ import { doseUnitOf } from './billing'
 import { openQuery } from './nursing-rules'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
-import { UD_RETURN_CAUSE, udPerDose, udVerifyBlocker, type UdReturnCause } from './ud-rules'
-import { pendingReturn, udCandidate, udLineHome, type PendingReturn } from './ud-work'
+import { checkUdIssue, UD_RETURN_CAUSE, udPerDose, udVerifyBlocker, type UdReturnCause } from './ud-rules'
+import { pendingReturn, udBoxWard, udCandidate, udLineHome, type PendingReturn } from './ud-work'
 import { admissionView, find, nameOf, stockLoc } from './views'
 
 export interface UdWorkLine {
@@ -131,6 +131,26 @@ export interface UdWork {
   awaitingWard: UdReturnRow[]
   /** 最近的調劑紀錄 */
   recent: UdDispenseView[]
+  /** 病房點收時回報不符、藥局還沒處理的藥盒 */
+  issues: UdIssueRow[]
+}
+
+/** 點收不符的藥盒（藥局處理清單、護理站「已回報」都用這個） */
+export interface UdIssueRow {
+  dispenseId: string
+  no: string
+  admissionId: string
+  ward: string
+  bedNo: string
+  patientName: string
+  cause: string
+  note?: string
+  reportedByName: string
+  reportedAt: string
+  /** 這盒的藥（讓藥師知道要補什麼） */
+  items: string[]
+  /** 這盒每一行（處理時可以逐行補發） */
+  lines: { lineId: string; drugName: string; unit: string; qty: number }[]
 }
 
 function groupsOf(mars: MarRecord[], locationId: string): UdWorkGroup[] {
@@ -272,6 +292,7 @@ export function getUdWork(): Promise<UdWork> {
       verify: verifyBoxes(u.id),
       returns: returnRows('sent'),
       awaitingWard: returnRows('waiting'),
+      issues: issueRows(),
       recent: [...db.udDispenses]
         .sort((x, y) => y.dispensedAt.localeCompare(x.dispensedAt))
         .slice(0, 8)
@@ -348,7 +369,12 @@ export function dispenseUd(input: UdDispenseInput): Promise<{ no: string; patien
       for (const m of p.ms) m.udLineId = line.id
       return line
     })
-    const boxes: UdBox[] = [...new Set(lines.map((l) => l.admissionId))].map((admissionId) => ({ admissionId, status: 'prepared' }))
+    // 藥盒記下送去哪個病房（調劑當下病人所在的）：之後轉床，藥盒還是在原病房等點收
+    const boxes: UdBox[] = [...new Set(lines.map((l) => l.admissionId))].map((admissionId) => {
+      const a = find.admission(admissionId)
+      const ward = a?.bedId ? find.bed(a.bedId)?.ward : undefined
+      return { admissionId, status: 'prepared', ...(ward ? { ward } : {}) }
+    })
     db.udDispenses.push({ id: newId('UD'), no, locationId: loc.id, kind: input.kind, dispensedBy: u.id, dispensedAt: t, boxes, lines })
     audit('住院調劑', `${no} ${input.kind === 'daily' ? '每日調劑（明日）' : '補調劑'}：${boxes.length} 位病人、${lines.length} 項，待核對`)
     return { no, patients: boxes.length, lines: lines.length }
@@ -476,5 +502,146 @@ export function receiveUdReturn(lineId: string, input: { qty: number; reason?: s
     const d = find.drug(line.drugId)
     audit('退藥點收', `${disp.no} ${d?.name ?? line.drugId}：應退 ${expected}、實收 ${qty}${reason ? `（${reason}）` : ''}`)
     return r
+  })
+}
+
+// ---------- 藥車交接：核對送出 → 病房點收（逐盒）；不符回報藥局 ----------
+
+const boxItems = (disp: UdDispense, admissionId: string) =>
+  disp.lines
+    .filter((l) => l.admissionId === admissionId && l.qty > 0)
+    .map((l) => {
+      const d = find.drug(l.drugId)
+      return `${d?.name ?? l.drugId} ${l.qty} ${d?.unit ?? ''}`.trim()
+    })
+
+function bedNoOf(admissionId: string) {
+  const a = find.admission(admissionId)
+  return a?.bedId ? find.bed(a.bedId)?.bedNo ?? '' : ''
+}
+
+function issueRows(ward?: string): UdIssueRow[] {
+  const rows: UdIssueRow[] = []
+  for (const d of db.udDispenses)
+    for (const b of d.boxes) {
+      if (!b.issue || b.issue.resolvedAt) continue
+      const w = udBoxWard(b)
+      if (ward && w !== ward) continue
+      rows.push({
+        dispenseId: d.id, no: d.no, admissionId: b.admissionId, ward: w, bedNo: bedNoOf(b.admissionId),
+        patientName: nameOf.patient(find.admission(b.admissionId)?.patientId),
+        cause: b.issue.cause, ...(b.issue.note ? { note: b.issue.note } : {}),
+        reportedByName: nameOf.user(b.issue.by), reportedAt: b.issue.at, items: boxItems(d, b.admissionId),
+        lines: d.lines.filter((l) => l.admissionId === b.admissionId).map((l) => {
+          const dr = find.drug(l.drugId)
+          return { lineId: l.id, drugName: dr?.name ?? l.drugId, unit: dr?.unit ?? '', qty: l.qty }
+        }),
+      })
+    }
+  return rows.sort((x, y) => x.reportedAt.localeCompare(y.reportedAt))
+}
+
+/** 一車（一張調劑單送到這個病房的藥盒）：還沒點收的那幾盒 */
+export interface UdCart {
+  dispenseId: string
+  no: string
+  kind: UdDispense['kind']
+  /** 最後一盒核對送出的時間（藥車出發） */
+  sentAt: string
+  boxes: { admissionId: string; bedNo: string; patientName: string; verifiedByName: string; items: string[] }[]
+}
+
+/** 護理站：這個病房待點收的藥車、已回報不符（藥局處理中）的藥盒 */
+export function listWardUdCarts(ward: string): Promise<{ carts: UdCart[]; issues: UdIssueRow[] }> {
+  return query(() => {
+    requireUser('nurse')
+    const carts: UdCart[] = []
+    for (const d of db.udDispenses) {
+      const boxes = d.boxes.filter((b) => b.status === 'verified' && !b.receivedAt && udBoxWard(b) === ward)
+      if (!boxes.length) continue
+      carts.push({
+        dispenseId: d.id, no: d.no, kind: d.kind,
+        sentAt: boxes.map((b) => b.verifiedAt ?? '').sort().at(-1)!,
+        boxes: boxes
+          .map((b) => ({ admissionId: b.admissionId, bedNo: bedNoOf(b.admissionId), patientName: nameOf.patient(find.admission(b.admissionId)?.patientId), verifiedByName: nameOf.user(b.verifiedBy), items: boxItems(d, b.admissionId) }))
+          .sort((x, y) => x.bedNo.localeCompare(y.bedNo)),
+      })
+    }
+    return { carts: carts.sort((x, y) => x.sentAt.localeCompare(y.sentAt)), issues: issueRows(ward) }
+  })
+}
+
+function receivableBox(dispenseId: string, admissionId: string) {
+  const disp = must(db.udDispenses.find((x) => x.id === dispenseId), '調劑紀錄')
+  const box = must(disp.boxes.find((b) => b.admissionId === admissionId), '藥盒')
+  if (box.status !== 'verified') fail('這一盒藥局還沒核對送出', 'CONFLICT')
+  if (box.receivedAt) fail(`這一盒已由 ${nameOf.user(box.receivedBy)} 點收`, 'CONFLICT')
+  return { disp, box }
+}
+
+/** 點收（勾了哪幾盒就點收哪幾盒——畫面上看得到的；藥車上沒有的就不要勾，改回報不符） */
+export function receiveUdBoxes(dispenseId: string, admissionIds: string[]): Promise<{ no: string; boxes: number }> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const ids = [...new Set(admissionIds ?? [])]
+    if (!ids.length) fail('請勾選要點收的藥盒')
+    const t = now()
+    let disp: UdDispense | undefined
+    for (const id of ids) {
+      const r = receivableBox(dispenseId, id)
+      disp = r.disp
+      Object.assign(r.box, { receivedBy: u.id, receivedAt: t })
+    }
+    audit('藥車點收', `${disp!.no} ${udBoxWard(disp!.boxes.find((b) => b.admissionId === ids[0])!)}：${ids.length} 盒`)
+    return { no: disp!.no, boxes: ids.length }
+  })
+}
+
+/**
+ * 點收時發現不符：這一盒記下原因，藥局 UD 頁出現「病房回報」。帳不動（核對時已扣）；
+ * 補藥走藥局現有的流程（重新調劑），處理完填說明。這一盒算「已到病房」，但給藥列會標「藥盒不符」直到藥局處理完
+ */
+export function reportUdBox(dispenseId: string, admissionId: string, input: { cause: string; note?: string }): Promise<{ no: string }> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const { disp, box } = receivableBox(dispenseId, admissionId)
+    failFields(checkUdIssue(input))
+    const t = now()
+    const note = input.note?.trim()
+    Object.assign(box, { receivedBy: u.id, receivedAt: t, issue: { cause: input.cause, ...(note ? { note } : {}), by: u.id, at: t } })
+    audit('藥盒不符', `${disp.no} ${nameOf.patient(find.admission(admissionId)?.patientId)}：${input.cause}${note ? `（${note}）` : ''}`)
+    return { no: disp.no }
+  })
+}
+
+/**
+ * 藥局處理病房回報的不符：寫處理說明（已補發、已更換、病房找到了…），需要時逐行補發。
+ * 那幾劑已經在這張調劑單上（核對時扣過），**不會**再出現在補調劑——補發在這裡扣住院藥局（同一張單號），
+ * 不然實際多拿出去的藥帳上沒有，要到盤點才發現短少。不夠扣就整筆不處理
+ */
+export function resolveUdIssue(dispenseId: string, admissionId: string, input: { resolution: string; resupply?: Record<string, number> }): Promise<{ no: string; resupplied: number }> {
+  return mutate(() => {
+    const u = requireUser('pharmacist')
+    const disp = must(db.udDispenses.find((x) => x.id === dispenseId), '調劑紀錄')
+    const box = must(disp.boxes.find((b) => b.admissionId === admissionId), '藥盒')
+    if (!box.issue) fail('這一盒沒有回報不符')
+    if (box.issue!.resolvedAt) fail(`已由 ${nameOf.user(box.issue!.resolvedBy)} 處理`, 'CONFLICT')
+    const text = input.resolution?.trim()
+    const errors: Record<string, string> = {}
+    if (!text) errors.resolution = '請寫處理說明（例：已補發 1 顆、已更換藥盒）'
+    const plan: { line: UdLine; qty: number }[] = []
+    for (const [lineId, qty] of Object.entries(input.resupply ?? {})) {
+      const line = disp.lines.find((l) => l.id === lineId && l.admissionId === admissionId)
+      if (!line) fail('補發的品項不在這一盒', 'CONFLICT')
+      if (!Number.isInteger(qty) || qty < 0) errors[`resupply.${lineId}`] = '補發數量需為 0 以上的整數'
+      else if (qty > 0) plan.push({ line: line!, qty })
+    }
+    failFields(errors)
+    const t = now()
+    const txnIds = plan.map((p) => postStock({ kind: 'out', type: 'dispense', drugId: p.line.drugId, locationId: disp.locationId, qty: p.qty, ref: disp.no, reason: `藥盒不符補發（${box.issue!.cause}）` }, u.id, t).id)
+    Object.assign(box.issue!, { resolvedBy: u.id, resolvedAt: t, resolution: text, ...(txnIds.length ? { resupplyTxnIds: txnIds } : {}) })
+    const what = plan.map((p) => `${find.drug(p.line.drugId)?.name} ${p.qty}`).join('、')
+    audit('藥盒不符處理', `${disp.no} ${nameOf.patient(find.admission(admissionId)?.patientId)}：${text}${what ? `（補發 ${what}）` : ''}`)
+    return { no: disp.no, resupplied: plan.reduce((n, p) => n + p.qty, 0) }
   })
 }

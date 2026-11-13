@@ -6,6 +6,7 @@ import { UBadge, UQueryState } from '@/components/ui'
 import { nursingApi, type WardTask } from '@/services'
 import { useQuery } from '@/composables/useService'
 import WardSendBack from './WardSendBack.vue'
+import WardUdCarts from './WardUdCarts.vue'
 
 const props = defineProps<{ ward: string; clock: string }>()
 const emit = defineEmits<{ open: [admissionId: string, tab: string] }>()
@@ -33,6 +34,7 @@ const counts = computed(() => ({
       <span class="font-semibold text-slate-700">本班待辦・{{ ward }}</span>
       <span v-if="tasks" class="text-xs text-slate-500">逾時 {{ counts.overdue }}・現在可做 {{ counts.due }}・共 {{ tasks.length }} 項　點選一列前往該病人</span>
     </div>
+    <WardUdCarts :ward="ward" />
     <WardSendBack :ward="ward" />
     <UQueryState :loading="loading && !tasks" :ready="!!tasks?.length" empty-title="本班目前沒有待辦" empty-description="給藥、臨時醫囑、醫囑核對、生命徵象都已完成">
       <ul class="divide-y divide-slate-100 rounded-md border border-slate-200">

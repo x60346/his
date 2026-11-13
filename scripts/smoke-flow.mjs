@@ -3582,6 +3582,66 @@ try {
       '另一位藥師逐位病人核對通過：這時才扣住院藥局、送病房')
     ok(dailyIds.every((id) => db().mar.find((m) => m.id === id).udLineId) && !db().stockTxns.some((x) => x.ref === r.no && x.drugId === insulin.drugId), '那幾劑標為已調劑；胰島素填 0（床邊已有）不產生異動')
     await expectError(() => U.verifyUdBox(myBox.dispenseId, myBox.admissionId), '已核對的藥盒再核對一次')
+    // 藥車交接：核對送出 → 病房逐盒點收；不符回報藥局、藥師處理。點收前照樣可以給（只標示）
+    {
+      ok(seedUd.boxes.every((b) => b.receivedAt && b.receivedBy && b.ward), '展示資料：昨天的藥車已在病房點收（記下送到哪個病房）')
+      const disp = db().udDispenses.find((x) => x.no === r.no)
+      const wardOf = (b) => db().beds.find((x) => x.id === db().admissions.find((a) => a.id === b.admissionId).bedId)?.ward
+      ok(disp.boxes.every((b) => b.ward && b.ward === wardOf(b)), '調劑時記下藥盒送去的病房（病人當時的床）')
+      await expectError(() => U.listWardUdCarts(disp.boxes[0].ward), '藥師看護理站的藥車點收')
+      await as('nurse01')
+      const wards = [...new Set(disp.boxes.map((b) => b.ward))]
+      const cartsByWard = Object.fromEntries(await Promise.all(wards.map(async (wd) => [wd, await U.listWardUdCarts(wd)])))
+      const listed = wards.flatMap((wd) => cartsByWard[wd].carts.filter((c) => c.no === r.no).flatMap((c) => c.boxes))
+      ok(listed.length === disp.boxes.length && wards.every((wd) => cartsByWard[wd].carts.filter((c) => c.no === r.no).every((c) => c.boxes.every((b) => disp.boxes.find((x) => x.admissionId === b.admissionId).ward === wd))), `護理站：${r.no} 的 ${listed.length} 盒依病房列在「藥車待點收」`)
+      ok((await api.dashboardApi.getDashboard()).udToReceive === disp.boxes.length, '首頁待辦：藥車待點收的盒數')
+      const [b1, b2] = disp.boxes
+      const box = (b) => db().udDispenses.find((x) => x.no === r.no).boxes.find((x) => x.admissionId === b.admissionId) // mutate 失敗會換成快照：每次重新取
+      const m1 = (await api.ipdApi.listMar(b1.admissionId, addDays(T, 1))).find((m) => m.udLineId && disp.lines.some((l) => l.id === m.udLineId))
+      ok(m1?.udDelivery === 'notReceived' && !m1.awaitingUd, '給藥列：已核對送出、還沒點收的標「藥車未點收」（不擋給藥）')
+      await expectError(() => U.receiveUdBoxes(disp.id, []), '沒勾藥盒就點收')
+      const rc = await U.receiveUdBoxes(disp.id, [b1.admissionId])
+      ok(rc.boxes === 1 && box(b1).receivedBy === 'U201' && db().auditLogs[0].action === '藥車點收', '點收勾的那一盒（記下誰、何時），寫稽核')
+      ok(!(await api.ipdApi.listMar(b1.admissionId, addDays(T, 1))).some((m) => m.udDelivery), '點收後給藥列不再標示')
+      await expectError(() => U.receiveUdBoxes(disp.id, [b1.admissionId]), '已點收的再點收一次')
+      if (b2) {
+        try {
+          await U.reportUdBox(disp.id, b2.admissionId, { cause: '其他' })
+          ok(false, '「其他」沒寫說明應被擋下')
+        } catch (e) {
+          ok(e.fields?.note, '不符選「其他」要寫說明')
+        }
+        await expectError(() => U.reportUdBox(disp.id, b2.admissionId, { cause: '亂寫' }), '不在清單的不符原因')
+        await U.reportUdBox(disp.id, b2.admissionId, { cause: '短少', note: '少一顆' })
+        const m2 = (await api.ipdApi.listMar(b2.admissionId, addDays(T, 1))).find((m) => m.udLineId && disp.lines.some((l) => l.id === m.udLineId))
+        ok(box(b2).receivedAt && box(b2).issue?.cause === '短少' && m2?.udDelivery === 'issue' && db().auditLogs[0].action === '藥盒不符', '回報不符：這一盒算已到病房、記下原因，給藥列標「藥盒不符」')
+        ok((await U.listWardUdCarts(b2.ward)).issues.some((i) => i.admissionId === b2.admissionId && i.note === '少一顆'), '護理站列出「已回報藥局、處理中」')
+        await expectError(() => U.receiveUdBoxes(disp.id, [b2.admissionId]), '回報不符的再點收')
+        await expectError(() => U.resolveUdIssue(disp.id, b2.admissionId, { resolution: '已補發' }), '護理師處理藥局的回報')
+        await as('ph01')
+        const iw = await U.getUdWork()
+        ok(iw.issues.length === 1 && iw.issues[0].items.length > 0 && (await api.dashboardApi.getDashboard()).udIssues === 1, `藥局 UD 頁：病房回報 1 盒（${iw.issues[0]?.cause}，列出這盒的藥）；首頁待辦也有`)
+        try {
+          await U.resolveUdIssue(disp.id, b2.admissionId, { resolution: ' ', resupply: { [iw.issues[0].lines[0].lineId]: -1 } })
+          ok(false, '沒寫處理說明應被擋下')
+        } catch (e) {
+          ok(e.fields?.resolution && e.fields?.[`resupply.${iw.issues[0].lines[0].lineId}`], '處理要寫說明；補發數量要是 0 以上整數（一次標出）')
+        }
+        const before2 = db().stockTxns.length
+        const rl = iw.issues[0].lines.find((l) => l.qty > 0)
+        const rs = await U.resolveUdIssue(disp.id, b2.admissionId, { resolution: '已補發 1 顆', resupply: { [rl.lineId]: 1 } })
+        const rtx = db().stockTxns.slice(before2)
+        ok(rs.resupplied === 1 && rtx.length === 1 && rtx[0].ref === r.no && rtx[0].qty === -1 && rtx[0].reason.includes('藥盒不符補發') && box(b2).issue.resupplyTxnIds?.[0] === rtx[0].id, `補發 1 ${rl.unit} ${rl.drugName}：扣住院藥局、同一張單號（那幾劑不會再出現在補調劑，不在這裡扣就帳實不符）`)
+        ok(box(b2).issue.resolvedBy === 'U301' && !(await U.getUdWork()).issues.length && db().auditLogs[0].detail.includes('補發') && ledgerBroken(db()).length === 0, '藥師處理完：記下說明、稽核寫出補發，帳本仍對得起來')
+        await expectError(() => U.resolveUdIssue(disp.id, b2.admissionId, { resolution: '再處理一次' }), '已處理的再處理')
+        await as('nurse01')
+        ok(!(await api.ipdApi.listMar(b2.admissionId, addDays(T, 1))).some((m) => m.udDelivery) && !(await U.listWardUdCarts(b2.ward)).issues.length, '處理完：給藥列、護理站都不再標示')
+      }
+      // 其餘的點收完（後面的測試照常）
+      for (const wd of wards) for (const c of (await U.listWardUdCarts(wd)).carts) await U.receiveUdBoxes(c.dispenseId, c.boxes.map((b) => b.admissionId))
+      ok((await api.dashboardApi.getDashboard()).udToReceive === 0, '全部點收完，首頁待辦歸零')
+      await as('ph02')
+    }
     await as('admin')
     await api.pharmacyApi.saveDispensePolicy(false)
     await as('ph01')

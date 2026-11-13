@@ -4,7 +4,7 @@
 // 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為清單上選取的那一位。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { handoverShiftOf, nursingApi, shiftOf, SHIFT_ORDER, type Shift, type WardPatient } from '@/services'
+import { handoverShiftOf, nursingApi, shiftOf, SHIFT_ORDER, udApi, type Shift, type WardPatient } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { usePhrases } from '@/composables/usePhrases'
 import PhraseHint from '@/components/PhraseHint.vue'
@@ -28,6 +28,13 @@ watch(() => props.selectedId, (id) => id && (form.admissionId = id))
 const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.bed?.bedNo} ${p.patientName}`, value: p.id })))
 
 const phrase = usePhrases(() => props.ward)
+// 交班時提醒：還沒點收的藥車、回報不符藥局還沒處理的藥盒（和「本班待辦」同一個查詢）
+const { data: ud } = useQuery(async () => ({ ward: props.ward, r: await udApi.listWardUdCarts(props.ward) }), [() => props.ward])
+const udNote = computed(() => {
+  if (ud.value?.ward !== props.ward) return ''
+  const boxes = ud.value.r.carts.reduce((n, c) => n + c.boxes.length, 0)
+  return [boxes && `${ud.value.r.carts.length} 車藥（${boxes} 盒）還沒點收`, ud.value.r.issues.length && `${ud.value.r.issues.length} 盒回報不符、藥局處理中`].filter(Boolean).join('；')
+})
 const save = useAction(nursingApi.addHandover, { success: '已新增交班' })
 async function submit() {
   if (!form.admissionId) return
@@ -38,6 +45,7 @@ async function submit() {
 
 <template>
   <div class="space-y-4 p-4">
+    <p v-if="udNote" class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">交班前注意：{{ udNote }}（在「本班待辦」點收）</p>
     <div class="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div class="mb-2 text-sm font-semibold text-slate-700">新增交班</div>
       <!-- 班別、病人並排，交班重點獨佔一列。以前三欄並排用 md:（看整個視窗寬），

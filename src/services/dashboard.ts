@@ -32,6 +32,9 @@ export interface DashboardStats {
   udReturns: number
   udVerify: number
   udSendBack: number
+  /** 藥車交接：已核對送出、病房還沒點收的藥盒（護理站，全院）；病房回報不符、藥局還沒處理的（住院藥局） */
+  udToReceive: number
+  udIssues: number
   /** 大型醫院：撥補單待撥發（請領中）、待簽收（運送中）；小型醫院沒有（不回傳） */
   transferRequested?: number
   transferIssued?: number
@@ -85,6 +88,8 @@ export function getDashboard(): Promise<DashboardStats> {
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
+      udToReceive: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'verified' && !b.receivedAt).length, 0),
+      udIssues: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.issue && !b.issue.resolvedAt).length, 0),
       restockOpen: db.restockRequests.filter((x) => x.status === 'open' && db.drugs.some((d) => d.id === x.drugId && d.active)).length,
       purchasePending: db.purchaseOrders.filter((p) => p.status === 'pending').length,
       ...(() => {
