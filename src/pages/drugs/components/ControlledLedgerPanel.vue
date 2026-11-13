@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 管制藥品收支結存簿冊（藥師）：選管制藥、地點（藥庫、藥局、各病房常備）、期間 → 逐筆收入、支出、結存、
-// 病人、開立醫師、經手、見證；殘餘量銷毀另列一行（不動結存）。資料與 CSV 都來自服務層 controlled.controlledLedger。
+// 病人、開立醫師、經手、見證；殘餘量銷毀另列一行（不動結存）。資料、CSV、Excel 都來自服務層 controlled.controlledLedger。
 import { computed, ref, watch } from 'vue'
 import { Download, Printer } from 'lucide-vue-next'
 import { UBadge, UButton, UInput, UQueryState, USelect } from '@/components/ui'
-import { controlledApi, controlledLedgerCsv, controlledLedgerFileName } from '@/services'
+import { controlledApi, controlledLedgerCsv, controlledLedgerFileName, controlledLedgerXlsx, controlledLedgerXlsxFileName, XLSX_MIME } from '@/services'
+import { downloadFile } from '@/utils/download'
 import { useQuery } from '@/composables/useService'
 import { addDays, today } from '@/utils/date'
 
@@ -25,15 +26,11 @@ const { data, loading } = useQuery(
 )
 const KIND_TONE = { in: 'green', out: 'blue', residual: 'purple' } as const
 const print = () => window.print()
+function exportXlsx() {
+  if (data.value) downloadFile(controlledLedgerXlsx(data.value), XLSX_MIME, controlledLedgerXlsxFileName(data.value))
+}
 function exportCsv() {
-  const r = data.value
-  if (!r) return
-  const url = URL.createObjectURL(new Blob([controlledLedgerCsv(r)], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = controlledLedgerFileName(r)
-  a.click()
-  URL.revokeObjectURL(url)
+  if (data.value) downloadFile(controlledLedgerCsv(data.value), 'text/csv;charset=utf-8', controlledLedgerFileName(data.value))
 }
 </script>
 
@@ -45,7 +42,8 @@ function exportCsv() {
       <UInput v-model="from" type="date" label="起" class="w-40" />
       <UInput v-model="to" type="date" label="迄" class="w-40" :max="today()" />
       <div class="ml-auto flex gap-2">
-        <UButton variant="secondary" :icon="Download" :disabled="!data" @click="exportCsv">匯出 CSV</UButton>
+        <UButton variant="secondary" :icon="Download" :disabled="!data" @click="exportXlsx">匯出 Excel</UButton>
+        <UButton variant="ghost" :disabled="!data" @click="exportCsv">CSV</UButton>
         <UButton variant="secondary" :icon="Printer" :disabled="!data" @click="print">列印</UButton>
       </div>
     </div>

@@ -5,7 +5,8 @@ import { HOSPITAL } from '@/utils/hospital'
 import { computed, nextTick, ref } from 'vue'
 import { Ban, Coins, Download, FileText, Printer, Stethoscope } from 'lucide-vue-next'
 import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
-import { chargeApi, dailyReportCsv, reportFileName } from '@/services'
+import { chargeApi, dailyReportCsv, dailyReportXlsx, reportFileName, reportXlsxFileName, XLSX_MIME } from '@/services'
+import { downloadFile } from '@/utils/download'
 import type { DailyReport } from '@/services/charge'
 import { useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -43,14 +44,12 @@ function usePreset(p: { from: string; to: string }) {
 }
 
 // 匯出：內容與檔名由服務層的純函式產生，頁面只負責觸發下載
+// Excel：明細、合計、每日小計分開工作表，金額是數字；CSV 給要匯入其他系統的人
+function exportXlsx() {
+  if (r.value) downloadFile(dailyReportXlsx(r.value), XLSX_MIME, reportXlsxFileName(r.value))
+}
 function exportCsv() {
-  if (!r.value) return
-  const url = URL.createObjectURL(new Blob([dailyReportCsv(r.value)], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = reportFileName(r.value)
-  a.click()
-  URL.revokeObjectURL(url)
+  if (r.value) downloadFile(dailyReportCsv(r.value), 'text/csv;charset=utf-8', reportFileName(r.value))
 }
 
 type Row = DailyReport['charges'][number]
@@ -147,7 +146,8 @@ const print = async () => {
       </div>
       <div class="ml-auto flex gap-2">
         <UButton variant="secondary" :icon="Printer" :disabled="!r || !!error" @click="print">列印</UButton>
-        <UButton variant="secondary" :icon="Download" :disabled="!r || !!error" @click="exportCsv">匯出 CSV</UButton>
+        <UButton variant="secondary" :icon="Download" :disabled="!r || !!error" @click="exportXlsx">匯出 Excel</UButton>
+        <UButton variant="ghost" :disabled="!r || !!error" @click="exportCsv">CSV</UButton>
       </div>
     </div>
     <p v-if="error" class="no-print text-sm text-red-600" role="alert">{{ error }}</p>

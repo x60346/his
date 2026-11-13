@@ -4736,6 +4736,107 @@ try {
     await as('clerk01')
   }
 
+  // 匯出 Excel：自己產生的 xlsx（不壓縮的 zip＋XML）。拆開檢查 zip 結構與 CRC、工作表、數字／文字型別、轉義；內容和 CSV 同一份報表表格
+  console.log('\n[匯出 Excel]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const XL = await load('/src/services/xlsx.ts')
+    const RX = await load('/src/services/report-xlsx.ts')
+    const CSV = await load('/src/services/report-csv.ts')
+    // 自己寫一個最小的 zip 讀取：照中央目錄找每個檔，核對本地檔頭、大小與 CRC
+    const unzip = (u8) => {
+      const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength)
+      const eocd = u8.length - 22
+      if (dv.getUint32(eocd, true) !== 0x06054b50) throw new Error('沒有 EOCD')
+      const count = dv.getUint16(eocd + 10, true)
+      let p = dv.getUint32(eocd + 16, true)
+      const files = new Map()
+      const dec = new TextDecoder('utf-8', { fatal: true })
+      for (let i = 0; i < count; i++) {
+        if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('中央目錄壞了')
+        const crc = dv.getUint32(p + 16, true), size = dv.getUint32(p + 24, true), nl = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true)
+        const name = dec.decode(u8.subarray(p + 46, p + 46 + nl))
+        if (dv.getUint32(off, true) !== 0x04034b50 || dv.getUint16(off + 8, true) !== 0 || dv.getUint32(off + 14, true) !== crc) throw new Error('本地檔頭不符：' + name)
+        const start = off + 30 + dv.getUint16(off + 26, true)
+        const data = u8.subarray(start, start + size)
+        if (XL.crc32(data) !== crc) throw new Error('CRC 不符：' + name)
+        files.set(name, dec.decode(data))
+        p += 46 + nl
+      }
+      return files
+    }
+    const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+    const cellsOf = (xml) => {
+      const m = new Map()
+      for (const x of xml.matchAll(/<c r="([A-Z]+)(\d+)"( s="1")?( t="inlineStr")?>(?:<v>([^<]*)<\/v>|<is><t xml:space="preserve">([^<]*)<\/t><\/is>)<\/c>/g)) {
+        m.set(x[1] + x[2], { bold: !!x[3], num: x[5] !== undefined ? Number(x[5]) : undefined, str: x[6] !== undefined ? unesc(x[6]) : undefined })
+      }
+      return m
+    }
+    const book = (u8) => {
+      const f = unzip(u8)
+      const names = [...f.get('xl/workbook.xml').matchAll(/<sheet name="([^"]*)"/g)].map((x) => unesc(x[1]))
+      return { f, names, sheet: (i) => f.get(`xl/worksheets/sheet${i + 1}.xml`) }
+    }
+    const rowOf = (k) => Number(k.match(/\d+$/)[0])
+    const colOf = (cells, col, from = 2) => [...cells].filter(([k]) => k.match(/^[A-Z]+/)[0] === col && rowOf(k) >= from).map(([, v]) => v)
+
+    ok(XL.crc32(new TextEncoder().encode('123456789')) === 0xcbf43926, 'CRC32 標準測試值（"123456789" → CBF43926）')
+    ok(XL.colName(0) === 'A' && XL.colName(25) === 'Z' && XL.colName(26) === 'AA' && XL.colName(701) === 'ZZ' && XL.colName(702) === 'AAA', '欄名：A、Z、AA、ZZ、AAA')
+
+    const tricky = XL.buildXlsx([
+      { name: 'a/b:c', rows: [['<林&"王>', '=1+1', '000123', -50, 1.5, NaN, 'x\u0001y', '', null]], bold: [0] },
+      { name: 'a/b:c', rows: [[1]] },
+    ])
+    const tb = book(tricky)
+    ok(tb.f.has('[Content_Types].xml') && tb.f.has('_rels/.rels') && tb.f.has('xl/styles.xml') && tb.f.has('xl/_rels/workbook.xml.rels') && tb.f.has('xl/worksheets/sheet2.xml'),
+      'zip 拆得開、每個檔 CRC 對：內容型別、關聯、活頁簿、樣式、兩張工作表都在')
+    ok(tb.names.join() === 'a_b_c,a_b_c_2', '工作表名稱的非法字元換掉、同名自動加序號')
+    const tc = cellsOf(tb.sheet(0))
+    ok(tc.get('A1').str === '<林&"王>' && tb.sheet(0).includes('&lt;林&amp;&quot;王&gt;'), '文字裡的 < & " > 有轉義（病人姓名有這些字元也打得開）')
+    ok(tc.get('B1').str === '=1+1' && !tb.sheet(0).includes('<f>'), '「=1+1」存成文字、不是公式（不需要 CSV 那種加 \'）')
+    ok(tc.get('C1').str === '000123' && tc.get('D1').num === -50 && tc.get('E1').num === 1.5, '000123 是文字（0 不會掉）；-50、1.5 是數字')
+    ok(!tc.has('F1') && tc.get('G1').str === 'xy' && !tc.has('H1') && !tc.has('I1'), 'NaN、空字串、null 留空；XML 不允許的控制字元拿掉')
+    ok(tc.get('A1').bold && tb.sheet(0).includes('<col min="1" max="1" width="'), '粗體列、欄寬有設')
+    ok(Buffer.from(XL.buildXlsx([{ name: 'x', rows: [['a', 1]] }])).equals(Buffer.from(XL.buildXlsx([{ name: 'x', rows: [['a', 1]] }]))), '同樣內容產生一模一樣的檔（日期固定，不含現在時間）')
+
+    // 收費報表（區間 7 天）
+    await as('clerk01')
+    const R = await api.chargeApi.dailyReport(addDaysT(-6), T)
+    const rb = book(RX.dailyReportXlsx(R))
+    ok(rb.names.join() === '明細,合計,每日小計', '區間報表：明細、合計、每日小計三張工作表')
+    const det = cellsOf(rb.sheet(0))
+    const tbl = CSV.dailyReportTable(R)
+    ok(det.get('A1').str === '類別' && det.get('A1').bold && rb.sheet(0).includes('ySplit="1"') && colOf(det, 'A').length === tbl.rows.length,
+      `明細：表頭粗體並凍結，${tbl.rows.length} 列＝CSV 同一份明細`)
+    let valid = 0
+    for (let i = 2; i <= tbl.rows.length + 1; i++) if (det.get('A' + i)?.str === '收費' && det.get('M' + i)?.str === '有效') valid += det.get('I' + i).num
+    ok(tbl.rows.length > 0 && valid === R.patientTotal, `金額欄是數字：有效收據加總 ${valid} ＝ 應收合計 ${R.patientTotal}`)
+    ok(['B', 'C', 'E'].every((c) => colOf(det, c).every((x) => x.str !== undefined)), '收據號、日期、病歷號存成文字（不會變成數字或日期）')
+    const tot = cellsOf(rb.sheet(1))
+    ok(tot.get('B1').str === R.date + ' ~ ' + R.to && [...tot.values()].some((c) => c.num === R.collected) && tot.get('A3').bold, '合計：期間、實收合計（數字）')
+    const byDay = cellsOf(rb.sheet(2))
+    ok(colOf(byDay, 'A').length === 7 && colOf(byDay, 'I').reduce((n, c) => n + c.num, 0) === R.collected, '每日小計 7 列、實收加總＝實收合計')
+    const day = await api.chargeApi.dailyReport(T)
+    ok(RX.reportXlsxFileName(R) === `收費報表_${R.date}_${R.to}.xlsx` && RX.reportXlsxFileName(day) === `日結_${T}.xlsx`, '檔名和 CSV 一樣，只換副檔名')
+    ok(book(RX.dailyReportXlsx(day)).names.join() === '明細,合計', '單日日結沒有每日小計')
+
+    // 管制藥簿冊
+    await as('ph01')
+    const opdLoc = db().stockLocations.find((l) => l.dispensesOpd).id
+    const L = await api.controlledApi.controlledLedger({ drugId: 'M031', locationId: opdLoc, from: addDaysT(-30), to: T })
+    const lb = book(RX.controlledLedgerXlsx(L))
+    const lc = cellsOf(lb.sheet(0))
+    const last = Math.max(...[...lc.keys()].map(rowOf))
+    ok(lb.names.join() === '收支結存簿冊' && lc.get('A1').str === '管制藥品收支結存簿冊' && lc.get('A5').str === '日期時間' && lc.get('A5').bold && lb.sheet(0).includes('ySplit="5"'),
+      '管制藥簿冊：一張，抬頭在上、表頭粗體並凍結')
+    ok(lc.get('A' + last).str === '期末結存' && lc.get('B' + last).num === L.closing && lc.get('F6').num === L.opening, `期初 ${L.opening}、期末 ${L.closing} 是數字`)
+    ok(colOf(lc, 'F', 7).length === L.rows.length, `逐筆 ${L.rows.length} 列（每列都有結存）`)
+    ok(RX.controlledLedgerXlsxFileName(L).endsWith('.xlsx') && RX.controlledLedgerXlsxFileName(L).startsWith('管制藥簿冊_'), '簿冊檔名')
+    await as('clerk01')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {
