@@ -3,12 +3,13 @@
 // 兩段式（核對、發藥）是用藥安全的標準流程；扣庫存只在發藥時發生，且整筆交易（任一藥不足就全部不扣）。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
-import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer } from 'lucide-vue-next'
+import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, UStatusBadge, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
-import { pharmacyApi } from '@/services'
+import ReasonDialog from '@/components/ReasonDialog.vue'
+import { dispenseOpen, pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -31,7 +32,7 @@ const matches = (x: { pickupNo: number; patientName: string; chartNo: string }, 
 }
 const searched = computed(() => (all.value ?? []).filter((d) => matches(d, kw.value.trim())))
 const tabs = computed(() =>
-  (['pending', 'verified', 'dispensed'] as DispenseStatus[]).map((s) => ({ key: s, label: dispenseStatus[s].label, count: searched.value.filter((d) => d.status === s).length })),
+  (['pending', 'verified', 'dispensed', 'returned'] as DispenseStatus[]).map((s) => ({ key: s, label: dispenseStatus[s].label, count: searched.value.filter((d) => d.status === s).length })),
 )
 const list = computed(() => searched.value.filter((d) => d.status === tab.value))
 /** Enter：只有一筆符合就直接選中（分頁由下方的 watch 跟著那張單切過去）；多筆就留給使用者從清單點 */
@@ -44,7 +45,7 @@ function onSearchEnter() {
 }
 // 前幾日開立、還沒領的單（服務層排在當天的後面）。領藥號每天重編，要標日期才分得出是哪一天的「3 號」
 const createdDay = (x: { createdAt: string }) => x.createdAt.slice(0, 10)
-const isCarried = (x: { createdAt: string; status: DispenseStatus }) => x.status !== 'dispensed' && createdDay(x) < date.value
+const isCarried = (x: { createdAt: string; status: DispenseStatus }) => dispenseOpen(x) && createdDay(x) < date.value
 // 「開立幾天」從看診（開處方）那天算，和有效期同一個起點（rx-rules）
 const ageDays = (x: { date: string }) => diffDays(x.date, todayStr.value)
 
@@ -69,9 +70,15 @@ watch(
 // ---------- 核對、發藥 ----------
 const verify = useAction(pharmacyApi.verifyDispense, { success: (x) => `領藥號 ${x.pickupNo} 核對完成` })
 const give = useAction(pharmacyApi.dispense, { success: (x) => `領藥號 ${x.pickupNo} 已發藥給 ${x.patientName}` })
+// 門診退藥（整張）：退回發出時的批號；之後櫃台才能作廢或退費
+const returnOpen = ref(false)
+const ret = useAction(pharmacyApi.returnDispense, { success: (x) => `領藥號 ${x.pickupNo} 已退藥：藥品退回原批號，請櫃台辦理作廢或退費` })
+async function confirmReturn(reason: string) {
+  if (d.value && (await ret.run(d.value.id, reason))) returnOpen.value = false
+}
 
 /** 下一張待處理的單：發藥後自動帶到下一位，減少點擊 */
-const nextPending = computed(() => (all.value ?? []).find((x) => x.status !== 'dispensed' && x.id !== selectedId.value))
+const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x) && x.id !== selectedId.value))
 // ---------- 發藥前確認身分：請病人說出出生月日，或登記代領人（比對在服務層） ----------
 const pickupOpen = ref(false)
 const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '' })
@@ -127,7 +134,7 @@ const print = () => window.print()
               <span class="block font-medium text-slate-800">{{ x.patientName }}</span>
               <span class="block truncate text-xs text-slate-500">{{ x.deptName }}・{{ x.items.length }} 項藥品</span>
               <!-- 逾期與否由服務層依看診日判斷（rx-rules）；頁面不自己用天數門檻 -->
-              <UBadge v-if="x.status !== 'dispensed' && x.rxExpired" tone="yellow" class="mt-0.5">處方逾期・已開立 {{ ageDays(x) }} 天</UBadge>
+              <UBadge v-if="dispenseOpen(x) && x.rxExpired" tone="yellow" class="mt-0.5">處方逾期・已開立 {{ ageDays(x) }} 天</UBadge>
             </span>
             <span class="flex flex-col items-end gap-1">
               <AlertTriangle v-if="x.allergyWarnings.length" class="h-4 w-4 text-red-500" aria-label="過敏警示" />
@@ -198,7 +205,7 @@ const print = () => window.print()
               </td>
             </tr>
             <!-- 缺藥的處理放在下一列、跨整列：窄螢幕時明細只有 400px 寬，擠在最後一欄會撐出橫向捲軸 -->
-            <tr v-if="it.shortage && d.status !== 'dispensed'" class="bg-red-50">
+            <tr v-if="it.shortage && dispenseOpen(d)" class="bg-red-50">
               <td colspan="5" class="px-4 pb-2">
                 <div v-if="it.restock?.includesThis" class="flex flex-wrap items-center gap-2 text-xs text-sky-800">
                   <UBadge tone="blue">已申請補貨</UBadge>
@@ -216,7 +223,7 @@ const print = () => window.print()
       </UCard>
 
       <!-- 錯誤訊息不只說「錯了」，也告訴使用者下一步 -->
-      <div v-if="shortages.length && d.status !== 'dispensed'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+      <div v-if="shortages.length && dispenseOpen(d)" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
 {{ shortages.map((s) => s.drugName).join('、') }} 庫存不足，無法{{ d.status === 'pending' ? '核對' : '發藥' }}。
         <template v-if="shortages.every((s) => s.restock?.includesThis)">已申請補貨，到貨入庫後即可{{ d.status === 'pending' ? '核對' : '發藥' }}；也可以請醫師改開替代藥。</template>
         <template v-else>請按該列的「申請補貨」，或聯絡醫師更換藥品。</template>
@@ -226,10 +233,12 @@ const print = () => window.print()
         <span class="text-xs text-slate-500">
           <template v-if="d.verifiedAt">核對：{{ d.verifiedAt.slice(11) }}　</template>
           <template v-if="d.dispensedAt">發藥：{{ d.dispensedAt.slice(11) }}</template>
+          <template v-if="d.returnedAt">　退藥：{{ d.returnedAt.slice(5).replace('-', '/') }}（{{ d.returnReason }}）</template>
         </span>
         <div class="ml-auto flex gap-2">
           <UButton variant="secondary" :icon="Printer" @click="bagOpen = true">藥袋</UButton>
           <UButton v-if="d.status === 'pending'" :icon="ClipboardCheck" :disabled="shortages.length > 0" :loading="verify.pending.value" @click="verify.run(d.id)">核對處方</UButton>
+          <UButton v-if="d.status === 'dispensed'" variant="ghost" :icon="Undo2" @click="returnOpen = true">退藥</UButton>
           <UButton v-if="d.status === 'verified'" variant="success" :icon="CheckCheck" :disabled="shortages.length > 0 || !!d.dispenseBlocked" :loading="give.pending.value" @click="onDispense">發藥</UButton>
         </div>
         <!-- 雙人核對開啟、而我就是核對的人：先說清楚，不是按了才被擋（規則 rx-rules.dispenseBlocker） -->
@@ -240,6 +249,18 @@ const print = () => window.print()
     <!-- 補貨申請：與藥品庫存頁共用；建議量依用量算（stock-rules 的 suggestRestockQty），不再固定「缺量＋500」 -->
     <RestockRequestDialog v-model="restockOpen" :drug-id="restockItem?.drugId" :dispense-id="d?.id" :pickup-no="d?.pickupNo" />
 
+    <ReasonDialog
+      v-model="returnOpen"
+      title="門診退藥"
+      :subject="d ? `領藥號 ${d.pickupNo} ${d.patientName}・${d.items.length} 項（整張退）` : ''"
+      label="退藥原因"
+      :presets="['病人過敏回診', '醫師修改處方', '病人不需要了']"
+      ok-text="退藥"
+      danger
+      :pending="ret.pending.value"
+      :error="ret.fieldErrors.value.reason"
+      @confirm="confirmReturn"
+    />
     <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
       <div v-if="d" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">

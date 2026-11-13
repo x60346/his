@@ -1,15 +1,15 @@
 // 門診藥局：調劑清單、核對、發藥（扣庫存）。
 // 扣庫存一律透過 inventory.postStock：寫異動帳、依 FEFO 扣批號；這裡不直接改 drug.stock。
 // 狀態：pending（待調劑）→ verified（已核對）→ dispensed（已發藥，掛號狀態同步為 dispensed）。
-import type { Dispense, DispenseStatus, Drug } from '@/types'
+import type { Dispense, DispenseStatus, Drug, StockTxn } from '@/types'
 import { db } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, sessionUser } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
-import { dispenseBlocker, rxExpired, rxValidUntil } from './rx-rules'
+import { dispenseBlocker, dispenseOpen, rxExpired, rxValidUntil } from './rx-rules'
 import { effectiveTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 
@@ -99,7 +99,7 @@ function dispenseView(d: Dispense): DispenseView {
       ...(m.timing && timingApplies(m.freq, m.route) ? { timingByDoctor: true } : {}),
       indication: drug?.indication ?? '',
       warning: drug?.warning ?? '',
-      shortage: d.status !== 'dispensed' && usable < m.qty,
+      shortage: dispenseOpen(d) && usable < m.qty,
       ...(req ? { restock: { qty: req.qty, outstanding: Math.max(0, req.qty - req.receivedQty), requestedAt: req.requestedAt, includesThis: req.dispenseIds.includes(d.id) } } : {}),
     }
   })
@@ -134,12 +134,12 @@ function dispenseView(d: Dispense): DispenseView {
  * 排序：當天開立的在前（依領藥號），前幾天的接在後面（依日期、領藥號）——窗口前的人優先。
  */
 /** 這一天還等著領藥的單：當天以前（含）開立、還沒發藥。藥局清單與首頁「待領藥」共用 */
-export const awaitingPickup = (d: Pick<Dispense, 'status' | 'createdAt'>, date: string) => d.status !== 'dispensed' && d.createdAt.slice(0, 10) <= date
+export const awaitingPickup = (d: Pick<Dispense, 'status' | 'createdAt'>, date: string) => dispenseOpen(d) && d.createdAt.slice(0, 10) <= date
 
 export function listDispenses(q: { date: string; status?: DispenseStatus[] }): Promise<DispenseView[]> {
   return query(() =>
     db.dispenses
-      .filter((d) => (d.status === 'dispensed' ? !!d.dispensedAt?.startsWith(q.date) : awaitingPickup(d, q.date)))
+      .filter((d) => (d.status === 'dispensed' || d.status === 'returned' ? !!d.dispensedAt?.startsWith(q.date) : awaitingPickup(d, q.date)))
       .filter((d) => !q.status || q.status.includes(d.status))
       .sort((a, b) => {
         const da = a.createdAt.slice(0, 10)
@@ -208,7 +208,8 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     const view = dispenseView(d)
     assertStock(view)
     // 每個品項寫一筆發藥異動；任何一項失敗，mutate 會整筆回滾（不會只扣一半）
-    for (const item of view.items) postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, locationId: stockLoc.opd(), qty: item.qty, ref: `領藥號 ${d.pickupNo}` }, ph.id)
+    // 記下扣庫存的那幾筆：日後退藥要退回同幾個批號
+    d.txnIds = view.items.map((item) => postStock({ kind: 'out', type: 'dispense', drugId: item.drugId, locationId: stockLoc.opd(), qty: item.qty, ref: `領藥號 ${d.pickupNo}` }, ph.id).id)
     d.status = 'dispensed'
     d.dispensedBy = ph.id
     d.dispensedAt = now()
@@ -216,6 +217,50 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     // 逾期處方不擋，但發出去要留紀錄：日後查得到是藥師知情下發的
     const late = view.rxExpired ? `（處方已逾有效期：${view.date} 開立、有效至 ${view.rxValidUntil}）` : ''
     audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）${late}`)
+    return dispenseView(d)
+  })
+}
+
+/**
+ * 發藥時扣庫存的那幾筆異動。新資料記在調劑單上（txnIds）；舊資料沒記，只能比對：
+ * 領藥號依「看診日」編，跨日才領的單和當天的單可能同一個號——所以要「同一個發藥時間、同樣的藥與數量」都對上，
+ * 對不上就不退（寧可請人工處理，也不能退到別人的批號）
+ */
+function dispenseTxns(d: Dispense): StockTxn[] {
+  if (d.txnIds?.length) return d.txnIds.map((id) => must(db.stockTxns.find((x) => x.id === id), '發藥異動'))
+  const meds = must(db.encounters.find((e) => e.id === d.encounterId), '病歷').medications
+  const txns = db.stockTxns.filter((x) => x.type === 'dispense' && x.ref === `領藥號 ${d.pickupNo}` && x.at === d.dispensedAt)
+  const same = txns.length === meds.length && meds.every((m) => txns.some((x) => x.drugId === m.drugId && -x.qty === m.qty))
+  return same ? txns : []
+}
+
+/**
+ * 門診退藥（整張）：病人過敏回診、醫師改處方……把已發出的藥收回，退回發出時的那幾個批號（效期跟著回來），
+ * 調劑單標「已退藥」、掛號回到「已批價」——之後櫃台才能作廢或退費。盤點中的藥不能退（會打亂盲盤）
+ */
+export function returnDispense(id: string, reason: string): Promise<DispenseView> {
+  return mutate(() => {
+    const ph = requireUser('pharmacist')
+    const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
+    if (d.status === 'returned') fail('這張已經退藥了', 'CONFLICT')
+    if (dispenseOpen(d)) fail('還沒發藥，不需要退藥', 'CONFLICT')
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫退藥原因（例：病人過敏回診、醫師改處方）')
+    const txns = dispenseTxns(d)
+    if (!txns.length) fail('找不到這張的發藥紀錄，無法退回批號', 'CONFLICT')
+    for (const tx of txns) {
+      const counting = stockLoc.counting(tx.drugId, tx.locationId)
+      if (counting) fail(`${find.drug(tx.drugId)?.name}盤點中（${counting}），盤點完成前不能退藥`, 'CONFLICT')
+    }
+    const t = now()
+    for (const tx of txns)
+      for (const m of tx.lots) {
+        const lot = must(stockLoc.lots(tx.drugId, tx.locationId).find((l) => l.lotNo === m.lotNo), '批號')
+        postStock({ kind: 'in', type: 'return', drugId: tx.drugId, locationId: tx.locationId, qty: -m.qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tx.ref, reason: `門診退藥：${why}` }, ph.id, t)
+      }
+    Object.assign(d, { status: 'returned', returnedBy: ph.id, returnedAt: t, returnReason: why })
+    must(find.visit(d.visitId), '掛號紀錄').status = 'charged'
+    audit('門診退藥', `領藥號 ${d.pickupNo} ${find.patient(d.patientId)?.name}：${why}`)
     return dispenseView(d)
   })
 }

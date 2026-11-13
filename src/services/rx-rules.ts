@@ -22,3 +22,6 @@ export function dispenseBlocker(d: { status: string; verifiedBy?: string }, user
   if (twoPerson && d.verifiedBy === userId) return '本院規定核對與發藥須由不同藥師：請由另一位藥師發藥'
   return undefined
 }
+
+/** 調劑單還沒結束（待調劑、已核對）：等著領藥、要算進缺藥需求的。已發藥、已退藥的都不算 */
+export const dispenseOpen = (d: { status: string }) => d.status === 'pending' || d.status === 'verified'

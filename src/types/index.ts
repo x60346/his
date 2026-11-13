@@ -389,7 +389,8 @@ export interface Repayment {
   at: string
 }
 
-export type DispenseStatus = 'pending' | 'verified' | 'dispensed'
+/** returned＝發出去又退回藥局（門診退藥：病人過敏回診、醫師改處方…）；之後櫃台才能作廢或退費 */
+export type DispenseStatus = 'pending' | 'verified' | 'dispensed' | 'returned'
 
 /** 門診藥局調劑單（批價後自動產生） */
 export interface Dispense {
@@ -406,6 +407,12 @@ export interface Dispense {
   dispensedAt?: string
   /** 發藥時怎麼確認身分：病人說出生日（birth），或他人代領（proxy，記代領人與關係） */
   pickupCheck?: { method: 'birth' | 'proxy'; proxyName?: string; relation?: string }
+  /** 發藥扣庫存的那幾筆異動：退藥時退回同幾個批號（舊資料沒有，用「領藥號＋發藥日」找） */
+  txnIds?: string[]
+  /** 門診退藥 */
+  returnedBy?: string
+  returnedAt?: string
+  returnReason?: string
   createdAt: string
 }
 

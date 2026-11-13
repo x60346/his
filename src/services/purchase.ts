@@ -6,6 +6,7 @@
 //   - 到貨一律對品項入，超過尚未到貨的數量擋下；全部到齊自動「已到齊」，短交要寫原因結案
 //   - 入庫地點＝採購入庫的地點（小型＝藥局、大型＝藥庫），核准時記下
 import type { PurchaseLine, PurchaseOrder, Supplier } from '@/types'
+import { dispenseOpen } from './rx-rules'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
@@ -118,7 +119,7 @@ export function purchaseCandidates(): Promise<PurchaseCandidate[]> {
       // 近 30 天這個地點的用量（發藥＋撥出，和庫存頁同一個定義）
       const since = addDays(t, -30)
       const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === loc && (x.type === 'dispense' || x.type === 'transfer-out') && x.at >= since).reduce((n, x) => n + x.qty, 0)
-      const waiting = freeReq ? freeReq.dispenseIds.map((id) => db.dispenses.find((x) => x.id === id)).filter((x) => x && x.status !== 'dispensed').length : 0
+      const waiting = freeReq ? freeReq.dispenseIds.map((id) => db.dispenses.find((x) => x.id === id)).filter((x) => x && dispenseOpen(x)).length : 0
       const sug = suggestRestockQty({ usable, need: 0, safetyStock: safety, used30, onOrder: onOrder(d.id) })
       out.push({
         drugId: d.id, drugName: d.name, unit: d.unit, usable, safetyStock: safety,

@@ -16,6 +16,7 @@ import { find, nameOf, stockLoc } from './views'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
 import { isExpired } from './stock-rules'
 import { matchesDrug } from './drug-rules'
+import { dispenseOpen } from './rx-rules'
 
 // 寫入一律透過 stock-ledger.postStock（內部模組，不經 services/index 對外）
 
@@ -248,7 +249,7 @@ export function scrapExpired(drugId: string, locationId?: string): Promise<Stock
 const medsOf = (d: Dispense) => db.encounters.find((e) => e.id === d.encounterId)?.medications ?? []
 /** 這張申請關聯、還沒發藥的調劑單（病人還在等） */
 const waitingOf = (r: RestockRequest) =>
-  r.dispenseIds.map((id) => db.dispenses.find((d) => d.id === id)).filter((d): d is Dispense => !!d && d.status !== 'dispensed')
+  r.dispenseIds.map((id) => db.dispenses.find((d) => d.id === id)).filter((d): d is Dispense => !!d && dispenseOpen(d))
 
 export interface RestockWaiting {
   dispenseId: string
@@ -319,7 +320,7 @@ export function getRestockPlan(drugId: string): Promise<RestockPlan> {
   return query(() => {
     const d = must(find.drug(drugId), '藥品')
     const row = inventoryRow(d, today(), stockLoc.opd())
-    const waiting = db.dispenses.filter((x) => x.status !== 'dispensed' && medsOf(x).some((m) => m.drugId === d.id))
+    const waiting = db.dispenses.filter((x) => dispenseOpen(x) && medsOf(x).some((m) => m.drugId === d.id))
     const need = waiting.reduce((n, x) => n + medsOf(x).filter((m) => m.drugId === d.id).reduce((k, m) => k + m.qty, 0), 0)
     const open = openRestockOf(d.id)
     const counting = row.counting

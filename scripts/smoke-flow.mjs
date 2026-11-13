@@ -3054,6 +3054,64 @@ try {
     ok((src.match(/doseLevel\(/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 2, '開立與修改共用 createOrder：劑量、重複、服用時機的檢查只有一份')
   }
 
+  // 門診退藥：已發出的藥整張收回，退回發出時的批號；之後櫃台才能作廢或退費
+  console.log('\n[門診退藥]')
+  {
+    const PH = api.pharmacyApi
+    const db = () => dbm.db
+    const lotSum = (drugId, loc) => db().drugLots.filter((l) => l.drugId === drugId && l.locationId === loc).reduce((n, l) => n + l.qty, 0)
+    // 舊資料（種子發的藥沒記 txnIds）：用「領藥號＋發藥日」找回發藥異動
+    const old = db().dispenses.find((d) => d.status === 'dispensed' && !d.txnIds && db().stockTxns.some((x) => x.ref === `領藥號 ${d.pickupNo}` && x.at === d.dispensedAt) &&
+      db().encounters.find((e) => e.id === d.encounterId).medications.every((m) => !db().stocktakes.some((st) => (st.status === 'counting' || st.status === 'submitted') && st.lines.some((l) => l.drugId === m.drugId))))
+    ok(!!old, '有一張種子資料裡已發藥（沒記發藥異動 id）的調劑單')
+    const meds = db().encounters.find((e) => e.id === old.encounterId).medications
+    const loc = db().stockTxns.find((x) => x.ref === `領藥號 ${old.pickupNo}` && x.at === old.dispensedAt).locationId
+    const before = Object.fromEntries(meds.map((m) => [m.drugId, lotSum(m.drugId, loc)]))
+    await as('clerk01')
+    const ch = db().charges.find((c) => c.visitId === old.visitId && !c.voided)
+    try {
+      await api.chargeApi.voidCharge(ch.id, '測試')
+      ok(false, '已發藥的收據應先退藥')
+    } catch (e) {
+      ok(e.message.includes('請先到藥局辦理退藥'), `已發藥的收據作廢 → 「${e.message}」（指向退藥，不再說沒有這功能）`)
+    }
+    await expectError(() => PH.returnDispense(old.id, '病人過敏'), '櫃台退藥')
+    await as('ph01')
+    try {
+      await PH.returnDispense(old.id, ' ')
+      ok(false, '沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', '退藥要寫原因')
+    }
+    const pend = db().dispenses.find((d) => d.status === 'pending')
+    if (pend) await expectError(() => PH.returnDispense(pend.id, 'x'), '還沒發藥就退藥')
+    const r = await PH.returnDispense(old.id, '病人過敏回診')
+    ok(r.status === 'returned' && r.returnReason === '病人過敏回診' && db().visits.find((v) => v.id === old.visitId).status === 'charged' && db().auditLogs[0].action === '門診退藥',
+      '退藥：調劑單標「已退藥」、掛號回到「已批價」、寫稽核')
+    ok(meds.every((m) => lotSum(m.drugId, loc) === before[m.drugId] + m.qty), `藥退回原地點（${meds.map((m) => `${m.drugId} +${m.qty}`).join('、')}）`)
+    const backTx = db().stockTxns.filter((x) => x.type === 'return' && x.reason?.startsWith('門診退藥'))
+    const outTx = db().stockTxns.filter((x) => x.type === 'dispense' && x.ref === `領藥號 ${old.pickupNo}` && x.at === old.dispensedAt)
+    ok(outTx.every((o) => o.lots.every((m) => backTx.some((b) => b.drugId === o.drugId && b.lots.some((x) => x.lotNo === m.lotNo && x.qty === -m.qty)))), '退回發出時的同幾個批號（效期跟著回來）')
+    ok(ledgerBroken(db()).length === 0, '退藥後帳本仍對得起來')
+    await expectError(() => PH.returnDispense(old.id, '再退一次'), '已退藥的再退一次')
+    ok(!(await PH.listDispenses({ date: old.dispensedAt.slice(0, 10) })).some((x) => x.id === old.id && x.status !== 'returned'), '已退藥不算待領（不是「還沒發藥」）')
+    await as('clerk01')
+    await api.chargeApi.voidCharge(ch.id, '病人過敏，醫師改處方')
+    ok(db().charges.find((c) => c.id === ch.id).voided && db().visits.find((v) => v.id === old.visitId).status === 'consulted', '退藥後收據可以作廢，回到待批價')
+    // 新發的藥記下發藥異動
+    await as('ph01')
+    const ver = db().dispenses.find((d) => d.status === 'verified' && db().encounters.find((e) => e.id === d.encounterId).medications.every((m) => db().drugLots.filter((l) => l.drugId === m.drugId && l.locationId === db().stockLocations.find((x) => x.dispensesOpd).id && l.expiry >= T).reduce((n, l) => n + l.qty, 0) >= m.qty))
+    if (ver) {
+      const pt = db().patients.find((x) => x.id === ver.patientId)
+      await PH.dispense(ver.id, { birthMMDD: pt.birthDate.slice(5).replace('-', '') })
+      const dd = db().dispenses.find((x) => x.id === ver.id)
+      ok(dd.txnIds?.length === db().encounters.find((e) => e.id === dd.encounterId).medications.length && dd.txnIds.every((id) => db().stockTxns.find((x) => x.id === id)?.type === 'dispense'), '新發藥：調劑單記下扣庫存的那幾筆異動（退藥時用）')
+    }
+    const { readFileSync } = await import('node:fs')
+    const usesOpen = ['src/services/inventory.ts', 'src/services/purchase.ts', 'src/services/transfer.ts', 'src/services/pharmacy.ts', 'src/pages/pharmacy/PharmacyPage.vue'].map((f) => readFileSync(f, 'utf8'))
+    ok(usesOpen.every((t) => !t.includes("!== 'dispensed'")), '「還在等領藥」一律用 dispenseOpen（已退藥不能被當成還沒發藥）')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {

@@ -318,9 +318,9 @@ const identityOpen = ref(false)
         <!-- 已批價：收據 -->
         <template v-else-if="receipt">
           <div class="no-print flex flex-wrap items-center gap-2">
-            <UBadge v-if="item.status === 'dispensed'" tone="green">藥品已發出，無法作廢（本系統未提供退藥）</UBadge>
+            <UBadge v-if="item.status === 'dispensed'" tone="green">藥品已發出：要作廢請先到藥局退藥</UBadge>
             <div class="ml-auto flex gap-2">
-              <UButton variant="danger" :icon="Ban" :disabled="item.status === 'dispensed'" :title="item.status === 'dispensed' ? '已領藥，收據無法作廢' : ''" @click="openVoid">作廢</UButton>
+              <UButton variant="danger" :icon="Ban" :disabled="item.status === 'dispensed'" :title="item.status === 'dispensed' ? '已領藥：請先到藥局退藥' : ''" @click="openVoid">作廢</UButton>
               <UButton variant="secondary" :icon="Printer" @click="print">列印收據</UButton>
             </div>
           </div>

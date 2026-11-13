@@ -18,6 +18,7 @@ export const dispenseStatus: LabelMap<DispenseStatus> = {
   pending: { label: '待調劑', tone: 'yellow' },
   verified: { label: '已核對', tone: 'blue' },
   dispensed: { label: '已發藥', tone: 'green' },
+  returned: { label: '已退藥', tone: 'gray' },
 }
 
 export const admissionStatus: LabelMap<AdmissionStatus> = {

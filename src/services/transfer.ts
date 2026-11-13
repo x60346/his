@@ -8,6 +8,7 @@
 //   - 小型醫院只有一個藥局，沒有撥補（服務層擋下）
 //   - 反方向「退回藥庫」：藥局逐批選要退的（近效期、請領過多…），送出就扣（運送中），藥庫照一般簽收入帳；過期的也能退（送藥庫集中報廢）
 import type { TransferLine, TransferOrder } from '@/types'
+import { dispenseOpen } from './rx-rules'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
@@ -129,7 +130,7 @@ export function transferCandidates(toLocationId: string): Promise<TransferCandid
       const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === to.id && x.type === 'dispense' && x.at >= since).reduce((n, x) => n + x.qty, 0)
       const way = onTheWay(d.id)
       const sug = suggestRestockQty({ usable, need: 0, safetyStock: safety, used30, onOrder: way })
-      const waiting = freeReq ? freeReq.dispenseIds.map((id) => db.dispenses.find((x) => x.id === id)).filter((x) => x && x.status !== 'dispensed').length : 0
+      const waiting = freeReq ? freeReq.dispenseIds.map((id) => db.dispenses.find((x) => x.id === id)).filter((x) => x && dispenseOpen(x)).length : 0
       out.push({
         drugId: d.id, drugName: d.name, unit: d.unit, usable, safetyStock: safety, onTheWay: way,
         suggestedQty: Math.max(sug.qty, freeReq ? outstandingOf(freeReq) : 0),

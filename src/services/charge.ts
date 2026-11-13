@@ -191,7 +191,7 @@ export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
     if (c.voided) fail('此收據已作廢')
     const dp = db.dispenses.find((d) => d.visitId === c.visitId)
     // 訊息不能指向不存在的功能：本系統沒有退藥，要明說，使用者才不會到處找「退藥」按鈕
-    if (dp?.status === 'dispensed') fail('藥品已發出，收據無法作廢。實務上需先辦理退藥，本展示系統未提供退藥功能。', 'CONFLICT')
+    if (dp?.status === 'dispensed') fail('藥品已發出，收據無法作廢：請先到藥局辦理退藥（藥局「已發藥」那張按「退藥」）', 'CONFLICT')
     // 已收回過欠款：作廢後那筆收回的錢就沒有對應的帳。要先退還，本系統未提供退款
     if (c.repayments?.length) fail('這張收據的欠款已收回過，無法作廢。實務上需先辦理退款，本展示系統未提供退款功能。', 'CONFLICT')
     c.voided = true
