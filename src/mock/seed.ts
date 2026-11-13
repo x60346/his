@@ -1366,6 +1366,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     progressNotes,
     consults,
     wardStockItems,
+    discountRequests: [],
     wardCounts: codes.wards.map((w, wi): WardCount => ({
       id: `WC-SEED-${wi + 1}`, ward: w, shift: '小夜', date: addDays(T, -1), countedBy: 'U202', at: `${addDays(T, -1)} 23:30`,
       lines: wardStockItems.filter((x) => x.ward === w).map((x) => ({ drugId: x.drugId, book: wardStartQty(wi, x.drugId, x.par), counted: wardStartQty(wi, x.drugId, x.par) })),

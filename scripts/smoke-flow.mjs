@@ -4570,6 +4570,101 @@ try {
     await as('clerk01')
   }
 
+  // 優免送簽：櫃台送簽、主管在首頁核准或退回；核准綁掛號＋類別＋櫃台、當天有效、結帳用掉
+  console.log('\n[優免送簽]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const C = api.chargeApi
+    const makeConsulted = async () => {
+      await as('clerk01')
+      const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
+      const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
+      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
+      const e = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(e.id, { subjective: '測試', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'J06.9', name: '急性上呼吸道感染', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+      await as('clerk01')
+      return v
+    }
+    const v1 = await makeConsulted()
+    try {
+      await C.requestDiscountApproval({ visitId: v1.id, code: 'DC05' })
+      ok(false, '沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'discountReason', '送簽也要寫優免原因（需註明原因的類別）')
+    }
+    await expectError(() => C.requestDiscountApproval({ visitId: v1.id, code: 'DC01', reason: 'x' }), '不需核准的類別送簽')
+    let r1 = await C.requestDiscountApproval({ visitId: v1.id, code: 'DC05', reason: '院長特准' })
+    ok(r1.status === 'pending' && r1.amount > 0 && db().auditLogs[0].action === '優免送簽', `送簽：待核准、減免 ${r1.amount} 元，寫稽核`)
+    const pv = await C.previewCharge(v1.id, 'DC05')
+    const payWith = (extra) => C.pay(v1.id, { payMethod: 'cash', received: 9999, discount: { code: 'DC05', reason: '院長特准', ...extra } })
+    try {
+      await payWith({ requestId: r1.id })
+      ok(false, '送簽中結帳應被擋下')
+    } catch (e) {
+      ok(e.field === 'approval' && e.message.includes('還沒核准'), `送簽中就結帳 → 「${e.message}」`)
+    }
+    await expectError(() => C.listDiscountRequests(), '沒有核准權限的櫃台看待核准清單')
+    await as('clerk02')
+    ok((await C.listDiscountRequests()).some((x) => x.id === r1.id && x.patientName && x.ruleName && x.cashierName === '馬文琪'), '主管（clerk02）首頁看得到待核准：病人、類別、金額、送簽的櫃台')
+    try {
+      await C.decideDiscountRequest(r1.id, { approve: false })
+      ok(false, '退回沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', '退回要寫原因')
+    }
+    await C.decideDiscountRequest(r1.id, { approve: false, reason: '請補充說明' })
+    await as('clerk01')
+    try {
+      await payWith({ requestId: r1.id })
+      ok(false, '退回的送簽結帳應被擋下')
+    } catch (e) {
+      ok(e.message.includes('退回：請補充說明'), `被退回 → 「${e.message}」`)
+    }
+    ok((await C.getChargeDetail(v1.id, 'DC05')).discountRequest?.status === 'rejected', '批價頁看得到被退回與原因')
+    r1 = await C.requestDiscountApproval({ visitId: v1.id, code: 'DC05', reason: '院長特准，已附公文' })
+    await as('clerk02')
+    const ap = await C.decideDiscountRequest(r1.id, { approve: true })
+    ok(ap.status === 'approved' && ap.decidedByName === '鄭淑芬' && db().auditLogs[0].detail.includes('（送簽）'), '主管核准（寫稽核，標「送簽」）')
+    // 核准綁送簽的櫃台：別的櫃台（clerk02 也能批價）拿來結帳不行
+    try {
+      await payWith({ requestId: r1.id })
+      ok(false, '別的櫃台用這張核准應被擋下')
+    } catch (e) {
+      ok(e.field === 'approval' && e.message.includes('櫃台不同'), `別的櫃台拿這張送簽結帳 → 「${e.message}」`)
+    }
+    await as('clerk01')
+    clockBase += 86_400_000
+    try {
+      await payWith({ requestId: r1.id })
+      ok(false, '隔天用應被擋下')
+    } catch (e) {
+      ok(e.message.includes('只限當天'), `隔天才結帳 → 「${e.message}」`)
+    } finally {
+      clockBase -= 86_400_000
+    }
+    const ch = await C.pay(v1.id, { payMethod: 'cash', received: pv.patientTotal, discount: { code: 'DC05', reason: '院長特准', requestId: r1.id } })
+    ok(ch.discount?.approverName === '鄭淑芬' && ch.discount.approvedBy === 'U402' && db().discountRequests.find((x) => x.id === r1.id).status === 'used', '結帳：收據記下核准的主管，送簽單用掉')
+    // 撤回、不能核准自己送簽的、病人已批價不必處理
+    const v2 = await makeConsulted()
+    const r2 = await C.requestDiscountApproval({ visitId: v2.id, code: 'DC05', reason: '專案' })
+    await C.cancelDiscountRequest(r2.id)
+    await as('clerk02')
+    await expectError(() => C.decideDiscountRequest(r2.id, { approve: true }), '核准已撤回的送簽')
+    const r3 = await C.requestDiscountApproval({ visitId: v2.id, code: 'DC05', reason: '專案' })
+    await expectError(() => C.decideDiscountRequest(r3.id, { approve: true }), '核准自己送簽的優免')
+    await as('clerk01')
+    const r4 = await C.requestDiscountApproval({ visitId: v2.id, code: 'DC05', reason: '專案' })
+    ok(db().discountRequests.find((x) => x.id === r3.id).status === 'cancelled', '同一次掛號重送：舊的待核准自動撤回')
+    await C.pay(v2.id, { payMethod: 'cash', received: 9999 })
+    await as('clerk02')
+    await expectError(() => C.decideDiscountRequest(r4.id, { approve: true }), '病人已批價（沒用優免）還去核准')
+    ok(!(await C.listDiscountRequests()).some((x) => x.visitId === v2.id && x.status !== 'pending'), '待核准清單只列待核准的')
+    await as('clerk01')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

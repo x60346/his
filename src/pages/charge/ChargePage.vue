@@ -56,7 +56,19 @@ const { data: discountRules } = useQuery(() => chargeApi.listDiscounts())
 watch(visitId, () => {
   discountCode.value = ''
   discountReason.value = ''
+  prefilledFor = ''
 })
+// 這位病人送簽過（待核准、已核准、被退回）：回到這位病人時帶入送簽的類別與原因，不必重選重打（每次選病人只帶一次）
+let prefilledFor = ''
+watch(
+  () => (item.value ? detail.value?.discountRequest : undefined),
+  (r) => {
+    if (!r || r.visitId !== visitId.value || prefilledFor === r.visitId || discountCode.value) return
+    prefilledFor = r.visitId
+    discountCode.value = r.code
+    discountReason.value = r.reason ?? ''
+  },
+)
 const rule = computed(() => discountRules.value?.find((d) => d.code === discountCode.value))
 const discountOptions = computed(() => [{ label: '不優免', value: '' }, ...(discountRules.value ?? []).map((d) => ({ label: `${d.name}（${discountSummary(d)}）`, value: d.code }))])
 const preview = computed(() => {
@@ -72,6 +84,17 @@ const lastDiscount = computed(() => (item.value ? detail.value?.lastDiscount : u
 // 核准是否有效、是否過期由服務層在結帳時判斷；這裡只記下核准結果，換病人或類別時不再顯示
 const approval = ref<{ token: string; name: string; visitId: string; code: string }>()
 const approvalNow = computed(() => (approval.value && approval.value.visitId === visitId.value && approval.value.code === discountCode.value ? approval.value : undefined))
+// 送簽：主管在自己的首頁核准（不必到櫃台）。這次掛號最近一張送簽單（同一個類別才算）；核准後結帳帶 requestId，當天有效
+const reqNow = computed(() => {
+  const r = item.value ? detail.value?.discountRequest : undefined
+  return r && r.visitId === visitId.value && r.code === discountCode.value ? r : undefined
+})
+const reqApproved = computed(() => reqNow.value?.status === 'approved' && reqNow.value.decidedAt?.slice(0, 10) === todayStr.value)
+const sendReq = useAction(chargeApi.requestDiscountApproval, { success: (r) => `已送簽：${r.patientName} ${r.ruleName}，等主管核准（可以先結其他病人）` })
+const cancelReq = useAction(chargeApi.cancelDiscountRequest, { success: '已撤回送簽' })
+function onSendReq() {
+  if (visitId.value && rule.value) sendReq.run({ visitId: visitId.value, code: rule.value.code, reason: discountReason.value })
+}
 const apOpen = ref(false)
 // 共用的第二人確認對話框（WitnessDialog）：帳密錯、沒權限、核准自己都由服務層回傳，留在稽核
 const approveFn = async (cred: { username: string; password: string }) => {
@@ -111,7 +134,7 @@ const change = computed(() => (payMethod.value === 'cash' ? (received.value ?? 0
 // 與服務層同一條規則：不足（沒勾欠款）、非整數、找零異常（多打了 0）都不能收款
 const cashProblem = computed(() => (payMethod.value === 'cash' && preview.value ? checkCash(total.value, received.value, owe.value) : null))
 const owedAmount = computed(() => (owe.value ? Math.max(0, total.value - (received.value ?? 0)) : 0))
-const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()) && (!rule.value?.needsReason || !!discountReason.value.trim()) && (!rule.value?.needsApproval || !!approvalNow.value))
+const canPay = computed(() => !!preview.value && !cashProblem.value && (!owe.value || !!oweReason.value.trim()) && (!rule.value?.needsReason || !!discountReason.value.trim()) && (!rule.value?.needsApproval || !!approvalNow.value || reqApproved.value))
 
 const pay = useAction(chargeApi.pay, { success: (c) => `結帳完成：收據 ${c.receiptNo}` })
 async function onPay() {
@@ -120,7 +143,7 @@ async function onPay() {
     payMethod: payMethod.value,
     received: payMethod.value === 'cash' ? received.value ?? 0 : total.value,
     owe: owe.value ? { reason: oweReason.value } : undefined,
-    discount: discountCode.value ? { code: discountCode.value, reason: discountReason.value, ...(approvalNow.value ? { approval: approvalNow.value.token } : {}) } : undefined,
+    discount: discountCode.value ? { code: discountCode.value, reason: discountReason.value, ...(approvalNow.value ? { approval: approvalNow.value.token } : reqApproved.value ? { requestId: reqNow.value!.id } : {}) } : undefined,
   })
   // 結帳後清單經 dbVersion 自動刷新，右側會切換成收據
 }
@@ -290,11 +313,19 @@ const identityOpen = ref(false)
                   @click="discountCode = lastDiscount.code"
                 >上次使用：{{ lastDiscount.name }}（{{ lastDiscount.date.slice(5).replace('-', '/') }}），按此套用</button>
                 <UInput v-if="rule?.needsReason" v-model="discountReason" label="優免原因" required placeholder="例：院長特准、社工轉介" :error="pay.fieldErrors.value.discountReason" />
-                <div v-if="rule?.needsApproval" :class="['flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm', approvalNow ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900']">
+                <div v-if="rule?.needsApproval" :class="['flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm', approvalNow || reqApproved ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900']">
                   <ShieldCheck class="h-4 w-4 shrink-0" />
                   <span v-if="approvalNow" class="flex-1">已由 <b>{{ approvalNow.name }}</b> 核准</span>
+                  <span v-else-if="reqApproved" class="flex-1">送簽已由 <b>{{ reqNow?.decidedByName }}</b> 核准</span>
+                  <span v-else-if="reqNow?.status === 'pending'" class="flex-1">已送簽（{{ reqNow.requestedAt.slice(11, 16) }}），等主管在首頁核准</span>
+                  <span v-else-if="reqNow?.status === 'rejected'" class="flex-1">主管退回：{{ reqNow.rejectReason }}（{{ reqNow.decidedByName }}）</span>
                   <span v-else class="flex-1">「{{ rule.name }}」需主管核准</span>
-                  <UButton size="sm" :variant="approvalNow ? 'ghost' : 'primary'" @click="apOpen = true">{{ approvalNow ? '重新核准' : '主管核准' }}</UButton>
+                  <template v-if="!approvalNow && !reqApproved">
+                    <UButton v-if="reqNow?.status === 'pending'" size="sm" variant="ghost" :loading="cancelReq.pending.value" @click="cancelReq.run(reqNow.id)">撤回送簽</UButton>
+                    <UButton v-else size="sm" variant="secondary" :loading="sendReq.pending.value" @click="onSendReq">{{ reqNow?.status === 'rejected' ? '重新送簽' : '送簽' }}</UButton>
+                  </template>
+                  <UButton size="sm" :variant="approvalNow || reqApproved ? 'ghost' : 'primary'" @click="apOpen = true">{{ approvalNow ? '重新核准' : '當場核准' }}</UButton>
+                  <p v-if="sendReq.fieldErrors.value.discountReason" class="w-full text-xs text-red-600">{{ sendReq.fieldErrors.value.discountReason }}</p>
                   <p v-if="pay.fieldErrors.value.approval" class="w-full text-xs text-red-600">{{ pay.fieldErrors.value.approval }}</p>
                 </div>
                 <p v-if="rule" class="text-xs text-slate-500">部分負擔依健保規定不能減免，優免只減掛號費與自費項目。</p>

@@ -10,9 +10,12 @@ import { dashboardApi, opdApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
+import { useCan } from '@/composables/useCan'
+import DiscountRequestsCard from '@/components/DiscountRequestsCard.vue'
 import { money } from '@/utils/labels'
 
 const auth = useAuth()
+const can = useCan()
 const router = useRouter()
 
 const { data: s, reload } = useQuery(() => dashboardApi.getDashboard())
@@ -88,6 +91,8 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
 
 <template>
   <div v-if="s" class="space-y-5">
+    <!-- 待核准優免：有「可核准優免」的人才查（主管在首頁直接核准，不必到櫃台） -->
+    <DiscountRequestsCard v-if="can('charge.approveDiscount')" />
     <!-- 我的待辦 -->
     <section v-if="todos.length">
       <h2 class="mb-2 text-sm font-semibold text-slate-600">{{ auth.user?.name }}，您目前的待辦</h2>

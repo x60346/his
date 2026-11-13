@@ -428,6 +428,26 @@ export interface Refund {
   at: string
 }
 
+/**
+ * 優免送簽：需主管核准的優免，櫃台先送簽（不必請主管到櫃台），主管在自己的首頁核准或退回。
+ * 核准綁「這次掛號＋這個類別＋送簽的櫃台」，當天有效，結帳時用掉（used）。和當場輸入帳密核准並存
+ */
+export interface DiscountRequest {
+  id: string
+  visitId: string
+  code: string
+  reason?: string
+  /** 送簽時試算的減免金額（給主管看的） */
+  amount: number
+  cashierId: string
+  requestedAt: string
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'used'
+  decidedBy?: string
+  decidedAt?: string
+  rejectReason?: string
+  usedChargeId?: string
+}
+
 /** 部分退費（一次）：病人實際拿走的藥重算後，應付減少的部分 */
 export interface PartialRefund {
   /** 退款單號（有退錢或抵欠款才開；只有申報點數減少時沒有） */

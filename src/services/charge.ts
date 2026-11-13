@@ -1,6 +1,6 @@
 // 批價：試算、結帳、作廢、日結報表。
 // 結帳成功 → 掛號狀態 charged；有開藥則自動產生藥局調劑單（領藥號）。
-import type { Charge, ChargeLine, DiscountRule, PayMethod, Repayment } from '@/types'
+import type { Charge, ChargeLine, DiscountRequest, DiscountRule, PayMethod, Repayment } from '@/types'
 import { permDef, permits } from './permission-rules'
 import { db, nextCounter, newId } from '@/mock/db'
 import { addDays, diffDays, now, today } from '@/utils/date'
@@ -123,13 +123,109 @@ function approvalFor(token: string | undefined, visitId: string, code: string, c
   return { approverId: g.witnessId, approverName: g.witnessName }
 }
 
+// ---------- 優免送簽：櫃台送簽，主管在自己的首頁核准或退回（不必到櫃台）----------
+
+/** 結帳時檢查送簽單：已核准、同一次掛號、同一類別、同一位櫃台、當天核准的。不符回傳原因 */
+function requestApprovalFor(id: string, visitId: string, code: string, cashierId: string): { request: DiscountRequest; approval: { approverId: string; approverName: string } } | string {
+  const r = db.discountRequests.find((x) => x.id === id)
+  if (!r || r.visitId !== visitId || r.code !== code || r.cashierId !== cashierId) return '送簽單和這次結帳不符（病人、優免類別或櫃台不同），請重新送簽'
+  if (r.status === 'pending') return '送簽中，主管還沒核准'
+  if (r.status === 'rejected') return `主管已退回：${r.rejectReason}`
+  if (r.status !== 'approved') return '這張送簽單已經用過或撤回了，請重新送簽'
+  if (r.decidedAt!.slice(0, 10) !== today()) return '送簽的核准只限當天，請重新送簽'
+  return { request: r, approval: { approverId: r.decidedBy!, approverName: nameOf.user(r.decidedBy) } }
+}
+
+export interface DiscountRequestView extends DiscountRequest {
+  ruleName: string
+  patientName: string
+  chartNo: string
+  cashierName: string
+  decidedByName?: string
+}
+
+const discountRequestView = (r: DiscountRequest): DiscountRequestView => {
+  const v = find.visit(r.visitId)
+  const p = v ? find.patient(v.patientId) : undefined
+  return {
+    ...r,
+    ruleName: db.discounts.find((d) => d.code === r.code)?.name ?? r.code,
+    patientName: p?.name ?? '', chartNo: p?.chartNo ?? '',
+    cashierName: nameOf.user(r.cashierId),
+    ...(r.decidedBy ? { decidedByName: nameOf.user(r.decidedBy) } : {}),
+  }
+}
+
+/** 這次掛號最近一張送簽單（撤回的不算）：批價頁顯示狀態 */
+const latestRequestOf = (visitId: string) => db.discountRequests.filter((x) => x.visitId === visitId && x.status !== 'cancelled').sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))[0]
+
+/** 送簽：需主管核准的優免。同一次掛號同時只有一張待核准的（重送會撤回舊的） */
+export function requestDiscountApproval(input: { visitId: string; code: string; reason?: string }): Promise<DiscountRequestView> {
+  return mutate(() => {
+    const cashier = requirePermission('charge.pay')
+    const v = must(find.visit(input.visitId), '掛號紀錄')
+    if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
+    const rule = usableDiscount(input.code)
+    if (!rule.needsApproval) fail(`「${rule.name}」不需要主管核准`)
+    const reason = input.reason?.trim()
+    if (rule.needsReason && !reason) failField('discountReason', `「${rule.name}」需註明原因`)
+    const t = now()
+    for (const x of db.discountRequests.filter((x) => x.visitId === v.id && x.status === 'pending')) Object.assign(x, { status: 'cancelled', decidedAt: t })
+    const r: DiscountRequest = {
+      id: newId('DRQ'), visitId: v.id, code: rule.code, ...(reason ? { reason } : {}), amount: buildPreview(v.id, rule.code).discount?.amount ?? 0,
+      cashierId: cashier.id, requestedAt: t, status: 'pending',
+    }
+    db.discountRequests.push(r)
+    audit('優免送簽', `${nameOf.patient(v.patientId)} ${rule.name} −${r.amount} 元${reason ? `（${reason}）` : ''}`)
+    return discountRequestView(r)
+  })
+}
+
+/** 撤回還沒核准的送簽（送簽的櫃台） */
+export function cancelDiscountRequest(id: string): Promise<DiscountRequestView> {
+  return mutate(() => {
+    const cashier = requirePermission('charge.pay')
+    const r = must(db.discountRequests.find((x) => x.id === id), '送簽單')
+    if (r.cashierId !== cashier.id) fail('只有送簽的櫃台可以撤回', 'FORBIDDEN')
+    if (r.status !== 'pending') fail('這張送簽單已經處理了', 'CONFLICT')
+    Object.assign(r, { status: 'cancelled', decidedAt: now() })
+    audit('撤回優免送簽', `${nameOf.patient(find.visit(r.visitId)?.patientId)} ${r.code}`)
+    return discountRequestView(r)
+  })
+}
+
+/** 待我核准的送簽（有「可核准優免」的人；首頁卡片）：今天送的、待核准的，舊的在前 */
+export function listDiscountRequests(): Promise<DiscountRequestView[]> {
+  return query(() => {
+    requirePermission('charge.approveDiscount')
+    return db.discountRequests.filter((x) => x.status === 'pending' && x.requestedAt.slice(0, 10) === today()).sort((a, b) => a.requestedAt.localeCompare(b.requestedAt)).map(discountRequestView)
+  })
+}
+
+/** 主管核准或退回（退回要寫原因）。不能核准自己送簽的；病人已經批價了就不必再核 */
+export function decideDiscountRequest(id: string, input: { approve: boolean; reason?: string }): Promise<DiscountRequestView> {
+  return mutate(() => {
+    const u = requirePermission('charge.approveDiscount')
+    const r = must(db.discountRequests.find((x) => x.id === id), '送簽單')
+    if (r.status !== 'pending') fail(r.status === 'cancelled' ? '櫃台已撤回這張送簽' : '這張送簽單已經處理了', 'CONFLICT')
+    if (r.cashierId === u.id) fail('不能核准自己送簽的優免，請另一位主管核准', 'FORBIDDEN')
+    if (find.visit(r.visitId)?.status !== 'consulted') fail('病人已經批價或不在待批價，這張送簽不必處理了', 'CONFLICT')
+    const why = input.reason?.trim()
+    if (!input.approve && !why) failField('reason', '退回請寫原因（例：不符合專案資格）')
+    Object.assign(r, { status: input.approve ? 'approved' : 'rejected', decidedBy: u.id, decidedAt: now(), ...(input.approve ? {} : { rejectReason: why }) })
+    const what = `${nameOf.patient(find.visit(r.visitId)?.patientId)} ${db.discounts.find((d) => d.code === r.code)?.name} −${r.amount} 元（櫃台 ${nameOf.user(r.cashierId)}）`
+    audit(input.approve ? '優免核准' : '優免退回', `${u.name} ${input.approve ? '核准' : '退回'} ${what}${why ? `：${why}` : ''}（送簽）`)
+    return discountRequestView(r)
+  })
+}
+
 export interface PayInput {
   payMethod: PayMethod
   received: number
   /** 實收不足時，差額記為欠款（只限現金；刷卡、行動支付一定是足額扣款） */
   owe?: { reason: string }
-  /** 優免：類別與原因（需註明原因的類別必填）；需主管核准的帶 approveDiscount 給的核准 */
-  discount?: { code: string; reason?: string; approval?: string }
+  /** 優免：類別與原因（需註明原因的類別必填）；需主管核准的帶 approveDiscount 給的核准（approval），或已核准的送簽單（requestId） */
+  discount?: { code: string; reason?: string; approval?: string; requestId?: string }
 }
 
 export function pay(visitId: string, input: PayInput): Promise<Charge> {
@@ -142,7 +238,10 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const rule = input.discount?.code ? usableDiscount(input.discount.code) : undefined
     const discountReason = input.discount?.reason?.trim()
     if (rule?.needsReason && !discountReason) failField('discountReason', `「${rule.name}」需註明原因`)
-    const approval = rule?.needsApproval ? approvalFor(input.discount?.approval, visitId, rule.code, cashier.id) : undefined
+    // 主管核准：當場輸入帳密（approval token）或已核准的送簽單（requestId）
+    const req = rule?.needsApproval && input.discount?.requestId ? requestApprovalFor(input.discount.requestId, visitId, rule.code, cashier.id) : undefined
+    if (typeof req === 'string') failField('approval', req)
+    const approval = rule?.needsApproval ? (req && typeof req !== 'string' ? req.approval : approvalFor(input.discount?.approval, visitId, rule.code, cashier.id)) : undefined
     if (approval === null) failField('approval', `「${rule!.name}」需主管核准`)
     if (approval === 'expired') failField('approval', `主管核准已超過 ${DISCOUNT_APPROVAL_MIN} 分鐘，請重新核准`)
     const approved = approval || undefined // null、expired 上面已擋下
@@ -183,7 +282,9 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const discNote = charge.discount ? `（優免：${charge.discount.name} −${charge.discount.amount} 元${charge.discount.reason ? `，${charge.discount.reason}` : ''}${approved ? `，${approved.approverName} 核准` : ''}）` : ''
     const preNote = applied ? `（預收扣抵 ${applied} 元${excessRefund ? `、退還差額 ${excessRefund.amount} 元 ${excessRefund.receiptNo}` : ''}）` : ''
     audit('批價結帳', `${charge.receiptNo} ${find.patient(v.patientId)?.name} ${pv.patientTotal} 元${preNote}${discNote}${owed ? `（欠 ${owed} 元：${charge.oweReason}）` : ''}`)
-    if (approved) consumeWitness(input.discount!.approval) // 一次性：用掉
+    // 一次性：用掉
+    if (approved && req && typeof req !== 'string') Object.assign(req.request, { status: 'used', usedChargeId: charge.id })
+    else if (approved) consumeWitness(input.discount!.approval)
     return charge
   })
 }
@@ -444,6 +545,8 @@ export interface ChargeDetail {
   receipt?: ReceiptView
   /** 這個病人尚未還清的欠款（含本次以外的就醫） */
   debts: DebtItem[]
+  /** 這次掛號最近一張優免送簽單（撤回的不算） */
+  discountRequest?: DiscountRequestView
   /** 選的優免不能用（例：剛被停用）：試算改為不含優免，並說明原因 */
   discountError?: string
   /** 這個病人上次用過的優免（類別還啟用中才給）：批價頁提示，按一下才套用 */
@@ -482,6 +585,7 @@ export function getChargeDetail(visitId: string, discountCode?: string): Promise
         ? receiptOf(charge)
         : undefined,
       debts: debtsOf(v.patientId),
+      ...(latestRequestOf(v.id) ? { discountRequest: discountRequestView(latestRequestOf(v.id)!) } : {}),
       ...(() => {
         const last = db.charges.filter((c) => c.patientId === v.patientId && !c.voided && c.discount && c.visitId !== v.id).sort((a, b) => b.paidAt.localeCompare(a.paidAt))[0]
         const rule = last && db.discounts.find((d) => d.code === last.discount!.code && d.active)

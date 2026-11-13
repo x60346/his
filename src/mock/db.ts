@@ -47,6 +47,7 @@ import type {
   Consult,
   WardStockItem,
   WardCount,
+  DiscountRequest,
 } from '@/types'
 import { today } from '@/utils/date'
 import { buildSeed } from './seed'
@@ -105,6 +106,8 @@ export interface Database {
   wardStockItems: WardStockItem[]
   /** 病房點班紀錄 */
   wardCounts: WardCount[]
+  /** 優免送簽 */
+  discountRequests: DiscountRequest[]
   handovers: HandoverNote[]
   preventItems: PreventItem[]
   preventRecords: PreventRecord[]
@@ -134,7 +137,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 60
+export const SCHEMA_VERSION = 61
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {
