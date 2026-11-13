@@ -1168,6 +1168,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ['U201', 'vs', '生命徵象穩定，持續監測。'],
     ] as const
   ).map(([owner, code, text], i) => ({ id: `PH-SEED-${i + 1}`, userId: owner.startsWith('U') ? owner : doctorUser(owner), code, text, createdAt: setAt, updatedAt: setAt }))
+  // 共用片語：內科科室共用（dr02、dr03 都能用；.htn 和 dr02 的個人片語同簡碼，示範「個人的優先」）、5A 內科病房共用（護理師在 5A 寫紀錄時可用）
+  const sharedPhrases: Phrase[] = (
+    [
+      ['DR03', 'dept', 'D02', 'dmedu', '衛教低升糖飲食、規律運動與足部自我檢查，攜帶血糖紀錄回診。'],
+      ['DR03', 'dept', 'D02', 'htn', '高血壓，目前藥物治療中；衛教低鈉飲食、每日早晚量血壓並記錄。'],
+      ['U202', 'ward', '5A 內科病房', 'turn', '每兩小時協助翻身，皮膚完整，無壓傷。'],
+      ['U202', 'ward', '5A 內科病房', 'iv', '周邊靜脈留置針通暢，注射部位無紅腫熱痛。'],
+    ] as const
+  ).map(([owner, scope, where, code, text], i) => {
+    const userId = owner.startsWith('U') ? owner : doctorUser(owner)
+    return { id: `PH-SHARED-${i + 1}`, userId, scope, ...(scope === 'dept' ? { deptId: where } : { ward: where }), code, text, createdAt: setAt, updatedAt: setAt, updatedBy: userId }
+  })
+  phrases.push(...sharedPhrases)
 
   // 展示資料裡的住院醫囑都是「之前開的」：當班護理師早已核對過（開立後 30 分鐘），
   // 不然一打開護理站，每位病人都掛著「新醫囑」，真正新開的反而被淹沒

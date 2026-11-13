@@ -1507,8 +1507,10 @@ try {
       await as('admin')
     }
     await expectError(() => S.suspendSession(susp.id, ''), '停診未填原因')
+    // 停診前已經退掛的（病人自己取消）不動，原因維持原樣
+    const activeBefore = new Set(dbm.db.visits.filter((v) => v.sessionId === susp.id && v.status !== 'cancelled').map((v) => v.id))
     const notice = await S.suspendSession(susp.id, '醫師病假')
-    ok(notice.length > 0 && dbm.db.visits.filter((v) => v.sessionId === susp.id).every((v) => v.status === 'cancelled' && v.cancelReason === '停診：醫師病假'), `停診：${notice.length} 筆掛號退掛，並列入通知名單（含電話 ${notice[0].phone}）`)
+    ok(notice.length > 0 && dbm.db.visits.filter((v) => activeBefore.has(v.id)).every((v) => v.status === 'cancelled' && v.cancelReason === '停診：醫師病假'), `停診：${notice.length} 筆掛號退掛，並列入通知名單（含電話 ${notice[0].phone}）`)
     await expectError(() => S.suspendSession(susp.id, '再停一次'), '重複停診')
     await as('clerk01')
     await expectError(() => api.bookingApi.register({ patientId: dbm.db.patients[34].id, sessionId: susp.id, identityCode: '01', caseType: '01' }), '掛停診的診次')
@@ -2044,15 +2046,16 @@ try {
     ok(JSON.stringify(R.checkPhrase({ code: '', text: '' })) === JSON.stringify({ code: '請輸入簡碼', text: '請輸入片語內容' }) && R.checkPhrase({ code: 'a-b', text: 'x' }).code && R.checkPhrase({ code: 'abcdefghijk', text: 'x' }).code && !Object.keys(R.checkPhrase({ code: '.HTN', text: 'x' })).length,
       '簡碼與內容一次標出；只能英數、最多 10 碼；「.HTN」視為 htn')
     const PH = api.phraseApi
+    const lp = async (q) => (await PH.listPhrases(q)).phrases
     await as('clerk01')
     await expectError(() => PH.listPhrases(), '櫃台查看片語')
     await as('nurse01')
-    const nurseOwn = await PH.listPhrases()
+    const nurseOwn = await lp()
     ok(nurseOwn.length >= 3 && nurseOwn.every((p) => p.userId === 'U201') && nurseOwn.some((p) => p.code === 'fall'), `護理師也有自己的片語（${nurseOwn.map((p) => '.' + p.code).join('、')}），看不到醫師的`)
     await as('dr01')
     const dr01 = dbm.db.users.find((u) => u.username === 'dr01').id
-    const mine = await PH.listPhrases()
-    ok(mine.length >= 3 && mine.every((p) => p.userId === dr01), `只看得到自己的片語（${mine.map((p) => '.' + p.code).join('、')}）`)
+    const mine = await lp()
+    ok(mine.length >= 3 && mine.every((p) => p.userId === dr01 && !p.scope), `只看得到自己的片語（${mine.map((p) => '.' + p.code).join('、')}）`)
     try {
       await PH.savePhrase({ code: '', text: '' })
       ok(false, '空白片語應被擋下')
@@ -2068,14 +2071,72 @@ try {
       ok(e.field === 'code' && e.message.includes('.wnl'), `重複簡碼（不分大小寫）→ 「${e.message}」`)
     }
     const ed = await PH.savePhrase({ id: np.id, code: 'cc', text: '咳嗽一週' })
-    ok(ed.id === np.id && (await PH.listPhrases()).filter((p) => p.code === 'cc').length === 1, '修改片語（同簡碼不算重複）')
+    ok(ed.id === np.id && (await lp()).filter((p) => p.code === 'cc').length === 1, '修改片語（同簡碼不算重複）')
     await as('dr02')
-    ok(!(await PH.listPhrases()).some((p) => p.id === np.id), '別的醫師看不到我的片語')
+    ok(!(await lp()).some((p) => p.id === np.id), '別的醫師看不到我的片語')
     await expectError(() => PH.savePhrase({ id: np.id, code: 'cc', text: '改別人的' }), '修改別的醫師的片語')
     await expectError(() => PH.deletePhrase(np.id), '刪除別的醫師的片語')
     await as('dr01')
     await PH.deletePhrase(np.id)
-    ok(!(await PH.listPhrases()).some((p) => p.id === np.id), '刪除自己的片語')
+    ok(!(await lp()).some((p) => p.id === np.id), '刪除自己的片語')
+
+    // 共用片語：醫師＝科室（同科都能用、能改），護理師＝目前的病房；同簡碼個人優先
+    const ward5A = '5A 內科病房'
+    await as('dr02')
+    const d2 = await PH.listPhrases()
+    const htns = d2.phrases.filter((p) => p.code === 'htn')
+    ok(d2.shareTarget?.label === '內科科室共用' && d2.phrases.some((p) => p.code === 'dmedu' && p.scope === 'dept' && p.updatedByName === '黃柏翰'), 'dr02 看得到內科科室共用片語（dr03 建的，標出最後修改的人）')
+    ok(htns.length === 2 && !htns[0].scope && htns[1].scope === 'dept' && htns[1].shadowed && !htns[0].shadowed, '同簡碼 .htn：個人的排前面，共用的標「被個人片語蓋住」')
+    const ex2 = R.expandPhrase('.htn', 4, d2.phrases)
+    ok(ex2.text === htns[0].text, '展開 .htn 用的是自己的個人片語（個人優先）')
+    await as('dr03')
+    const d3 = await lp()
+    ok(R.expandPhrase('.htn', 4, d3).text.startsWith('高血壓，目前藥物治療中') && !d3.find((p) => p.code === 'htn').shadowed, 'dr03 沒有個人的 .htn：展開成科室共用的')
+    await as('dr01')
+    ok(!(await lp()).some((p) => p.scope === 'dept'), '家醫科 dr01 看不到內科的共用片語')
+    await expectError(() => PH.savePhrase({ id: htns[1].id, code: 'htn', text: '改別科的' }), '別科醫師修改科室共用片語')
+    // dr02 新增科室共用：同範圍不可重複簡碼；個人與共用可同簡碼
+    await as('dr02')
+    try {
+      await PH.savePhrase({ code: 'dmedu', text: '重複', shared: true })
+      ok(false, '科室共用同簡碼應被擋下')
+    } catch (e) {
+      ok(e.fields?.code?.includes('內科科室共用已有簡碼'), `科室共用簡碼重複 → 「${e.fields?.code}」`)
+    }
+    const sp = await PH.savePhrase({ code: 'stable', text: '科室版：病情穩定。', shared: true })
+    ok(sp.scope === 'dept' && sp.deptId === 'D02' && dbm.db.auditLogs[0].detail === '內科科室共用 .stable', '共用片語可以和自己的個人片語同簡碼；稽核寫出範圍')
+    await as('dr03')
+    const edd = await PH.savePhrase({ id: sp.id, code: 'stable', text: '科室版：病情穩定，續觀察。' })
+    ok(edd.scope === 'dept' && dbm.db.phrases.find((p) => p.id === sp.id).updatedBy === dbm.db.users.find((u) => u.username === 'dr03').id, '同科的 dr03 能改，記下最後修改的人；修改不會換範圍')
+    await PH.deletePhrase(sp.id)
+    ok(!dbm.db.phrases.some((p) => p.id === sp.id) && dbm.db.auditLogs[0].action === '刪除片語', '同科的人也能刪共用片語（寫稽核）')
+
+    // 護理師：病房共用依目前所在的病房
+    await as('nurse01')
+    const n5 = await PH.listPhrases({ ward: ward5A })
+    ok(n5.shareTarget?.label === '5A 內科病房共用' && n5.phrases.some((p) => p.code === 'turn' && p.scope === 'ward') && n5.phrases.findIndex((p) => p.scope) > n5.phrases.findLastIndex((p) => !p.scope), '在 5A 寫紀錄：有 5A 的病房共用片語，排在個人的後面')
+    const n6 = await PH.listPhrases({ ward: '6B 外科病房' })
+    ok(!n6.phrases.some((p) => p.scope === 'ward') && n6.shareTarget?.label === '6B 外科病房共用', '換到 6B：看不到 5A 的共用片語')
+    ok(!(await lp()).some((p) => p.scope) && !(await PH.listPhrases()).shareTarget, '沒選病房只有個人的，也不能新增病房共用')
+    await expectError(() => PH.listPhrases({ ward: '9Z' }), '不存在的病房')
+    await expectError(() => PH.savePhrase({ code: 'x1', text: 'x', shared: true }), '沒選病房新增病房共用片語')
+    const wp = await PH.savePhrase({ code: 'pain', text: '疼痛評估 0 分。', shared: true, ward: '6B 外科病房' })
+    ok(wp.scope === 'ward' && wp.ward === '6B 外科病房', '在 6B 新增的病房共用片語屬於 6B')
+    const turn = n5.phrases.find((p) => p.code === 'turn')
+    await expectError(() => PH.savePhrase({ id: turn.id, code: 'turn', text: '在 6B 改 5A 的', ward: '6B 外科病房' }), '在別的病房修改 5A 的共用片語')
+    await as('dr02')
+    ok(!(await PH.listPhrases({ ward: '6B 外科病房' })).phrases.some((p) => p.scope === 'ward'), '醫師看不到護理病房共用片語')
+    await as('nurse01')
+    await PH.deletePhrase(wp.id, { ward: '6B 外科病房' })
+    await as('dr01')
+    {
+      const { readFileSync } = await import('node:fs')
+      const nn = readFileSync('src/pages/nursing/components/NursingNotesPanel.vue', 'utf8')
+      const ho = readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8')
+      const svc = readFileSync('src/services/phrase.ts', 'utf8')
+      ok(nn.includes('usePhrases(() => props.admission.bed?.ward)') && ho.includes('usePhrases(() => props.ward)'), '護理紀錄、交班帶目前的病房（病房共用片語）')
+      ok(svc.includes("scopeOf(a) === 'personal' ? -1 : 1"), '「個人優先」靠服務層排序（個人在前）＋ expandPhrase 取第一個，頁面不另寫')
+    }
     {
       // 片語展開只有一份（usePhrases）：門診、住院病程與病摘、護理紀錄、交班都用它，頁面不自己呼叫 expandPhrase
       const { readFileSync } = await import('node:fs')
@@ -2378,7 +2439,13 @@ try {
     // 藥局：盤點中的藥，調劑單上看不到庫存數字，但有貨照樣能核對（缺不缺用真的量判斷，不能拿遮掉的 0 擋人）
     await as('ph01')
     const medsOf2 = (d) => dbm.db.encounters.find((e) => e.id === d.encounterId).medications
-    const pd = dbm.db.dispenses.find((d) => d.status === 'pending' && medsOf2(d).every((m) => dbm.db.drugLots.filter((l) => l.drugId === m.drugId && l.locationId === opd && l.expiry >= T).reduce((n, l) => n + l.qty, 0) >= m.qty))
+    const opdQty = (drugId) => dbm.db.drugLots.filter((l) => l.drugId === drugId && l.locationId === opd && l.expiry >= T).reduce((n, l) => n + l.qty, 0)
+    let pd = dbm.db.dispenses.find((d) => d.status === 'pending' && medsOf2(d).every((m) => opdQty(m.drugId) >= m.qty))
+    if (!pd) {
+      // 今天的待調劑單可能剛好都含示範缺貨的藥（看當天種子）：先進貨補足，測試不依賴日期
+      pd = dbm.db.dispenses.find((d) => d.status === 'pending')
+      for (const m of medsOf2(pd)) if (opdQty(m.drugId) < m.qty) INV.postStock({ kind: 'in', type: 'adjust', reason: '測試', drugId: m.drugId, locationId: opd, qty: m.qty, lot: { lotNo: 'TEST-PD', expiry: '2099-12-31' }, ref: '測試：補足待調劑單' }, 'U301')
+    }
     if (pd) {
       const dId = medsOf2(pd)[0].drugId
       const s5 = await S.createStocktake({ scope: { kind: 'drugs', drugIds: [dId] } })

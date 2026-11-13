@@ -277,8 +277,14 @@ export interface OrderSet {
 /** 片語：個人的常用文字（醫師、護理師各自一份），屬於登入帳號 */
 export interface Phrase {
   id: string
-  /** 擁有者（使用者帳號 id） */
+  /** 個人片語的擁有者；共用片語是建立的人（使用者帳號 id） */
   userId: string
+  /** personal（預設）：本人的；dept：醫師科室共用（deptId）；ward：護理病房共用（ward） */
+  scope?: 'personal' | 'dept' | 'ward'
+  deptId?: string
+  ward?: string
+  /** 共用片語最後修改的人（大家都能改，要看得出是誰改的） */
+  updatedBy?: string
   /** 簡碼：英數字 1–10 碼，存小寫；同一個人不重複 */
   code: string
   text: string

@@ -27,7 +27,7 @@ const form = reactive({ shift: handoverShiftOf(props.clock) as string | number |
 watch(() => props.selectedId, (id) => id && (form.admissionId = id))
 const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.bed?.bedNo} ${p.patientName}`, value: p.id })))
 
-const phrase = usePhrases()
+const phrase = usePhrases(() => props.ward)
 const save = useAction(nursingApi.addHandover, { success: '已新增交班' })
 async function submit() {
   if (!form.admissionId) return
@@ -46,7 +46,7 @@ async function submit() {
         <USelect v-model="form.shift" label="班別" :options="shifts.map((s) => ({ label: s, value: s }))" />
         <USelect v-model="form.admissionId" label="病人" required :options="patientOptions" placeholder="請選擇" />
         <!-- 外包一層 div：UTextarea 把 class 傳給裡面的 textarea（inheritAttrs: false），col-span 要放在格子本身 -->
-        <div class="col-span-2"><UTextarea v-model="form.content" label="交班重點" :rows="2" :error="save.fieldErrors.value.content" placeholder="例：夜間體溫最高 38.1°C，已給退燒藥；明早空腹抽血" @keydown="phrase.onKey($event, (v) => (form.content = v))" /><PhraseHint class="mt-1" :phrases="phrase.phrases.value" /></div>
+        <div class="col-span-2"><UTextarea v-model="form.content" label="交班重點" :rows="2" :error="save.fieldErrors.value.content" placeholder="例：夜間體溫最高 38.1°C，已給退燒藥；明早空腹抽血" @keydown="phrase.onKey($event, (v) => (form.content = v))" /><PhraseHint class="mt-1" :phrase="phrase" /></div>
       </div>
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>

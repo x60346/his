@@ -285,7 +285,7 @@ async function submitNote() {
             <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" @keydown="phrase.onKey($event, (v) => (dsForm.course = v))" />
             <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" @keydown="phrase.onKey($event, (v) => (dsForm.condition = v))" />
             <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" @keydown="phrase.onKey($event, (v) => (dsForm.followUp = v))" />
-            <PhraseHint :phrases="phrase.phrases.value" />
+            <PhraseHint :phrase="phrase" />
             <div class="flex justify-end gap-2">
               <UButton variant="secondary" :loading="saveDs.pending.value" @click="onSaveDs(false)">儲存草稿</UButton>
               <UButton :icon="LogOut" :loading="saveDs.pending.value" @click="onSaveDs(true)">簽署並准予出院</UButton>
@@ -303,7 +303,7 @@ async function submitNote() {
               <UTextarea v-model="note.assessment" label="A 評估" :rows="2" @keydown="phrase.onKey($event, (v) => (note.assessment = v))" />
               <UTextarea v-model="note.plan" label="P 計畫" :rows="2" @keydown="phrase.onKey($event, (v) => (note.plan = v))" />
             </div>
-            <PhraseHint class="mt-1" :phrases="phrase.phrases.value" />
+            <PhraseHint class="mt-1" :phrase="phrase" />
             <div class="mt-2 text-right"><UButton size="sm" :loading="addNote.pending.value" @click="submitNote">儲存病程紀錄</UButton></div>
           </div>
           <article v-for="n in notes" :key="n.id" class="rounded-md border border-slate-200 p-3 text-sm">

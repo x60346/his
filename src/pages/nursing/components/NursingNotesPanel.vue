@@ -25,7 +25,7 @@ const form = reactive(blank())
 watch(() => props.admission.id, () => Object.assign(form, blank()))
 
 // 片語：D／A／R 輸入「.簡碼」再按空白鍵展開（護理師個人的片語）
-const phrase = usePhrases()
+const phrase = usePhrases(() => props.admission.bed?.ward)
 
 const save = useAction(nursingApi.addNursingNote, { success: '已新增護理紀錄' })
 async function submit() {
@@ -53,7 +53,7 @@ async function respond(noteId: string) {
         <UTextarea v-model="form.action" label="A 措施" :rows="2" @keydown="phrase.onKey($event, (v) => (form.action = v))" />
         <div class="md:col-span-2"><UTextarea v-model="form.response" label="R 反應（可稍後補記）" :rows="2" @keydown="phrase.onKey($event, (v) => (form.response = v))" /></div>
       </div>
-      <PhraseHint class="mt-1" :phrases="phrase.phrases.value" />
+      <PhraseHint class="mt-1" :phrase="phrase" />
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" @click="submit">儲存護理紀錄</UButton></div>
     </div>
 

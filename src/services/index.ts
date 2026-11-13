@@ -44,6 +44,7 @@ export const stocktakeApi = overNetwork(stocktake)
 export const purchaseApi = overNetwork(purchase)
 export const transferApi = overNetwork(transfer)
 export const udApi = overNetwork(ud)
+export type { PhraseView, PhraseShareTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
 

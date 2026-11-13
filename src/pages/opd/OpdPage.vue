@@ -537,7 +537,7 @@ const lastOpen = ref(true)
               <UTextarea v-model="draft.subjective" label="S 主訴（病人主觀描述）" :rows="4" :disabled="!editable" @keydown="onPhraseKey($event, 'subjective')" />
               <UTextarea v-model="draft.objective" label="O 客觀檢查" :rows="4" :disabled="!editable" @keydown="onPhraseKey($event, 'objective')" />
             </section>
-            <PhraseHint v-if="editable" class="-mt-3" :phrases="phrase.phrases.value" />
+            <PhraseHint v-if="editable" class="-mt-3" :phrase="phrase" />
 
             <!-- A：評估與診斷放在一起 -->
             <section :ref="setSection('dx')" class="scroll-mt-12 space-y-2 border-t border-slate-100 pt-4">
