@@ -48,6 +48,8 @@ const todos = computed<Todo[]>(() => {
   const list: (Todo & { roles: string[] })[] = [
     { roles: ['doctor'], label: '待回覆會診', count: s.value.consultIncoming ?? 0, hint: s.value.consultUrgent ? `其中急會診 ${s.value.consultUrgent} 張` : '他科請本科會診的住院病人', route: 'ipd', icon: Stethoscope, urgent: !!s.value.consultUrgent },
     { roles: ['doctor'], label: '轉入申請', count: s.value.transferIncoming ?? 0, hint: '他科申請轉入本科的住院病人，待接受', route: 'ipd', icon: Stethoscope, urgent: true },
+    { roles: ['doctor'], label: '待回覆門診會診', count: s.value.opdConsultIncoming ?? 0, hint: '他科看診時請本科書面會診（病人不必在場）', route: 'opd', icon: Stethoscope, urgent: true },
+    { roles: ['doctor'], label: '會診已回覆', count: s.value.consultReplies ?? 0, hint: '我申請的門診會診已回覆，看過按已閱', route: 'opd', icon: Stethoscope },
     { roles: ['doctor'], label: '會診醫師新開的醫囑', count: s.value.consultOrdersUnseen ?? 0, hint: '我的住院病人：會診醫師開了醫囑，看過後按「已閱」', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '護理師醫囑疑問', count: s.value.orderQueries ?? 0, hint: '我的住院病人，待回覆（回覆前給藥暫停）', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },

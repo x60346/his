@@ -223,6 +223,8 @@ export interface HistoryItem extends Encounter {
   deptName: string
   medicationNames: string[]
   procedureNames: string[]
+  /** 這次看診的門診會診（含回覆） */
+  consults: { id: string; toDeptName: string; question: string; status: string; findings?: string; recommendation?: string; answeredByName?: string; suggestVisit?: boolean }[]
 }
 
 /** 歷史病歷（已完成的），新的在前；看診畫面用來參考與複製前次處方 */
@@ -236,6 +238,11 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
         refillSeq: find.visit(e.visitId)?.refillSeq,
         doctorName: nameOf.doctor(e.doctorId),
         deptName: nameOf.dept(e.deptId),
+        consults: db.consults.filter((c) => c.visitId === e.visitId && c.status !== 'cancelled').map((c) => ({
+          id: c.id, toDeptName: nameOf.dept(c.toDeptId), question: c.question, status: c.status,
+          ...(c.findings ? { findings: c.findings, recommendation: c.recommendation, answeredByName: nameOf.doctor(c.answeredBy) } : {}),
+          ...(c.suggestVisit ? { suggestVisit: true } : {}),
+        })),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),
         procedureNames: e.procedures.map((p) => `${find.procedure(p.procId)?.name ?? p.procId}${p.notDone ? `（未執行：${p.notDone.reason}）` : ''}`),
       })),

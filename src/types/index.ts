@@ -695,7 +695,9 @@ export interface DeptTransfer {
  */
 export interface Consult {
   id: string
-  admissionId: string
+  /** 住院會診：哪一次住院；門診會診：哪一次掛號（visitId）。兩者擇一 */
+  admissionId?: string
+  visitId?: string
   fromDeptId: string
   /** 申請的醫師 */
   fromDoctorId: string
@@ -713,8 +715,12 @@ export interface Consult {
   findings?: string
   /** 建議 */
   recommendation?: string
-  /** 會診醫師建議轉入本科 */
+  /** 會診醫師建議轉入本科（住院） */
   suggestTransfer?: boolean
+  /** 會診醫師建議病人掛本科門診（門診會診：書面會診，要當面看診再另外掛號） */
+  suggestVisit?: boolean
+  /** 門診會診：申請的醫師看過回覆（首頁待辦「會診已回覆」消失） */
+  replySeenAt?: string
   cancelledAt?: string
   cancelReason?: string
 }

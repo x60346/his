@@ -4665,6 +4665,77 @@ try {
     await as('clerk01')
   }
 
+  // 門診會診：看診中請別科書面會診（病人不必另外掛號、不收費）；回覆留在這次就醫，申請的醫師看過按已閱
+  console.log('\n[門診會診]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const CS = api.consultApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId)?.username
+    // 今天、別科（不是內科）的診次：看完診的病人
+    await as('clerk01')
+    const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended && x.deptId !== 'D02' && userOf(x.doctorId))
+    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+    const requester = userOf(sess.doctorId)
+    await as(requester)
+    await expectError(() => CS.requestOpdConsult(v.id, { toDeptId: 'D02', question: '請評估' }), '還沒看診就會診')
+    const e = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.saveDraft(e.id, { subjective: '血糖控制不佳三個月', objective: '', assessment: '第二型糖尿病', plan: '', vitals: { sbp: 142, dbp: 88 }, diagnoses: [{ icd: 'E11.9', name: '第二型糖尿病', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+    try {
+      await CS.requestOpdConsult(v.id, { toDeptId: sess.deptId, question: '' })
+      ok(false, '同科、沒寫目的應被擋下')
+    } catch (e2) {
+      ok(e2.fields?.toDeptId && e2.fields?.question, '同科會診、沒寫目的：一次標出')
+    }
+    await as('dr02')
+    await expectError(() => CS.requestOpdConsult(v.id, { toDeptId: 'D03', question: 'x' }), '別科醫師替這位病人開會診')
+    await as(requester)
+    const c = await CS.requestOpdConsult(v.id, { toDeptId: 'D02', question: '血糖控制不佳，請評估是否調整用藥' })
+    ok(c.visitId === v.id && !c.admissionId && c.status === 'pending' && db().auditLogs[0].action === '門診會診申請', '看診中開門診會診（掛在這次掛號上，不是住院）')
+    await expectError(() => CS.requestOpdConsult(v.id, { toDeptId: 'D02', question: '再一張' }), '同一科還沒回覆又開一張')
+    ok(!db().charges.some((x) => x.visitId === v.id) && !db().visits.some((x) => x.patientId === pt.id && x.deptId === 'D02' && x.date === T), '不收費、不替病人掛號（書面會診）')
+    // 會診科（內科）
+    await as('dr02')
+    const d0 = await api.dashboardApi.getDashboard()
+    const inc = (await CS.listIncomingOpdConsults()).find((x) => x.consult.id === c.id)
+    ok(d0.opdConsultIncoming >= 1 && inc && inc.summary.diagnoses[0].includes('E11.9') && inc.summary.subjective.includes('血糖') && inc.summary.vitals === 'BP 142/88' && !inc.overdue, '內科醫師：首頁待辦、待回覆清單看得到這次看診的摘要（主訴、診斷、生命徵象「BP 142/88」）')
+    ok(!(await CS.listIncomingConsults()).some((x) => x.consult.id === c.id), '門診會診不混進住院會診清單')
+    const notes0 = db().progressNotes.length
+    const ans = await CS.answerConsult(c.id, { findings: 'HbA1c 偏高，無低血糖', recommendation: '加 Metformin，三個月後內科追蹤', suggestVisit: true })
+    ok(ans.status === 'answered' && ans.suggestVisit && !ans.suggestTransfer && db().progressNotes.length === notes0 && db().auditLogs[0].action === '門診會診回覆', '回覆：建議掛本科門診；不寫住院病程')
+    // 申請的醫師：已回覆、已閱
+    await as(requester)
+    let d1 = await api.dashboardApi.getDashboard()
+    ok(d1.consultReplies === 1 && (await CS.listOpdConsultReplies()).some((x) => x.id === c.id && x.findings), '申請的醫師：首頁待辦「會診已回覆」、看得到回覆')
+    ok((await CS.listVisitConsults(v.id)).some((x) => x.id === c.id && x.status === 'answered'), '看診頁這次掛號的會診看得到回覆')
+    await as('dr03')
+    await expectError(() => CS.ackConsultReply(c.id), '不是申請的醫師按已閱')
+    await as(requester)
+    await CS.ackConsultReply(c.id)
+    d1 = await api.dashboardApi.getDashboard()
+    ok(!d1.consultReplies && !(await CS.listOpdConsultReplies()).length, '按已閱後待辦消失')
+    // 完成看診後，就診紀錄看得到會診與回覆
+    await api.opdApi.completeEncounter(e.id, { subjective: '血糖控制不佳三個月', objective: '', assessment: '第二型糖尿病', plan: '', vitals: {}, diagnoses: [{ icd: 'E11.9', name: '第二型糖尿病', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+    const hist = await api.opdApi.patientHistory(pt.id)
+    ok(hist.some((h) => h.consults.some((x) => x.findings?.includes('HbA1c') && x.suggestVisit)), '就診紀錄：這次看診的會診與回覆')
+    // 逾期：當天沒回覆的隔天標逾期，不會消失；撤回
+    const c2 = await CS.requestOpdConsult(v.id, { toDeptId: 'D02', question: '血脂請一併評估' })
+    clockBase += 86_400_000
+    try {
+      await as('dr02')
+      ok((await CS.listIncomingOpdConsults()).find((x) => x.consult.id === c2.id)?.overdue, '當天沒回覆：隔天仍在清單上，標逾期')
+      await as(requester)
+      await expectError(() => CS.requestOpdConsult(v.id, { toDeptId: 'D02', question: 'x' }), '隔天才對昨天的看診開會診')
+    } finally {
+      clockBase -= 86_400_000
+    }
+    await as(requester)
+    await CS.cancelConsult(c2.id, '已在門診當面討論')
+    ok(db().consults.find((x) => x.id === c2.id).status === 'cancelled', '門診會診可以撤回')
+    await as('clerk01')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

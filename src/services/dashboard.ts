@@ -30,6 +30,10 @@ export interface DashboardStats {
   transferIncoming?: number
   /** 醫師：待我（我這科）回覆的會診；其中急會診幾張 */
   consultIncoming?: number
+  /** 我申請的門診會診已回覆、還沒看 */
+  consultReplies?: number
+  /** 待我（我這科）回覆的門診會診 */
+  opdConsultIncoming?: number
   /** 我的病人（我是主治）有會診醫師新開、還沒按已閱的醫囑：病人數 */
   consultOrdersUnseen?: number
   consultUrgent?: number
@@ -127,8 +131,14 @@ export function getDashboard(): Promise<DashboardStats> {
           }).length,
           ...(() => {
             // 待我（我這科）回覆的會診：急會診另外算（首頁標紅）
-            const cs = db.consults.filter((c) => c.status === 'pending' && c.toDeptId === myDept && (!c.toDoctorId || c.toDoctorId === me.doctorId) && db.admissions.find((a) => a.id === c.admissionId)?.status === 'admitted')
-            return { consultIncoming: cs.length, consultUrgent: cs.filter((c) => c.urgent).length }
+            const mineTo = (c: (typeof db.consults)[number]) => c.status === 'pending' && c.toDeptId === myDept && (!c.toDoctorId || c.toDoctorId === me.doctorId)
+            const cs = db.consults.filter((c) => mineTo(c) && !!c.admissionId && db.admissions.find((a) => a.id === c.admissionId)?.status === 'admitted')
+            return {
+              consultIncoming: cs.length, consultUrgent: cs.filter((c) => c.urgent).length,
+              opdConsultIncoming: db.consults.filter((c) => mineTo(c) && !!c.visitId).length,
+              // 我申請的門診會診已回覆、還沒看
+              consultReplies: db.consults.filter((c) => c.visitId && c.fromDoctorId === me.doctorId && c.status === 'answered' && !c.replySeenAt).length,
+            }
           })(),
         }
       })(),

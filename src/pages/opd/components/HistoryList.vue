@@ -31,6 +31,7 @@ defineEmits<{ copy: [item: HistoryItem, only?: 'medications'] }>()
       <div v-if="h.assessment" class="text-slate-700"><span class="text-slate-500">評估：</span>{{ h.assessment }}</div>
       <div v-if="h.plan" class="text-slate-700"><span class="text-slate-500">計畫：</span>{{ h.plan }}</div>
       <div v-if="h.procedures.length" class="text-slate-700"><span class="text-slate-500">處置：</span>{{ h.procedureNames.join('、') }}</div>
+      <div v-for="c in h.consults" :key="c.id" class="text-slate-700"><span class="text-slate-500">會診 {{ c.toDeptName }}：</span>{{ c.question }}<template v-if="c.findings">；{{ c.answeredByName }} 回覆：{{ c.findings }}／{{ c.recommendation }}<template v-if="c.suggestVisit">（建議掛{{ c.toDeptName }}門診）</template></template><template v-else>（待回覆）</template></div>
       <ul v-if="h.medications.length" class="mt-1.5 space-y-0.5 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
         <li v-for="m in h.medications" :key="m.drugId" class="tabular">
           {{ drugs.get(m.drugId)?.name ?? m.drugId }}　{{ m.dose }} {{ drugs.get(m.drugId) ? doseUnitOf(drugs.get(m.drugId)!) : '' }} {{ m.freq }}<template v-if="m.timing">（{{ TIMING_SHORT[m.timing] }}）</template> {{ m.route }} × {{ m.days }} 天（{{ m.qty }}）

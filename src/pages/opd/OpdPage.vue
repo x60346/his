@@ -16,9 +16,11 @@ import MedicationEditor, { type MedRow } from './components/MedicationEditor.vue
 import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
+import OpdConsultDialog from './components/OpdConsultDialog.vue'
+import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
-import { autoQty, doseLevel, doseNote, masterApi, nextInQueue, opdApi, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import { autoQty, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -99,6 +101,17 @@ watch(encounter, (e) => {
 })
 
 const editable = computed(() => visit.value?.status === 'in-consult' && encounter.value?.status === 'draft')
+
+// ---------- 門診會診：書面會診，病人不必另外掛號、不收費（consult.requestOpdConsult）----------
+const { data: opdIncoming } = useQuery(async () => (isAdmin ? [] : consultApi.listIncomingOpdConsults()))
+const { data: consultReplies } = useQuery(async () => (isAdmin ? [] : consultApi.listOpdConsultReplies()))
+const { data: visitConsults } = useQuery(async () => (visitId.value ? consultApi.listVisitConsults(visitId.value) : []), [visitId])
+const answeringOpd = ref<IncomingOpdConsult | null>(null)
+const consultOpen = ref(false)
+const ackReply = useAction(consultApi.ackConsultReply, { success: '已閱會診回覆' })
+/** 看診當天、看過診的才能會診（還沒叫號的不行） */
+const canConsult = computed(() => !isAdmin && !!visit.value && ['in-consult', 'consulted', 'charged', 'dispensed'].includes(visit.value.status))
+const CONSULT_STATUS: Record<string, { label: string; tone: 'yellow' | 'green' | 'gray' }> = { pending: { label: '待回覆', tone: 'yellow' }, answered: { label: '已回覆', tone: 'green' }, cancelled: { label: '已撤回', tone: 'gray' } }
 // 「看診」一頁照 SOAP 順序排（生命徵象 → S/O → A＋診斷 → P＋醫令），「歷史病歷」另一頁。
 // 以前拆成 SOAP／診斷／醫令／歷史四個分頁：寫主訴看不到上次處方、開藥看不到剛寫的評估，檢查出錯還會自動跳分頁。
 const tab = ref<'visit' | 'history'>('visit')
@@ -410,6 +423,31 @@ const lastOpen = ref(true)
         <USelect v-model="doctorId" label="檢視醫師（管理員）" :options="(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))" />
       </div>
       <!-- 「載入中」與「沒有資料」要分開：載入中就顯示沒病人，會讓醫師誤判 -->
+      <!-- 門診會診：待我回覆（別科請本科看）、我申請的已回覆（看過按已閱） -->
+      <div v-if="opdIncoming?.length" class="border-b border-rose-200 bg-rose-50 p-2">
+        <div class="px-1 pb-1 text-xs font-semibold text-rose-900">待回覆門診會診（{{ opdIncoming.length }}）</div>
+        <button v-for="it in opdIncoming" :key="it.consult.id" class="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-rose-100" @click="answeringOpd = it">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-slate-800">{{ it.summary.patientName }}</span>
+            <UBadge v-if="it.consult.urgent" tone="red">急</UBadge>
+            <UBadge v-if="it.overdue" tone="yellow">逾期</UBadge>
+            <span class="ml-auto text-xs text-rose-800">{{ it.consult.fromDeptName }}</span>
+          </div>
+          <div class="truncate text-xs text-slate-600">{{ it.consult.question }}</div>
+        </button>
+      </div>
+      <div v-if="consultReplies?.length" class="border-b border-emerald-200 bg-emerald-50 p-2">
+        <div class="px-1 pb-1 text-xs font-semibold text-emerald-900">會診已回覆（{{ consultReplies.length }}）</div>
+        <div v-for="c in consultReplies" :key="c.id" class="rounded px-2 py-1.5 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-slate-800">{{ c.patientName }}</span>
+            <span class="text-xs text-emerald-800">{{ c.toDeptName }} {{ c.answeredByName }}</span>
+            <UButton size="sm" variant="ghost" class="ml-auto" :loading="ackReply.pending.value" @click="ackReply.run(c.id)">已閱</UButton>
+          </div>
+          <div class="text-xs text-slate-700">評估：{{ c.findings }}</div>
+          <div class="text-xs text-slate-700">建議：{{ c.recommendation }}<UBadge v-if="c.suggestVisit" tone="blue" class="ml-1">建議掛{{ c.toDeptName }}門診</UBadge></div>
+        </div>
+      </div>
       <UQueryState :loading="queueLoading" :ready="!!queue?.length" empty-title="今天沒有掛號病人">
       <ul class="max-h-[calc(100vh-12rem)] divide-y divide-slate-100 overflow-y-auto">
         <li v-for="v in queue" :key="v.id">
@@ -454,6 +492,20 @@ const lastOpen = ref(true)
           <button type="button" class="ml-1 rounded border border-current px-1 text-xs font-medium opacity-80 hover:opacity-100" title="病人當場告知的過敏，直接記錄（只能新增；移除請到病患資料）" @click="openAllergy">＋過敏</button>
         </template>
       </PatientBanner>
+      <!-- 這次看診的門診會診 -->
+      <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+        <span class="pt-0.5 text-xs font-semibold text-slate-600">門診會診</span>
+        <div class="min-w-0 flex-1 space-y-1">
+          <div v-for="c in visitConsults" :key="c.id">
+            <UBadge :tone="CONSULT_STATUS[c.status].tone">{{ CONSULT_STATUS[c.status].label }}</UBadge>
+            <span class="ml-1 text-slate-700">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }}</span>
+            <div v-if="c.status === 'answered'" class="text-xs text-slate-600">{{ c.answeredByName }} 回覆：{{ c.findings }}／建議：{{ c.recommendation }}<UBadge v-if="c.suggestVisit" tone="blue" class="ml-1">建議掛{{ c.toDeptName }}門診</UBadge></div>
+          </div>
+          <span v-if="!visitConsults?.length" class="text-xs text-slate-400">請別科書面會診，病人不必另外掛號</span>
+        </div>
+        <UButton v-if="canConsult" size="sm" variant="secondary" @click="consultOpen = true">會診</UButton>
+      </div>
+      <RequestConsultDialog v-if="visit" v-model="consultOpen" :visit="{ id: visit.id, deptId: visit.deptId, patientName: visit.patientName }" />
       <UDialog v-model="allergyOpen" title="新增過敏" size="sm" @submit="submitAllergy">
         <div class="space-y-3 text-sm">
           <p class="text-slate-600">{{ visit.patientName }} 目前記錄：{{ visit.allergies.length ? visit.allergies.join('、') : '無已知過敏' }}</p>
@@ -586,5 +638,6 @@ const lastOpen = ref(true)
         </div>
       </div>
     </div>
+    <OpdConsultDialog :item="answeringOpd" @close="answeringOpd = null" />
   </div>
 </template>

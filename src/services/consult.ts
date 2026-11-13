@@ -2,9 +2,10 @@
 // 會診醫師不是主治，看的是會診單附上的病人摘要（診斷、執行中醫囑、最新生命徵象、最近的病程紀錄），不是整份病歷——
 // 範圍清楚，也不必改「住院醫囑只看我的病人」的設計。
 // 申請與回覆都寫進病程紀錄（addChartNote）：病歷時間軸上看得到會診的經過。
+// 門診會診（visitId）：看診中請別科書面會診，病人不必另外掛號；回覆留在這次就醫（就診紀錄看得到），要當面看診的勾「建議掛本科門診」。不收費。
 import type { Admission, Consult } from '@/types'
 import { db, newId } from '@/mock/db'
-import { now } from '@/utils/date'
+import { now, today } from '@/utils/date'
 import { audit, fail, failFields, fieldErrors, must, mutate, query, requireUser } from './http'
 import { addChartNote } from './order-ops'
 import { orderView, type OrderView } from './ipd'
@@ -34,6 +35,8 @@ export interface ConsultView extends Consult {
   /** 還沒回覆的：等了幾小時 */
   waitingHours?: number
 }
+
+const consultPatientName = (c: Consult) => nameOf.patient(c.admissionId ? find.admission(c.admissionId)?.patientId : find.visit(c.visitId ?? '')?.patientId)
 
 const consultView = (c: Consult): ConsultView => ({
   ...c,
@@ -113,12 +116,12 @@ export function cancelConsult(id: string, reason: string): Promise<ConsultView> 
   return mutate(() => {
     const { d } = me()
     const c = must(db.consults.find((x) => x.id === id), '會診單')
-    const a = must(find.admission(c.admissionId), '住院紀錄')
-    if (d.deptId !== a.deptId) fail('只有病人目前科別的醫師可以撤回', 'FORBIDDEN')
+    const ownerDept = c.admissionId ? must(find.admission(c.admissionId), '住院紀錄').deptId : must(find.visit(c.visitId ?? ''), '掛號紀錄').deptId
+    if (d.deptId !== ownerDept) fail('只有病人目前科別的醫師可以撤回', 'FORBIDDEN')
     if (c.status !== 'pending') fail(c.status === 'answered' ? '已經回覆了，不能撤回' : '已經撤回了', 'CONFLICT')
     if (!reason?.trim()) failFields({ reason: '請寫撤回原因' })
     Object.assign(c, { status: 'cancelled', cancelledAt: now(), cancelReason: reason.trim() })
-    audit('撤回會診', `${a.admitNo} ${nameOf.patient(a.patientId)} → ${nameOf.dept(c.toDeptId)}：${reason.trim()}`)
+    audit('撤回會診', `${consultPatientName(c)} → ${nameOf.dept(c.toDeptId)}：${reason.trim()}`)
     return consultView(c)
   })
 }
@@ -138,10 +141,10 @@ export function listIncomingConsults(): Promise<IncomingConsult[]> {
   return query(() => {
     const { d } = me()
     return db.consults
-      .filter((c) => (c.status === 'pending' && c.toDeptId === d.deptId && (!c.toDoctorId || c.toDoctorId === d.id)) || (c.status === 'answered' && consultOpenFor(c, d.id)))
-      .filter((c) => find.admission(c.admissionId)?.status === 'admitted')
+      .filter((c) => !!c.admissionId && ((c.status === 'pending' && c.toDeptId === d.deptId && (!c.toDoctorId || c.toDoctorId === d.id)) || (c.status === 'answered' && consultOpenFor(c, d.id))))
+      .filter((c) => find.admission(c.admissionId!)?.status === 'admitted')
       .sort((p, q) => Number(p.status === 'answered') - Number(q.status === 'answered') || Number(q.urgent) - Number(p.urgent) || p.requestedAt.localeCompare(q.requestedAt))
-      .map((c) => ({ consult: consultView(c), summary: summaryOf(find.admission(c.admissionId)!), canOrder: consultOpenFor(c, d.id) }))
+      .map((c) => ({ consult: consultView(c), summary: summaryOf(find.admission(c.admissionId!)!), canOrder: consultOpenFor(c, d.id) }))
   })
 }
 
@@ -154,20 +157,25 @@ export function listConsults(admissionId: string): Promise<ConsultView[]> {
 }
 
 /** 回覆會診（該科醫師；有指定時只有他）：評估、建議必填；可建議轉入本科 */
-export function answerConsult(id: string, input: { findings: string; recommendation: string; suggestTransfer?: boolean }): Promise<ConsultView> {
+export function answerConsult(id: string, input: { findings: string; recommendation: string; suggestTransfer?: boolean; suggestVisit?: boolean }): Promise<ConsultView> {
   return mutate(() => {
     const { d } = me()
     const c = must(db.consults.find((x) => x.id === id), '會診單')
     if (c.toDeptId !== d.deptId) fail(`這是給${nameOf.dept(c.toDeptId)}的會診`, 'FORBIDDEN')
     if (c.toDoctorId && c.toDoctorId !== d.id) fail(`這張會診指定由 ${nameOf.doctor(c.toDoctorId)} 回覆`, 'FORBIDDEN')
     if (c.status !== 'pending') fail(c.status === 'answered' ? `已由 ${nameOf.doctor(c.answeredBy)} 回覆` : '這張會診已撤回', 'CONFLICT')
-    const a = admitted(c.admissionId)
+    const a = c.admissionId ? admitted(c.admissionId) : undefined
     const v = fieldErrors()
     if (!input.findings?.trim()) v.add('findings', '請寫評估（看診所見）')
     if (!input.recommendation?.trim()) v.add('recommendation', '請寫建議')
     v.done()
     const t = now()
-    Object.assign(c, { status: 'answered', answeredBy: d.id, answeredAt: t, findings: input.findings.trim(), recommendation: input.recommendation.trim(), ...(input.suggestTransfer ? { suggestTransfer: true } : {}) })
+    Object.assign(c, { status: 'answered', answeredBy: d.id, answeredAt: t, findings: input.findings.trim(), recommendation: input.recommendation.trim(), ...(input.suggestTransfer && a ? { suggestTransfer: true } : {}), ...(input.suggestVisit && !a ? { suggestVisit: true } : {}) })
+    if (!a) {
+      // 門診會診：回覆留在會診單上（就診紀錄、看診頁看得到），不寫住院病程
+      audit('門診會診回覆', `${consultPatientName(c)}（${nameOf.dept(c.fromDeptId)} → ${nameOf.dept(c.toDeptId)}）${c.suggestVisit ? '：建議掛本科門診' : ''}`)
+      return consultView(c)
+    }
     addChartNote(a.id, d.id, 'consultReply', [
       { label: '會診回覆', text: `${nameOf.dept(d.deptId)}（申請：${c.requestedAt.slice(5)}，${c.question}）` },
       { label: '評估', text: c.findings! },
@@ -179,3 +187,122 @@ export function answerConsult(id: string, input: { findings: string; recommendat
   })
 }
 
+
+// ---------- 門診會診 ----------
+
+/** 門診會診的病人摘要：這次看診的主訴、評估、診斷、處方、生命徵象、過敏（會診醫師看這份就夠） */
+export interface OpdConsultSummary {
+  visitId: string
+  date: string
+  patientName: string
+  chartNo: string
+  gender: string
+  birthDate: string
+  allergies: string[]
+  deptName: string
+  doctorName: string
+  subjective?: string
+  objective?: string
+  assessment?: string
+  diagnoses: string[]
+  medications: string[]
+  vitals: string
+}
+
+function opdSummaryOf(visitId: string): OpdConsultSummary {
+  const v = must(find.visit(visitId), '掛號紀錄')
+  const p = must(find.patient(v.patientId), '病人')
+  const e = find.encounterOfVisit(visitId)
+  const vt = e?.vitals ?? {}
+  return {
+    visitId, date: v.date, patientName: p.name, chartNo: p.chartNo, gender: p.gender, birthDate: p.birthDate, allergies: p.allergies,
+    deptName: nameOf.dept(v.deptId), doctorName: nameOf.doctor(v.doctorId),
+    ...(e?.subjective ? { subjective: e.subjective } : {}), ...(e?.objective ? { objective: e.objective } : {}), ...(e?.assessment ? { assessment: e.assessment } : {}),
+    diagnoses: (e?.diagnoses ?? []).map((x) => `${x.icd} ${x.name}`),
+    medications: (e?.medications ?? []).map((m) => `${find.drug(m.drugId)?.name ?? m.drugId} ${m.dose} ${m.freq} ${m.days} 天`),
+    vitals: [
+      vt.temp && `T ${vt.temp}`, vt.pulse && `P ${vt.pulse}`, vt.resp && `R ${vt.resp}`, vt.sbp && `BP ${vt.sbp}/${vt.dbp ?? '?'}`, vt.spo2 && `SpO2 ${vt.spo2}`,
+      vt.height && `身高 ${vt.height}`, vt.weight && `體重 ${vt.weight}`,
+    ].filter(Boolean).join('・'),
+  }
+}
+
+/** 門診會診：看診中（或今天看完）的醫師請別科書面會診；病人不必另外掛號、不收費 */
+export function requestOpdConsult(visitId: string, input: ConsultInput): Promise<ConsultView> {
+  return mutate(() => {
+    const { d } = me()
+    const v = must(find.visit(visitId), '掛號紀錄')
+    if (v.date !== today()) fail('門診會診只能在看診當天提出', 'CONFLICT')
+    if (!['in-consult', 'consulted', 'charged', 'dispensed'].includes(v.status)) fail('病人還沒看診，不能會診', 'CONFLICT')
+    if (d.deptId !== v.deptId) fail(`只有${nameOf.dept(v.deptId)}的醫師可以為這位病人開會診單`, 'FORBIDDEN')
+    const f = fieldErrors()
+    const dept = find.dept(input.toDeptId ?? '')
+    if (!dept || !dept.active) f.add('toDeptId', '請選擇會診科別')
+    else if (dept.id === v.deptId) f.add('toDeptId', '與病人這次看診的科別相同')
+    else if (!db.doctors.some((x) => x.active && x.deptId === dept.id)) f.add('toDeptId', `${dept.name}目前沒有在職醫師`)
+    if (input.toDoctorId) {
+      const doc = find.doctor(input.toDoctorId)
+      if (!doc || !doc.active || doc.deptId !== input.toDeptId) f.add('toDoctorId', '指定的醫師不是該科在職醫師')
+    }
+    if (!input.question?.trim()) f.add('question', '請寫會診目的（想請對方評估什麼）')
+    f.done()
+    if (db.consults.some((c) => c.visitId === v.id && c.toDeptId === dept!.id && c.status === 'pending')) fail(`已有一張會診${dept!.name}的單還沒回覆`, 'CONFLICT')
+    const c: Consult = {
+      id: newId('CS'), visitId: v.id, fromDeptId: v.deptId, fromDoctorId: d.id, toDeptId: dept!.id,
+      ...(input.toDoctorId ? { toDoctorId: input.toDoctorId } : {}),
+      question: input.question.trim(), urgent: !!input.urgent, requestedAt: now(), status: 'pending',
+    }
+    db.consults.push(c)
+    audit('門診會診申請', `${nameOf.patient(v.patientId)} ${nameOf.dept(v.deptId)} → ${dept!.name}${c.urgent ? '（急）' : ''}：${c.question}`)
+    return consultView(c)
+  })
+}
+
+export interface IncomingOpdConsult {
+  consult: ConsultView
+  summary: OpdConsultSummary
+  /** 當天沒回覆：標逾期（不會自動消失） */
+  overdue: boolean
+}
+
+/** 待我（我這科）回覆的門診會診：急的在前、再依申請時間；以前沒回的標逾期 */
+export function listIncomingOpdConsults(): Promise<IncomingOpdConsult[]> {
+  return query(() => {
+    const { d } = me()
+    return db.consults
+      .filter((c) => !!c.visitId && c.status === 'pending' && c.toDeptId === d.deptId && (!c.toDoctorId || c.toDoctorId === d.id))
+      .sort((p, q) => Number(q.urgent) - Number(p.urgent) || p.requestedAt.localeCompare(q.requestedAt))
+      .map((c) => ({ consult: consultView(c), summary: opdSummaryOf(c.visitId!), overdue: c.requestedAt.slice(0, 10) < today() }))
+  })
+}
+
+/** 這次掛號的會診單（看診頁、就診紀錄） */
+export function listVisitConsults(visitId: string): Promise<ConsultView[]> {
+  return query(() => {
+    requireUser('doctor')
+    return db.consults.filter((c) => c.visitId === visitId).sort((p, q) => p.requestedAt.localeCompare(q.requestedAt)).map(consultView)
+  })
+}
+
+/** 我申請的、已回覆還沒看的門診會診（首頁待辦「會診已回覆」、看診頁上方） */
+export function listOpdConsultReplies(): Promise<(ConsultView & { patientName: string; visitDate: string })[]> {
+  return query(() => {
+    const { d } = me()
+    return db.consults
+      .filter((c) => !!c.visitId && c.fromDoctorId === d.id && c.status === 'answered' && !c.replySeenAt)
+      .sort((p, q) => (p.answeredAt ?? '').localeCompare(q.answeredAt ?? ''))
+      .map((c) => ({ ...consultView(c), patientName: consultPatientName(c), visitDate: find.visit(c.visitId!)?.date ?? '' }))
+  })
+}
+
+/** 申請的醫師看過回覆 */
+export function ackConsultReply(id: string): Promise<ConsultView> {
+  return mutate(() => {
+    const { d } = me()
+    const c = must(db.consults.find((x) => x.id === id), '會診單')
+    if (c.fromDoctorId !== d.id) fail('只有申請的醫師可以標已閱', 'FORBIDDEN')
+    if (c.status !== 'answered') fail('還沒回覆', 'CONFLICT')
+    c.replySeenAt = now()
+    return consultView(c)
+  })
+}
