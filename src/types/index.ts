@@ -631,6 +631,14 @@ export interface IpdOrder {
    * 這段期間不能核對、給藥暫停（緊急時可寫原因強制給藥）。醫師回覆「確認無誤」或停止這筆醫囑後解除
    */
   queries?: OrderQuery[]
+  /**
+   * 修改（reviseOrder）：資料上仍是「停止舊的＋開新的」兩筆，互相標記。已給的藥掛在舊醫囑上，
+   * 直接改舊醫囑的劑量會讓以前的給藥紀錄看起來像照新劑量給的
+   */
+  replaces?: string
+  replacedBy?: string
+  /** 修改原因（新醫囑上） */
+  reviseReason?: string
 }
 
 export interface OrderQuery {
@@ -640,8 +648,8 @@ export interface OrderQuery {
   replyBy?: string
   replyAt?: string
   reply?: string
-  /** confirmed＝醫師確認原醫囑無誤（寫說明）；stopped＝醫師停止這筆醫囑（通常會另開正確的） */
-  resolution?: 'confirmed' | 'stopped'
+  /** confirmed＝醫師確認原醫囑無誤（寫說明）；stopped＝醫師停止這筆醫囑（通常會另開正確的）；modified＝醫師直接修改（舊的停止、新的接手） */
+  resolution?: 'confirmed' | 'stopped' | 'modified'
 }
 
 /** 給藥紀錄（MAR） */

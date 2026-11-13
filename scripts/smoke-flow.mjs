@@ -2992,6 +2992,68 @@ try {
     ok(/passwordAgeOf\(u!\)\?\.expired\) fail\('密碼已過期/.test(httpSrc), '過期檢查在服務層 requireUser（直接呼叫 API 也擋），不是只有畫面')
   }
 
+  // 醫囑疑問直接修改：畫面一步，資料上停止舊的＋開新的；檢查與開立共用；從下一劑開始（不多給一劑）
+  console.log('\n[修改住院醫囑]')
+  {
+    const { addMinutes } = await load('/src/utils/date.ts')
+    const I = api.ipdApi
+    const db = () => dbm.db
+    const nowS = nowStr()
+    // 找一筆長期給藥（非 PRN），今天稍後還有待給的劑量
+    const old = db().ipdOrders.find((o) => o.status === 'active' && o.category === 'medication' && o.type === 'long' && o.freq !== 'PRN' && !o.queries?.some((q) => !q.replyAt) &&
+      db().admissions.find((a) => a.id === o.admissionId)?.status === 'admitted' &&
+      db().mar.some((m) => m.orderId === o.id && m.status === 'pending' && m.scheduledAt.startsWith(T) && m.scheduledAt > nowS))
+    ok(!!old, '有一筆今天稍後還有待給劑量的長期給藥醫囑')
+    const drug = db().drugs.find((d) => d.id === old.drugId)
+    await as('nurse01')
+    await api.nursingApi.queryOrder(old.id, '劑量好像偏低')
+    await expectError(() => I.reviseOrder(old.id, { dose: old.dose * 2, freq: old.freq, route: old.route, reason: '依體重' }), '護理師修改醫囑')
+    await as('dr02')
+    try {
+      await I.reviseOrder(old.id, { dose: old.dose, freq: old.freq, route: old.route, reason: ' ' })
+      ok(false, '沒寫原因應被擋下')
+    } catch (e) {
+      ok(e.field === 'reason', '修改要寫原因')
+    }
+    await expectError(() => I.reviseOrder(old.id, { dose: old.dose, freq: old.freq, route: old.route, ...(old.timingSet ? { timing: old.timing } : {}), reason: '沒改' }), '沒有任何變更')
+    await expectError(() => I.reviseOrder(old.id, { dose: old.dose * 100, freq: old.freq, route: old.route, reason: '打錯' }), '劑量不合理（開立的檢查同一份）')
+    try {
+      await I.reviseOrder(old.id, { dose: old.dose * 4, freq: old.freq, route: old.route, reason: '加量' })
+      ok(false, '劑量偏高應先確認')
+    } catch (e) {
+      ok(e.code === 'CONFLICT' && e.message.startsWith('劑量偏高'), `劑量偏高沒確認 → 「${e.message}」`)
+    }
+    ok(db().ipdOrders.find((o) => o.id === old.id).status === 'active', '被擋下時舊醫囑不動（同一筆交易）')
+    const nonMed = db().ipdOrders.find((o) => o.status === 'active' && o.category !== 'medication')
+    if (nonMed) await expectError(() => I.reviseOrder(nonMed.id, { dose: 1, freq: 'QD', route: 'PO', reason: 'x' }), '修改護理／飲食醫囑（停止後另開）')
+    const stat = db().ipdOrders.find((o) => o.status === 'active' && o.type === 'stat')
+    if (stat) await expectError(() => I.reviseOrder(stat.id, { dose: 1, freq: 'STAT', route: 'PO', reason: 'x' }), '修改臨時醫囑')
+
+    // 下一劑已經提早給了：新醫囑不能在同一時間再排一劑
+    const next = db().mar.filter((m) => m.orderId === old.id && m.status === 'pending' && m.scheduledAt > nowS).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0]
+    next.status = 'given'
+    next.executedAt = nowS
+    next.nurseId = 'U201'
+    const nv = await I.reviseOrder(old.id, { dose: old.dose * 2, freq: old.freq, route: old.route, reason: '依腎功能調整' })
+    const o1 = db().ipdOrders.find((o) => o.id === old.id)
+    const o2 = db().ipdOrders.find((o) => o.id === nv.id)
+    ok(o1.status === 'stopped' && o1.replacedBy === o2.id && o2.replaces === o1.id && o2.drugId === o1.drugId && o2.dose === old.dose * 2 && o2.reviseReason === '依腎功能調整',
+      '資料上是兩筆：舊的停止、新的接手，互相標記（以前的給藥紀錄仍掛在舊醫囑上）')
+    ok(o2.startAt === addMinutes(next.scheduledAt, 1) && !db().mar.some((m) => m.orderId === o2.id && m.scheduledAt === next.scheduledAt) && db().mar.some((m) => m.orderId === o2.id && m.scheduledAt > next.scheduledAt),
+      `從下一劑開始：${next.scheduledAt.slice(11)} 那劑已提早給，新醫囑從 ${o2.startAt.slice(11)} 起算，不會再排一劑`)
+    const q = o1.queries.at(-1)
+    ok(q.resolution === 'modified' && q.reply.includes('→') && q.reply.includes('依腎功能調整') && !o2.ackAt && db().auditLogs[0].action === '修改住院醫囑',
+      `疑問記為「已修改」並寫出改了什麼（「${q.reply}」）；新醫囑要護理師核對；寫稽核`)
+    ok(nv.replacesText?.startsWith(`每次 ${old.dose} `) && (await I.listOrders(old.admissionId)).find((o) => o.id === old.id).replacedByText?.startsWith(`每次 ${old.dose * 2} `), '醫囑清單：新的標「修改自」、舊的標「已修改為」')
+    await expectError(() => I.reviseOrder(old.id, { dose: old.dose, freq: old.freq, route: old.route, reason: '再改' }), '修改已停止的醫囑')
+    await as('nurse01')
+    const ng = (await api.nursingApi.listNursingOrders(old.admissionId)).flatMap((g) => g.orders)
+    ok(ng.find((o) => o.id === o2.id)?.needsAck && ng.find((o) => o.id === o1.id)?.lastReply?.resolution === 'modified', '護理站：新醫囑待核對、舊醫囑看得到醫師的修改回覆')
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/services/ipd.ts', 'utf8')
+    ok((src.match(/doseLevel\(/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 2, '開立與修改共用 createOrder：劑量、重複、服用時機的檢查只有一份')
+  }
+
   // 藥品中文名與搜尋：中文名、別名、作用都搜得到；開藥選單與藥品庫存同一個規則
   console.log('\n[藥品中文名]')
   {

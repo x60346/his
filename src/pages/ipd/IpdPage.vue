@@ -4,11 +4,12 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { ArrowRightLeft, LogOut, Plus, Square } from 'lucide-vue-next'
+import { ArrowRightLeft, LogOut, Plus, Square, Pencil } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
+import ReviseOrderDialog from './components/ReviseOrderDialog.vue'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
@@ -76,11 +77,15 @@ async function onStop(o: OrderView) {
   // 同一種藥可能有兩筆醫囑：帶上劑量、頻率、途徑與開立時間，才分得出要停的是哪一筆
   const detail = o.category === 'medication' ? `\n每次 ${o.dose} ${o.unit}・${o.freq}・${o.route}` : ''
   const message = `確定停止「${o.content}」？${detail}\n（${o.startAt.slice(5)} 開立，${o.doctorName}）${extra}`
-  const q = o.pendingQuery ? `\n\n護理師的疑問「${o.pendingQuery.reason}」會一併結案（記為「已停止此醫囑」）；要改的話請另開正確的一筆。` : ''
+  const q = o.pendingQuery ? `\n\n護理師的疑問「${o.pendingQuery.reason}」會一併結案（記為「已停止此醫囑」）；只改劑量、頻率的話請用「修改」。` : ''
   if (await ui.confirm({ title: '停止醫囑', message: message + q, okText: '停止', danger: true })) stop.run(o.id)
 }
 
-// ---------- 回覆護理師疑問：確認原醫囑無誤（寫說明）；要改就「停止」再另開 ----------
+// ---------- 修改（長期給藥）：服務層停止舊的、開新的，從下一劑開始 ----------
+const revising = ref<OrderView | null>(null)
+const canRevise = (o: OrderView) => o.status === 'active' && o.category === 'medication' && o.type === 'long'
+
+// ---------- 回覆護理師疑問：確認原醫囑無誤（寫說明）、或直接修改；要換藥就「停止」再另開 ----------
 const replying = ref<OrderView | null>(null)
 const replyOpen = computed({ get: () => !!replying.value, set: (v) => !v && (replying.value = null) })
 const reply = useAction(ipdApi.replyOrderQuery, { success: (o) => `已回覆：${o.content}（護理師核對後恢復執行）` })
@@ -245,18 +250,22 @@ async function submitNote() {
                       <UBadge v-if="o.highAlert && o.status === 'active'" tone="purple" class="ml-1">高警訊</UBadge>
                     </div>
                     <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template><span v-if="o.timingSet" class="ml-1 rounded bg-sky-100 px-1 text-sky-800">醫師指定</span></div>
+                    <div v-if="o.replacesText" class="text-xs text-sky-700" :title="o.reviseReason">修改自：{{ o.replacesText }}（{{ o.reviseReason }}）</div>
+                    <div v-if="o.replacedByText" class="text-xs no-underline">已修改為：{{ o.replacedByText }}</div>
                   </div>
                   <div class="tabular text-right text-xs">
                     <div>{{ o.startAt.slice(5) }} 開立</div>
                     <div v-if="o.stopAt">{{ o.stopAt.slice(5) }} 停止</div>
                   </div>
                   <span class="w-12 text-xs">{{ statusLabel[o.status] }}</span>
+                  <UButton v-if="canRevise(o)" size="sm" variant="ghost" :icon="Pencil" @click="revising = o">修改</UButton>
                   <UButton v-if="o.status === 'active'" size="sm" variant="ghost" :icon="Square" @click="onStop(o)">停止</UButton>
                   <span v-else class="w-[4.25rem]" />
                   <!-- 護理師的疑問：回覆前這筆暫停執行。確認無誤就回覆；要改就停止再另開 -->
                   <div v-if="o.pendingQuery" class="flex w-full items-center gap-2 text-xs text-amber-900">
                     <span class="min-w-0 flex-1">護理師疑問（{{ o.pendingQuery.byName }} {{ o.pendingQuery.at.slice(5) }}）：{{ o.pendingQuery.reason }}・回覆前暫停執行</span>
                     <UButton size="sm" @click="replying = o">回覆：確認無誤</UButton>
+                    <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改醫囑</UButton>
                   </div>
                 </li>
               </ul>
@@ -330,6 +339,7 @@ async function submitNote() {
       @confirm="confirmReply"
     />
     <OrderDialog v-model="orderOpen" :admission="adm" />
+    <ReviseOrderDialog :order="revising" @close="revising = null" />
     <RequestTransferDialog v-model="requestOpen" :admission="adm" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">

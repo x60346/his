@@ -2,7 +2,7 @@
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
 import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
-import { addDays, now } from '@/utils/date'
+import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { doseLevel, doseNote } from './dose-rules'
 import { doseUnitOf } from './billing'
@@ -46,6 +46,9 @@ export interface OrderView extends IpdOrder {
   timingShort: string
   /** 劑量單位：醫囑上的劑量必須帶單位，「1」不知道是 1 瓶還是 1 克 */
   unit: string
+  /** 修改前／修改後那一筆的摘要（「每次 1 TAB BID PO」） */
+  replacesText?: string
+  replacedByText?: string
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -59,7 +62,15 @@ export const orderView = (o: IpdOrder): OrderView => {
     freqLabel: o.freq ? find.freq(o.freq)?.label ?? o.freq : '',
     timingShort: o.category === 'medication' && o.type === 'long' ? timingText(o.timing, o.freq ?? '', o.route ?? '', true) : '',
     unit: drug ? doseUnitOf(drug) : '',
+    ...(o.replaces ? { replacesText: summaryOf(o.replaces) } : {}),
+    ...(o.replacedBy ? { replacedByText: summaryOf(o.replacedBy) } : {}),
   }
+}
+
+function summaryOf(orderId: string): string {
+  const x = db.ipdOrders.find((o) => o.id === orderId)
+  const d = x?.drugId ? find.drug(x.drugId) : undefined
+  return x ? orderSummary(x, d ? doseUnitOf(d) : '') : ''
 }
 
 export function listOrders(admissionId: string): Promise<OrderView[]> {
@@ -90,11 +101,11 @@ export function listActiveSameDrug(admissionId: string, drugId: string): Promise
   return query(() => activeSameDrug(admissionId, drugId).map(orderView))
 }
 
-export function addOrder(input: OrderInput): Promise<OrderView> {
-  return mutate(() => {
-    const user = requireUser('doctor')
-    const a = activeAdmission(input.admissionId)
-    const t = now()
+/**
+ * 建立一筆醫囑（服務層內部：開立與修改共用）——劑量合理性、重複用藥、服用時機的檢查只有這一份。
+ * extra 可帶 startAt（修改時從下一劑開始）、replaces、reviseReason
+ */
+function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof activeAdmission>, input: OrderInput, t: string, extra: Partial<IpdOrder> = {}): IpdOrder {
     let content = input.content.trim()
     let timing: Pick<IpdOrder, 'timing' | 'timingSet'> = {}
 
@@ -132,6 +143,7 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
       content,
       id: newId('IO'),
       startAt: t,
+      ...extra,
       status: 'active',
       doctorId: user.doctorId ?? a.doctorId,
       createdAt: t,
@@ -154,7 +166,67 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
         db.mar.push({ id: newId('MAR'), orderId: o.id, admissionId: a.id, scheduledAt: t, status: 'pending' })
       }
     }
-    audit('開立住院醫囑', `${a.admitNo} ${content}`)
+    return o
+}
+
+export function addOrder(input: OrderInput): Promise<OrderView> {
+  return mutate(() => {
+    const user = requireUser('doctor')
+    const a = activeAdmission(input.admissionId)
+    const o = createOrder(user, a, input, now())
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}`)
+    return orderView(o)
+  })
+}
+
+export interface ReviseInput {
+  dose: number
+  freq: string
+  route: string
+  /** 空＝照主檔 */
+  timing?: DrugTiming
+  reason: string
+  /** 劑量偏高時醫師確認（這次送出的確認，不存） */
+  confirmHighDose?: boolean
+}
+
+const orderSummary = (o: Pick<IpdOrder, 'dose' | 'freq' | 'route' | 'timing' | 'timingSet'>, unit: string) =>
+  `每次 ${o.dose} ${unit} ${o.freq} ${o.route}${o.timingSet && o.timing ? ` ${timingText(o.timing, o.freq ?? '', o.route ?? '', true)}` : ''}`
+
+/**
+ * 修改長期給藥醫囑（劑量、頻率、途徑、服用時機；藥不能換——換藥請停止後另開，要重新看過敏）。
+ * 畫面上一步完成，資料上仍是「停止舊的＋開新的」兩筆、互相標記；檢查與開新醫囑同一份（createOrder），護理師要重新核對。
+ * 有護理師疑問的，疑問記為「已修改」並自動寫出改了什麼。
+ * **從下一劑開始**：新醫囑的起始時間取「現在」與「舊醫囑最後一劑已處理（給、暫停、拒絕）的時間」較晚者——
+ * 12:00 那劑 11:40 提早給了、11:55 改劑量，新醫囑不會在 12:00 再排一劑
+ */
+export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderView> {
+  return mutate(() => {
+    const user = requireUser('doctor')
+    const old = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
+    if (old.status !== 'active') fail('此醫囑已停止或完成', 'CONFLICT')
+    if (old.category !== 'medication' || old.type !== 'long') fail('只有長期給藥醫囑（含需要時）可以修改；其他請停止後另開')
+    const a = activeAdmission(old.admissionId)
+    const reason = input.reason?.trim()
+    if (!reason) failField('reason', '請寫修改原因（例：依腎功能調整劑量）')
+    const timingNow = old.timingSet ? old.timing : undefined
+    if (input.dose === old.dose && input.freq === old.freq && input.route === old.route && (input.timing || undefined) === timingNow) fail('沒有任何變更')
+    const t = now()
+    const q = openQuery(old)
+    const handled = db.mar.filter((m) => m.orderId === old.id && m.status !== 'pending').map((m) => m.scheduledAt).sort().at(-1)
+    const startAt = handled && addMinutes(handled, 1) > t ? addMinutes(handled, 1) : t
+    const unit = doseUnitOf(must(find.drug(old.drugId!), '藥品'))
+    stopOrderRecord(old, user.id, t)
+    // 原本就有的同藥醫囑醫師開立時已確認過，修改不再問一次
+    const o = createOrder(user, a, {
+      admissionId: a.id, type: 'long', category: 'medication', drugId: old.drugId, content: '',
+      dose: input.dose, freq: input.freq, route: input.route, ...(input.timing ? { timing: input.timing } : {}),
+      allowDuplicate: true, ...(input.confirmHighDose ? { confirmHighDose: true } : {}),
+    }, t, { startAt, replaces: old.id, reviseReason: reason })
+    old.replacedBy = o.id
+    const change = `${orderSummary(old, unit)} → ${orderSummary(o, unit)}`
+    if (q) Object.assign(q, { reply: `已修改：${change}（${reason}）`, resolution: 'modified' })
+    audit('修改住院醫囑', `${a.admitNo} ${old.content}：${change}（${reason}）${q ? `；回覆護理師疑問：${q.reason}` : ''}`)
     return orderView(o)
   })
 }

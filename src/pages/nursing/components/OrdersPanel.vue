@@ -75,6 +75,8 @@ const md = (s?: string) => (s ? `${s.slice(5, 10).replace('-', '/')} ${s.slice(1
                 {{ o.type === 'stat' ? '臨時' : '長期' }}・{{ md(o.startAt) }} {{ o.doctorName }} 開立
                 <template v-if="o.stopAt">・{{ md(o.stopAt) }} {{ o.status === 'done' ? '完成' : '停止' }}</template>
               </div>
+              <div v-if="o.replacesText" class="text-xs text-sky-700">醫師修改：原 {{ o.replacesText }}（{{ o.reviseReason }}）・從 {{ md(o.startAt) }} 起</div>
+              <div v-if="o.replacedByText" class="text-xs text-slate-500">已修改為：{{ o.replacedByText }}</div>
               <div v-if="o.pendingQuery" class="mt-0.5 text-xs text-amber-800">疑問（{{ o.pendingQuery.byName }} {{ md(o.pendingQuery.at) }}）：{{ o.pendingQuery.reason }}・待醫師回覆，執行暫停</div>
               <div v-else-if="o.lastReply" class="mt-0.5 text-xs text-emerald-800">醫師回覆（{{ o.lastReply.byName }} {{ md(o.lastReply.at) }}）：{{ o.lastReply.reply }}</div>
             </div>
