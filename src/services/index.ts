@@ -86,5 +86,5 @@ export type { WardPatient, MarBoard, PrnView, HandoverView, HandoverGroup, WardT
 export type { RoomRow } from './schedule'
 export type { SessionView, WeeklySlotView, SessionImpact, AffectedVisit, NoticeRow, SlotResult } from './schedule'
 export type { UserRow, UserInput, DepartmentRow, DoctorRow, DoctorImpact, AuditRow, DiscountInput } from './admin'
-export type { InventoryRow, InventorySummary, DrugLedger, StockTxnView, ReceiveInput, ReceiveResult, RestockView, RestockPlan, RestockInput, RestockWaiting } from './inventory'
+export type { InventoryRow, InventorySummary, DrugLedger, StockTxnView, ReceiveInput, ReceiveResult, RestockView, RestockPlan, RestockInput, RestockWaiting, StockLocationView, StockLocationInput } from './inventory'
 export type { PreventProfile, PreventRecordView, PreventStat, WorklistRow } from './prevent'

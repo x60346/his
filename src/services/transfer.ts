@@ -69,7 +69,7 @@ const trOf = (id: string) => must(db.transfers.find((x) => x.id === id), '撥補
 /** 撥補只在有藥庫（大型醫院）時存在 */
 function warehouse() {
   const wh = db.stockLocations.find((l) => l.kind === 'warehouse' && l.active)
-  if (!wh) fail('只有一個藥局的醫院沒有撥補（藥庫就是藥局）', 'CONFLICT')
+  if (!wh) fail('沒有啟用中的藥庫，不能撥補（只有藥局的醫院，採購直接進藥局）', 'CONFLICT')
   return wh!
 }
 /** 這張補貨申請已在哪張進行中的撥補單上 */

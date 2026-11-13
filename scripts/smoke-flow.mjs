@@ -3789,6 +3789,81 @@ try {
       ok(got.status === 'received' && whLot() === before.wh + 2 && dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.lotNo === lot.lotNo).expiry === lot.expiry, '藥庫簽收：入藥庫同一批號、同效期（短少 1 寫原因）')
       ok(ledgerBroken(dbm.db).length === 0, '退回後各地點帳本仍對得起來')
     }
+    // ---- 庫存地點維護（大型）：新增、改名、停用；三項工作改由哪個地點負責 ----
+    {
+      const I2 = api.inventoryApi
+      const all = async () => (await I2.listStockLocations({ includeInactive: true })).locations
+      const loc = async (id) => (await all()).find((l) => l.id === id)
+      const wh0 = await loc('LOC-WH')
+      ok(wh0.roles.join() === 'receiving' && wh0.blockers.some((b) => b.includes('負責採購入庫')) && wh0.blockers.some((b) => b.includes('種藥的庫存')), `藥庫不能停用：${wh0.blockers.join('；')}`)
+      await as('clerk01')
+      await expectError(() => I2.saveStockLocation({ name: '急診藥局', kind: 'pharmacy', active: true }), '櫃台新增庫存地點')
+      await as('ph01')
+      try {
+        await I2.saveStockLocation({ name: ' 藥 庫', kind: 'warehouse', active: true })
+        ok(false, '同名、第二個藥庫應被擋下')
+      } catch (e) {
+        ok(e.fields?.name?.includes('已有「藥庫」') && e.fields?.kind?.includes('同時只能有一個藥庫'), `同名（忽略空白）與第二個藥庫一次標出：${Object.values(e.fields ?? {}).join('／')}`)
+      }
+      try {
+        await I2.saveStockLocation({ name: '一二三四五六七八九十十一二', active: true })
+        ok(false, '名稱過長、沒選類別應被擋下')
+      } catch (e) {
+        ok(e.fields?.name?.includes('最多 12 字') && e.fields?.kind, '名稱最多 12 字、新增要選類別')
+      }
+      const er = await I2.saveStockLocation({ name: '急診藥局', kind: 'pharmacy', active: true })
+      ok(er.kind === 'pharmacy' && !er.roles.length && er.drugCount === 0 && !er.blockers.length && dbm.db.auditLogs[0].action === '新增庫存地點', '新增急診藥局：不負責任何工作、沒有庫存（可以停用）、寫稽核')
+      ok((await I2.listStockLocations()).locations.length === 4, '庫存頁的地點選單多了一個')
+      await expectError(() => I2.saveStockLocation({ id: er.id, name: '急診藥局', kind: 'warehouse', active: true }), '建立後改類別')
+
+      // 門診發藥改由急診藥局：先回 CONFLICT 說明，確認後才改；開藥可用量跟著換地點
+      await expectError(() => I2.setLocationRole({ role: 'opd', locationId: 'LOC-WH', confirm: true }), '藥庫負責門診發藥')
+      try {
+        await I2.setLocationRole({ role: 'opd', locationId: er.id })
+        ok(false, '改負責地點應先確認')
+      } catch (e) {
+        ok(e.code === 'CONFLICT' && e.field === 'confirm' && e.message.includes('改從「急診藥局」扣') && e.message.includes('原本是「門診藥局」'), `改負責地點先說明 → 「${e.message}」`)
+      }
+      ok((await I2.listStockLocations()).opd === 'LOC-OPD', '沒確認就沒改')
+      const mv = await I2.setLocationRole({ role: 'opd', locationId: er.id, confirm: true })
+      const m10 = (await api.masterApi.listDrugs({ includeInactive: true })).find((d) => d.id === 'M010')
+      ok(mv.from === '門診藥局' && (await I2.listStockLocations()).opd === er.id && m10.usable === 0 && dbm.db.auditLogs[0].detail === '門診發藥：門診藥局 → 急診藥局', '確認後門診發藥改從急診藥局扣：醫師開藥看到的可用量跟著變（急診藥局還沒有貨）、寫稽核')
+      ok((await loc('LOC-OPD')).roles.length === 0 && (await loc(er.id)).blockers.some((b) => b.includes('負責門診發藥')), '每項工作同一時間只有一個地點；負責工作的不能停用')
+      await expectError(() => I2.setLocationRole({ role: 'opd', locationId: er.id, confirm: true }), '已經負責的再指定一次')
+      await I2.setLocationRole({ role: 'opd', locationId: 'LOC-OPD', confirm: true })
+
+      // 改名：單據存地點 id，舊單據顯示新名稱
+      const anyTr = dbm.db.transfers.find((x) => x.toLocationId === 'LOC-OPD')
+      await I2.saveStockLocation({ id: 'LOC-OPD', name: '門診調劑台', active: true })
+      ok((await api.transferApi.getTransfer(anyTr.id)).toName === '門診調劑台' && dbm.db.auditLogs[0].detail === '門診調劑台：門診藥局 → 門診調劑台', '改名：舊撥補單顯示新名稱（地點是院內單位，不是外部對象）；稽核記下前後')
+      await I2.saveStockLocation({ id: 'LOC-OPD', name: '門診藥局', active: true })
+
+      // 停用：有工作、有庫存的擋下並一次說明；空的可以停用、再啟用
+      try {
+        await I2.saveStockLocation({ id: 'LOC-IPD', name: '住院藥局', active: false })
+        ok(false, '住院藥局不能停用')
+      } catch (e) {
+        ok(e.fields?.active?.includes('負責住院調劑與病房常備') && e.fields.active.includes('種藥的庫存'), `有工作、有庫存不能停用 → 「${e.fields?.active}」`)
+      }
+      await I2.saveStockLocation({ id: er.id, name: '急診藥局', active: false })
+      ok(!(await I2.listStockLocations()).locations.some((l) => l.id === er.id) && (await loc(er.id)).active === false, '停用後庫存頁選單不再出現，管理清單仍列出')
+      await expectError(() => I2.setLocationRole({ role: 'ipd', locationId: er.id, confirm: true }), '停用的地點負責住院調劑')
+      try {
+        await I2.saveStockLocation({ name: '急診藥局', kind: 'pharmacy', active: true })
+        ok(false, '和停用的同名應擋下')
+      } catch (e) {
+        ok(e.fields?.name?.includes('已停用，請直接啟用它'), '和停用的地點同名：請直接啟用它')
+      }
+      await I2.saveStockLocation({ id: er.id, name: '急診藥局', active: true })
+      // 有進行中的單據：撥補請領中不能停用（列出單號）
+      const trq = await api.transferApi.requestTransfer({ toLocationId: er.id, lines: [{ drugId: 'M001', qty: 1 }] })
+      ok((await loc(er.id)).blockers.some((b) => b === '撥補進行中：' + trq.no), '撥補請領中不能停用（列出單號）')
+      await api.transferApi.cancelTransfer(trq.id, '測試結束')
+      await I2.saveStockLocation({ id: er.id, name: '急診藥局', active: false })
+      const { readFileSync } = await import('node:fs')
+      const panel = readFileSync('src/pages/drugs/components/LocationPanel.vue', 'utf8')
+      ok(panel.includes('l.blockers') && !/db\.|stocktakes|transfers\.filter/.test(panel) && panel.includes("e.field === 'confirm'"), '不能停用的原因由服務層列出（locationBlockers），頁面只顯示；改負責地點走 CONFLICT 確認')
+    }
     const dashL = await api.dashboardApi.getDashboard()
     ok(dashL.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested').length && dashL.transferIssued === 0, '首頁待辦（大型）：撥補待撥發、待簽收')
     ok(!Object.values(api).some((m) => m && typeof m === 'object' && ('inTransit' in m || 'inTransitTo' in m)), '內部查詢（運送中數量）不經 Api 對外')
@@ -3798,6 +3873,14 @@ try {
     await expectError(() => api.transferApi.requestTransfer({ toLocationId: 'LOC-PH', lines: [{ drugId: 'M001', qty: 1 }] }), '小型醫院（只有一個藥局）請領')
     await expectError(() => api.transferApi.returnCandidates('LOC-PH'), '小型醫院（只有一個藥局）退回藥庫')
     ok((await api.dashboardApi.getDashboard()).transferRequested === undefined, '小型醫院首頁沒有撥補待辦')
+    // 小型醫院也能加藥庫：加了之後就能撥補（藥庫負責採購入庫、撥給藥局）
+    {
+      const wh = await api.inventoryApi.saveStockLocation({ name: '藥庫', kind: 'warehouse', active: true })
+      ok(Array.isArray(await api.transferApi.transferCandidates('LOC-PH')) && (await api.inventoryApi.listStockLocations()).locations.length === 2, '小型醫院新增藥庫後可以請領（不再說只有一個藥局）')
+      await expectError(() => api.inventoryApi.setLocationRole({ role: 'ipd', locationId: wh.id, confirm: true }), '藥庫負責住院調劑')
+      await api.inventoryApi.saveStockLocation({ id: wh.id, name: '藥庫', active: false })
+      await expectError(() => api.transferApi.transferCandidates('LOC-PH'), '藥庫停用後請領')
+    }
     await as('clerk01')
   }
 } catch (e) {

@@ -35,7 +35,7 @@ async function doExport() {
   const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
   const a = document.createElement('a')
   a.href = url
-  a.download = `his-demo-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}.json`
+  a.download = `his-demo-${new Date().toISOString().slice(0, 16).replace(/\D/g, '')}.json`
   a.click()
   URL.revokeObjectURL(url)
   ui.toast.success(`已匯出（${(json.length / 1024).toFixed(0)} KB）`)

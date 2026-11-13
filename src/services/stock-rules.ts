@@ -109,3 +109,21 @@ export function suggestRestockQty(i: { usable: number; need: number; safetyStock
  * 這些是「確實會發生、但不經採購」的情況；異動帳上會標「無單進貨：原因」，月底對帳查得到。
  */
 export const NO_PO_REASONS = ['緊急調貨（向鄰近藥局借調）', '廠商贈品／樣品', '病人退藥回收', '其他'] as const
+
+// ---------- 庫存地點 ----------
+/** 地點負責的工作：每項同一時間只由一個啟用中的地點負責 */
+export type LocationRole = 'opd' | 'ipd' | 'receiving'
+export const LOCATION_ROLES: { key: LocationRole; flag: 'dispensesOpd' | 'dispensesIpd' | 'receivesPurchase'; label: string; verb: string; pharmacyOnly: boolean }[] = [
+  { key: 'opd', flag: 'dispensesOpd', label: '門診發藥', verb: '扣', pharmacyOnly: true },
+  { key: 'ipd', flag: 'dispensesIpd', label: '住院調劑與病房常備', verb: '扣', pharmacyOnly: true },
+  { key: 'receiving', flag: 'receivesPurchase', label: '採購入庫', verb: '入', pharmacyOnly: false },
+]
+export const LOCATION_NAME_MAX = 12
+export const normalizeLocationName = (s: string) => (s ?? '').trim().replace(/\s+/g, '').toLowerCase()
+/** 地點名稱：必填、最多 12 字 */
+export function locationNameProblem(name: string): string | null {
+  const n = (name ?? '').trim()
+  if (!n) return '請輸入地點名稱'
+  if (n.length > LOCATION_NAME_MAX) return `地點名稱最多 ${LOCATION_NAME_MAX} 字`
+  return null
+}

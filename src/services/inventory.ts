@@ -8,7 +8,9 @@
 import type { Dispense, Drug, DrugLot, HospitalScale, RestockRequest, RestockStatus, StockLocation, StockTxn } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
-import { audit, fail, failField, must, mutate, query, requireUser } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser } from './http'
+import { LOCATION_ROLES, locationNameProblem, normalizeLocationName, type LocationRole } from './stock-rules'
+import { pendingReturn } from './ud-work'
 import { daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus, NO_PO_REASONS } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
@@ -417,18 +419,128 @@ export function listRestockRequests(q: { status?: RestockStatus } = {}): Promise
 export interface StockLocationView extends StockLocation {
   /** 有幾種藥在這裡有庫存 */
   drugCount: number
+  /** 負責的工作（門診發藥、住院調劑、採購入庫） */
+  roles: LocationRole[]
+  /** 不能停用的原因（管理清單才給；空陣列＝可以停用） */
+  blockers?: string[]
 }
 
-/** 庫存地點與醫院規模：庫存頁的地點選單用（小型只有一個，頁面就不顯示選單） */
-export function listStockLocations(): Promise<{ scale: HospitalScale; locations: StockLocationView[]; opd: string; receiving: string }> {
+const drugCountAt = (locId: string) => new Set(db.drugLots.filter((x) => x.locationId === locId && x.qty > 0).map((x) => x.drugId)).size
+const rolesOf = (l: StockLocation): LocationRole[] => LOCATION_ROLES.filter((r) => l[r.flag]).map((r) => r.key)
+
+/**
+ * 這個地點為什麼不能停用：還負責某項工作、還有庫存、還有進行中的單據（盤點、撥補、已訂購待到貨的採購單、
+ * 待核對的住院調劑、病房還沒送回或已送回待點收的退藥——這些都會回到這個地點）。停用前、管理清單共用同一份
+ */
+function locationBlockers(l: StockLocation): string[] {
+  const out: string[] = []
+  const roles = LOCATION_ROLES.filter((r) => l[r.flag])
+  if (roles.length) out.push(`負責${roles.map((r) => r.label).join('、')}，請先改由其他地點負責`)
+  const n = drugCountAt(l.id)
+  if (n) out.push(`還有 ${n} 種藥的庫存（請先撥出、退回藥庫或報廢）`)
+  const st = db.stocktakes.filter((s) => s.locationId === l.id && (s.status === 'counting' || s.status === 'submitted')).map((s) => s.no)
+  if (st.length) out.push(`盤點中：${st.join('、')}`)
+  const tr = db.transfers.filter((t) => (t.status === 'requested' || t.status === 'issued') && (t.fromLocationId === l.id || t.toLocationId === l.id)).map((t) => t.no)
+  if (tr.length) out.push(`撥補進行中：${tr.join('、')}`)
+  const po = db.purchaseOrders.filter((p) => p.status === 'ordered' && p.locationId === l.id).map((p) => p.no)
+  if (po.length) out.push(`採購待到貨：${po.join('、')}`)
+  const ud = db.udDispenses.filter((d) => d.locationId === l.id && d.boxes.some((b) => b.status === 'prepared')).map((d) => d.no)
+  if (ud.length) out.push(`住院調劑待核對：${ud.join('、')}`)
+  const ret = db.udDispenses
+    .filter((d) => d.locationId === l.id && d.lines.some((x) => { const p = pendingReturn(x); return p.sent.marIds.length + p.waiting.marIds.length > 0 }))
+    .map((d) => d.no)
+  if (ret.length) out.push(`住院退藥還沒點收：${ret.join('、')}`)
+  return out
+}
+
+/**
+ * 庫存地點與醫院規模：庫存頁的地點選單只用啟用中的（只有一個時頁面不顯示選單）；
+ * 管理畫面帶 includeInactive，連同停用的、與不能停用的原因
+ */
+export function listStockLocations(q: { includeInactive?: boolean } = {}): Promise<{ scale: HospitalScale; locations: StockLocationView[]; opd: string; receiving: string }> {
   return query(() => ({
     scale: db.hospitalScale,
     locations: db.stockLocations
-      .filter((l) => l.active)
-      .map((l) => ({ ...l, drugCount: new Set(db.drugLots.filter((x) => x.locationId === l.id && x.qty > 0).map((x) => x.drugId)).size })),
+      .filter((l) => q.includeInactive || l.active)
+      .map((l) => ({ ...l, drugCount: drugCountAt(l.id), roles: rolesOf(l), ...(q.includeInactive ? { blockers: l.active ? locationBlockers(l) : [] } : {}) })),
     opd: stockLoc.opd(),
     receiving: stockLoc.receiving(),
   }))
+}
+
+export interface StockLocationInput {
+  id?: string
+  name: string
+  /** 只有新增時能選；建立後不能改（藥庫與藥局的單據流程不同） */
+  kind?: StockLocation['kind']
+  active: boolean
+}
+
+/**
+ * 新增、改名、停用（藥師、管理員）。改名只改主檔：單據存的是地點 id，畫面顯示時查目前的名稱
+ * （和供應商不同——那是外部的對象，單據要留當時的名稱；地點是院內自己的單位，改名只是換叫法）。
+ * 藥庫最多一個（撥補、退回藥庫都找「那個藥庫」）；停用前檢查 locationBlockers
+ */
+export function saveStockLocation(input: StockLocationInput): Promise<StockLocationView> {
+  return mutate(() => {
+    requireUser('pharmacist', 'admin')
+    const old = input.id ? must(db.stockLocations.find((l) => l.id === input.id), '庫存地點') : undefined
+    const name = (input.name ?? '').trim()
+    const v = fieldErrors()
+    const np = locationNameProblem(name)
+    if (np) v.add('name', np)
+    else {
+      const dup = db.stockLocations.find((l) => l.id !== old?.id && normalizeLocationName(l.name) === normalizeLocationName(name))
+      if (dup) v.add('name', `已有「${dup.name}」${dup.active ? '' : '（已停用，請直接啟用它）'}`)
+    }
+    const kind = old?.kind ?? input.kind
+    if (!old && kind !== 'warehouse' && kind !== 'pharmacy') v.add('kind', '請選擇藥庫或藥局')
+    if (old && input.kind && input.kind !== old.kind) v.add('kind', '建立後不能改類別（藥庫與藥局的流程不同），請另外新增')
+    const active = input.active !== false
+    if (kind === 'warehouse' && active && (!old || !old.active)) {
+      const wh = db.stockLocations.find((l) => l.id !== old?.id && l.kind === 'warehouse' && l.active)
+      if (wh) v.add(old ? 'active' : 'kind', `已有藥庫「${wh.name}」：撥補、退回藥庫都找那一個，同時只能有一個藥庫`)
+    }
+    if (old?.active && !active) {
+      const b = locationBlockers(old)
+      if (b.length) v.add('active', `不能停用：${b.join('；')}`)
+    }
+    v.done()
+    let l: StockLocation
+    if (old) {
+      const was = { name: old.name, active: old.active }
+      l = Object.assign(old, { name, active })
+      const changes = [was.name !== name && `${was.name} → ${name}`, was.active !== active && (active ? '啟用' : '停用')].filter(Boolean)
+      audit('修改庫存地點', `${name}${changes.length ? '：' + changes.join('、') : ''}`)
+    } else {
+      l = { id: newId('LOC'), name, kind: kind!, receivesPurchase: false, dispensesOpd: false, dispensesIpd: false, active }
+      db.stockLocations.push(l)
+      audit('新增庫存地點', `${name}（${kind === 'warehouse' ? '藥庫' : '藥局'}）`)
+    }
+    return { ...l, drugCount: drugCountAt(l.id), roles: rolesOf(l), blockers: l.active ? locationBlockers(l) : [] }
+  })
+}
+
+/**
+ * 某項工作改由哪個地點負責（每項同一時間只有一個地點）。改了之後新的作業從新地點扣／入；
+ * 已經開出去的單據（已訂購的採購單、已調劑的 UD、撥補單）照原本存的地點處理。
+ * 影響大，先回 CONFLICT 說明「之後從哪裡扣」，頁面確認後帶 confirm 重送
+ */
+export function setLocationRole(input: { role: LocationRole; locationId: string; confirm?: boolean }): Promise<{ from: string; to: string }> {
+  return mutate(() => {
+    requireUser('pharmacist', 'admin')
+    const r = LOCATION_ROLES.find((x) => x.key === input.role)
+    if (!r) fail('不明的工作項目')
+    const loc = stockLoc.usable(input.locationId)
+    if (loc[r!.flag]) fail(`「${loc.name}」已經負責${r!.label}`)
+    if (r!.pharmacyOnly && loc.kind !== 'pharmacy') fail(`藥庫不直接發藥給病人，${r!.label}要由藥局負責`)
+    const from = db.stockLocations.find((l) => l[r!.flag] && l.active)
+    if (!input.confirm) fail(`之後${r!.label}改從「${loc.name}」${r!.verb}${from ? `（原本是「${from.name}」）` : ''}。已經開出的單據照原地點處理。`, 'CONFLICT', 'confirm')
+    for (const l of db.stockLocations) l[r!.flag] = false
+    loc[r!.flag] = true
+    audit('修改庫存地點', `${r!.label}：${from?.name ?? '（無）'} → ${loc.name}`)
+    return { from: from?.name ?? '', to: loc.name }
+  })
 }
 
 /**
