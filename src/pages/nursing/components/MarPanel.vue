@@ -236,11 +236,11 @@ async function complete(o: OrderView) {
             <li
               v-for="m in board.mar"
               :key="m.id"
-              :class="['flex items-center gap-3 px-3 py-2 text-sm', urgencyOf(m) === 'overdue' && 'bg-red-50/60', m.status !== 'pending' && 'text-slate-500']"
+              :class="['flex flex-wrap items-center gap-3 px-3 py-2 text-sm', urgencyOf(m) === 'overdue' && 'bg-red-50/60', m.status !== 'pending' && 'text-slate-500']"
             >
               <span :class="['tabular w-12 text-base font-semibold', urgencyOf(m) === 'overdue' ? 'text-red-700' : 'text-slate-700']">{{ m.scheduledAt.slice(11) }}<span v-if="m.timingShort" class="block text-[11px] font-normal text-amber-700" title="依服用時機對齊病房用餐時間">{{ m.timingShort }}</span></span>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-1.5 font-medium text-slate-800">
+              <div class="min-w-[12rem] flex-1">
+                <div class="flex flex-wrap items-center gap-1.5 break-keep break-words font-medium text-slate-800">
                   {{ m.content }}
                   <UBadge v-if="m.highAlert" tone="purple">高警訊</UBadge>
                   <UBadge v-if="m.orderType === 'stat'" tone="blue">STAT</UBadge>
@@ -281,9 +281,9 @@ async function complete(o: OrderView) {
           <h3 class="mb-2 text-sm font-semibold text-slate-700">需要時給藥（PRN）</h3>
           <p v-if="!board.prn.length" class="text-sm text-slate-400">沒有 PRN 醫囑</p>
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
-            <li v-for="o in board.prn" :key="o.id" class="flex items-center gap-3 px-3 py-2 text-sm">
-              <div class="min-w-0 flex-1">
-                <div class="font-medium text-slate-800">{{ o.content }}<UBadge v-if="o.pendingQuery" tone="yellow" class="ml-1">待醫師回覆</UBadge></div>
+            <li v-for="o in board.prn" :key="o.id" class="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+              <div class="min-w-[12rem] flex-1">
+                <div class="break-keep break-words font-medium text-slate-800">{{ o.content }}<UBadge v-if="o.pendingQuery" tone="yellow" class="ml-1">待醫師回覆</UBadge></div>
                 <div class="tabular text-xs text-slate-500">{{ dose(o) }}・PRN<template v-if="o.residualQty">・管制藥，殘餘 {{ o.residualQty }} {{ o.unit }} 要見證銷毀</template></div>
                 <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}</div>
               </div>
@@ -302,9 +302,9 @@ async function complete(o: OrderView) {
           <h3 class="mb-2 text-sm font-semibold text-slate-700">待執行臨時醫囑</h3>
           <p v-if="!board.stat.length" class="text-sm text-slate-400">沒有待執行的臨時醫囑</p>
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-amber-200 bg-amber-50/40">
-            <li v-for="o in board.stat" :key="o.id" class="flex items-center gap-3 px-3 py-2 text-sm">
-              <div class="min-w-0 flex-1">
-                <div class="font-medium text-slate-800">{{ o.content }}</div>
+            <li v-for="o in board.stat" :key="o.id" class="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+              <div class="min-w-[12rem] flex-1">
+                <div class="break-keep break-words font-medium text-slate-800">{{ o.content }}</div>
                 <div class="tabular text-xs text-slate-500">{{ o.startAt.slice(5) }} 開立・{{ o.doctorName }}</div>
                 <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}（執行暫停）</div>
               </div>

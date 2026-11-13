@@ -24,7 +24,7 @@ import { useWorkLocation } from '@/composables/useWorkLocation'
 const work = useWorkLocation()
 // 庫存／採購單／盤點單（首頁待辦帶 ?tab=purchase、?tab=stocktake 進來直接看）
 const route0 = useRoute()
-const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location', 'quarantine', 'ward'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
+const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location', 'quarantine', 'ward', 'controlled'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
 // 撥補單只有大型醫院（多個地點）才有
 const viewTabs = computed(() => [
   { key: 'stock', label: '庫存' },
@@ -49,11 +49,13 @@ const cardFilters = {
   low: { label: '低於安全庫存', flags: ['low'] },
   expiry: { label: '效期提醒', flags: ['expiring', 'expired'] },
   restock: { label: '補貨待到貨', flags: [] },
+  // 沒有卡片、只從首頁待辦連過來：「缺貨或低於安全庫存」（首頁的數字＝缺貨＋偏低，點進來看到的要是同一批）
+  short: { label: '缺貨或低於安全庫存', flags: ['out', 'low'] },
 } as const satisfies Record<string, { label: string; flags: StockFlag[] }>
 type CardKey = keyof typeof cardFilters
 // 首頁待辦「補貨申請待到貨」帶 ?filter=restock 進來，直接篩好
 const route = useRoute()
-const cardFilter = ref<CardKey | null>(route.query.filter === 'restock' ? 'restock' : null)
+const cardFilter = ref<CardKey | null>(route.query.filter === 'restock' || route.query.filter === 'short' ? route.query.filter : null)
 const toggleCard = (k: CardKey | null) => (cardFilter.value = cardFilter.value === k ? null : k)
 
 const { data: summary } = useQuery(() => inventoryApi.inventorySummary(work.locationId.value || undefined), [work.locationId])

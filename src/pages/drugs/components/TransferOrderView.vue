@@ -227,7 +227,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
                 </td>
                 <td v-if="isOpenReturn" class="px-3 py-1.5">
                   <div v-for="(x, k) in l.lots ?? []" :key="x.lotNo" class="flex flex-wrap items-center gap-2 text-xs">
-                    <span class="w-28 text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
+                    <span class="min-w-[10.5rem] whitespace-nowrap text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
                     <span class="text-slate-500">申請 {{ x.requestedQty ?? x.qty }}</span>
                     <template v-if="tr.status === 'requested' && isWarehouse && approveQty[l.id]">
                       <span class="text-slate-400">→</span>
@@ -248,7 +248,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
                 </td>
                 <td v-else-if="tr.status !== 'requested'" class="px-3 py-1.5">
                   <div v-for="(x, k) in l.lots ?? []" :key="x.lotNo" class="flex items-center gap-2 text-xs">
-                    <span class="w-28 text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
+                    <span class="min-w-[10.5rem] whitespace-nowrap text-slate-700">{{ x.lotNo }}（{{ x.expiry }}）</span>
                     <template v-if="tr.status === 'issued' && isPharmacist && recv[l.id]">
                       <input v-model.number="recv[l.id][k]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 批號 ${x.lotNo} 實收`" />
                       <span class="text-slate-400">/ {{ x.qty }}</span>

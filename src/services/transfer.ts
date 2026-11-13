@@ -355,7 +355,7 @@ export function returnCandidates(fromLocationId: string): Promise<ReturnCandidat
 }
 
 /**
- * 退回藥庫：逐批（lotId）給數量，送出就從藥局扣（transfer-out，指定批號；過期的也能退），單子直接是「運送中」，
+ * 退回藥庫申請：逐批（lotId）給數量，**不扣帳**（之後藥庫審核、藥局送出才扣：見 approveReturn、shipReturn），
  * 藥庫用一般的簽收（receiveTransfer）入帳。同一種藥的幾個批號併成一行
  */
 export function returnToWarehouse(input: { fromLocationId: string; reason: string; lines: { lotId: string; qty: number }[] }): Promise<TransferView> {

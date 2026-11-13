@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 撥補單（大型醫院）：清單（和目前地點有關的：請領方或撥出方）＋從藥局發起請領。
 // 請領中 → 藥庫撥發（運送中）→ 藥局簽收；點一張在右側打開（TransferOrderView）。
-// 反方向「退回藥庫」（ReturnToWarehouse）：藥局逐批選、送出就扣（運送中）→ 藥庫簽收。
+// 反方向「退回藥庫」（ReturnToWarehouse）：藥局逐批申請（不扣帳）→ 藥庫審核 → 藥局送出才扣（運送中）→ 藥庫簽收。
 import { ref } from 'vue'
 import { ArrowLeftRight, Plus, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty } from '@/components/ui'

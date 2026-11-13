@@ -65,7 +65,7 @@ const md = (s?: string) => (s ? `${s.slice(5, 10).replace('-', '/')} ${s.slice(1
             ]"
           >
             <div class="min-w-0 flex-1">
-              <div :class="['font-medium', o.status === 'active' ? 'text-slate-800' : 'line-through']">
+              <div :class="['break-keep break-words font-medium', o.status === 'active' ? 'text-slate-800' : 'line-through']">
                 {{ o.content }}
                 <template v-if="o.dose">・{{ o.dose }} {{ o.unit }}</template>
                 <template v-if="o.freq">・{{ o.freqLabel }}</template><template v-if="o.timingShort">（{{ o.timingShort }}{{ o.timingSet ? '・醫師指定' : '' }}）</template>

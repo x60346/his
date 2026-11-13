@@ -101,7 +101,7 @@ const blankProc = () => ({ code: '', name: '', category: '處置', points: 0, se
 // ---------- 診斷碼 ----------
 const icdColumns: Column<IcdCode>[] = [
   { key: 'code', label: '代碼', width: '7rem' },
-  { key: 'name', label: '中文名稱' },
+  { key: 'name', label: '中文名稱', width: '14rem' },
   { key: 'nameEn', label: '英文名稱' },
 ]
 const icdFields: FieldDef[] = [
@@ -115,7 +115,7 @@ const icdFields: FieldDef[] = [
 const itemColumns: Column<PreventItem>[] = [
   { key: 'code', label: '代碼', width: '6rem' },
   { key: 'name', label: '名稱' },
-  { key: 'intervalYears', label: '間隔', width: '6rem', format: (i) => (i.intervalYears ? `每 ${i.intervalYears} 年` : '終身／依次數') },
+  { key: 'intervalYears', label: '間隔', width: '7.5rem', format: (i) => (i.intervalYears ? `每 ${i.intervalYears} 年` : '終身／依次數') },
   { key: 'fields', label: '登錄欄位', format: (i) => i.fields.join('、') },
 ]
 const itemFields: FieldDef[] = [

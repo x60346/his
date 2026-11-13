@@ -163,7 +163,7 @@ const diffText = (n?: number) => (n === undefined ? '' : n > 0 ? `+${n}` : Strin
 
       <div class="overflow-x-auto rounded-md border border-slate-200">
         <table class="tabular w-full text-sm">
-          <thead class="bg-slate-50 text-xs text-slate-500">
+          <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
             <tr>
               <th class="px-3 py-1.5 text-left font-medium">藥品</th>
               <th class="px-2 text-left font-medium">批號</th>

@@ -23,12 +23,12 @@ const rows = computed(() =>
 const roles = Object.entries(roleLabel).map(([value, label]) => ({ label, value }))
 const columns: Column<UserRow>[] = [
   { key: 'username', label: '帳號', width: '8rem' },
-  { key: 'name', label: '姓名' },
-  { key: 'roles', label: '角色', width: '9rem' },
+  { key: 'name', label: '姓名' }, // 姓名、對應醫師不換行（1024 寬時固定寬的欄位會把它擠成一字一行）
+  { key: 'roles', label: '角色' },
   { key: 'doctorName', label: '對應醫師' },
-  { key: 'lastLoginAt', label: '最近登入', width: '9rem', format: (u) => u.lastLoginAt?.slice(5) ?? '—' },
+  { key: 'lastLoginAt', label: '最近登入' },
   { key: 'active', label: '狀態', width: '5rem' },
-  { key: 'act', label: '', width: '13rem', align: 'right' },
+  { key: 'act', label: '', align: 'right' },
 ]
 
 // ---------- 新增 / 修改 ----------
@@ -99,8 +99,10 @@ async function submitPw() {
         <UBadge v-else-if="row.passwordState?.expired" tone="red" class="ml-1" :title="`${row.passwordState.expiresOn} 到期；登入後須先變更`">密碼過期</UBadge>
         <UBadge v-else-if="row.passwordState" tone="yellow" class="ml-1" :title="`${row.passwordState.expiresOn} 到期`">密碼 {{ row.passwordState.daysLeft }} 天後到期</UBadge>
       </template>
-      <template #cell-roles="{ row }">{{ row.roles.map((x) => roleLabel[x]).join('、') }}</template>
-      <template #cell-doctorName="{ row }">{{ row.doctorName || '—' }}</template>
+      <template #cell-roles="{ row }"><template v-for="(x, i) in row.roles" :key="x">{{ i ? '、' : '' }}<span class="whitespace-nowrap">{{ roleLabel[x] }}</span></template></template>
+      <template #cell-name="{ row }"><span class="whitespace-nowrap">{{ row.name }}</span></template>
+      <template #cell-lastLoginAt="{ row }"><span class="whitespace-nowrap">{{ row.lastLoginAt?.slice(5) ?? '—' }}</span></template>
+      <template #cell-doctorName="{ row }"><span class="whitespace-nowrap">{{ row.doctorName || '—' }}</span></template>
       <template #cell-active="{ row }"><UBadge :tone="row.active ? 'green' : 'gray'">{{ row.active ? '啟用' : '停用' }}</UBadge></template>
       <template #cell-act="{ row }">
         <span class="inline-flex whitespace-nowrap">

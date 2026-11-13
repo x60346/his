@@ -113,7 +113,7 @@ async function submitDc() {
       <div class="rounded-md border border-slate-200">
         <div class="border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">藥品部分負擔試算</div>
         <table v-if="valid && settings" class="w-full text-sm">
-          <thead class="text-xs text-slate-500">
+          <thead class="whitespace-nowrap text-xs text-slate-500">
             <tr><th class="px-3 py-1 text-left font-medium">健保藥費</th><th class="px-3 text-right font-medium">目前</th><th class="px-3 text-right font-medium">修改後</th></tr>
           </thead>
           <tbody class="divide-y divide-slate-100">

@@ -171,7 +171,7 @@ function onScrapApproved(token: string) {
         <h3 class="mb-2 text-sm font-semibold text-slate-700">異動紀錄（最近 {{ ledger.txns.length }} 筆）</h3>
         <div class="max-h-80 overflow-y-auto rounded-md border border-slate-200">
           <table class="w-full text-sm">
-            <thead class="sticky top-0 bg-slate-50 text-xs text-slate-500">
+            <thead class="sticky top-0 whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr><th class="px-3 py-1.5 text-left font-medium">時間</th><th class="px-2 text-left font-medium">類別</th><th class="px-2 text-left font-medium">說明</th><th class="px-2 text-right font-medium">增減</th><th class="px-3 text-right font-medium">結存</th></tr>
             </thead>
             <tbody class="divide-y divide-slate-100">

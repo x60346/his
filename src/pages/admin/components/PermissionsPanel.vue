@@ -88,7 +88,7 @@ const groups = computed(() => [...new Set((rows.value ?? []).map((r) => r.group)
       <UQueryState :loading="loading && !rows" :ready="!!rows">
         <div class="overflow-x-auto rounded-md border border-slate-200">
           <table class="w-full text-sm">
-            <thead class="bg-slate-50 text-xs text-slate-500">
+            <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr>
                 <th class="px-3 py-2 text-left font-medium">操作</th>
                 <th v-for="r in roles" :key="r" class="whitespace-nowrap px-2 py-2 text-center font-medium">{{ roleLabel[r] }}</th>
@@ -135,7 +135,7 @@ const groups = computed(() => [...new Set((rows.value ?? []).map((r) => r.group)
       <p class="mb-2 text-xs text-slate-500">由路由設定自動產生（固定）。看得到頁面不代表能做每個操作，操作看上表。</p>
       <div class="overflow-x-auto rounded-md border border-slate-200">
         <table class="w-full text-sm">
-          <thead class="bg-slate-50 text-xs text-slate-500">
+          <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
             <tr>
               <th class="px-3 py-2 text-left font-medium">分組</th>
               <th class="px-3 py-2 text-left font-medium">頁面</th>

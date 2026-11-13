@@ -75,7 +75,7 @@ async function remove() {
     <UQueryState :loading="loading && !slots" :ready="!!slots">
     <div class="overflow-x-auto rounded-md border border-slate-200">
       <table class="w-full min-w-[56rem] table-fixed text-sm">
-        <thead class="bg-slate-50 text-xs text-slate-500">
+        <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
           <tr>
             <th class="w-16 px-2 py-2 text-left font-medium">時段</th>
             <th v-for="wd in weekdays" :key="wd" class="px-2 py-2 text-left font-medium">{{ wdLabel(wd) }}</th>

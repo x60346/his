@@ -9,6 +9,8 @@ export interface Column<R> {
   label: string
   align?: 'left' | 'center' | 'right'
   width?: string
+  /** 不換行：姓名、身分、診別這類短字。表格自動排版時中文可以在任一字之間斷，空間不夠會被擠成一字一行 */
+  nowrap?: boolean
   /** 沒有提供 slot 時，用來把值轉成文字 */
   format?: (row: R) => string | number
 }
@@ -63,7 +65,8 @@ function cellText(row: T, col: Column<T>) {
           ]"
           @click="$emit('row-click', row)"
         >
-          <td v-for="c in columns" :key="c.key" :class="[dense ? 'px-3 py-1.5' : 'px-3 py-2.5', alignCls[c.align ?? 'left'], 'tabular']">
+          <!-- 靠右、純文字的欄（數量、金額）不換行：「3200 TAB」被擠成兩行很難讀；按鈕欄（有 slot）照常可換行，不然會把別欄擠成一字一行 -->
+          <td v-for="c in columns" :key="c.key" :class="[dense ? 'px-3 py-1.5' : 'px-3 py-2.5', alignCls[c.align ?? 'left'], (c.nowrap || (c.align === 'right' && !$slots[`cell-${c.key}`])) && 'whitespace-nowrap', 'tabular']">
             <slot :name="`cell-${c.key}`" :row="row">{{ cellText(row, c) }}</slot>
           </td>
         </tr>

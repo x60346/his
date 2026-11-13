@@ -263,10 +263,10 @@ const columns: Column<VisitView>[] = [
   { key: 'seqNo', label: '號', align: 'center', width: '50px', format: (v) => (v.refillOf ? '—' : String(v.seqNo)) },
   { key: 'session', label: '診別', format: (v) => (v.refillOf ? `慢箋第 ${v.refillSeq} 次` : `${periodLabel[v.period]} ${v.roomNo}`) },
   { key: 'doctor', label: '科別／醫師', format: (v) => `${v.deptName} ${v.doctorName}` },
-  { key: 'chartNo', label: '病歷號' },
-  { key: 'patientName', label: '姓名' },
+  // 病歷號放在姓名下面（少一欄：1024 寬時十欄會把姓名、身分擠成一字一行）
+  { key: 'patientName', label: '姓名', nowrap: true },
   { key: 'identityName', label: '身分' },
-  { key: 'cardSeq', label: '就醫序號', format: (v) => (v.refillOf ? '—' : v.cardSeq) },
+  { key: 'cardSeq', label: '就醫序號', nowrap: true, format: (v) => (v.refillOf ? '—' : v.cardSeq) },
   { key: 'status', label: '狀態' },
   // 前幾天預約的要帶日期：只寫時間的話，「15:32」看起來像今天下午才掛（還沒到的時間）
   { key: 'createdAt', label: '掛號時間', format: (v) => (v.createdAt.startsWith(v.date) ? v.createdAt.slice(11) : `${v.createdAt.slice(5, 10).replace('-', '/')} 預約`) },
@@ -512,6 +512,21 @@ function openIdentity(v: VisitView) {
       </template>
       <div class="px-4"><UTabs v-model="statusTab" :tabs="tabs" /></div>
       <UTable :columns="columns" :rows="filtered" :row-key="(v) => v.id" :loading="visitsLoading" dense empty-text="沒有符合的掛號">
+        <!-- 科別、醫師各一行；身分只在「（」前斷（不然會斷成「健保一／般」） -->
+        <template #cell-doctor="{ row }">
+          <div class="whitespace-nowrap">{{ row.deptName }}</div>
+          <div class="whitespace-nowrap text-xs text-slate-500">{{ row.doctorName }}</div>
+        </template>
+        <template #cell-session="{ row }">
+          <span v-for="(p, i) in String(columns[1].format!(row)).split(/ (?=\d+$)/)" :key="i" class="inline-block whitespace-nowrap pr-1">{{ p }}</span>
+        </template>
+        <template #cell-identityName="{ row }">
+          <span v-for="(p, i) in row.identityName.split(/(?=（)/)" :key="i" class="inline-block whitespace-nowrap">{{ p }}</span>
+        </template>
+        <template #cell-patientName="{ row }">
+          <div>{{ row.patientName }}</div>
+          <div class="tabular text-xs text-slate-500">{{ row.chartNo }}</div>
+        </template>
         <template #cell-status="{ row }">
           <span class="inline-flex items-center gap-1">
             <UStatusBadge :map="visitStatus" :value="row.status" />

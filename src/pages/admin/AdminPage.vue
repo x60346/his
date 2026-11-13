@@ -34,8 +34,8 @@ const go = (key: string) => router.replace({ query: { ...route.query, tab: key }
 </script>
 
 <template>
-  <div class="grid grid-cols-1 gap-4 lg:grid-cols-[11rem_1fr]">
-    <nav class="flex gap-1 overflow-x-auto lg:flex-col" aria-label="系統管理分類">
+  <div class="grid grid-cols-1 gap-4 xl:grid-cols-[11rem_1fr]">
+    <nav class="flex gap-1 overflow-x-auto xl:flex-col" aria-label="系統管理分類">
       <button
         v-for="s in sections"
         :key="s.key"

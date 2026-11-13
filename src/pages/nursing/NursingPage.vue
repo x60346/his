@@ -5,6 +5,7 @@
 //   2. 服務層算好的（病人清單上的逾時數）：資料是查詢當下算的，所以要定時重新查詢
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { AlertTriangle, ListChecks } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
@@ -46,7 +47,8 @@ watch(patients, (list) => {
 
 // 分頁分兩組：沒選病人時是病房層級（本班待辦、交班）；選了病人才有個人的五個分頁。
 // 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
-const tab = ref('tasks')
+// 首頁待辦可以直接帶到某個病房層級的分頁（例：本班未點班 → 常備點班）
+const tab = ref(['stock', 'handover'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
 const tabs = computed(() =>
   !adm.value
     ? [
@@ -132,7 +134,7 @@ const wardTotals = computed(() => ({
                   <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
                   {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
                   <span v-if="p.abnormal.length" class="font-medium text-red-600">（{{ p.abnormal.join('、') }}異常）</span>
-                  <span v-if="!p.measuredThisShift" class="ml-1 rounded bg-amber-50 px-1 font-medium text-amber-700">本班未量</span>
+                  <span v-if="!p.measuredThisShift" class="ml-1 whitespace-nowrap rounded bg-amber-50 px-1 font-medium text-amber-700">本班未量</span>
                 </div>
                 <div v-else class="mt-0.5 text-xs font-medium text-amber-700">尚無生命徵象紀錄</div>
               </button>

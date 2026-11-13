@@ -125,7 +125,7 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
     <UEmpty v-if="!rows.length" title="尚未開立藥品" />
     <div v-else class="overflow-x-auto rounded-md border border-slate-200">
       <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-xs text-slate-500">
+        <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
           <tr>
             <th class="px-2 py-2 text-left">藥品</th>
             <th class="px-2 py-2 text-left">劑量</th>

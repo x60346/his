@@ -11,7 +11,7 @@ const isCopay = (l: ChargeLine) => l.kind === 'copay-basic' || l.kind === 'copay
 
 <template>
   <table :class="['w-full', compact ? 'text-xs' : 'text-sm']">
-    <thead>
+    <thead class="whitespace-nowrap">
       <tr class="border-b border-slate-200 text-xs text-slate-500">
         <th class="py-1.5 text-left font-medium">項目</th>
         <th class="py-1.5 text-right font-medium">數量</th>

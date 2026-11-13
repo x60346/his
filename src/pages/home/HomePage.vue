@@ -62,12 +62,12 @@ const todos = computed<Todo[]>(() => {
     { roles: ['pharmacist'], label: '病房回報不符', count: s.value.udIssues, hint: '藥車點收時發現短少、破損，待藥局處理', route: 'ud', icon: AlertTriangle, urgent: true },
     { roles: ['nurse'], label: '藥車待點收', count: s.value.udToReceive, hint: '藥局已核對送出的藥盒（全院），在護理站本班待辦點收', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '病房常備待補充', count: s.value.wardRefillDue, hint: '各病房低於基準量的品項，在住院藥局補充', route: 'ud', icon: Pill },
-    { roles: ['nurse'], label: '本班未點班', count: s.value.wardCountDue, hint: '病房常備還沒點班的病房（全院），在護理站「常備點班」', route: 'nursing', icon: Pill },
+    { roles: ['nurse'], label: '本班未點班', count: s.value.wardCountDue, hint: '病房常備還沒點班的病房（全院），在護理站「常備點班」', route: 'nursing', query: { tab: 'stock' }, icon: Pill },
     { roles: ['nurse'], label: '待送回藥局', count: s.value.udSendBack, hint: '沒給的 UD 藥（含出院病人），在護理站本班待辦送回', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
-    { roles: ['pharmacist'], label: '低於安全庫存', count: s.value.lowStockDrugs, hint: '需要補貨的藥品', route: 'drugs', icon: Package, urgent: true },
+    { roles: ['pharmacist'], label: '缺貨或低於安全庫存', count: s.value.lowStockDrugs, hint: '門診藥局需要補貨的藥品', route: 'drugs', query: { filter: 'short' }, icon: Package, urgent: true },
     { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
     ...(s.value.transferRequested !== undefined
       ? [
@@ -135,7 +135,7 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
       <UStatCard label="住院中" :value="s.ipd.admitted" :hint="`今日待報到 ${s.ipd.reservedToday} 人`" :icon="BedDouble" />
       <UStatCard label="可用空床" :value="`${s.ipd.emptyBeds} / ${s.ipd.totalBeds}`" hint="不含清潔中、保留床" :icon="ClipboardCheck" tone="emerald" />
       <UStatCard label="逾時未給藥" :value="s.ipd.overdueMar" :hint="s.ipd.overdueMar ? '請護理站儘速處理' : '目前沒有逾時'" :icon="AlertTriangle" :tone="s.ipd.overdueMar ? 'red' : 'slate'" />
-      <UStatCard label="低於安全庫存" :value="s.lowStockDrugs" hint="藥品品項數" :icon="Package" :tone="s.lowStockDrugs ? 'amber' : 'slate'" />
+      <UStatCard label="缺貨或低於安全庫存" :value="s.lowStockDrugs" hint="門診藥局的藥品品項數" :icon="Package" :tone="s.lowStockDrugs ? 'amber' : 'slate'" />
     </section>
 
     <!-- 圖表 -->

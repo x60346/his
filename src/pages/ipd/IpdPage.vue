@@ -308,8 +308,8 @@ async function submitNote() {
               <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
                 <li v-for="o in sec.list" :key="o.id" :class="['flex flex-wrap items-center gap-3 px-3 py-2 text-sm', o.status !== 'active' && 'bg-slate-50 text-slate-400', o.pendingQuery && 'border-l-4 border-l-amber-500 bg-amber-50/50']">
                   <UBadge :tone="o.status === 'active' ? categoryLabel[o.category].tone : 'gray'">{{ categoryLabel[o.category].label }}</UBadge>
-                  <div class="min-w-0 flex-1">
-                    <div :class="['font-medium', o.status === 'active' && 'text-slate-800', o.status === 'stopped' && 'line-through']">
+                  <div class="min-w-[14rem] flex-1">
+                    <div :class="['break-keep break-words font-medium', o.status === 'active' && 'text-slate-800', o.status === 'stopped' && 'line-through']">
                       {{ o.content }}
                       <UBadge v-if="o.highAlert && o.status === 'active'" tone="purple" class="ml-1">高警訊</UBadge>
                       <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>

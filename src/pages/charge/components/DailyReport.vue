@@ -180,7 +180,7 @@ const print = async () => {
       <!-- 區間報表：每天一列（沒收費的日子也列出 0，看得出哪天沒開或漏結）；加總 = 上面的合計 -->
       <UCard v-if="isRange" title="依日期" :padded="false">
         <table class="tabular w-full text-sm">
-          <thead class="bg-slate-50 text-xs text-slate-500">
+          <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
             <tr><th class="px-4 py-2 text-left">日期</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">預收−扣抵</th><th class="px-4 py-2 text-right">退款</th><th class="px-4 py-2 text-right">實收</th></tr>
           </thead>
           <tbody>
@@ -249,7 +249,7 @@ const print = async () => {
         </UCard>
         <UCard title="依科別" :padded="false">
           <table class="tabular w-full text-sm">
-            <thead class="bg-slate-50 text-xs text-slate-500">
+            <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr><th class="px-4 py-2 text-left">科別</th><th class="px-4 py-2 text-right">人次</th><th class="px-4 py-2 text-right">收入</th><th class="px-4 py-2 text-right">點數</th></tr>
             </thead>
             <tbody>

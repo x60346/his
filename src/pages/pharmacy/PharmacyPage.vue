@@ -175,7 +175,7 @@ const print = () => window.print()
           <div class="text-xs text-slate-500">{{ d.deptName }}・{{ d.doctorName }}｜診斷：{{ d.diagnoses.join('、') }}</div>
         </template>
         <table class="tabular w-full text-sm">
-          <thead class="bg-slate-50 text-xs text-slate-500">
+          <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
             <tr>
               <th class="px-4 py-2 text-left">藥品</th>
               <th class="px-3 py-2 text-left">用法</th>

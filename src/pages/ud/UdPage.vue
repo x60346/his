@@ -237,7 +237,7 @@ async function confirmReturn() {
           <template #title><span class="text-sm font-semibold text-slate-800">最近的調劑</span></template>
           <UEmpty v-if="!w.recent.length" title="還沒有調劑紀錄" class="py-6" />
           <table v-else class="tabular w-full text-sm">
-            <thead class="bg-slate-50 text-xs text-slate-500">
+            <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr>
                 <th class="px-4 py-2 text-left">單號</th>
                 <th class="px-3 py-2 text-left">類別</th>
