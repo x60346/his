@@ -4004,9 +4004,84 @@ try {
       const recvd = Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
       recvd[ln.id] = ln.lots.map((x, k) => (x.lotNo === lot.lotNo ? x.qty - 1 : x.qty))
       await expectError(() => TRA.receiveTransfer(rt.id, { received: recvd }), '退回簽收短少沒寫原因')
-      const got = await TRA.receiveTransfer(rt.id, { received: recvd, shortReasons: { [ln.id]: '運送破損 1' } })
+      // 退回藥庫逐批處理：過期的不能入可用庫存（只能待報廢或拒收）
+      const dispAll = Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map(() => 'stock')]))
+      if (expired) {
+        try {
+          await TRA.receiveTransfer(rt.id, { received: recvd, shortReasons: { [ln.id]: '運送破損 1' }, dispositions: dispAll })
+          ok(false, '過期的入可用庫存應被擋下')
+        } catch (e) {
+          ok(Object.keys(e.fields ?? {}).some((k) => k.startsWith('disp-')) && Object.values(e.fields).some((m) => m.includes('不能入可用庫存')), '退回的過期批號不能入可用庫存（只能待報廢或拒收）')
+        }
+      }
+      const dispOk = Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => (x.expiry < T ? 'quarantine' : 'stock'))]))
+      const got = await TRA.receiveTransfer(rt.id, { received: recvd, shortReasons: { [ln.id]: '運送破損 1' }, dispositions: dispOk })
       ok(got.status === 'received' && whLot() === before.wh + 2 && dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.lotNo === lot.lotNo).expiry === lot.expiry, '藥庫簽收：入藥庫同一批號、同效期（短少 1 寫原因）')
       ok(ledgerBroken(dbm.db).length === 0, '退回後各地點帳本仍對得起來')
+      if (expired) {
+        const qr = dbm.db.stockLocations.find((l) => l.kind === 'quarantine')
+        const qLot = dbm.db.drugLots.find((l) => l.locationId === qr?.id && l.lotNo === expired.lotNo && l.qty > 0)
+        ok(qr?.parentId === 'LOC-WH' && qLot?.qty === expired.qty && got.lines.some((l) => l.lots.some((x) => x.disposition === 'quarantine')), `過期批號 ${expired.lotNo} 進「${qr?.name}」（藥庫底下另一區），單上標「待報廢」`)
+      }
+    }
+    // ---- 退回藥庫：拒收、待報廢區（報廢、放回可用） ----
+    {
+      const INV2 = api.inventoryApi
+      const lotQty = (loc, drugId, lotNo) => dbm.db.drugLots.find((l) => l.locationId === loc && l.drugId === drugId && l.lotNo === lotNo)?.qty ?? 0
+      const cands = (await TRA.returnCandidates('LOC-OPD')).filter((c) => c.qty >= 4 && c.flag !== 'expired')
+      const [c1, c2] = [cands[0], cands.find((c) => c.drugId !== cands[0].drugId)]
+      const rt2 = await TRA.returnToWarehouse({ fromLocationId: 'LOC-OPD', reason: '請領過多', lines: [{ lotId: c1.lotId, qty: 2 }, { lotId: c2.lotId, qty: 2 }] })
+      const l1 = rt2.lines.find((l) => l.drugId === c1.drugId)
+      const l2 = rt2.lines.find((l) => l.drugId === c2.drugId)
+      const recv2 = Object.fromEntries(rt2.lines.map((l) => [l.id, l.lots.map((x) => x.qty)]))
+      const opdBefore = lotQty('LOC-OPD', c1.drugId, c1.lotNo)
+      const whBefore = lotQty('LOC-WH', c1.drugId, c1.lotNo)
+      try {
+        await TRA.receiveTransfer(rt2.id, { received: recv2, dispositions: { [l1.id]: ['rejected'], [l2.id]: ['quarantine'] } })
+        ok(false, '拒收沒寫原因應被擋下')
+      } catch (e) {
+        ok(e.fields?.[`reject-${l1.id}`], '拒收要寫原因')
+      }
+      const got2 = await TRA.receiveTransfer(rt2.id, { received: recv2, dispositions: { [l1.id]: ['rejected'], [l2.id]: ['quarantine'] }, rejectReasons: { [l1.id]: '未事先聯絡' } })
+      ok(lotQty('LOC-OPD', c1.drugId, c1.lotNo) === opdBefore + 2 && lotQty('LOC-WH', c1.drugId, c1.lotNo) === whBefore && got2.lines.find((l) => l.id === l1.id).rejectReason === '未事先聯絡' && dbm.db.auditLogs[0].detail.includes('拒收退回 2'),
+        '拒收：退回原藥局的同一個批號（帳回到門診藥局），藥庫不入；稽核寫出拒收')
+      ok(dbm.db.stockTxns.some((x) => x.ref === rt2.no && x.locationId === 'LOC-OPD' && x.qty === 2 && x.reason?.startsWith('藥庫拒收')), '拒收的帳：門診藥局 transfer-in、原因「藥庫拒收」')
+      ok(ledgerBroken(dbm.db).length === 0, '拒收、待報廢後各地點帳本仍對得起來')
+
+      // 待報廢區：不算可用（開藥、撥補、庫存頁選單都看不到）、只能報廢或放回可用
+      const qr = dbm.db.stockLocations.find((l) => l.kind === 'quarantine')
+      ok(!(await INV2.listStockLocations()).locations.some((l) => l.kind === 'quarantine') && (await INV2.listStockLocations({ includeInactive: true })).locations.some((l) => l.id === qr.id), '庫存頁的地點選單沒有待報廢區（管理清單才列）')
+      await expectError(() => INV2.listInventory({ locationId: qr.id }), '把待報廢區當一般地點查庫存')
+      await expectError(() => INV2.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: c2.drugId, locationId: qr.id, qty: 1, lotNo: 'QR-X', expiry: '2030-01-01' }), '進貨進待報廢區')
+      await expectError(() => api.stocktakeApi.createStocktake({ locationId: qr.id, scope: { kind: 'all' } }), '盤點待報廢區')
+      await expectError(() => INV2.setLocationRole({ role: 'receiving', locationId: qr.id, confirm: true }), '待報廢區負責採購入庫')
+      const whUsable = (await INV2.listInventory({ locationId: 'LOC-WH' })).find((r) => r.id === c2.drugId).usable
+      const qrows = await INV2.listQuarantine()
+      const q2 = qrows.find((r) => r.drugId === c2.drugId && r.lotNo === c2.lotNo)
+      ok(q2?.qty === 2 && q2.ref === rt2.no && !q2.expired, `待報廢區清單：${q2?.drugName} 批號 ${q2?.lotNo} 2（來自 ${rt2.no}）`)
+      const totalBefore = dbm.db.drugs.find((d) => d.id === c2.drugId).stock
+      try {
+        await INV2.releaseQuarantine(q2.lotId, '')
+        ok(false, '放回可用沒寫原因應被擋下')
+      } catch (e) {
+        ok(e.field === 'reason', '放回可用要寫原因')
+      }
+      const rel = await INV2.releaseQuarantine(q2.lotId, '確認包裝完好')
+      ok(rel.qty === 2 && (await INV2.listInventory({ locationId: 'LOC-WH' })).find((r) => r.id === c2.drugId).usable === whUsable + 2 && dbm.db.drugs.find((d) => d.id === c2.drugId).stock === totalBefore, '放回可用：移回藥庫（藥庫可用量 +2、全院總量不變）')
+      const exQ = (await INV2.listQuarantine()).find((r) => r.expired)
+      if (exQ) {
+        await expectError(() => INV2.releaseQuarantine(exQ.lotId, '想放回'), '過期的放回可用')
+        const before = dbm.db.drugs.find((d) => d.id === exQ.drugId).stock
+        await expectError(() => INV2.scrapQuarantine(exQ.lotId, ' '), '報廢沒寫原因')
+        await INV2.scrapQuarantine(exQ.lotId, '過期')
+        ok(dbm.db.drugs.find((d) => d.id === exQ.drugId).stock === before - exQ.qty && !(await INV2.listQuarantine()).some((r) => r.lotId === exQ.lotId) && dbm.db.auditLogs[0].action === '待報廢區報廢', `報廢 ${exQ.drugName} ${exQ.qty}：全院總量才扣、寫稽核`)
+        await expectError(() => INV2.scrapQuarantine(exQ.lotId, '再報廢'), '已報廢完的再報廢')
+      }
+      await expectError(() => INV2.scrapQuarantine(dbm.db.drugLots.find((l) => l.locationId === 'LOC-WH' && l.qty > 0).id, 'x'), '用待報廢區的報廢扣藥庫的批號')
+      ok(ledgerBroken(dbm.db).length === 0, '報廢、放回後帳本仍對得起來')
+      // 一般撥補不能選待報廢、拒收
+      const wh0 = (await TRA.listTransfers()).find((x) => x.status === 'issued' && x.kind !== 'return')
+      if (wh0) await expectError(() => TRA.receiveTransfer(wh0.id, { received: Object.fromEntries(wh0.lines.map((l) => [l.id, (l.lots ?? []).map((x) => x.qty)])), dispositions: { [wh0.lines[0].id]: ['quarantine'] } }), '一般撥補簽收選待報廢')
     }
     // ---- 庫存地點維護（大型）：新增、改名、停用；三項工作改由哪個地點負責 ----
     {

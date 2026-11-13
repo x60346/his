@@ -884,7 +884,13 @@ export type HospitalScale = 'small' | 'large'
 export interface StockLocation {
   id: string
   name: string
-  kind: 'warehouse' | 'pharmacy'
+  /**
+   * quarantine＝待報廢區：藥庫底下獨立的一區（退回的過期、破損品）。另開地點是因為同一個批號可能一半可用、一半是退回的破損品——
+   * 在批號上標記會把好的那一半也鎖住。FEFO、開藥可用量、撥補、盤點都不會用到它；只能報廢或放回可用
+   */
+  kind: 'warehouse' | 'pharmacy' | 'quarantine'
+  /** 待報廢區屬於哪個藥庫 */
+  parentId?: string
   /** 採購到貨入庫的地點（大型＝藥庫；小型＝唯一的藥局） */
   receivesPurchase: boolean
   /** 門診發藥從這裡扣（醫師開藥看的「可用量」也是這裡的） */
@@ -1018,11 +1024,18 @@ export interface TransferLine {
   restockId?: string
   /** 實際撥發的數量（藥庫不夠可以少撥；0＝這次沒撥） */
   issuedQty?: number
-  /** 撥發的批號（批號、效期跟著藥走）；簽收時逐批填實收 */
-  lots?: { lotNo: string; expiry: string; qty: number; receivedQty?: number }[]
+  /**
+   * 撥發的批號（批號、效期跟著藥走）；簽收時逐批填實收。
+   * 退回藥庫簽收時逐批決定 disposition：stock 入可用庫存、quarantine 放待報廢區、rejected 拒收退回原藥局
+   */
+  lots?: { lotNo: string; expiry: string; qty: number; receivedQty?: number; disposition?: ReturnDisposition }[]
   /** 簽收短少的原因 */
   shortReason?: string
+  /** 退回藥庫：拒收的原因（這一行有拒收的批號時） */
+  rejectReason?: string
 }
+
+export type ReturnDisposition = 'stock' | 'quarantine' | 'rejected'
 
 export interface TransferOrder {
   id: string

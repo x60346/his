@@ -12,7 +12,8 @@ import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
-import { offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
+import { offsetRestock, openRestockOf, outstandingOf, postStock, quarantineOf } from './stock-ledger'
+import type { ReturnDisposition } from '@/types'
 import { isExpiringSoon, stockStatus, suggestRestockQty, usableQty } from './stock-rules'
 
 export interface TransferLineView extends TransferLine {
@@ -215,11 +216,29 @@ export function issueTransfer(id: string, issued: Record<string, number>): Promi
  * 藥局簽收：逐批填實收（≤ 撥發量），實收入藥局（transfer-in，批號效期照撥出的）；
  * 短少要寫原因（破損、遺失…）。門診藥局簽收時沖銷補貨申請。
  */
-export function receiveTransfer(id: string, input: { received: Record<string, number[]>; shortReasons?: Record<string, string> }): Promise<TransferView> {
+export interface ReceiveTransferInput {
+  /** 每一行、每個批號的實收 */
+  received: Record<string, number[]>
+  shortReasons?: Record<string, string>
+  /** 退回藥庫才有：每一行、每個批號怎麼處理（沒給＝入庫；過期的不能入庫） */
+  dispositions?: Record<string, ReturnDisposition[]>
+  /** 退回藥庫：有拒收的那一行要寫原因 */
+  rejectReasons?: Record<string, string>
+}
+
+/**
+ * 簽收。一般撥補：逐批實收入藥局。退回藥庫：藥庫逐批決定——入可用庫存、放待報廢區（過期的只能放這裡或拒收）、
+ * 或拒收（寫原因，退回原藥局的同一個批號，帳回到藥局）。短少照舊寫原因
+ */
+export function receiveTransfer(id: string, input: ReceiveTransferInput): Promise<TransferView> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const tr = trOf(id)
     if (tr.status !== 'issued') fail('只有運送中的撥補單可以簽收', 'CONFLICT')
+    const isReturn = tr.kind === 'return'
+    if (!isReturn && Object.values(input.dispositions ?? {}).some((ds) => ds.some((d) => d !== 'stock'))) fail('只有退回藥庫可以放待報廢區或拒收')
+    const t = today()
+    const dispOf = (lineId: string, k: number): ReturnDisposition => input.dispositions?.[lineId]?.[k] ?? 'stock'
     const errors: Record<string, string> = {}
     for (const l of tr.lines.filter((x) => x.lots?.length)) {
       const got = input.received?.[l.id] ?? []
@@ -227,27 +246,48 @@ export function receiveTransfer(id: string, input: { received: Record<string, nu
         const q = got[k]
         if (!Number.isInteger(q) || q < 0) errors[`recv-${l.id}-${k}`] = '實收需為 0 以上的整數'
         else if (q > lot.qty) errors[`recv-${l.id}-${k}`] = `不能多於撥發的 ${lot.qty}`
+        const d = dispOf(l.id, k)
+        if (!['stock', 'quarantine', 'rejected'].includes(d)) errors[`disp-${l.id}-${k}`] = '處理方式不正確'
+        else if (isReturn && d === 'stock' && lot.expiry < t) errors[`disp-${l.id}-${k}`] = `已過期（${lot.expiry}），不能入可用庫存：請放待報廢區或拒收`
       })
       const short = l.lots!.reduce((n, lot, k) => n + (lot.qty - (got[k] ?? lot.qty)), 0)
       if (short > 0 && !input.shortReasons?.[l.id]?.trim()) errors[`short-${l.id}`] = `短少 ${short}，請寫原因（破損、遺失…）`
+      if (isReturn && l.lots!.some((_, k) => dispOf(l.id, k) === 'rejected') && !input.rejectReasons?.[l.id]?.trim()) errors[`reject-${l.id}`] = '拒收請寫原因（例：未事先聯絡、包裝已拆無法再用）'
     }
     failFields(errors)
+    const wh = db.stockLocations.find((x) => x.id === tr.toLocationId)!
     let shortTotal = 0
+    const count = { quarantine: 0, rejected: 0 }
     for (const l of tr.lines.filter((x) => x.lots?.length)) {
       const got = input.received[l.id]
       l.lots!.forEach((lot, k) => {
         lot.receivedQty = got[k]
+        const d = isReturn ? dispOf(l.id, k) : 'stock'
+        if (isReturn) lot.disposition = d
         if (got[k] > 0) {
-          const txn = postStock({ kind: 'in', type: 'transfer-in', drugId: l.drugId, locationId: tr.toLocationId, qty: got[k], lot: { lotNo: lot.lotNo, expiry: lot.expiry }, ref: tr.no }, u.id)
-          offsetRestock(l.drugId, txn, u.id) // 只有進門診藥局才沖銷（offsetRestock 自己判斷地點）
+          const lotIn = { lotNo: lot.lotNo, expiry: lot.expiry }
+          if (d === 'stock') {
+            const txn = postStock({ kind: 'in', type: 'transfer-in', drugId: l.drugId, locationId: tr.toLocationId, qty: got[k], lot: lotIn, ref: tr.no }, u.id)
+            offsetRestock(l.drugId, txn, u.id) // 只有進門診藥局才沖銷（offsetRestock 自己判斷地點）
+          } else if (d === 'quarantine') {
+            postStock({ kind: 'in', type: 'transfer-in', drugId: l.drugId, locationId: quarantineOf(wh).id, qty: got[k], lot: lotIn, ref: tr.no, reason: `退回待報廢（${tr.returnReason ?? ''}）` }, u.id)
+            count.quarantine += got[k]
+          } else {
+            // 拒收：退回原藥局的同一個批號（帳回到藥局）
+            postStock({ kind: 'in', type: 'transfer-in', drugId: l.drugId, locationId: tr.fromLocationId, qty: got[k], lot: lotIn, ref: tr.no, reason: `藥庫拒收：${input.rejectReasons![l.id].trim()}` }, u.id)
+            count.rejected += got[k]
+          }
         }
         shortTotal += lot.qty - got[k]
       })
       const reason = input.shortReasons?.[l.id]?.trim()
       if (reason && l.lots!.some((lot) => (lot.receivedQty ?? 0) < lot.qty)) l.shortReason = reason
+      const rj = input.rejectReasons?.[l.id]?.trim()
+      if (isReturn && rj && l.lots!.some((lot) => lot.disposition === 'rejected')) l.rejectReason = rj
     }
     Object.assign(tr, { status: 'received', receivedBy: u.id, receivedAt: now() })
-    audit('撥補簽收', `${tr.no} ${nameOf.location(tr.toLocationId)}${shortTotal ? `（短少 ${shortTotal}）` : ''}`)
+    const notes = [shortTotal && `短少 ${shortTotal}`, count.quarantine && `待報廢 ${count.quarantine}`, count.rejected && `拒收退回 ${count.rejected}`].filter(Boolean).join('、')
+    audit('撥補簽收', `${tr.no} ${nameOf.location(tr.toLocationId)}${notes ? `（${notes}）` : ''}`)
     return view(tr)
   })
 }

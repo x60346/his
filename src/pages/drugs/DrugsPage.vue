@@ -13,6 +13,7 @@ import StocktakePanel from './components/StocktakePanel.vue'
 import PurchasePanel from './components/PurchasePanel.vue'
 import SupplierPanel from './components/SupplierPanel.vue'
 import LocationPanel from './components/LocationPanel.vue'
+import QuarantinePanel from './components/QuarantinePanel.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
@@ -21,11 +22,11 @@ import { useWorkLocation } from '@/composables/useWorkLocation'
 const work = useWorkLocation()
 // 庫存／採購單／盤點單（首頁待辦帶 ?tab=purchase、?tab=stocktake 進來直接看）
 const route0 = useRoute()
-const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
+const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location', 'quarantine'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
 // 撥補單只有大型醫院（多個地點）才有
 const viewTabs = computed(() => [
   { key: 'stock', label: '庫存' },
-  ...(work.multi.value ? [{ key: 'transfer', label: '撥補單' }] : []),
+  ...(work.multi.value ? [{ key: 'transfer', label: '撥補單' }, { key: 'quarantine', label: '待報廢區' }] : []),
   { key: 'purchase', label: '採購單' },
   { key: 'supplier', label: '供應商' },
   { key: 'stocktake', label: '盤點單' },
@@ -95,6 +96,7 @@ const shown = computed(() => rows.value?.length ?? 0)
     <PurchasePanel v-else-if="view === 'purchase'" />
     <SupplierPanel v-else-if="view === 'supplier'" />
     <LocationPanel v-else-if="view === 'location'" />
+    <QuarantinePanel v-else-if="view === 'quarantine' && work.multi.value" />
     <StocktakePanel v-else-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
     <template v-else>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">

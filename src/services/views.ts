@@ -93,9 +93,11 @@ export const stockLoc = {
   /** 採購到貨入庫的地點 */
   receiving: () => (db.stockLocations.find((l) => l.receivesPurchase && l.active) ?? db.stockLocations[0]).id,
   /** 指定的地點（沒指定＝門診藥局）；不存在或停用就擋 */
-  usable(id?: string) {
+  usable(id?: string, opts: { quarantine?: boolean } = {}) {
     const loc = must(db.stockLocations.find((l) => l.id === (id || stockLoc.opd())), '庫存地點')
     if (!loc.active) fail(`${loc.name}已停用`)
+    // 待報廢區只能報廢或放回可用：進貨、盤點、撥補、查庫存清單都不行（記帳本身 postStock 帶 quarantine 才能進出）
+    if (loc.kind === 'quarantine' && !opts.quarantine) fail(`${loc.name}只能報廢或放回可用`)
     return loc
   },
   /** 某藥在某地點的批號 */

@@ -8,6 +8,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { PackageCheck, Plus, Send, Trash2, Truck } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { masterApi, transferApi } from '@/services'
+import { today } from '@/utils/date'
+import type { ReturnDisposition } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { useUi } from '@/stores/ui'
@@ -64,19 +66,31 @@ async function onIssue() {
 }
 
 // ---------- 簽收 ----------
+// 退回藥庫：逐批選「入庫／待報廢／拒收」（過期的預設待報廢、不能入庫——服務層也擋）
 const recv = reactive<Record<string, number[]>>({})
 const shortReasons = reactive<Record<string, string>>({})
+const disp = reactive<Record<string, ReturnDisposition[]>>({})
+const rejectReasons = reactive<Record<string, string>>({})
+const todayStr = today()
 watch(tr, (t) => {
   if (t?.status !== 'issued') return
   for (const l of t.lines) if (l.lots?.length && !recv[l.id]) recv[l.id] = l.lots.map((x) => x.qty)
+  if (t.kind === 'return') for (const l of t.lines) if (l.lots?.length && !disp[l.id]) disp[l.id] = l.lots.map((x) => (x.expiry < todayStr ? 'quarantine' : 'stock'))
 }, { immediate: true })
+const dispOptions = (expiry: string) => [
+  ...(expiry < todayStr ? [] : [{ label: '入庫', value: 'stock' }]),
+  { label: '待報廢', value: 'quarantine' },
+  { label: '拒收退回', value: 'rejected' },
+]
+const DISP_LABEL: Record<ReturnDisposition, string> = { stock: '入庫', quarantine: '待報廢', rejected: '拒收退回' }
+const hasReject = (lineId: string) => (disp[lineId] ?? []).includes('rejected')
 const shortOf = (lineId: string) => (tr.value?.lines.find((l) => l.id === lineId)?.lots ?? []).reduce((n, x, k) => n + (x.qty - (Number(recv[lineId]?.[k]) || 0)), 0)
-const receive = useAction(transferApi.receiveTransfer, { success: (t) => `${t.no} 已簽收入 ${t.toName}` })
+const receive = useAction(transferApi.receiveTransfer, { success: (t) => (t.kind === 'return' ? `${t.no} 已簽收（入庫、待報廢、拒收依各批）` : `${t.no} 已簽收入 ${t.toName}`) })
 async function onReceive() {
   const t = tr.value
   if (!t) return
   const received = Object.fromEntries(Object.entries(recv).map(([k, v]) => [k, v.map((x) => Number(x))]))
-  await receive.run(t.id, { received, shortReasons: { ...shortReasons } })
+  await receive.run(t.id, { received, shortReasons: { ...shortReasons }, ...(t.kind === 'return' ? { dispositions: { ...disp }, rejectReasons: { ...rejectReasons } } : {}) })
 }
 
 // ---------- 取消 ----------
@@ -176,16 +190,29 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
                     <template v-if="tr.status === 'issued' && isPharmacist && recv[l.id]">
                       <input v-model.number="recv[l.id][k]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${l.drugName} 批號 ${x.lotNo} 實收`" />
                       <span class="text-slate-400">/ {{ x.qty }}</span>
+                      <select v-if="tr.kind === 'return' && disp[l.id]" v-model="disp[l.id][k]" :class="['form-control w-24 text-xs', err(`disp-${l.id}-${k}`) && 'form-control-error']" :aria-label="`${l.drugName} 批號 ${x.lotNo} 處理方式`">
+                        <option v-for="o in dispOptions(x.expiry)" :key="o.value" :value="o.value">{{ o.label }}</option>
+                      </select>
+                      <UBadge v-if="x.expiry < todayStr" tone="red">已過期</UBadge>
                       <span v-if="err(`recv-${l.id}-${k}`)" class="text-red-600">{{ err(`recv-${l.id}-${k}`) }}</span>
+                      <span v-if="err(`disp-${l.id}-${k}`)" class="text-red-600">{{ err(`disp-${l.id}-${k}`) }}</span>
                     </template>
-                    <span v-else class="text-slate-600">{{ x.receivedQty ?? x.qty }} / {{ x.qty }}</span>
+                    <template v-else>
+                      <span class="text-slate-600">{{ x.receivedQty ?? x.qty }} / {{ x.qty }}</span>
+                      <UBadge v-if="x.disposition && x.disposition !== 'stock'" :tone="x.disposition === 'rejected' ? 'yellow' : 'red'">{{ DISP_LABEL[x.disposition] }}</UBadge>
+                    </template>
                   </div>
                   <p v-if="!l.lots?.length" class="text-xs text-slate-400">這次沒有撥</p>
                   <template v-if="tr.status === 'issued' && isPharmacist && shortOf(l.id) > 0">
                     <input v-model="shortReasons[l.id]" type="text" placeholder="短少原因：破損、遺失…" :class="['form-control mt-1 w-48 text-xs', err(`short-${l.id}`) && 'form-control-error']" :aria-label="`${l.drugName} 短少原因`" />
                     <div v-if="err(`short-${l.id}`)" class="text-xs text-red-600">{{ err(`short-${l.id}`) }}</div>
                   </template>
+                  <template v-if="tr.status === 'issued' && isPharmacist && tr.kind === 'return' && hasReject(l.id)">
+                    <input v-model="rejectReasons[l.id]" type="text" placeholder="拒收原因：未事先聯絡、包裝已拆…" :class="['form-control mt-1 w-56 text-xs', err(`reject-${l.id}`) && 'form-control-error']" :aria-label="`${l.drugName} 拒收原因`" />
+                    <div v-if="err(`reject-${l.id}`)" class="text-xs text-red-600">{{ err(`reject-${l.id}`) }}</div>
+                  </template>
                   <p v-if="l.shortReason" class="text-xs text-amber-800">短少 {{ l.shortQty }}：{{ l.shortReason }}</p>
+                  <p v-if="l.rejectReason" class="text-xs text-amber-800">拒收：{{ l.rejectReason }}（退回{{ tr.fromName }}）</p>
                 </td>
               </tr>
             </tbody>
@@ -195,7 +222,7 @@ const err = (k: string) => issue.fieldErrors.value[k] || receive.fieldErrors.val
           <UButton v-if="tr.status === 'requested'" size="sm" :icon="Truck" :loading="issue.pending.value" @click="onIssue">撥發</UButton>
           <UButton v-if="tr.status === 'issued'" size="sm" :icon="PackageCheck" :loading="receive.pending.value" @click="onReceive">簽收入帳</UButton>
         </div>
-        <p v-if="tr.status === 'issued'" class="text-xs text-slate-500">運送中：{{ tr.fromName }}已扣、{{ tr.toName }}還沒入帳。照實物逐批填實收，短少寫原因。</p>
+        <p v-if="tr.status === 'issued'" class="text-xs text-slate-500">運送中：{{ tr.fromName }}已扣、{{ tr.toName }}還沒入帳。照實物逐批填實收，短少寫原因。<template v-if="tr.kind === 'return'">退回的每一批選「入庫」（可用）、「待報廢」（放待報廢區，過期的只能這樣）或「拒收退回」（寫原因，帳回到{{ tr.fromName }}）。</template></p>
       </template>
 
       <UDialog v-model="cancelOpen" title="取消撥補單" size="sm" @submit="onCancel">

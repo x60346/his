@@ -127,3 +127,6 @@ export function locationNameProblem(name: string): string | null {
   if (n.length > LOCATION_NAME_MAX) return `地點名稱最多 ${LOCATION_NAME_MAX} 字`
   return null
 }
+
+/** 批號是否已過期（效期當天還能用） */
+export const isExpired = (expiry: string, today: string) => expiry < today

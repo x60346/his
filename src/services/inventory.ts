@@ -14,6 +14,7 @@ import { pendingReturn } from './ud-work'
 import { daysOfSupply, isExpiringSoon, STOCK_FLAG_ORDER, stockFlags, stockStatus, suggestRestockQty, usableQty, type RestockSuggestion, type StockFlag, type StockStatus, NO_PO_REASONS } from './stock-rules'
 import { find, nameOf, stockLoc } from './views'
 import { checkReceiveInput, offsetRestock, openRestockOf, outstandingOf, postStock } from './stock-ledger'
+import { isExpired } from './stock-rules'
 import { matchesDrug } from './drug-rules'
 
 // 寫入一律透過 stock-ledger.postStock（內部模組，不經 services/index 對外）
@@ -217,7 +218,8 @@ export function receiveStock(input: ReceiveInput): Promise<ReceiveResult> {
     else if (reason === '其他' && !note) errors.note = '原因選「其他」時請說明'
     const lotNo = checkReceiveInput(input, { errors })
     const ref = `無單進貨：${reason === '其他' ? note : reason}${reason !== '其他' && note ? `（${note}）` : ''}`
-    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, locationId: input.locationId || stockLoc.receiving(), qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref }, u.id)
+    const loc = stockLoc.usable(input.locationId || stockLoc.receiving()) // 一般作業的地點檢查（停用、待報廢區都擋）；postStock 本身允許待報廢區
+    const txn = postStock({ kind: 'in', type: 'receive', drugId: input.drugId, locationId: loc.id, qty: input.qty, lot: { lotNo, expiry: input.expiry }, ref }, u.id)
     const restock = offsetRestock(input.drugId, txn, u.id)
     const tail = !restock ? '' : restock.outstanding ? `，補貨申請尚欠 ${restock.outstanding}` : '，補貨申請已到齊'
     audit('藥品進貨', `${find.drug(input.drugId)?.name} +${input.qty}（批號 ${lotNo}；${ref}${tail}）`)
@@ -461,7 +463,7 @@ export function listStockLocations(q: { includeInactive?: boolean } = {}): Promi
   return query(() => ({
     scale: db.hospitalScale,
     locations: db.stockLocations
-      .filter((l) => q.includeInactive || l.active)
+      .filter((l) => q.includeInactive || (l.active && l.kind !== 'quarantine'))
       .map((l) => ({ ...l, drugCount: drugCountAt(l.id), roles: rolesOf(l), ...(q.includeInactive ? { blockers: l.active ? locationBlockers(l) : [] } : {}) })),
     opd: stockLoc.opd(),
     receiving: stockLoc.receiving(),
@@ -559,5 +561,82 @@ export function setSafetyStock(drugId: string, locationId: string, qty: number):
     else db.safetyStocks.push({ locationId: loc.id, drugId: d.id, qty })
     audit('修改安全庫存', `${d.name} ${loc.name}：${before} → ${qty}`)
     return { qty }
+  })
+}
+
+// ---------- 待報廢區（藥庫底下）：退回的過期、破損品放這裡，只能報廢或放回可用 ----------
+export interface QuarantineRow {
+  lotId: string
+  locationId: string
+  locationName: string
+  drugId: string
+  drugName: string
+  unit: string
+  lotNo: string
+  expiry: string
+  qty: number
+  expired: boolean
+  /** 最近一次放進來的單號與原因（退回藥庫的撥補單） */
+  ref?: string
+  reason?: string
+  at?: string
+}
+
+export function listQuarantine(): Promise<QuarantineRow[]> {
+  return query(() => {
+    requireUser('pharmacist', 'admin')
+    const t = today()
+    const qs = db.stockLocations.filter((l) => l.kind === 'quarantine')
+    const rows: QuarantineRow[] = []
+    for (const q of qs)
+      for (const lot of db.drugLots.filter((x) => x.locationId === q.id && x.qty > 0)) {
+        const d = find.drug(lot.drugId)
+        const last = db.stockTxns.filter((x) => x.locationId === q.id && x.drugId === lot.drugId && x.qty > 0 && x.lots.some((m) => m.lotNo === lot.lotNo)).at(-1)
+        rows.push({
+          lotId: lot.id, locationId: q.id, locationName: q.name, drugId: lot.drugId, drugName: d?.name ?? lot.drugId, unit: d?.unit ?? '',
+          lotNo: lot.lotNo, expiry: lot.expiry, qty: lot.qty, expired: isExpired(lot.expiry, t),
+          ...(last ? { ref: last.ref, reason: last.reason, at: last.at } : {}),
+        })
+      }
+    return rows.sort((a, b) => a.drugName.localeCompare(b.drugName) || a.expiry.localeCompare(b.expiry))
+  })
+}
+
+function quarantineLot(lotId: string) {
+  const lot = must(db.drugLots.find((x) => x.id === lotId), '批號')
+  const loc = must(db.stockLocations.find((l) => l.id === lot.locationId), '庫存地點')
+  if (loc.kind !== 'quarantine') fail('這個批號不在待報廢區')
+  if (lot.qty <= 0) fail('這個批號已經處理完了', 'CONFLICT')
+  return { lot, loc }
+}
+
+/** 報廢待報廢區的一個批號（整批；寫原因） */
+export function scrapQuarantine(lotId: string, reason: string): Promise<StockTxn> {
+  return mutate(() => {
+    const u = requireUser('pharmacist')
+    const { lot, loc } = quarantineLot(lotId)
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫報廢原因（例：過期、破損）')
+    const txn = postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty: lot.qty, lotId: lot.id, reason: `報廢（待報廢區）：${why}` }, u.id)
+    audit('待報廢區報廢', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo} ${-txn.qty}：${why}`)
+    return txn
+  })
+}
+
+/** 放回可用：沒過期的（例：判斷錯了、包裝其實完好）移回所屬藥庫；寫原因 */
+export function releaseQuarantine(lotId: string, reason: string): Promise<{ qty: number; to: string }> {
+  return mutate(() => {
+    const u = requireUser('pharmacist')
+    const { lot, loc } = quarantineLot(lotId)
+    if (isExpired(lot.expiry, today())) fail(`已過期（${lot.expiry}），不能放回可用，只能報廢`, 'CONFLICT')
+    const why = reason?.trim()
+    if (!why) failField('reason', '請寫放回的原因（例：確認包裝完好）')
+    const wh = stockLoc.usable(loc.parentId)
+    const qty = lot.qty
+    const t = now()
+    postStock({ kind: 'out', type: 'adjust', drugId: lot.drugId, locationId: loc.id, qty, lotId: lot.id, reason: `待報廢區放回可用：${why}` }, u.id, t)
+    postStock({ kind: 'in', type: 'adjust', drugId: lot.drugId, locationId: wh.id, qty, lot: { lotNo: lot.lotNo, expiry: lot.expiry }, reason: `待報廢區放回可用：${why}` }, u.id, t)
+    audit('待報廢區放回可用', `${find.drug(lot.drugId)?.name} 批號 ${lot.lotNo} ${qty} → ${wh.name}：${why}`)
+    return { qty, to: wh.name }
   })
 }

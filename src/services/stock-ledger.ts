@@ -4,7 +4,7 @@
 // postStock 本身不檢查登入與角色（它是給進貨、發藥、盤點過帳這些已經檢查過權限的服務呼叫的）。
 // 以前它從 inventory.ts 匯出，overNetwork(inventory) 就把它一起對外了——任何頁面都能直接改庫存。
 // 流程測試會檢查：各 Api 不得有 postStock、index.ts 不得匯出這個模組。
-import type { DrugLot, IpdOrder, RestockRequest, RestockStatus, StockTxn, StockTxnType } from '@/types'
+import type { DrugLot, IpdOrder, RestockRequest, RestockStatus, StockLocation, StockTxn, StockTxnType } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { fail, failField, fieldErrors, must } from './http'
@@ -16,11 +16,23 @@ export type Post =
   | { kind: 'in'; drugId: string; locationId: string; qty: number; type: StockTxnType; lot: Pick<DrugLot, 'lotNo' | 'expiry'>; ref?: string; reason?: string }
   | { kind: 'out'; drugId: string; locationId: string; qty: number; type: StockTxnType; ref?: string; reason?: string; includeExpired?: boolean; lotId?: string }
 
+/** 藥庫的待報廢區（第一次有東西要放才建立；停用過的重新啟用） */
+export function quarantineOf(wh: StockLocation): StockLocation {
+  const q = db.stockLocations.find((l) => l.kind === 'quarantine' && l.parentId === wh.id)
+  if (q) {
+    q.active = true
+    return q
+  }
+  const nq: StockLocation = { id: newId('LOC'), name: `${wh.name}待報廢區`, kind: 'quarantine', parentId: wh.id, receivesPurchase: false, dispensesOpd: false, dispensesIpd: false, active: true }
+  db.stockLocations.push(nq)
+  return nq
+}
+
 /** 寫入一筆庫存異動。出庫依 FEFO 扣批號（或指定批號），不足時整筆失敗 */
 export function postStock(p: Post, userId: string, at = now()): StockTxn {
   const drug = must(find.drug(p.drugId), '藥品')
   if (!Number.isInteger(p.qty) || p.qty <= 0) fail('數量需為正整數')
-  const loc = stockLoc.usable(p.locationId)
+  const loc = stockLoc.usable(p.locationId, { quarantine: true })
   const lots = stockLoc.lots(drug.id, loc.id)
   let moved: { lotNo: string; qty: number }[]
 

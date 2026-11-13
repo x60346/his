@@ -12,7 +12,7 @@ import { useUi } from '@/stores/ui'
 const ui = useUi()
 const { data, loading } = useQuery(() => inventoryApi.listStockLocations({ includeInactive: true }))
 const locations = computed(() => data.value?.locations ?? [])
-const kindLabel = (k: StockLocationView['kind']) => (k === 'warehouse' ? '藥庫' : '藥局')
+const kindLabel = (k: StockLocationView['kind']) => (k === 'warehouse' ? '藥庫' : k === 'quarantine' ? '待報廢區' : '藥局')
 const roleLabel = (r: LocationRole) => LOCATION_ROLES.find((x) => x.key === r)!.label
 
 // ---------- 新增／編輯 ----------
@@ -33,7 +33,7 @@ async function submit() {
 const picks = reactive<Record<LocationRole, string>>({ opd: '', ipd: '', receiving: '' })
 const holderOf = (r: (typeof LOCATION_ROLES)[number]) => locations.value.find((l) => l.active && l[r.flag])
 const optionsFor = (r: (typeof LOCATION_ROLES)[number]) =>
-  locations.value.filter((l) => l.active && !l[r.flag] && (!r.pharmacyOnly || l.kind === 'pharmacy')).map((l) => ({ label: `${l.name}（${kindLabel(l.kind)}）`, value: l.id }))
+  locations.value.filter((l) => l.active && !l[r.flag] && l.kind !== 'quarantine' && (!r.pharmacyOnly || l.kind === 'pharmacy')).map((l) => ({ label: `${l.name}（${kindLabel(l.kind)}）`, value: l.id }))
 async function moveRole(input: { role: LocationRole; locationId: string }) {
   try {
     return await inventoryApi.setLocationRole(input)
@@ -62,7 +62,7 @@ async function onMove(role: LocationRole) {
           <li v-for="l in locations" :key="l.id" :class="['flex items-start gap-3 px-4 py-2.5', !l.active && 'text-slate-400']">
             <div class="min-w-0 flex-1">
               <p class="flex flex-wrap items-center gap-1 font-medium">
-                {{ l.name }}<UBadge :tone="l.kind === 'warehouse' ? 'blue' : 'gray'">{{ kindLabel(l.kind) }}</UBadge><UBadge v-if="!l.active">停用</UBadge>
+                {{ l.name }}<UBadge :tone="l.kind === 'warehouse' ? 'blue' : l.kind === 'quarantine' ? 'red' : 'gray'">{{ kindLabel(l.kind) }}</UBadge><UBadge v-if="!l.active">停用</UBadge>
               </p>
               <p class="text-xs text-slate-500">
                 {{ l.drugCount }} 種藥有庫存<template v-if="l.roles.length">・負責{{ l.roles.map(roleLabel).join('、') }}</template>
