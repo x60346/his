@@ -334,8 +334,8 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M041: ['嗎啡錠', ['MST']],
 }
 
-/** 管制藥品級別：Morphine（注射、錠劑）第二級、Tramadol 第四級 */
-const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M041: 2, M031: 4 }
+/** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */
+const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M041: 2, M031: 4, M028: 4, M029: 4 }
 
 export const drugs: Drug[] = drugBase.map((d) => ({
   ...d,

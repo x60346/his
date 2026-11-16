@@ -4557,7 +4557,7 @@ try {
     const csv = CSV.controlledLedgerCsv(L)
     ok(csv.startsWith('\uFEFF') && csv.includes('管制藥品收支結存簿冊') && csv.includes('殘餘量銷毀') && csv.includes('孫佩君') && csv.includes(`期末結存,${L.closing}`), '匯出 CSV：表頭、逐筆（含殘餘量、見證人）、期末')
     const opts = await api.controlledApi.controlledLedgerOptions()
-    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 3 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
+    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 5 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
     // STAT 也一樣
     await as(docUser)
     const st = await api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 0.5, freq: 'STAT', route: 'IM', allowDuplicate: true })
@@ -5025,6 +5025,32 @@ try {
     const ttab = CSV.controlledReportTable(R)
     ok(ttab.totalRows.length === ctrl.length && ttab.totalRows.every((i) => ttab.rows[i][5] === '全院合計') && typeof ttab.rows[ttab.headRow + 1][6] === 'number', '申報表的全院合計列標粗體、數量是數字')
 
+
+    // 第四級口服：Zolpidem、Alprazolam。半顆也算殘餘量（整顆扣、剩半顆見證銷毀），和注射劑同一條規則
+    ok(drug('M028').controlled === 4 && drug('M029').controlled === 4 && !CR.needsSpecialRx(drug('M028').controlled), '種子：Zolpidem、Alprazolam 是第四級管制藥（不需專用處方箋與使用執照）')
+    {
+      const DR = await load('/src/services/drug-rules.ts')
+      ok(DR.residualOf(drug('M028'), 0.5)?.take === 1 && DR.residualOf(drug('M028'), 0.5)?.residual === 0.5 && !DR.residualOf(drug('M028'), 1), 'Zolpidem 半顆：整顆扣、殘餘半顆；整顆沒有殘餘')
+      const a5 = db().admissions.find((x) => x.status === 'admitted' && db().beds.find((b) => b.id === x.bedId))
+      const keepZ = structuredClone(doc(a5.doctorId).controlledLicense)
+      delete doc(a5.doctorId).controlledLicense
+      await as(db().users.find((u) => u.doctorId === a5.doctorId).username)
+      const z = await api.ipdApi.addOrder({ admissionId: a5.id, type: 'long', category: 'medication', drugId: 'M028', content: '', dose: 0.5, freq: 'PRN', route: 'PO', allowDuplicate: true })
+      ok(z.residualQty === 0.5, '第四級不需要使用執照；醫囑標出每次殘餘半顆')
+      doc(a5.doctorId).controlledLicense = keepZ
+      await as('nurse01')
+      msg = await errOf(() => api.nursingApi.givePrn(z.id, '失眠'))
+      ok(msg.includes('見證'), `Zolpidem 半顆沒有見證 → 「${msg}」`)
+      const zt = await witnessOf({ purpose: 'residual', orderId: z.id }, 'nurse02')
+      const zm = await api.nursingApi.givePrn(z.id, '失眠', undefined, zt)
+      ok(zm.residual?.qty === 0.5 && !!zm.residual.witnessBy, '有見證：給半顆、殘餘半顆銷毀記在給藥紀錄')
+      await as('ph01')
+      const zloc = db().stockTxns.filter((x) => x.drugId === 'M028').at(-1).locationId
+      const ZL = await api.controlledApi.controlledLedger({ drugId: 'M028', locationId: zloc, from: T, to: T })
+      ok(ZL.rows.some((r) => r.kind === 'out' && r.qty === 1 && r.witnessName) && ZL.rows.some((r) => r.kind === 'residual' && r.qty === 0.5) && ZL.closing === db().drugLots.filter((l) => l.drugId === 'M028' && l.locationId === zloc).reduce((n, l) => n + l.qty, 0), 'Zolpidem 簿冊：扣 1 顆、殘餘 0.5 銷毀另列，期末＝帳上')
+      const ZR = await api.controlledApi.controlledReport({ from: T, to: T })
+      ok(['M028', 'M029'].every((id) => ZR.rows.some((r) => r.drugId === id && !r.locationId)), '申報表含 Zolpidem、Alprazolam')
+    }
     // 規則只在服務層：頁面不得自己判斷級別要不要專用處方箋
     const { readFileSync } = await import('node:fs')
     const pages = ['src/pages/opd/OpdPage.vue', 'src/pages/pharmacy/PharmacyPage.vue'].map((p) => readFileSync(p, 'utf8'))
