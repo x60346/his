@@ -7,6 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import RiskBadges from '@/components/RiskBadges.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
 import LabReportList from '@/components/LabReportList.vue'
@@ -275,6 +276,8 @@ async function submitNote() {
       <PatientBanner :patient="adm">
         <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
         <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.deptName }}</span>
+        <!-- 護理師評的跌倒、壓傷風險（醫師只看） -->
+        <RiskBadges :levels="adm.riskLevels" />
         <UButton v-if="!isAdmin" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="consultOpen = true">會診</UButton>
         <UButton v-if="!isAdmin && transfer?.status !== 'pending' && !adm.dischargeReady" size="sm" variant="secondary" :icon="ArrowRightLeft" @click="openTransfer()">申請轉科</UButton>
       </PatientBanner>

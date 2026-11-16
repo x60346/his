@@ -1,6 +1,6 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
-import type { Admission, DeptTransfer, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
+import type { Admission, DeptTransfer, RiskLevel, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { doseUnitOf } from './billing'
 import { ageOf, diffDays, today } from '@/utils/date'
@@ -11,6 +11,7 @@ import { checkInProblem } from './queue-rules'
 import { normalizeRxTiming } from './drug-rules'
 import { prepayAvailable } from './money'
 import { afterDischargeCopayEligible } from './followup-rules'
+import { latestRisk } from './risk-work'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -266,6 +267,8 @@ export interface AdmissionView extends Admission, PatientBrief {
   consultOrdersUnseen: number
   /** 最近一筆轉科申請（申請中、或剛被婉拒／接受／撤回的那筆）；從未申請過沒有 */
   lastTransfer?: DeptTransferView
+  /** 最新一次跌倒、壓傷風險評估的等級（沒評過沒有）：護理站、醫師都看得到標記 */
+  riskLevels: { fall?: RiskLevel; pressure?: RiskLevel }
 }
 
 export interface DeptTransferView extends DeptTransfer {
@@ -314,6 +317,7 @@ export function admissionView(a: Admission): AdmissionView {
     openQueries: db.ipdOrders.filter((o) => o.admissionId === a.id && !!openQuery(o)).length,
     consultOrdersUnseen: db.ipdOrders.filter((o) => o.admissionId === a.id && o.consultId && !o.consultSeenAt).length,
     ...(a.deptTransfers?.length ? { lastTransfer: deptTransferView(a.deptTransfers[a.deptTransfers.length - 1]) } : {}),
+    riskLevels: { fall: latestRisk(a.id, 'fall')?.level, pressure: latestRisk(a.id, 'pressure')?.level },
   }
 }
 

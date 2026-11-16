@@ -5803,6 +5803,119 @@ try {
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
   }
 
+  // 跌倒（Morse）、壓傷（Braden）風險評估：分數與等級、該評的時程、高風險預防措施、護理紀錄、作廢、切點設定
+  console.log('\n[跌倒、壓傷風險評估]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const R = api.riskApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const { addMinutes } = await load('/src/utils/date.ts')
+    // 規則
+    const fall = (o = {}) => ({ history: 0, secondary: 0, aid: 0, iv: 0, gait: 0, mental: 0, ...o })
+    const pres = (o = {}) => ({ sensory: 4, moisture: 4, activity: 4, mobility: 4, nutrition: 4, friction: 3, ...o })
+    ok(api.riskScore('fall', fall({ history: 25, iv: 20 })).score === 45 && api.riskScore('pressure', pres()).score === 23 && api.riskScore('pressure', pres({ sensory: 1, moisture: 1, activity: 1, mobility: 1, nutrition: 1, friction: 1 })).score === 6, 'Morse 加總、Braden 6–23 分')
+    ok(api.riskScore('fall', { history: 25 }).missing.length === 5 && api.riskScore('fall', fall({ aid: 7 })).missing.length === 1, '沒答的題、不是選項的分數都算沒答')
+    ok(api.riskLevel('fall', 45) === 'high' && api.riskLevel('fall', 44) === 'moderate' && api.riskLevel('fall', 25) === 'moderate' && api.riskLevel('fall', 24) === 'low', 'Morse：≥45 高、25–44 中、<25 低')
+    ok(api.riskLevel('pressure', 16) === 'high' && api.riskLevel('pressure', 17) === 'moderate' && api.riskLevel('pressure', 18) === 'moderate' && api.riskLevel('pressure', 19) === 'low', 'Braden：≤16 高、17–18 中、≥19 低（越低越危險）')
+    ok(api.riskLevel('fall', 45, { ...api.RISK_DEFAULT, fallHigh: 50 }) === 'moderate', '切點可調')
+    const ce = api.checkRiskSettings({ fallHigh: 40, fallModerate: 40, pressureHigh: 18, pressureModerate: 16 })
+    ok(!!ce.fallModerate && !!ce.pressureModerate && !Object.keys(api.checkRiskSettings(api.RISK_DEFAULT)).length, '切點檢查：Morse 中度要低於高、Braden 中度要高於高')
+    const A0 = '2026-11-10 14:00'
+    let d = api.riskDue({ admittedAt: A0 }, '2026-11-11 11:00')
+    ok(d.reason === 'admission' && d.dueAt === '2026-11-11 14:00' && d.status === 'ok', '沒評過：入院後 24 小時內')
+    ok(api.riskDue({ admittedAt: A0 }, '2026-11-11 12:00').status === 'due' && api.riskDue({ admittedAt: A0 }, '2026-11-11 14:01').status === 'overdue', '到期前 2 小時列「該評了」、過了列逾時')
+    ok(api.riskDue({ admittedAt: A0, lastAt: '2026-11-10 15:00', lastLevel: 'high' }, '2026-11-10 20:00').dueAt === '2026-11-11 15:00' && api.riskDue({ admittedAt: A0, lastAt: '2026-11-10 15:00', lastLevel: 'low' }, '2026-11-10 20:00').dueAt === '2026-11-17 15:00', '高風險 24 小時重評、其他 7 天')
+    d = api.riskDue({ admittedAt: A0, lastAt: '2026-11-10 15:00', lastLevel: 'low', movedAt: '2026-11-12 09:00' }, '2026-11-12 10:00')
+    ok(d.reason === 'transfer' && d.dueAt === '2026-11-13 09:00', '評估後轉床或轉科：24 小時內重評（比例行的早）')
+    ok(api.riskFactors('pressure', pres({ activity: 1, mobility: 2 })).length === 2 && api.riskFactors('fall', fall({ iv: 20 }))[0].startsWith('靜脈輸液'), '高風險因子：Morse 有分的題、Braden 1–2 分的題')
+
+    // 種子
+    const inpt = db().admissions.filter((a) => a.status === 'admitted')
+    ok(inpt.every((a) => db().riskAssessments.some((r) => r.admissionId === a.id && r.scale === 'fall')), '種子：住院中的病人都評過跌倒')
+    const stroke = inpt.find((a) => a.diagnosis.startsWith('I63'))
+    const strokeView = (await api.admissionApi.getAdmission(stroke.id))
+    ok(strokeView.riskLevels.fall === 'high' && strokeView.riskLevels.pressure === 'high', '腦梗塞：跌倒、壓傷都高風險（病人資料帶等級，醫師也看得到）')
+    await as('nurse01')
+    const ov = await R.getRiskOverview(stroke.id)
+    ok(ov.scales.fall.due.status === 'due' && ov.scales.fall.due.reason === 'routine' && ov.scales.fall.history.length === 4, '腦梗塞：每天重評，最近一次 23 小時前 → 該評了（例行重評）')
+    const missP = inpt.find((a) => !db().riskAssessments.some((r) => r.admissionId === a.id && r.scale === 'pressure'))
+    const ovM = await R.getRiskOverview(missP.id)
+    ok(ovM.scales.pressure.due.status === 'overdue' && ovM.scales.pressure.due.reason === 'admission', '漏評壓傷（入院超過 24 小時）：逾時')
+    const ward = db().beds.find((b) => b.id === missP.bedId).ward
+    const wp = (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === missP.id)
+    const tasks = await api.nursingApi.listWardTasks(ward)
+    ok(wp.riskOverdue === 1 && tasks.some((t) => t.kind === 'risk' && t.admissionId === missP.id && t.urgency === 'overdue' && t.text.includes('Braden')), '護理站：病人清單標評估逾時、本班待辦列出')
+    const dash0 = (await api.dashboardApi.getDashboard()).riskOverdue
+    ok(dash0 >= 1, `護理師首頁「風險評估逾時」${dash0} 份`)
+    // 存檔
+    await as('dr02')
+    await expectError(() => R.saveRiskAssessment({ admissionId: missP.id, scale: 'pressure', answers: pres() }), '醫師填風險評估')
+    await as('nurse01')
+    let f = await fieldsOf(() => R.saveRiskAssessment({ admissionId: missP.id, scale: 'pressure', answers: { sensory: 4 } }))
+    ok(f.answers?.includes('還有 5 題'), `沒答完 → 「${f.answers}」`)
+    const highP = pres({ sensory: 2, moisture: 2, activity: 2, mobility: 2, nutrition: 2, friction: 1 })
+    f = await fieldsOf(() => R.saveRiskAssessment({ admissionId: missP.id, scale: 'pressure', answers: highP }))
+    ok(f.measures?.includes('至少一項'), `高風險沒勾預防措施 → 「${f.measures}」`)
+    f = await fieldsOf(() => R.saveRiskAssessment({ admissionId: missP.id, scale: 'pressure', answers: highP, measures: ['rails'] }))
+    ok(!!f.measures, '跌倒的措施不能用在壓傷')
+    const notes0 = db().nursingNotes.length
+    const r1 = await R.saveRiskAssessment({ admissionId: missP.id, scale: 'pressure', answers: highP, measures: ['turn', 'mattress'], writeNote: true, score: 99 })
+    const note = db().nursingNotes.find((n) => n.id === r1.noteId)
+    ok(r1.score === 11 && r1.level === 'high' && r1.reason === 'admission' && db().auditLogs[0].action === '風險評估', '存檔：分數由服務層重算（不收畫面的分數）、高風險、入院評估、寫稽核')
+    ok(db().nursingNotes.length === notes0 + 1 && note.focus === '皮膚完整性受損的危險' && note.data.includes('Braden 壓傷量表 11 分（高風險）') && note.action.includes('每 2 小時翻身、使用氣墊床'), '一併寫護理紀錄：焦點、分數與因子、措施')
+    ok((await R.getRiskOverview(missP.id)).scales.pressure.due.status === 'ok' && (await api.dashboardApi.getDashboard()).riskOverdue === dash0 - 1 && (await api.admissionApi.getAdmission(missP.id)).riskLevels.pressure === 'high', '評完：不再逾時、首頁少 1、病人標壓傷高風險')
+    const r2 = await R.saveRiskAssessment({ admissionId: missP.id, scale: 'fall', answers: fall({ history: 25 }), change: true })
+    ok(r2.reason === 'change' && r2.level === 'moderate' && !r2.noteId && !r2.measures, '病情變化加評；中度不用勾措施、沒勾就不寫護理紀錄')
+    // 作廢
+    await as('nurse02')
+    const ovN2 = await R.getRiskOverview(missP.id)
+    ok(ovN2.scales.pressure.latest.cantVoid?.includes('本人'), '別的護理師不能作廢')
+    let msg = await errOf(() => R.voidRiskAssessment(r1.id, '測試'))
+    ok(msg.includes('本人'), `別人作廢 → 「${msg}」`)
+    await as('nurse01')
+    f = await fieldsOf(() => R.voidRiskAssessment(r1.id, ' '))
+    ok(!!f.reason, '作廢要原因')
+    await R.voidRiskAssessment(r1.id, '評錯病人')
+    const ovV = await R.getRiskOverview(missP.id)
+    ok(!ovV.scales.pressure.latest && ovV.scales.pressure.history[0].voided?.reason === '評錯病人' && ovV.scales.pressure.due.status === 'overdue' && db().nursingNotes.some((n) => n.id === r1.noteId), '作廢：紀錄留著、最新一次回到沒評（又逾時）、護理紀錄不動')
+    const old = db().riskAssessments.find((r) => r.admissionId === stroke.id && r.scale === 'fall' && r.at < T)
+    msg = await errOf(() => R.voidRiskAssessment(old.id, '測試'))
+    ok(msg.includes('不能作廢'), '前幾天的評估不能作廢（請再評一次）')
+    // 轉床後要重評
+    await as('clerk01')
+    const empty = db().beds.find((b) => b.status === 'empty' && b.ward === db().beds.find((x) => x.id === missP.bedId).ward) ?? db().beds.find((b) => b.status === 'empty')
+    await api.admissionApi.transferBed(missP.id, empty.id)
+    await as('nurse01')
+    const ovT = await R.getRiskOverview(missP.id)
+    ok(ovT.scales.fall.due.reason === 'transfer' && ovT.scales.fall.due.dueAt === addMinutes(db().admissions.find((a) => a.id === missP.id).bedHistory.at(-1).from, 24 * 60), '轉床後：跌倒評估改成轉床後 24 小時內')
+    // 切點
+    await expectError(() => R.saveRiskSettings({ ...api.RISK_DEFAULT, fallHigh: 50 }), '護理師改切點')
+    await as('admin')
+    f = await fieldsOf(() => R.saveRiskSettings({ fallHigh: 40, fallModerate: 45, pressureHigh: 16, pressureModerate: 18 }))
+    ok(!!f.fallModerate, '切點不合理 → 擋')
+    await R.saveRiskSettings({ ...api.RISK_DEFAULT, fallHigh: 50 })
+    ok(db().riskSettings.fallHigh === 50 && db().auditLogs[0].detail.includes('Morse 高 ≥45') , '管理員改 Morse 高風險切點 50（寫稽核）')
+    await as('nurse01')
+    const r3 = await R.saveRiskAssessment({ admissionId: missP.id, scale: 'fall', answers: fall({ history: 25, iv: 20 }) })
+    ok(r3.score === 45 && r3.level === 'moderate' && db().riskAssessments.find((r) => r.id === r2.id).level === 'moderate', '新切點：45 分變中度；舊紀錄的等級不變')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

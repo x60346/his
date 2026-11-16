@@ -1,6 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
+  RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
   Bed,
@@ -56,6 +57,7 @@ import { udPerDose } from '@/services/ud-rules'
 import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
+import { riskLevel, riskScore } from '@/services/risk-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -1597,6 +1599,46 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 跌倒、壓傷風險評估（示範，不抽亂數）：住院中的病人入院後 1.5 小時內都評過；
+  //   - 腦梗塞（住 32 天）跌倒、壓傷都高風險，每天重評，最近一次是 23 小時前（快到期，護理站列「待評估」）
+  //   - 骨折跌倒中度（之前跌倒過）；敗血症壓傷高風險（6 小時前重評過）、跌倒中度
+  //   - 一位入院超過 24 小時的低風險病人漏評壓傷（入院評估逾時）
+  const riskAssessments: RiskAssessment[] = []
+  {
+    const F = (history: number, secondary: number, aid: number, iv: number, gait: number, mental: number) => ({ history, secondary, aid, iv, gait, mental })
+    const B = (sensory: number, moisture: number, activity: number, mobility: number, nutrition: number, friction: number) => ({ sensory, moisture, activity, mobility, nutrition, friction })
+    const put = (a: Admission, scale: RiskScale, answers: Record<string, number>, at: string, reason: RiskReason, measures?: string[]) => {
+      const score = riskScore(scale, answers).score
+      riskAssessments.push({ id: id('RA'), admissionId: a.id, scale, at, nurseId: 'U201', answers, score, level: riskLevel(scale, score), reason, ...(measures ? { measures } : {}) })
+    }
+    const inpt = admissions.filter((a) => a.status === 'admitted' && a.admittedAt)
+    const first = (a: Admission) => notFuture(addMinutes(a.admittedAt!, 90), 5)
+    const skipPressure = inpt.find((a) => !/^(I63|S52|A41)/.test(a.diagnosis) && a.admittedAt! < addMinutes(nowStr, -26 * 60))
+    for (const a of inpt) {
+      if (a.diagnosis.startsWith('I63')) {
+        const fall = F(0, 15, 0, 20, 20, 15)
+        const pres = B(2, 3, 1, 2, 2, 1)
+        put(a, 'fall', fall, first(a), 'admission', ['rails', 'bell', 'escort', 'teach'])
+        put(a, 'pressure', pres, first(a), 'admission', ['turn', 'mattress', 'offload'])
+        for (const back of [8 * 24 * 60, 2 * 24 * 60, 23 * 60]) {
+          const at = addMinutes(nowStr, -back)
+          put(a, 'fall', fall, at, 'routine', ['rails', 'bell', 'escort', 'sign'])
+          put(a, 'pressure', pres, at, 'routine', ['turn', 'mattress', 'offload', 'nutrition'])
+        }
+      } else if (a.diagnosis.startsWith('S52')) {
+        put(a, 'fall', F(25, 0, 0, 0, 10, 0), first(a), 'admission')
+        put(a, 'pressure', B(4, 4, 3, 3, 3, 3), first(a), 'admission')
+      } else if (a.diagnosis.startsWith('A41')) {
+        put(a, 'fall', F(0, 15, 0, 20, 0, 0), first(a), 'admission')
+        put(a, 'pressure', B(3, 3, 2, 3, 2, 2), first(a), 'admission', ['turn', 'dry'])
+        put(a, 'pressure', B(3, 3, 2, 3, 2, 2), notFuture(addMinutes(nowStr, -6 * 60), 5) > first(a) ? addMinutes(nowStr, -6 * 60) : first(a), 'routine', ['turn', 'dry', 'mattress'])
+      } else {
+        put(a, 'fall', F(0, 0, 0, 20, 0, 0), first(a), 'admission')
+        if (a !== skipPressure) put(a, 'pressure', B(4, 4, 3, 4, 3, 3), first(a), 'admission')
+      }
+    }
+  }
+
   // 腕帶與給藥掃描（示範，不抽亂數）：住院中的病人報到時都印了腕帶；已給的藥都掃描核對過，
   // 只有第一個病房今天的第 2、第 5 筆略過（掃描器故障、腕帶弄濕），護理站「掃描統計」才有內容
   for (const a of admissions.filter((x) => x.status === 'admitted')) a.wristband = { printedAt: a.admittedAt!, printedBy: 'U401', reprints: [] }
@@ -1649,6 +1691,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     ipdOrders,
     mar,
     scanMismatches: [],
+    riskAssessments,
     vitals,
     nursingNotes,
     progressNotes,

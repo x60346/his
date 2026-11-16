@@ -13,6 +13,8 @@ import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
 import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
 import WristbandDialog from '@/components/WristbandDialog.vue'
 import ScanStatsPanel from './components/ScanStatsPanel.vue'
+import RiskPanel from './components/RiskPanel.vue'
+import RiskBadges from '@/components/RiskBadges.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -66,14 +68,17 @@ const tabs = computed(() =>
         { key: 'mar', label: '給藥紀錄', count: adm.value.overdueCount + adm.value.dueCount || undefined },
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
+        { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'notes', label: '護理紀錄' },
         { key: 'handover', label: '交班' },
       ],
 )
 // 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
+// 停在病房層級的分頁（常備點班、給藥掃描）時點病人，也換到給藥紀錄（以前會落到護理紀錄）
+const WARD_ONLY = ['tasks', 'stock', 'scan']
 watch(admissionId, (id) => {
-  if (id && tab.value === 'tasks') tab.value = 'mar'
-  else if (!id && tab.value !== 'handover' && tab.value !== 'stock') tab.value = 'tasks'
+  if (id && WARD_ONLY.includes(tab.value)) tab.value = 'mar'
+  else if (!id && tab.value !== 'handover' && !WARD_ONLY.includes(tab.value)) tab.value = 'tasks'
 })
 
 // 本班待辦：取消選取病人就回到全病房清單；點清單的一列跳到該病人的對應分頁
@@ -134,9 +139,11 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.unackedCount" tone="cyan">新醫囑 {{ p.unackedCount }}</UBadge>
                     <UBadge v-if="p.dischargeReady" tone="green">准出院</UBadge>
                     <UBadge v-if="!p.wristband" tone="red" title="腕帶還沒印：給藥掃描要用">未印腕帶</UBadge>
+                    <UBadge v-if="p.riskOverdue" tone="red" title="跌倒或壓傷評估過了期限">評估逾時</UBadge>
+                    <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
                   </span>
                 </div>
-                <div class="mt-0.5 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天</div>
+                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<RiskBadges :levels="p.riskLevels" compact /></div>
                 <div v-if="p.latestVitals" class="tabular mt-0.5 text-xs text-slate-500">
                   <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
                   {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
@@ -156,6 +163,7 @@ const wardTotals = computed(() => ({
           <PatientBanner :patient="adm">
             <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
             <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.doctorName }}</span>
+            <RiskBadges :levels="adm.riskLevels" />
             <UButton size="sm" :variant="adm.wristband ? 'ghost' : 'secondary'" :class="!adm.wristband && 'text-red-700'" @click="wristbandOpen = true">{{ adm.wristband ? '重印腕帶' : '未印腕帶：列印' }}</UButton>
           </PatientBanner>
           <WristbandDialog v-model="wristbandOpen" :admission-id="adm.id" />
@@ -175,6 +183,7 @@ const wardTotals = computed(() => ({
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
+          <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />
         </UCard>

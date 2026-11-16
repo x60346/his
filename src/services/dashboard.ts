@@ -1,5 +1,6 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { db } from '@/mock/db'
+import { riskStateOf } from './risk-work'
 import { isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today } from '@/utils/date'
 import { query, sessionRole, sessionUser } from './http'
@@ -69,6 +70,8 @@ export interface DashboardStats {
   /** 准出院、出院帶藥還沒調劑（住院藥局待辦） */
   dischargeRxToDispense: number
   wardCountDue: number
+  /** 風險評估逾時的份數（跌倒、壓傷各算一份；全院住院中，和護理站待辦同一個判斷） */
+  riskOverdue: number
   /** 藥車交接：已核對送出、病房還沒點收的藥盒（護理站，全院）；病房回報不符、藥局還沒處理的（住院藥局） */
   udToReceive: number
   udIssues: number
@@ -131,6 +134,10 @@ export function getDashboard(): Promise<DashboardStats> {
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
       ipdToBill: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)).length,
+      riskOverdue: db.admissions.filter((a) => a.status === 'admitted').reduce((n, a) => {
+        const rs = riskStateOf(a, now())
+        return n + Number(rs.fall.due.status === 'overdue') + Number(rs.pressure.due.status === 'overdue')
+      }, 0),
       noShowsToFollow: db.visits.filter((v) => isNoShow(v, today()) && v.date >= addDays(today(), -NO_SHOW_TRACK_DAYS) && isImportantNoShow(v) && !noShowClosed(v)).length,
       ipdInterim: db.admissions.filter((a) => a.status === 'admitted' && !a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id) && !!interimSuggestion(a, ipdBillOf(a))).length,
       wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,

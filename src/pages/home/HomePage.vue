@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, Receipt, Stethoscope, Truck, Users,
+  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, ShieldAlert, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
 import { dashboardApi, opdApi } from '@/services'
@@ -72,6 +72,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '藥車待點收', count: s.value.udToReceive, hint: '藥局已核對送出的藥盒（全院），在護理站本班待辦點收', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '病房常備待補充', count: s.value.wardRefillDue, hint: '各病房低於基準量的品項，在住院藥局補充', route: 'ud', icon: Pill },
     { roles: ['nurse'], label: '本班未點班', count: s.value.wardCountDue, hint: '病房常備還沒點班的病房（全院），在護理站「常備點班」', route: 'nursing', query: { tab: 'stock' }, icon: Pill },
+    { roles: ['nurse'], label: '風險評估逾時', count: s.value.riskOverdue, hint: '跌倒、壓傷評估過了期限（全院）：入院 24 小時內、高風險每天、轉床轉科後', route: 'nursing', icon: ShieldAlert, urgent: true },
     { roles: ['nurse'], label: '待送回藥局', count: s.value.udSendBack, hint: '沒給的 UD 藥（含出院病人），在護理站本班待辦送回', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },

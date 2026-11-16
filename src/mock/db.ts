@@ -20,7 +20,7 @@ import type {
   IcdCode,
   Identity,
   IpdOrder,
-  MarRecord, ScanMismatch,
+  MarRecord, ScanMismatch, RiskAssessment, RiskSettings,
   NursingNote,
   OrderSet,
   Phrase,
@@ -103,6 +103,10 @@ export interface Database {
   mar: MarRecord[]
   /** 給藥掃描不符（差點給錯）的紀錄 */
   scanMismatches: ScanMismatch[]
+  /** 跌倒、壓傷風險評估 */
+  riskAssessments: RiskAssessment[]
+  /** 風險評估切點（選用：沒有就用預設） */
+  riskSettings?: RiskSettings
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
@@ -150,7 +154,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 75
+export const SCHEMA_VERSION = 76
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

@@ -11,6 +11,8 @@ import { wardStockOut } from './stock-ledger'
 import { residualOf } from './drug-rules'
 import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
 import { udStage } from './ud-work'
+import { riskStateOf } from './risk-work'
+import { RISK_REASON_LABEL, RISK_SCALE_NAME } from './risk-rules'
 import { scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
@@ -29,6 +31,9 @@ export interface WardPatient extends AdmissionView {
   unackedCount: number
   /** 這一班量過生命徵象沒有（沒量的在清單上標「本班未量」） */
   measuredThisShift: boolean
+  /** 風險評估：逾時、該評了（到期前 2 小時內）的份數（跌倒、壓傷各算一份） */
+  riskOverdue: number
+  riskDue: number
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -61,6 +66,11 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           pendingStatCount: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication').length,
           unackedCount: db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length,
           measuredThisShift: measuredThisShift(latest?.at, t),
+          ...(() => {
+            const rs = riskStateOf(a, t)
+            const st = [rs.fall.due.status, rs.pressure.due.status]
+            return { riskOverdue: st.filter((s) => s === 'overdue').length, riskDue: st.filter((s) => s === 'due').length }
+          })(),
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
@@ -74,7 +84,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -113,6 +123,13 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       }
       const unacked = db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length
       if (unacked) tasks.push({ ...base, id: `ack-${a.id}`, kind: 'ack', urgency: 'todo', text: `${unacked} 項醫囑異動待核對` })
+      // 風險評估：逾時、該評了（到期前 2 小時內）——和病人清單的徽章同一個判斷（risk-work.riskStateOf）
+      const rs = riskStateOf(a, t)
+      for (const scale of ['fall', 'pressure'] as const) {
+        const d = rs[scale].due
+        if (d.status === 'ok') continue
+        tasks.push({ ...base, id: `risk-${scale}-${a.id}`, kind: 'risk', urgency: d.status === 'overdue' ? 'overdue' : 'due', at: d.dueAt, text: `${RISK_SCALE_NAME[scale]}（${RISK_REASON_LABEL[d.reason]}）` })
+      }
       // 這一班還沒量過生命徵象：和病人清單的「本班未量」同一條規則（measuredThisShift）
       if (!measuredThisShift(latestVitalOf(a.id)?.at, t)) {
         tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象' })

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // 安全設定：閒置多久鎖定畫面（規則與服務層同一個 checkIdleMinutes）；密碼期限與歷史（checkPasswordPolicy）；調劑雙人核對（U24）。
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { UButton, UCard, UCheckbox, UInput } from '@/components/ui'
-import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_GRACE_MAX, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, scanApi, UNLOCK_MAX_FAILS } from '@/services'
+import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_GRACE_MAX, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, riskApi, scanApi, UNLOCK_MAX_FAILS } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: current } = useQuery(() => authApi.idleLockMinutes())
@@ -29,6 +29,12 @@ const savePw = useAction(authApi.savePasswordPolicy, {
 // 調劑雙人核對：勾了立即儲存（只有一個開關，不需要另外按儲存）
 const { data: policy } = useQuery(() => pharmacyApi.dispensePolicy())
 const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (p.twoPersonDispense ? '已開啟：核對與發藥須由不同藥師' : '已關閉：同一位藥師可以核對並發藥') })
+
+// 風險評估切點（Morse 越高越危險、Braden 越低越危險）
+const { data: riskSet } = useQuery(() => riskApi.getRiskSettings())
+const rk = reactive({ fallHigh: 45, fallModerate: 25, pressureHigh: 16, pressureModerate: 18 })
+watch(riskSet, (s) => s && Object.assign(rk, s), { immediate: true })
+const saveRisk = useAction(riskApi.saveRiskSettings, { success: (s) => `已儲存：Morse ≥${s.fallHigh} 高風險、≥${s.fallModerate} 中度；Braden ≤${s.pressureHigh} 高風險、≤${s.pressureModerate} 中度` })
 
 // 給藥條碼核對：勾了立即儲存
 const { data: scanPol } = useQuery(() => scanApi.scanPolicy())
@@ -79,6 +85,18 @@ const saveScan = useAction(scanApi.saveScanPolicy, { success: (p) => (p.requireS
       <UCheckbox :model-value="!!policy?.twoPersonDispense" :disabled="!policy || savePolicy.pending.value" label="核對與發藥須由不同藥師" @update:model-value="(v) => savePolicy.run(v)" />
       <p class="text-slate-600">開啟後，核對處方的藥師不能自己發藥，要由第二位藥師在發藥時再看一次（雙重核對）。</p>
       <p class="text-xs text-slate-500">預設關閉：只有一位藥師的診所開啟後會無法發藥。目前有 2 位藥師帳號（ph01、ph02）可以示範。</p>
+    </div>
+  </UCard>
+  <UCard title="跌倒、壓傷風險評估切點" subtitle="護理站風險評估的等級判斷（之後的評估用新切點，舊紀錄不變）">
+    <div class="max-w-2xl space-y-2 text-sm">
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="w-40"><UInput v-model="rk.fallHigh" type="number" label="Morse 高風險 ≥" :error="saveRisk.fieldErrors.value.fallHigh" /></div>
+        <div class="w-40"><UInput v-model="rk.fallModerate" type="number" label="Morse 中度 ≥" :error="saveRisk.fieldErrors.value.fallModerate" /></div>
+        <div class="w-40"><UInput v-model="rk.pressureHigh" type="number" label="Braden 高風險 ≤" :error="saveRisk.fieldErrors.value.pressureHigh" /></div>
+        <div class="w-40"><UInput v-model="rk.pressureModerate" type="number" label="Braden 中度 ≤" :error="saveRisk.fieldErrors.value.pressureModerate" /></div>
+        <UButton :loading="saveRisk.pending.value" @click="saveRisk.run({ fallHigh: Number(rk.fallHigh), fallModerate: Number(rk.fallModerate), pressureHigh: Number(rk.pressureHigh), pressureModerate: Number(rk.pressureModerate) })">儲存</UButton>
+      </div>
+      <p class="text-xs text-slate-500">預設 Morse ≥45 高風險、≥25 中度（0–125 分，越高越危險）；Braden ≤16 高風險、≤18 中度（6–23 分，越低越危險）。各醫院切點不同，依院內規範調整。高風險每 24 小時重評，其他每 7 天。</p>
     </div>
   </UCard>
   <UCard title="給藥條碼核對" subtitle="住院給藥前掃病人腕帶與藥品條碼">

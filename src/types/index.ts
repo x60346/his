@@ -1232,6 +1232,44 @@ export interface VitalRecord {
   nurseId: string
 }
 
+/** 風險評估量表：fall＝跌倒（Morse）、pressure＝壓傷（Braden） */
+export type RiskScale = 'fall' | 'pressure'
+export type RiskLevel = 'high' | 'moderate' | 'low'
+/** 評估的時機：入院 24 小時內、例行重評、轉床或轉科後、病情變化加評 */
+export type RiskReason = 'admission' | 'routine' | 'transfer' | 'change'
+
+/** 風險評估（護理師）：每次一筆、只增不改；填錯的當班由本人作廢（留著、劃線） */
+export interface RiskAssessment {
+  id: string
+  admissionId: string
+  scale: RiskScale
+  at: string
+  nurseId: string
+  /** 每一題選的分數（題目 key → 分數） */
+  answers: Record<string, number>
+  score: number
+  /** 依當時的切點判斷（之後改切點，舊紀錄不變） */
+  level: RiskLevel
+  reason: RiskReason
+  /** 高風險時已採取的預防措施（措施 key） */
+  measures?: string[]
+  /** 一起寫的護理紀錄 */
+  noteId?: string
+  voided?: { at: string; by: string; reason: string }
+}
+
+/** 風險評估切點（管理員可調；沒設定用 risk-rules.RISK_DEFAULT）。Morse 越高越危險、Braden 越低越危險 */
+export interface RiskSettings {
+  /** Morse ≥ 這個分數＝高風險 */
+  fallHigh: number
+  /** Morse ≥ 這個分數＝中度 */
+  fallModerate: number
+  /** Braden ≤ 這個分數＝高風險 */
+  pressureHigh: number
+  /** Braden ≤ 這個分數＝中度 */
+  pressureModerate: number
+}
+
 export interface NursingNote {
   id: string
   admissionId: string
