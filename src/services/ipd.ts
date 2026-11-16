@@ -14,6 +14,8 @@ import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
+import { checkRxAlerts, type RxAlert } from './interaction-rules'
+import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -102,6 +104,13 @@ export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'd
   allowDuplicate?: boolean
   /** 劑量偏高時，醫師確認無誤 */
   confirmHighDose?: boolean
+  /** 交互作用、重複用藥提醒的確認（key → 原因；嚴重的原因必填）——這次送出的確認，原因存在醫囑的 rxAlerts */
+  rxAlertReasons?: Record<string, string>
+}
+
+/** 開醫囑前查詢：這個藥和病人執行中的其他給藥醫囑之間的交互作用、成分／同類重複（同一種藥另有 listActiveSameDrug） */
+export function orderRxAlerts(admissionId: string, drugId: string): Promise<RxAlert[]> {
+  return query(() => checkRxAlerts(drugRefs([drugId]), ipdInUse(admissionId, drugId)))
 }
 
 /** 這位病人執行中的同藥醫囑（重複開立前要先讓醫師看到） */
@@ -121,6 +130,7 @@ export function listActiveSameDrug(admissionId: string, drugId: string): Promise
 function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof activeAdmission>, input: OrderInput, t: string, extra: Partial<IpdOrder> = {}): IpdOrder {
     let content = input.content.trim()
     let timing: Pick<IpdOrder, 'timing' | 'timingSet'> = {}
+    let rxAlerts: IpdOrder['rxAlerts']
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
@@ -142,6 +152,9 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       if (dup.length && !input.allowDuplicate) {
         fail(`病人已有執行中的 ${drug.name}（${dup.map((o) => `每次 ${o.dose} ${doseUnitOf(drug)} ${o.freq}`).join('、')}），如確定要再開一筆請確認`, 'CONFLICT')
       }
+      // 交互作用、成分／同類重複：和這次住院執行中的其他給藥醫囑比。修改醫囑（同一個藥、只改劑量頻率）沿用原本的確認
+      const old = extra.replaces ? db.ipdOrders.find((x) => x.id === extra.replaces) : undefined
+      rxAlerts = old ? old.rxAlerts : settleRxAlerts(drugRefs([drug.id]), ipdInUse(a.id, drug.id), input.rxAlertReasons)
       content = content || drug.name
       // 服用時機：開立時決定、存在醫囑上（排程依它排）。只有長期、適用的（口服、非睡前／需要時）才有
       const rx = normalizeRxTiming(drug.timing, { timing: input.timing, freq: input.freq, route: input.route ?? '' })
@@ -155,10 +168,11 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       ...timing,
+      ...(rxAlerts?.length ? { rxAlerts } : {}),
       content,
       id: newId('IO'),
       startAt: t,
@@ -194,7 +208,8 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     const a = activeAdmission(input.admissionId)
     const role = requireCare(user.doctorId, a, '開這位病人的醫囑', { consult: true })
     const o = createOrder(user, a, input, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
-    audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}`)
+    const severe = (o.rxAlerts ?? []).filter((x) => x.level === 'severe')
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((x) => `${x.title}（${x.reason}）`).join('、')}` : ''}`)
     return orderView(o)
   })
 }

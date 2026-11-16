@@ -4,10 +4,12 @@
 // 送出時「依類別組裝」要送的欄位，而不是把整個表單丟出去——
 // 否則切換類別後殘留的欄位（例如先選了藥又改成飲食）會被一起送出。
 // 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
 import { doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
+import RxAlertList from '@/components/RxAlertList.vue'
+import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import type { Drug, DrugTiming, IpdOrderCategory, Procedure } from '@/types'
@@ -103,6 +105,13 @@ const doseCheck = computed(() => {
   return { level, text: level === 'ok' ? '' : doseNote(form.drug, form.dose) }
 })
 
+// 交互作用、成分／同類重複：和這位病人執行中的其他給藥醫囑比（選了藥就提醒，送出前逐項確認）
+const { data: rxAlerts } = useQuery(
+  async () => (open.value && props.admission && form.category === 'medication' && form.drug ? ipdApi.orderRxAlerts(props.admission.id, form.drug.id) : []),
+  [open, () => form.drug?.id, () => form.category, () => props.admission?.id],
+)
+const rxConfirm = ref<InstanceType<typeof RxAlertConfirm>>()
+
 const save = useAction(ipdApi.addOrder, { success: (o) => `已開立：${o.content}${o.type === 'long' && o.category === 'medication' ? '（已產生給藥排程）' : ''}` })
 
 async function submit() {
@@ -134,6 +143,12 @@ ${doseNote(drug, input.dose ?? 0)}。
     }
     const warns = await opdApi.allergyWarnings(props.admission.patientId, [drug.id])
     if (warns.length && !(await ui.confirm({ title: '過敏警示', message: `病人對 ${warns.map((w) => w.allergen).join('、')} 過敏，${drug.name} 可能引起過敏反應。\n確認已評估風險，仍要開立？`, okText: '確認開立', danger: true }))) return
+    const alerts = await ipdApi.orderRxAlerts(props.admission.id, drug.id)
+    if (alerts.length) {
+      const r = await rxConfirm.value!.ask(alerts)
+      if (!r) return
+      input.rxAlertReasons = r
+    }
     if (drug.highAlert && !(await ui.confirm({ title: '高警訊藥品', message: `${drug.name} 為高警訊藥品。\n請再次確認：每次 ${input.dose} ${doseUnitOf(drug)}、${input.freq}、${input.route}`, okText: '劑量正確，開立' }))) return
   }
   if (await save.run(input)) open.value = false
@@ -183,6 +198,7 @@ ${doseNote(drug, input.dose ?? 0)}。
         <div v-if="form.drug" class="flex items-center gap-2 text-sm">
           已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge>
         </div>
+        <RxAlertList :alerts="rxAlerts ?? []" />
         <div class="grid grid-cols-3 gap-3">
           <UInput
             v-model="form.dose"
@@ -236,4 +252,5 @@ ${doseNote(drug, input.dose ?? 0)}。
       <UButton :loading="save.pending.value" @click="submit">開立</UButton>
     </template>
   </UDialog>
+  <RxAlertConfirm ref="rxConfirm" />
 </template>

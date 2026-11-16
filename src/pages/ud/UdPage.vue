@@ -153,6 +153,10 @@ function openSheet(id: string) {
                       <UBadge v-if="l.highAlert" tone="purple">高警訊</UBadge>
                       <UBadge v-if="l.pendingQuery" tone="yellow" :title="`護理師疑問：${l.pendingQuery}`">醫囑有疑問</UBadge>
                     </div>
+                    <!-- 開立時醫師確認過的交互作用、重複用藥（嚴重的寫了原因） -->
+                    <div v-for="a in l.rxAlerts ?? []" :key="a.key" :class="['text-xs', a.level === 'severe' ? 'text-red-700' : 'text-amber-800']">
+                      {{ a.level === 'severe' ? '嚴重' : '注意' }}：{{ a.title }}{{ a.reason ? `（醫師：${a.reason}）` : '' }}
+                    </div>
                     <div class="text-xs text-slate-500">{{ l.drugNameZh }}・{{ l.spec }}</div>
                   </td>
                   <td class="px-3 py-2 text-slate-700">

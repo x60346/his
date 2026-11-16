@@ -6,6 +6,7 @@ import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, query, requireUser, sessionUser, requirePermission } from './http'
 import { checkAllergies, type AllergyWarning } from './allergy'
+import type { RxAlertRecord } from '@/types'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
@@ -76,6 +77,8 @@ export interface DispenseView extends Dispense, PatientBrief {
   rxExpired: boolean
   /** 有第一～三級管制藥：要專用處方箋，發藥時要登記領藥人身分證號 */
   specialRx: boolean
+  /** 醫師完成看診時確認過的交互作用、重複用藥提醒（嚴重的有原因） */
+  rxAlerts: RxAlertRecord[]
 }
 
 function dispenseView(d: Dispense): DispenseView {
@@ -128,6 +131,7 @@ function dispenseView(d: Dispense): DispenseView {
     dispenseDate: d.verifiedAt?.slice(0, 10) ?? today(),
     rxValidUntil: rxValidUntil(e.date),
     rxExpired: rxExpired(e.date, d.dispensedAt ?? today()),
+    rxAlerts: e.rxAlerts ?? [],
     specialRx: drugs.some((x) => needsSpecialRx(x.controlled)),
     ...(() => {
       const u = sessionUser()

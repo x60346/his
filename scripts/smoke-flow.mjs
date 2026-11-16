@@ -48,6 +48,8 @@ try {
   const http = await load('/src/services/http.ts')
   const dbm = await load('/src/mock/db.ts')
   const api = await load('/src/services/index.ts')
+  /** 住院開醫囑時醫師確認交互作用、重複用藥提醒（不是這段要測的東西時用；嚴重的帶原因） */
+  const withRxOk = async (input) => ({ ...input, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(input.admissionId, input.drugId)).map((x) => [x.key, '測試確認'])) })
   const dateUtil = await load('/src/utils/date.ts')
   const { today, now: nowStr } = dateUtil
   http.setLatency(0, 0)
@@ -4913,7 +4915,9 @@ try {
     msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41], { refillTimes: 2 })))
     ok(msg.includes('一次調劑'), `第二級開成連續處方箋 → 「${msg}」`)
     ok(db().encounters.find((e) => e.id === A.ee.id).status !== 'completed', '被擋下的都沒有完成看診')
-    await api.opdApi.completeEncounter(A.ee.id, draftOf([m41, m01]))
+    // 這位病人還在吃前次開的 Acetaminophen（成分重複提醒）：確認後才完成
+    const rxOk = Object.fromEntries((await api.opdApi.rxAlerts(A.ee.id, [m41.drugId, m01.drugId])).map((x) => [x.key, '']))
+    await api.opdApi.completeEncounter(A.ee.id, draftOf([m41, m01]), { rxAlertReasons: rxOk })
     ok(db().encounters.find((e) => e.id === A.ee.id).status === 'completed', '執照到期當天、病人資料齊全：可以開第二級')
 
     // 專用處方箋
@@ -4982,7 +4986,9 @@ try {
     const o4 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M031', content: '', dose: 1, freq: 'STAT', route: 'PO', allowDuplicate: true })
     ok(!!o4.id, '住院：第四級不需要使用執照')
     doc(adm.doctorId).controlledLicense = keep ?? { no: 'C99-TEST', validUntil: addDaysT(365) }
-    const o2 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 1, freq: 'STAT', route: 'IM', allowDuplicate: true })
+    // 剛開了 Tramadol（同屬鴉片類止痛，同類重複提醒）：確認後才開
+    const rxOk2 = Object.fromEntries((await api.ipdApi.orderRxAlerts(adm.id, 'M039')).map((x) => [x.key, '']))
+    const o2 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 1, freq: 'STAT', route: 'IM', allowDuplicate: true, rxAlertReasons: rxOk2 })
     ok(!!o2.id, '住院：有使用執照就能開')
 
     // 系統管理：醫師的使用執照
@@ -5041,7 +5047,7 @@ try {
       const keepZ = structuredClone(doc(a5.doctorId).controlledLicense)
       delete doc(a5.doctorId).controlledLicense
       await as(db().users.find((u) => u.doctorId === a5.doctorId).username)
-      const z = await api.ipdApi.addOrder({ admissionId: a5.id, type: 'long', category: 'medication', drugId: 'M028', content: '', dose: 0.5, freq: 'PRN', route: 'PO', allowDuplicate: true })
+      const z = await api.ipdApi.addOrder(await withRxOk({ admissionId: a5.id, type: 'long', category: 'medication', drugId: 'M028', content: '', dose: 0.5, freq: 'PRN', route: 'PO', allowDuplicate: true }))
       ok(z.residualQty === 0.5, '第四級不需要使用執照；醫囑標出每次殘餘半顆')
       doc(a5.doctorId).controlledLicense = keepZ
       await as('nurse01')
@@ -5786,6 +5792,122 @@ try {
     ok(ob.suggestions[0].label.includes('81 天後') && ob.suggestions[0].date === addDaysT(81) && ob.suggestions.length === 4, '慢性病連續處方（28 天 × 3 次）：第一個建議是 81 天後（藥用完前）')
     const vb = await BK.bookFollowUp(B.vv.id, { sessionId: ob.suggestions[0].session.id })
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
+  }
+
+  // 交互作用與重複用藥：純函式規則；門診比對病人還在吃的本院藥（各科、慢箋、出院帶藥），住院比對執行中醫囑；
+  // 注意的確認即可、嚴重的要寫原因；原因存病歷／醫囑，藥局看得到
+  console.log('\n[交互作用與重複用藥]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? `${e.code}|${e.field ?? ''}|${e.message}` : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const R = api
+    const dref = (id) => {
+      const d = db().drugs.find((x) => x.id === id)
+      return { id: d.id, name: d.name, generic: d.generic }
+    }
+    ok(R.ingredientsOf('Amoxicillin/Clavulanate').join() === 'amoxicillin,clavulanate' && R.ingredientsOf('Morphine sulfate').join() === 'morphine' && R.ingredientsOf('Acetylsalicylic acid').join() === 'acetylsalicylic', '成分：複方拆開、鹽類不算（Morphine sulfate＝morphine）')
+    let al = R.checkRxAlerts([dref('M001'), dref('M021'), dref('M002')])
+    ok(al.length === 1 && al[0].kind === 'interaction' && al[0].level === 'severe' && al[0].title.includes('Warfarin') && al[0].title.includes('Ibuprofen'), 'Warfarin＋Ibuprofen：嚴重交互作用（出血）；Acetaminophen 沒事')
+    al = R.checkRxAlerts([dref('M020'), dref('M022')])
+    ok(al.length === 1 && al[0].level === 'caution' && al[0].text.includes('Famotidine'), 'Clopidogrel＋Omeprazole：注意（建議改用 Famotidine）')
+    al = R.checkRxAlerts([dref('M007'), dref('M008'), dref('M003'), dref('M004')])
+    ok(al.length === 2 && al.some((a) => a.kind === 'class' && a.text.includes('抗組織胺')) && al.some((a) => a.kind === 'same' && a.text.includes('amoxicillin')), '同類重複（兩種抗組織胺）、成分重複（Amoxicillin＋Augmentin）都是注意')
+    al = R.checkRxAlerts([dref('M002'), dref('M002')])
+    ok(al.length === 0, '同一個藥在處方出現兩次不報（處方表自己的事）')
+    al = R.checkRxAlerts([dref('M028'), dref('M029')], [{ drug: dref('M031'), source: '骨科 11/10 某醫師', until: addDaysT(4), remainDays: 5 }])
+    ok(al[0].level === 'severe' && al[0].other.includes('骨科') && al[0].other.includes('還有 5 天') && al.some((a) => a.kind === 'class'), '和還在吃的藥比：寫出哪裡開的、還有幾天；嚴重的排前面')
+    const pr = R.rxAlertProblems(R.checkRxAlerts([dref('M021'), dref('M002'), dref('M007'), dref('M008')]), {})
+    ok(pr.missing.length === 2 && pr.needReason.length === 0, '沒有確認：兩則都算還沒確認')
+    const keys = R.checkRxAlerts([dref('M021'), dref('M002'), dref('M007'), dref('M008')]).map((a) => a.key)
+    const pr2 = R.rxAlertProblems(R.checkRxAlerts([dref('M021'), dref('M002'), dref('M007'), dref('M008')]), { [keys[0]]: ' ', [keys[1]]: '' })
+    ok(pr2.missing.length === 0 && pr2.needReason.length === 1, '都確認了，但嚴重的原因空白 → 要寫原因；注意的可空白')
+
+    // 門診：病人上午在內科拿了 Omeprazole 14 天，下午家醫科又開
+    await as('clerk01')
+    const sessions = (await api.scheduleApi.listSessions({ date: T })).filter((x) => !x.full && !x.closed && !x.suspended)
+    const s1 = sessions[0]
+    const s2 = sessions.find((x) => x.deptId !== s1.deptId)
+    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.patientId === x.id) && !db().admissions.some((a) => a.patientId === x.id))
+    const med = (drugId, days = 7, freq = 'QD') => ({ drugId, dose: 1, freq, route: 'PO', days, qty: 0, selfPay: false })
+    const draftOf = (meds) => ({ subjective: 's', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'K21.9', name: '胃食道逆流', primary: true }], medications: meds, procedures: [], refillTimes: 0, admissionRequested: false })
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const v1 = await api.bookingApi.register({ patientId: pt.id, sessionId: s1.id, identityCode: '01', caseType: '01' })
+    await as(userOf(s1.doctorId))
+    const e1 = await api.opdApi.startConsult(v1.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.completeEncounter(e1.id, draftOf([med('M022', 14)]))
+    ok(!db().encounters.find((e) => e.id === e1.id).rxAlerts, '沒有提醒：直接完成，病歷不存空的提醒')
+    await as('clerk01')
+    const v2 = await api.bookingApi.register({ patientId: pt.id, sessionId: s2.id, identityCode: '01', caseType: '01' })
+    await as(userOf(s2.doctorId))
+    const e2 = await api.opdApi.startConsult(v2.id, { allowParallel: true, allowNotCheckedIn: true })
+    const meds2 = [med('M023'), med('M021'), med('M002', 3, 'TID')]
+    al = await api.opdApi.rxAlerts(e2.id, meds2.map((m) => m.drugId))
+    const famo = al.find((a) => a.title.includes('Famotidine'))
+    ok(al.length === 2 && al[0].level === 'severe' && famo?.kind === 'class' && famo.other.includes(db().departments.find((d) => d.id === s1.deptId).name) && famo.other.includes('還有 14 天'), `處方表即時提醒：嚴重（Warfarin＋Ibuprofen）在前；Famotidine 和上午${db().departments.find((d) => d.id === s1.deptId).name}的 Omeprazole 同類（還有 14 天）`)
+    let msg = await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf(meds2)))
+    ok(msg.startsWith('CONFLICT|rxAlerts|') && msg.includes('2 則'), `沒確認就完成 → 「${msg.split('|')[2]}」`)
+    const rs = Object.fromEntries(al.map((a) => [a.key, '']))
+    msg = await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf(meds2), { rxAlertReasons: rs }))
+    ok(msg.includes('要寫原因') && db().encounters.find((e) => e.id === e2.id).status !== 'completed', `嚴重的沒寫原因 → 「${msg.split('|')[2]}」，沒有完成`)
+    rs[al[0].key] = '已評估，短期止痛並追蹤 INR'
+    await api.opdApi.completeEncounter(e2.id, draftOf(meds2), { rxAlertReasons: rs })
+    const ce = db().encounters.find((e) => e.id === e2.id)
+    ok(ce.status === 'completed' && ce.rxAlerts.length === 2 && ce.rxAlerts[0].reason === '已評估，短期止痛並追蹤 INR' && ce.rxAlerts[1].reason === '', '確認後完成：提醒與原因存進病歷')
+    ok(db().auditLogs[0].action === '完成看診' && db().auditLogs[0].detail.includes('嚴重交互作用仍開立') && db().auditLogs[0].detail.includes('追蹤 INR'), '稽核記下嚴重交互作用仍開立與原因')
+    await as('clerk01')
+    const pv = await api.chargeApi.previewCharge(v2.id)
+    await api.chargeApi.pay(v2.id, { payMethod: 'cash', received: pv.patientTotal })
+    await as('ph01')
+    const dv = (await api.pharmacyApi.listDispenses({ date: T })).find((d) => d.visitId === v2.id)
+    ok(dv?.rxAlerts.length === 2 && dv.rxAlerts[0].level === 'severe' && dv.rxAlerts[0].reason.includes('INR'), '藥局調劑畫面看得到提醒與醫師寫的原因')
+
+    // 吃完的不算；慢性病連續處方依可調劑次數算
+    const old = db().encounters.find((e) => e.id === e1.id)
+    old.date = addDaysT(-20)
+    await as('clerk01')
+    const s3 = sessions.find((x) => x.deptId !== s1.deptId && x.deptId !== s2.deptId) ?? sessions.find((x) => x.id !== s1.id && x.id !== s2.id)
+    const v3 = await api.bookingApi.register({ patientId: pt.id, sessionId: s3.id, identityCode: '01', caseType: '01' })
+    await as(userOf(s3.doctorId))
+    const e3 = await api.opdApi.startConsult(v3.id, { allowParallel: true, allowNotCheckedIn: true })
+    al = await api.opdApi.rxAlerts(e3.id, ['M022'])
+    ok(!al.some((a) => a.other?.includes(db().departments.find((d) => d.id === s1.deptId).name + ' ')), '20 天前開的 14 天 Omeprazole 已經吃完：不算重複')
+    old.refillTimes = 2
+    al = await api.opdApi.rxAlerts(e3.id, ['M022'])
+    ok(al.some((a) => a.kind === 'same' && a.other.includes('還有 8 天')), '同一張是慢性病連續處方（14 天 × 2 次）：還有 8 天，開同成分要提醒')
+    old.refillTimes = 0
+    await api.opdApi.saveDraft(e3.id, { ...draftOf([]), rxAlerts: [{ key: 'x', level: 'caution', title: '偽造', text: '', reason: '' }] })
+    ok(!db().encounters.find((e) => e.id === e3.id).rxAlerts, '畫面送來的提醒紀錄不收（只在完成看診時由服務層算）')
+    await as('nurse01')
+    await expectError(() => api.opdApi.completeEncounter(e3.id, draftOf([])), '護理師完成看診')
+
+    // 住院：和執行中的給藥醫囑比
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !db().ipdOrders.some((o) => o.admissionId === a.id && o.status === 'active' && ['M021', 'M019', 'M002', 'M030', 'M032'].includes(o.drugId)))
+    await as(userOf(adm.doctorId))
+    const base = { admissionId: adm.id, type: 'long', category: 'medication', content: '', dose: 1, freq: 'QD', route: 'PO', allowDuplicate: true }
+    await api.ipdApi.addOrder(await withRxOk({ ...base, drugId: 'M019' }))
+    al = await api.ipdApi.orderRxAlerts(adm.id, 'M021')
+    ok(al.length === 1 && al[0].level === 'severe' && al[0].title.includes('執行中') && al[0].other.includes('長期醫囑'), '住院：開 Warfarin 時，和執行中的 Aspirin 醫囑是嚴重交互作用')
+    msg = await errOf(() => api.ipdApi.addOrder({ ...base, drugId: 'M021' }))
+    ok(msg.startsWith('CONFLICT|rxAlerts|'), `沒確認就開 → 「${msg.split('|')[2]}」`)
+    msg = await errOf(() => api.ipdApi.addOrder({ ...base, drugId: 'M021', rxAlertReasons: { [al[0].key]: '' } }))
+    ok(msg.includes('要寫原因'), '嚴重的沒寫原因 → 擋下')
+    const wf = await api.ipdApi.addOrder({ ...base, drugId: 'M021', rxAlertReasons: { [al[0].key]: '心房顫動合併支架，心臟科建議' } })
+    ok(wf.rxAlerts?.[0].reason === '心房顫動合併支架，心臟科建議' && !('rxAlertReasons' in db().ipdOrders.find((o) => o.id === wf.id)), '確認後開立：提醒與原因存在醫囑上（確認本身不存）')
+    ok((await api.ipdApi.orderRxAlerts(adm.id, 'M021')).length === 1, '同一種藥不重複報（同藥重複開立另有確認）')
+    const rv = await api.ipdApi.reviseOrder(wf.id, { dose: 0.5, freq: 'QD', route: 'PO', reason: '依 INR 調整' })
+    ok(rv.rxAlerts?.[0].reason.includes('心臟科'), '修改劑量：沿用開立時的確認，不必再問一次')
+    await as('ph01')
+    const work = await api.udApi.getUdWork()
+    const line = [...work.extra, ...work.daily].flatMap((g) => g.lines).find((l) => l.orderId === rv.id)
+    ok(line?.rxAlerts?.[0].level === 'severe', '住院藥局調劑清單看得到這筆醫囑的提醒與原因')
   }
 
   // 診斷證明書：醫師開立、費用跟著帳單（門診批價、住院結帳）、收費後才能印；收費前可改可作廢、收費後只能作廢重開（不另收費）

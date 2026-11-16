@@ -365,6 +365,8 @@ export interface Encounter {
   admissionRequested: boolean
   status: EncounterStatus
   completedAt?: string
+  /** 完成看診時醫師確認過的交互作用、重複用藥提醒（嚴重的有原因）；藥局調劑時看得到 */
+  rxAlerts?: RxAlertRecord[]
 }
 
 export interface ChargeLine {
@@ -920,6 +922,8 @@ export interface IpdOrder {
   replacedBy?: string
   /** 修改原因（新醫囑上） */
   reviseReason?: string
+  /** 開立時醫師確認過的交互作用、重複用藥提醒（嚴重的有原因）；修改醫囑沿用 */
+  rxAlerts?: RxAlertRecord[]
   /** 會診醫師開的（哪一張會診單）：主治要按「已閱」 */
   consultId?: string
   consultSeenAt?: string
@@ -1496,4 +1500,19 @@ export interface MedicalCertificate {
   voided?: { at: string; by: string; reason: string; replacedBy?: string }
   /** 列印紀錄（誰、何時） */
   printed?: { at: string; by: string }[]
+}
+
+/** 交互作用、重複用藥提醒的嚴重度：嚴重＝要寫原因才能開；注意＝確認即可（規則見 services/interaction-rules.ts） */
+export type RxAlertLevel = 'severe' | 'caution'
+
+/** 醫師確認過的交互作用、重複用藥提醒（存在病歷／住院醫囑上，藥師看得到） */
+export interface RxAlertRecord {
+  key: string
+  level: RxAlertLevel
+  title: string
+  text: string
+  /** 另一個藥是病人還在吃的：哪裡開的、還有幾天 */
+  other?: string
+  /** 嚴重的必填；注意的可空白 */
+  reason: string
 }

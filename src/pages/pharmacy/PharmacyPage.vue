@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 門診藥局：調劑清單（依領藥號）→ 調劑單 → 核對 → 發藥；缺藥可申請補貨、列印藥袋。
 // 兩段式（核對、發藥）是用藥安全的標準流程；扣庫存只在發藥時發生，且整筆交易（任一藥不足就全部不扣）。
+import RxAlertList from '@/components/RxAlertList.vue'
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
 import { AlertTriangle, CheckCheck, ClipboardCheck, PackagePlus, Printer, Undo2 } from 'lucide-vue-next'
@@ -172,6 +173,8 @@ const print = () => window.print()
           <div v-for="w in d.allergyWarnings" :key="w.drugId">{{ w.drugName }}：病人對 {{ w.allergen }} 過敏</div>
         </div>
       </div>
+
+      <RxAlertList :alerts="d.rxAlerts" title="用藥提醒（醫師開立時已確認）：交互作用、重複用藥" />
 
       <UCard :padded="false">
         <template #title>

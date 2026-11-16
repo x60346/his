@@ -10,7 +10,7 @@
 //
 // 頁面送出的是「畫面上看得到的那幾劑」（marIds）：藥師按下前醫師剛好又開的新醫囑，不會被一起調劑——
 // 和護理師核對醫囑同一個原則。
-import type { MarRecord, UdBox, UdDispense, UdLine, UdReturn } from '@/types'
+import type { MarRecord, RxAlertRecord, UdBox, UdDispense, UdLine, UdReturn } from '@/types'
 import { commitIfPossible, db, newId, nextCounter } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failFields, failField, must, mutate, query, requireUser } from './http'
@@ -46,6 +46,8 @@ export interface UdWorkLine {
   highAlert: boolean
   /** 醫囑有疑問、待醫師回覆（照樣可以調劑；提醒藥師） */
   pendingQuery?: string
+  /** 開立時醫師確認過的交互作用、重複用藥提醒（嚴重的有原因） */
+  rxAlerts?: RxAlertRecord[]
   /** 住院藥局目前可用量；這種藥正在盤點時不給（盲盤），改標盤點單號 */
   available?: number
   counting?: string
@@ -182,6 +184,7 @@ function groupsOf(mars: MarRecord[], locationId: string): UdWorkGroup[] {
           ...(per ? { perDose: per, qty: per * ms.length } : {}),
           highAlert: d.highAlert,
           ...(openQuery(o) ? { pendingQuery: openQuery(o)!.reason } : {}),
+          ...(o.rxAlerts?.length ? { rxAlerts: o.rxAlerts } : {}),
           ...(counting ? { counting } : { available: usableQty(stockLoc.lots(d.id, locationId), today()) }),
         }
       })

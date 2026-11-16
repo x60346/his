@@ -21,6 +21,8 @@ import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import LabReportList from '@/components/LabReportList.vue'
 import FollowUpDialog from './components/FollowUpDialog.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
+import RxAlertList from '@/components/RxAlertList.vue'
+import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
@@ -157,6 +159,12 @@ const { data: warnings } = useQuery(
   async () => (visit.value && drugKey.value ? opdApi.allergyWarnings(visit.value.patientId, drugKey.value.split(',')) : []),
   [drugKey, () => visit.value?.patientId],
 )
+// 交互作用、重複用藥（這張處方彼此之間、病人還在吃的本院藥）：處方表即時提醒，完成看診時逐項確認
+const { data: rxAlerts } = useQuery(
+  async () => (encounter.value && drugKey.value && editable.value ? opdApi.rxAlerts(encounter.value.id, drugKey.value.split(',')) : []),
+  [drugKey, () => encounter.value?.id, editable],
+)
+const rxConfirm = ref<InstanceType<typeof RxAlertConfirm>>()
 
 // ---------- 動作 ----------
 /**
@@ -214,7 +222,7 @@ async function onSkip() {
   if (await skip.run(visit.value.id)) goNext()
 }
 
-const complete = useAction(async (opts: { confirmHighDose?: boolean } = {}) => {
+const complete = useAction(async (opts: { confirmHighDose?: boolean; rxAlertReasons?: Record<string, string> } = {}) => {
   const r = await opdApi.completeEncounter(encounter.value!.id, strip(draft.value), opts)
   baseline.value = JSON.stringify(strip(draft.value))
   return r
@@ -259,7 +267,19 @@ async function onComplete(): Promise<boolean> {
     })
     if (!ok) return false
   }
-  const done = (await complete.run({ confirmHighDose: high.length > 0 })) !== undefined
+  // 交互作用、重複用藥：逐項確認，嚴重的要寫原因（之前完成過、再修改的，帶入上次寫的原因）
+  let rxAlertReasons: Record<string, string> | undefined
+  const alerts = encounter.value ? await opdApi.rxAlerts(encounter.value.id, draft.value.medications.map((m) => m.drugId)) : []
+  if (alerts.length) {
+    const prev = Object.fromEntries((encounter.value?.rxAlerts ?? []).map((a) => [a.key, a.reason]))
+    const r = await rxConfirm.value!.ask(alerts, prev)
+    if (!r) {
+      goSection('orders')
+      return false
+    }
+    rxAlertReasons = r
+  }
+  const done = (await complete.run({ confirmHighDose: high.length > 0, rxAlertReasons })) !== undefined
   // 有第一～三級管制藥：完成就跳出專用處方箋（醫師印出、簽章；之後在這位病人的畫面也能重印）
   if (done && specialRx.value.length) openSpecialRx(encounter.value!.id)
   return done
@@ -662,6 +682,8 @@ const lastOpen = ref(true)
                 </span>
                 <UButton v-if="specialRx.length && encounter?.status === 'completed'" size="sm" variant="secondary" @click="openSpecialRx(encounter.id)">專用處方箋</UButton>
               </div>
+              <RxAlertList v-if="editable" class="mb-2" :alerts="rxAlerts ?? []" />
+              <RxAlertList v-else class="mb-2" :alerts="encounter?.rxAlerts ?? []" title="開立時確認過的用藥提醒" />
               <MedicationEditor v-model="draft.medications" :drugs="drugs" :freqs="freqs" :warnings="warnings ?? []" :default-days="defaultDays" :readonly="!editable" />
             </section>
             <section>
@@ -699,6 +721,7 @@ const lastOpen = ref(true)
     </div>
     <OpdConsultDialog :item="answeringOpd" @close="answeringOpd = null" />
     <ControlledRxDialog v-model="rxOpen" :encounter-id="rxEncounterId" />
+    <RxAlertConfirm ref="rxConfirm" />
     <FollowUpDialog v-model="followOpen" :visit-id="visit?.id" />
   </div>
 </template>

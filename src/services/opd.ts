@@ -7,6 +7,8 @@ import { autoQty, doseUnitOf } from './billing'
 import { checkDays, doseLevel, doseNote } from './dose-rules'
 import { CONTROLLED_LEVEL_LABEL, ID_NO_PATTERN, licenseProblem, needsSpecialRx } from './controlled-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
+import { checkRxAlerts, type RxAlert } from './interaction-rules'
+import { drugRefs, opdInUse, settleRxAlerts } from './rx-alert-work'
 import { audit, fail, must, mutate, query, requireUser, requirePermission } from './http'
 import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
 import type { ExpandedOrders } from './orderset'
@@ -93,6 +95,8 @@ export type EncounterDraft = Pick<
 const cleanDraft = (d: EncounterDraft): EncounterDraft => {
   const c = structuredClone(d)
   if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, ...p }) => p)
+  // 用藥提醒的確認只在完成看診時由服務層算好存，畫面送來的不收
+  delete (c as Partial<Encounter>).rxAlerts
   return c
 }
 
@@ -124,8 +128,11 @@ export interface CompleteResult {
 }
 
 /** 完成醫囑：驗證 → 病歷完成 → 掛號改為待批價 →（若建議住院）自動建立住院預約 */
-/** confirmHighDose：處方中有劑量偏高的藥，醫師已確認無誤（放在選項而不是病歷草稿裡，避免被存進病歷） */
-export function completeEncounter(encounterId: string, draft: EncounterDraft, opts: { confirmHighDose?: boolean } = {}): Promise<CompleteResult> {
+/**
+ * confirmHighDose：處方中有劑量偏高的藥，醫師已確認無誤（放在選項而不是病歷草稿裡，避免被存進病歷）
+ * rxAlertReasons：交互作用、重複用藥提醒的確認（key → 原因；嚴重的原因必填）。還沒確認的服務層擋下（CONFLICT，field rxAlerts）
+ */
+export function completeEncounter(encounterId: string, draft: EncounterDraft, opts: { confirmHighDose?: boolean; rxAlertReasons?: Record<string, string> } = {}): Promise<CompleteResult> {
   return mutate(() => {
     requirePermission('order.write')
     const e = editableEncounter(encounterId)
@@ -151,6 +158,10 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     }
     cleanRxTimings(e.medications)
     specialRxCheck(e)
+    // 交互作用、重複用藥：這張處方彼此之間，以及病人還在吃的本院藥（別科、前幾天開的、出院帶藥）
+    const rxAlerts = settleRxAlerts(drugRefs(e.medications.map((m) => m.drugId)), opdInUse(e.patientId, e.date, e.id), opts.rxAlertReasons)
+    if (rxAlerts) e.rxAlerts = rxAlerts
+    else delete e.rxAlerts
     for (const p of e.procedures) usable.procedure(p.procId)
     for (const d of e.diagnoses) usable.icd(d.icd)
     if (e.refillTimes > 0 && v.caseType !== '04' && v.caseType !== '08') fail('連續處方箋需為慢性病案件（04）')
@@ -170,7 +181,8 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
       }
       db.admissions.push(admission)
     }
-    audit('完成看診', `${find.patient(e.patientId)?.name} ${e.diagnoses.map((d) => d.icd).join(',')}${admission ? '（建議住院）' : ''}`)
+    const severe = (e.rxAlerts ?? []).filter((a) => a.level === 'severe')
+    audit('完成看診', `${find.patient(e.patientId)?.name} ${e.diagnoses.map((d) => d.icd).join(',')}${admission ? '（建議住院）' : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((a) => `${a.title}（${a.reason}）`).join('、')}` : ''}`)
     return { encounter: e, admission }
   })
 }
@@ -190,6 +202,17 @@ function specialRxCheck(e: Encounter) {
   const missing = [!ID_NO_PATTERN.test(p.idNo ?? '') && '身分證號', !p.address?.trim() && '地址'].filter(Boolean)
   if (missing.length) fail(`開立 ${names}要用專用處方箋，病人的${missing.join('、')}必填：請先到病人資料補齊`)
   if (e.refillTimes > 0 && special.some((d) => d.controlled! <= 2)) fail(`${names}以一次調劑為限，不能開成慢性病連續處方箋`)
+}
+
+/**
+ * 開藥時的交互作用、重複用藥提醒（處方表即時顯示）：這張處方的藥彼此之間，以及病人還在吃的本院藥。
+ * 判斷和完成看診同一份（rx-alert-work）
+ */
+export function rxAlerts(encounterId: string, drugIds: string[]): Promise<RxAlert[]> {
+  return query(() => {
+    const e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
+    return checkRxAlerts(drugRefs(drugIds), opdInUse(e.patientId, e.date, e.id))
+  })
 }
 
 /** 開藥時的過敏檢查（不擋，交給醫師判斷；畫面顯示警示） */
