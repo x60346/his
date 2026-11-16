@@ -94,7 +94,8 @@ const prepayColumns = computed<Column<PrepayRow>[]>(() => [
   { key: 'at', label: '時間', format: (x) => (isRange.value ? `${x.at.slice(5, 10).replace('-', '/')} ${x.at.slice(11)}` : x.at.slice(11)) },
   { key: 'chartNo', label: '病歷號' },
   { key: 'patientName', label: '姓名' },
-  { key: 'visitDate', label: '就醫日', format: (x) => x.visitDate.slice(5).replace('-', '/') },
+  { key: 'kind', label: '類別' },
+  { key: 'visitDate', label: '就醫日', format: (x) => (x.admitNo ? `住院 ${x.admitNo}` : x.visitDate.slice(5).replace('-', '/')) },
   { key: 'payMethod', label: '付款', format: (x) => payMethodLabel[x.payMethod] },
   { key: 'cashierName', label: '收費人員' },
   { key: 'amount', label: '金額', align: 'right', format: (x) => x.amount.toLocaleString() },
@@ -271,7 +272,7 @@ const print = async () => {
         <UTable :columns="columns" :rows="r.charges" :row-key="(c) => c.id" :loading="loading" dense empty-text="當日沒有收據" :row-class="(c) => (c.refund ? 'text-red-700' : c.voided ? 'text-slate-400 line-through' : '')" />
       </UCard>
 
-      <UCard v-if="r.prepays.length" title="掛號預收" :subtitle="`${r.prepays.length} 筆・${money(r.prepaidIn)}（錢算在收的這天；批價扣抵時從那天的應收減掉，不會算兩次）`" :padded="false">
+      <UCard v-if="r.prepays.length" title="預收與期中繳款" :subtitle="`${r.prepays.length} 筆・${money(r.prepaidIn)}（錢算在收的這天；批價、出院結帳扣抵時從那天的應收減掉，不會算兩次）`" :padded="false">
         <UTable :columns="prepayColumns" :rows="r.prepays" :row-key="(x) => x.receiptNo" dense />
       </UCard>
 

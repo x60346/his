@@ -54,13 +54,13 @@ export function dailyReportTable(r: DailyReport): DailyReportTable {
     ...r.prepays.map((x) => ({
       at: x.at,
       key: x.receiptNo,
-      cells: ['掛號預收', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', PAY[x.payMethod], x.amount, '', '', x.cashierName, '有效', ''],
+      cells: [x.kind === '期中繳款' ? '住院期中繳款' : '掛號預收', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', PAY[x.payMethod], x.amount, '', '', x.cashierName, '有效', ''],
     })),
     // 退款：負數，算在退款那天
     ...r.refunds.map((x) => ({
       at: x.at,
       key: x.receiptNo,
-      cells: [x.kind === '退預收' ? '退還預收' : x.kind === '部分退費' ? '部分退費' : '退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
+      cells: [x.kind === '退預收' ? '退還預收' : x.kind === '退期中繳款' ? '退還期中繳款' : x.kind === '部分退費' ? '部分退費' : '退款', x.receiptNo, x.at.slice(0, 10), x.at.slice(11), x.chartNo, x.patientName, '', x.payMethods, -x.amount, '', '', x.cashierName, '有效', x.originalReceiptNo],
     })),
   ].sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key))
   return {

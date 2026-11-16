@@ -9,7 +9,7 @@
 //   5. 自費身分：所有項目以自費價計算，不申報健保
 //   6. 價格一律看「看診日」：藥價、醫令點數、掛號費、部分負擔都可以排定某天起生效（dated-rules），
 //      調整前看診、調整後才批價的，收看診那天的價格
-import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Drug, Encounter, Identity, IpdBillMeta, IpdCopaySettings, Procedure, Visit } from '@/types'
+import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Drug, Encounter, Identity, IpdBillMeta, IpdCopaySettings, IpdInterimSettings, Procedure, Visit } from '@/types'
 import { diffDays } from '@/utils/date'
 import { drugPriceOn } from './drug-rules'
 import { valueOn } from './dated-rules'
@@ -242,6 +242,8 @@ export function autoQty(d: Pick<Drug, 'unit' | 'doseUnit'>, dose: number, timesP
  * 收費設定可改（BillingSettings.ipdCopay）
  */
 export const IPD_COPAY_DEFAULT: IpdCopaySettings = { rates: [10, 20, 30], cap: 57000 }
+/** 住院期中繳款提醒的預設：距入院（或上次繳款）滿 30 天、或還沒繳的自付金額達 30,000 元 */
+export const IPD_INTERIM_DEFAULT: IpdInterimSettings = { days: 30, amount: 30000 }
 
 /** 住院天數：入院當天算、出院（結帳）當天不算；當天入院當天出院算 1 天 */
 export const ipdDays = (from: string, to: string) => Math.max(1, diffDays(from.slice(0, 10), to.slice(0, 10)))

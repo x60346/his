@@ -99,6 +99,41 @@ export interface IpdCopaySettings {
   cap: number
 }
 
+/** 住院期中繳款提醒：住滿幾天、或還沒繳的自付金額超過多少元，任一條件成立就提醒櫃台（0＝不用這個條件） */
+export interface IpdInterimSettings {
+  days: number
+  amount: number
+}
+
+/**
+ * 住院期中繳款：住院中先繳一部分（收據號和批價同一個序號，算在繳款那天的日結）。
+ * 不是分段結帳——出院結帳時算整段住院的總帳，再扣掉期中已繳的，多繳的開退款單退還
+ */
+export interface IpdInterimPayment {
+  id: string
+  receiptNo: string
+  amount: number
+  payMethod: PayMethod
+  at: string
+  cashierId: string
+  /** 繳款當下的試算：截至哪天、到那天的自付累計、之前已繳多少（收據上印「截至 X 住院費用 Y 元」） */
+  asOf: string
+  billTotal: number
+  paidBefore: number
+  /** 當天收錯作廢（只限當天、還沒出院結帳扣抵）：不算日結 */
+  voided?: { at: string; by: string; reason: string }
+}
+
+/** 退還期中繳款（出院結帳時多繳的差額）：依原付款方式，開退款單算在退款那天 */
+export interface IpdInterimRefund {
+  receiptNo: string
+  amount: number
+  parts: { payMethod: PayMethod; amount: number }[]
+  reason: string
+  cashierId: string
+  at: string
+}
+
 export interface CopayValues {
   /** 門診基本部分負擔（元）：未經轉診 */
   basicCopay: number
@@ -115,6 +150,8 @@ export interface BillingSettings extends CopayValues {
   changes?: (DatedChange & CopayValues)[]
   /** 住院部分負擔（沒設定用 billing.IPD_COPAY_DEFAULT） */
   ipdCopay?: IpdCopaySettings
+  /** 住院期中繳款提醒（沒設定用 ipd-bill.IPD_INTERIM_DEFAULT）：只是提醒、不是價格，不分生效日 */
+  ipdInterim?: IpdInterimSettings
   updatedAt?: string
   updatedBy?: string
 }
@@ -482,7 +519,7 @@ export interface Charge {
    * 之後全部退完再整張退費時，會扣掉這裡已經退過的
    */
   partialRefunds?: PartialRefund[]
-  /** 這張收據扣抵了多少掛號預收款（批價時「本次應收」＝ patientTotal − 這個） */
+  /** 這張收據扣抵了多少預收款：門診是掛號預收、住院是期中繳款（「本次應收」＝ patientTotal − 這個） */
   prepaidApplied?: number
   /** 優免：當時的類別、名稱、原因與減免金額（明細裡也有對應的負數列）；需主管核准的記下核准人（id 與當時的姓名） */
   discount?: { code: string; name: string; reason?: string; amount: number; approvedBy?: string; approverName?: string }
@@ -844,6 +881,10 @@ export interface Admission {
   attendingHistory?: { from: string; to: string; at: string; by: string; reason: string }[]
   /** 轉科紀錄（只增不改）：原科申請 → 新科接受／婉拒，或原科撤回。同一時間最多一筆 pending */
   deptTransfers?: DeptTransfer[]
+  /** 期中繳款（只增不刪；作廢的標 voided） */
+  interim?: IpdInterimPayment[]
+  /** 退還期中繳款（出院結帳時多繳的） */
+  interimRefunds?: IpdInterimRefund[]
 }
 
 /**

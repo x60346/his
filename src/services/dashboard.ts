@@ -11,7 +11,7 @@ import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
-import { activeIpdChargeOf, dischargeRxPending } from './ipd-bill'
+import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 
 export interface DashboardStats {
@@ -61,6 +61,8 @@ export interface DashboardStats {
   pendingRefunds: number
   /** 醫師已簽准出院、還沒住院結帳的病人（櫃台待辦） */
   ipdToBill: number
+  /** 住很久、累計很多，建議期中繳款的住院病人（櫃台待辦；和住院結帳清單的標記同一個判斷） */
+  ipdInterim: number
   /** 准出院、出院帶藥還沒調劑（住院藥局待辦） */
   dischargeRxToDispense: number
   wardCountDue: number
@@ -126,6 +128,7 @@ export function getDashboard(): Promise<DashboardStats> {
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
       ipdToBill: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)).length,
+      ipdInterim: db.admissions.filter((a) => a.status === 'admitted' && !a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id) && !!interimSuggestion(a, ipdBillOf(a))).length,
       wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,
       wardCountDue: (() => {
         const t = now()

@@ -636,13 +636,14 @@ export interface DailyReport {
   refunded: number
   /** 實收 = 應收 − 新欠款 − 預收扣抵 + 收回欠款 + 預收 − 退款：錢箱、刷卡機加起來應該是這個數 */
   collected: number
-  /** 當日掛號預收（收進來的錢；批價時扣抵的另外減掉，才不會算兩次） */
+  /** 當日預收：掛號預收＋住院期中繳款（收進來的錢；批價、出院結帳時扣抵的另外減掉，才不會算兩次） */
   prepaidIn: number
   /** 當日有效收據扣抵掉的預收款（錢不是今天收的：可能是之前掛號時收的） */
   prepaidApplied: number
-  prepays: { receiptNo: string; at: string; patientName: string; chartNo: string; amount: number; payMethod: PayMethod; cashierName: string; visitDate: string }[]
+  /** visitDate：掛號預收是就醫日，期中繳款是入院日（admitNo 是住院號） */
+  prepays: { receiptNo: string; at: string; kind: '掛號預收' | '期中繳款'; patientName: string; chartNo: string; amount: number; payMethod: PayMethod; cashierName: string; visitDate: string; admitNo?: string }[]
   /** 當日退款明細（退費、退還預收款） */
-  refunds: { receiptNo: string; at: string; kind: '退費' | '退預收' | '部分退費'; patientName: string; chartNo: string; amount: number; payMethods: string; originalReceiptNo: string; originalDate: string; reason: string; cashierName: string }[]
+  refunds: { receiptNo: string; at: string; kind: '退費' | '退預收' | '部分退費' | '退期中繳款'; patientName: string; chartNo: string; amount: number; payMethods: string; originalReceiptNo: string; originalDate: string; reason: string; cashierName: string }[]
   /** 依付款方式：實際收到的錢（加總 = 實收） */
   byPayMethod: Record<PayMethod, number>
   /** 當日收回欠款明細 */
@@ -786,7 +787,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
         const row = cashierRow(pp.cashierId)
         row.prepayCount++
         row.collected += pp.amount
-        prepays.push({ receiptNo: pp.receiptNo, at: pp.at, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: pp.amount, payMethod: pp.payMethod, cashierName: nameOf.user(pp.cashierId), visitDate: v.date })
+        prepays.push({ receiptNo: pp.receiptNo, at: pp.at, kind: '掛號預收', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: pp.amount, payMethod: pp.payMethod, cashierName: nameOf.user(pp.cashierId), visitDate: v.date })
       }
       for (const r of pp.refunds) {
         if (!inRange(r.at)) continue
@@ -795,6 +796,27 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
         row.refundCount++
         row.collected -= r.amount
         refunds.push({ receiptNo: r.receiptNo, at: r.at, kind: '退預收', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: r.amount, payMethods: `${PM[pp.payMethod]} ${r.amount}`, originalReceiptNo: pp.receiptNo, originalDate: pp.at.slice(0, 10), reason: r.reason, cashierName: nameOf.user(r.cashierId) })
+      }
+    }
+    // 住院期中繳款：同上（作廢的不算：只有當天能作廢）；出院結帳多繳的退還算在退的那天
+    for (const a of db.admissions) {
+      const p = find.patient(a.patientId)
+      for (const ip of a.interim ?? []) {
+        if (ip.voided || !inRange(ip.at)) continue
+        byPayMethod[ip.payMethod] += ip.amount
+        const row = cashierRow(ip.cashierId)
+        row.prepayCount++
+        row.collected += ip.amount
+        prepays.push({ receiptNo: ip.receiptNo, at: ip.at, kind: '期中繳款', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: ip.amount, payMethod: ip.payMethod, cashierName: nameOf.user(ip.cashierId), visitDate: (a.admittedAt ?? a.reservedAt).slice(0, 10), admitNo: a.admitNo })
+      }
+      for (const r of a.interimRefunds ?? []) {
+        if (!inRange(r.at)) continue
+        for (const x of r.parts) byPayMethod[x.payMethod] -= x.amount
+        const row = cashierRow(r.cashierId)
+        row.refundCount++
+        row.collected -= r.amount
+        const src = (a.interim ?? []).filter((x) => !x.voided).map((x) => x.receiptNo)
+        refunds.push({ receiptNo: r.receiptNo, at: r.at, kind: '退期中繳款', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', amount: r.amount, payMethods: r.parts.map((x) => `${PM[x.payMethod]} ${x.amount}`).join('、'), originalReceiptNo: src.join('、'), originalDate: (a.interim ?? []).find((x) => !x.voided)?.at.slice(0, 10) ?? r.at.slice(0, 10), reason: r.reason, cashierName: nameOf.user(r.cashierId) })
       }
     }
     prepays.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo))

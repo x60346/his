@@ -5794,6 +5794,141 @@ try {
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
   }
 
+  // 住院中費用查詢與期中繳款：試算 − 已繳、提醒、收款與作廢、日結、出院結帳扣抵與退還多繳、費用明細表
+  console.log('\n[期中繳款]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const IC = api.ipdChargeApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const adm = (id) => db().admissions.find((a) => a.id === id)
+    // 種子：腦梗塞住了 32 天（滿 30 天提醒、部分負擔進第二段）；其他人住幾天、費用不多，不提醒
+    const long = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63.9'))
+    ok(!!long && long.admittedAt.startsWith(addDaysT(-32)) && !long.dischargeSummary?.signedAt, '種子：腦梗塞住院 32 天、還沒准出院')
+    await as('clerk01')
+    const lst = await IC.listIpdBilling()
+    const li = lst.find((x) => x.admissionId === long.id)
+    ok(li.suggestInterim?.includes('住院第 33 天') && li.interimPaid === 0, `住院結帳清單標「${li.suggestInterim}」`)
+    const others = lst.filter((x) => x.admissionId !== long.id && x.status === 'admitted' && !x.receiptNo)
+    const bills = await Promise.all(others.map((x) => IC.getIpdBill(x.admissionId)))
+    ok(others.every((x, i) => !x.suggestInterim === (x.dischargeReady || x.days < 30 && bills[i].bill.patientTotal < 30000)), '其他住院病人：沒滿 30 天、累計沒到 30,000 元（或已准出院）就不提醒')
+    ok((await api.dashboardApi.getDashboard()).ipdInterim === lst.filter((x) => x.suggestInterim).length, '櫃台首頁「建議期中繳款」＝清單上標記的人數')
+    const v0 = await IC.getIpdBill(long.id)
+    ok(v0.bill.meta.days === 32 && v0.bill.meta.copay.length === 2 && v0.interim.held === 0 && v0.interim.due === v0.bill.patientTotal && v0.interim.max === v0.bill.patientTotal && !v0.interim.blocked, `試算 ${v0.bill.patientTotal} 元（32 天、部分負擔兩段）；最多可期中繳 ${v0.interim.max} 元`)
+    // 權限
+    await as('ph01')
+    await expectError(() => IC.getIpdStatement(long.id), '藥師查住院費用明細')
+    await as('nurse01')
+    await expectError(() => IC.payInterim(long.id, { amount: 1000, payMethod: 'cash' }), '護理師收期中繳款')
+    const st0 = await IC.getIpdStatement(long.id)
+    ok(st0.bill.patientTotal === v0.bill.patientTotal && st0.stillDue === v0.bill.patientTotal && st0.interimPaid === 0 && !st0.receiptNo && st0.bill.lines.length === v0.bill.lines.length, '護理站查費用明細：和櫃台試算同一個數（只看、不能收款）')
+    // 收款的檢查
+    await as('clerk01')
+    let f = await fieldsOf(() => IC.payInterim(long.id, { amount: 0, payMethod: 'cash' }))
+    ok(f.amount?.includes('正整數'), `繳 0 元 → 「${f.amount}」`)
+    f = await fieldsOf(() => IC.payInterim(long.id, { amount: 10.5, payMethod: 'cash' }))
+    ok(f.amount?.includes('正整數'), '繳 10.5 元 → 擋')
+    f = await fieldsOf(() => IC.payInterim(long.id, { amount: v0.interim.max + 1, payMethod: 'cash' }))
+    ok(f.amount?.includes(`最多 ${v0.interim.max.toLocaleString()} 元`), `比目前的費用多 → 「${f.amount}」（不預收、不收保證金）`)
+    f = await fieldsOf(() => IC.payInterim(long.id, { amount: 100, payMethod: 'check' }))
+    ok(!!f.payMethod, '付款方式不正確 → 擋')
+    // 收兩筆
+    const p1 = await IC.payInterim(long.id, { amount: 10000, payMethod: 'cash' })
+    ok(/^R\d{12}$/.test(p1.receiptNo) && p1.asOf === T && p1.billTotal === v0.bill.patientTotal && p1.paidBefore === 0 && db().auditLogs[0].action === '期中繳款', `期中繳款 ${p1.receiptNo}：記下截至今天的費用、之前已繳 0、寫稽核`)
+    const p2 = await IC.payInterim(long.id, { amount: 5000, payMethod: 'card' })
+    ok(p2.paidBefore === 10000 && p2.receiptNo > p1.receiptNo, '第二筆：之前已繳 10,000（收據和批價同一個序號）')
+    const v1 = await IC.getIpdBill(long.id)
+    ok(v1.interim.held === 15000 && v1.interim.due === v0.bill.patientTotal - 15000 && v1.interim.max === v1.interim.due && v1.interim.payments.every((p) => !p.canVoid && p.cashierName), '已繳 15,000：還要繳＝試算 − 已繳；當天的可以作廢')
+    ok((await IC.listIpdBilling()).find((x) => x.admissionId === long.id).interimPaid === 15000, '清單顯示期中已繳')
+    ok(!v1.interim.suggest || v1.interim.suggest.includes('還沒繳的自付'), '剛繳過：不再用天數提醒（距上次繳款 0 天），只剩金額條件')
+    // 日結：算在收的那天
+    let rep = await api.chargeApi.dailyReport(T)
+    const ip = rep.prepays.filter((x) => x.kind === '期中繳款')
+    ok(ip.length === 2 && ip.every((x) => x.admitNo === long.admitNo) && rep.prepaidIn >= 15000, '日結「預收與期中繳款」列出兩筆（標住院號）')
+    const pmSum = (r) => r.byPayMethod.cash + r.byPayMethod.card + r.byPayMethod.mobile
+    ok(pmSum(rep) === rep.collected && rep.byCashier.reduce((n, c) => n + c.collected, 0) === rep.collected, '日結：依付款方式、依收費人員加總都＝實收')
+    const CSV = await load('/src/services/report-csv.ts')
+    ok(CSV.dailyReportCsv(rep).includes('住院期中繳款'), '日結匯出：類別寫「住院期中繳款」')
+    // 作廢
+    f = await fieldsOf(() => IC.voidInterim(long.id, p2.id, ' '))
+    ok(!!f.reason, '作廢要寫原因')
+    await IC.voidInterim(long.id, p2.id, '刷錯卡')
+    let msg = await errOf(() => IC.voidInterim(long.id, p2.id, '再一次'))
+    ok(msg.includes('已作廢'), `重複作廢 → 「${msg}」`)
+    rep = await api.chargeApi.dailyReport(T)
+    ok(rep.prepays.filter((x) => x.kind === '期中繳款').length === 1 && (await IC.getIpdBill(long.id)).interim.held === 10000 && db().auditLogs[0].action === '作廢期中繳款', '作廢後：不算日結、已繳回到 10,000、寫稽核')
+    adm(long.id).interim[0].at = `${addDaysT(-1)} 10:00`
+    msg = await errOf(() => IC.voidInterim(long.id, p1.id, '收錯'))
+    ok(msg.includes('不是今天'), `昨天收的作廢 → 「${msg}」`)
+    adm(long.id).interim[0].at = `${T} 08:00`
+    // 准出院後不收期中繳款（直接出院結帳）
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    msg = await errOf(() => IC.payInterim(ready.id, { amount: 100, payMethod: 'cash' }))
+    ok(msg.includes('簽准出院'), `准出院後期中繳款 → 「${msg}」`)
+    // 出院結帳扣抵：期中 10,000 → 本次應收＝總帳 − 10,000
+    const la = adm(long.id)
+    la.dischargeSummary = { ...ready.dischargeSummary, meds: [], signedAt: `${T} 09:00` }
+    const vb = await IC.getIpdBill(long.id)
+    ok(vb.interim.blocked?.includes('簽准出院') && !vb.interim.suggest && vb.interim.max === 0, '准出院：期中繳款區改說「直接出院結帳」、不再提醒')
+    const total = vb.bill.patientTotal
+    msg = await errOf(() => IC.payIpd(long.id, { payMethod: 'cash', received: total - 10000 - 1 }))
+    ok(msg.includes('不足'), '出院結帳的應收是扣抵後的：少 1 元也不足')
+    const c1 = await IC.payIpd(long.id, { payMethod: 'cash', received: total - 10000 })
+    ok(c1.patientTotal === total && c1.prepaidApplied === 10000 && c1.received === total - 10000 && c1.change === 0 && db().auditLogs[0].detail.includes('扣抵期中繳款 10000'), `出院結帳 ${c1.receiptNo}：總帳 ${total}、扣抵 10,000、本次收 ${total - 10000}`)
+    rep = await api.chargeApi.dailyReport(T)
+    ok(rep.prepaidApplied >= 10000 && pmSum(rep) === rep.collected, '日結：扣抵的從應收減掉（錢在繳款那天算過了）')
+    const vc = await IC.getIpdBill(long.id)
+    ok(vc.interim.blocked?.includes('已出院結帳') && vc.interim.payments[0].canVoid?.includes('不是今天') === false && !!vc.interim.payments[0].canVoid, '結帳後：期中繳款不能再收，也不能作廢（要先作廢結帳收據）')
+    // 作廢出院結帳收據：期中繳款回到這次住院，重結再扣抵
+    await api.chargeApi.voidCharge(c1.id, '測試重結')
+    ok((await IC.getIpdBill(long.id)).interim.due === total - 10000, '作廢結帳收據：期中繳款回來，還要繳＝總帳 − 10,000')
+    // 多繳：費用變少（例：改成住 3 天）→ 結帳時退還差額
+    const la2 = adm(long.id) // 每次寫入後資料庫物件會換新：重新取
+    la2.admittedAt = `${addDaysT(-3)} 10:00`
+    la2.bedHistory = la2.bedHistory?.length ? [{ ...la2.bedHistory[0], from: la2.admittedAt }] : la2.bedHistory
+    la2.deptTransfers = (la2.deptTransfers ?? []).filter((x) => x.status !== 'pending') // 種子有轉科申請中：這裡要測出院
+    const small = (await IC.getIpdBill(long.id)).bill.patientTotal
+    ok(small < 10000 && (await IC.getIpdBill(long.id)).interim.due === small - 10000, `費用變成 ${small} 元：還要繳是負數（多繳 ${10000 - small}）`)
+    const c2 = await IC.payIpd(long.id, { payMethod: 'card', received: 0 })
+    const rf = adm(long.id).interimRefunds?.[0]
+    ok(c2.prepaidApplied === small && c2.received === 0 && rf?.amount === 10000 - small && rf.parts[0].payMethod === 'cash' && /^RF/.test(rf.receiptNo), `多繳 ${10000 - small}：開退款單 ${rf?.receiptNo} 依原付款方式（現金）退還`)
+    rep = await api.chargeApi.dailyReport(T)
+    ok(rep.refunds.some((x) => x.kind === '退期中繳款' && x.receiptNo === rf.receiptNo && x.originalReceiptNo.includes(p1.receiptNo)) && pmSum(rep) === rep.collected, '日結退款列「退期中繳款」（原收據是期中繳款那張）；付款方式加總＝實收')
+    const st1 = await IC.getIpdStatement(long.id)
+    ok(st1.receiptNo === c2.receiptNo && st1.stillDue === 0 && st1.refunded === 10000 - small && st1.interimPaid === small, '已結帳的費用明細：收據內容、已退還多繳')
+    await as('nurse01')
+    await api.admissionApi.discharge(long.id, { confirmUnfinished: true })
+    ok(adm(long.id).status === 'discharged', '扣抵結清後可以出院')
+    await as('clerk01')
+    msg = await errOf(() => IC.payInterim(long.id, { amount: 100, payMethod: 'cash' }))
+    ok(msg.includes('已出院'), `出院後期中繳款 → 「${msg}」`)
+    // 提醒設定
+    await expectError(() => IC.saveIpdInterim({ days: 10, amount: 0 }), '櫃台改期中繳款提醒')
+    await as('admin')
+    f = await fieldsOf(() => IC.saveIpdInterim({ days: -1, amount: 1.5 }))
+    ok(!!f.days && !!f.amount, '提醒設定：天數、金額要是 0 以上的整數')
+    await IC.saveIpdInterim({ days: 2, amount: 0 })
+    ok(db().billingSettings.ipdInterim.days === 2 && db().auditLogs[0].detail.includes('2 天'), '管理員改成滿 2 天提醒、不看金額（寫稽核）')
+    await as('clerk01')
+    const l2 = await IC.listIpdBilling()
+    ok(l2.filter((x) => x.status === 'admitted' && !x.receiptNo && !x.dischargeReady).every((x) => !!x.suggestInterim === (x.days >= 2)) && l2.some((x) => x.suggestInterim), '改成 2 天後：住滿 2 天的都提醒（只看天數）')
+  }
+
   // 轉診：轉入（持外院轉診單掛號、經轉診部分負擔、同一療程回診沿用、轉診回覆單）與轉出（看完診開轉診單、列印、作廢）
   console.log('\n[轉診]')
   {

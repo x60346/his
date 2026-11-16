@@ -1,9 +1,10 @@
 // 住院帳單的資料整理（內部模組，index 不匯出、不會被包成 API）：從住院紀錄、床位紀錄、調劑與扣帳、已執行的醫囑
 // 組出 calcIpdChargeLines 的輸入。結帳（ipd-charge）、出院前檢查（admission.discharge）共用，兩邊算的一定一樣。
-import type { Admission, Charge, ChargeLine, IpdBillMeta } from '@/types'
+import type { Admission, Charge, ChargeLine, IpdBillMeta, IpdInterimRefund, IpdInterimSettings, PayMethod } from '@/types'
 import { db } from '@/mock/db'
-import { diffDays, today } from '@/utils/date'
-import { calcIpdChargeLines, IPD_COPAY_DEFAULT, summarize, type IpdBillInput } from './billing'
+import { diffDays, now, today } from '@/utils/date'
+import { nextRefundNo } from './money'
+import { calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, summarize, type IpdBillInput } from './billing'
 import { find } from './views'
 import { certFeeLines, certsOfAdmission } from './certificate-fee'
 
@@ -97,3 +98,52 @@ export const activeIpdChargeOf = (admissionId: string): Charge | undefined => db
 
 /** 有出院帶藥但藥局還沒調劑（調好才結帳：帳單依扣帳量） */
 export const dischargeRxPending = (a: Admission) => !!a.dischargeSummary?.meds?.length && !a.dischargeRx
+
+// ---------- 期中繳款：住院中先繳一部分，出院結帳時扣抵（和門診掛號預收同一套：收的那天算收入、結帳那天扣抵） ----------
+
+export const interimSettings = (): IpdInterimSettings => db.billingSettings.ipdInterim ?? IPD_INTERIM_DEFAULT
+
+const livePayments = (a: Admission) => (a.interim ?? []).filter((p) => !p.voided)
+/** 期中繳款還在醫院手上的：繳了（沒作廢的）− 已退還 */
+export const interimHeld = (a: Admission): number =>
+  livePayments(a).reduce((n, p) => n + p.amount, 0) - (a.interimRefunds ?? []).reduce((n, r) => n + r.amount, 0)
+/** 還沒被出院結帳扣抵的（出院結帳收據作廢後，期中繳款回到這次住院，重新結帳時再扣抵） */
+export const interimAvailable = (a: Admission): number => interimHeld(a) - (activeIpdChargeOf(a.id)?.prepaidApplied ?? 0)
+
+/**
+ * 要不要提醒櫃台收期中繳款：還沒簽准出院、還沒結帳，且「還沒繳的自付金額」大於 0，
+ * 再加上「距入院或上次期中繳款滿 N 天」或「還沒繳的達 M 元」任一條件（0＝不用該條件）。回傳提醒文字
+ */
+export function interimSuggestion(a: Admission, bill: Pick<IpdBill, 'patientTotal'>, at: string = today()): string | undefined {
+  if (a.status !== 'admitted' || a.dischargeSummary?.signedAt || activeIpdChargeOf(a.id)) return undefined
+  const unpaid = bill.patientTotal - interimAvailable(a)
+  if (unpaid <= 0) return undefined
+  const s = interimSettings()
+  const last = livePayments(a).map((p) => p.at).sort().at(-1)
+  const since = (last ?? a.admittedAt ?? a.reservedAt).slice(0, 10)
+  const days = diffDays(since, at.slice(0, 10)) + (last ? 0 : 1)
+  const why: string[] = []
+  if (s.days > 0 && days >= s.days) why.push(last ? `距上次期中繳款 ${days} 天` : `住院第 ${days} 天`)
+  if (s.amount > 0 && unpaid >= s.amount) why.push(`還沒繳的自付 ${unpaid.toLocaleString()} 元`)
+  return why.length ? `建議期中繳款：${why.join('、')}` : undefined
+}
+
+/** 退還期中繳款（出院結帳時多繳的差額）：依原付款方式，從最近一筆繳款的方式先退；開退款單算在今天 */
+export function refundInterim(a: Admission, amount: number, reason: string, cashierId: string): IpdInterimRefund | undefined {
+  if (amount <= 0) return undefined
+  const left = new Map<PayMethod, number>()
+  for (const p of livePayments(a)) left.set(p.payMethod, (left.get(p.payMethod) ?? 0) + p.amount)
+  for (const r of a.interimRefunds ?? []) for (const x of r.parts) left.set(x.payMethod, (left.get(x.payMethod) ?? 0) - x.amount)
+  const order = [...new Set(livePayments(a).sort((x, y) => y.at.localeCompare(x.at)).map((p) => p.payMethod))]
+  const parts: IpdInterimRefund['parts'] = []
+  let rest = amount
+  for (const m of order) {
+    const take = Math.min(rest, Math.max(0, left.get(m) ?? 0))
+    if (take > 0) parts.push({ payMethod: m, amount: take })
+    rest -= take
+  }
+  const t = now()
+  const r: IpdInterimRefund = { receiptNo: nextRefundNo(t.slice(0, 10)), amount, parts, reason, cashierId, at: t }
+  ;(a.interimRefunds ??= []).push(r)
+  return r
+}

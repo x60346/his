@@ -9,6 +9,7 @@ import { useRoute } from 'vue-router'
 import { AlertTriangle, ListChecks } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -150,6 +151,8 @@ const wardTotals = computed(() => ({
             <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
             <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.doctorName }}</span>
           </PatientBanner>
+          <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
+          <IpdFeeStrip :admission-id="adm.id" />
         </template>
 
         <UCard :padded="false">

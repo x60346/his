@@ -69,7 +69,7 @@ export const referralApi = overNetwork(referral)
 export type { CertificateView, CertificateInput } from './certificate'
 export type { ReferralInView, ReferralOutView, ReferralOutInput, ReferralReplyInput, PendingReferralReply } from './referral'
 export type { DischargeRxView, DischargeRxItem } from './discharge-rx'
-export type { IpdBillingItem, IpdBillView } from './ipd-charge'
+export type { IpdBillingItem, IpdBillView, IpdInterimView, IpdStatement } from './ipd-charge'
 export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'

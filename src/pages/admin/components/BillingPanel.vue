@@ -7,7 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { Pencil } from 'lucide-vue-next'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect } from '@/components/ui'
-import { adminApi, chargeApi, discountSummary, drugCopay, IPD_COPAY_DEFAULT, ipdChargeApi, masterApi, pickCopay, type DiscountInput, type IdentityView } from '@/services'
+import { adminApi, chargeApi, discountSummary, drugCopay, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, ipdChargeApi, masterApi, pickCopay, type DiscountInput, type IdentityView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { CopayValues, DiscountRule, Identity } from '@/types'
 import { today } from '@/utils/date'
@@ -92,11 +92,15 @@ async function submitDc() {
 
 // ---------- 住院部分負擔（依住院日數分段的比率、每次住院上限；不分生效日，改了立即用於之後的結帳） ----------
 const ipd = reactive({ r0: 10, r1: 20, r2: 30, cap: 0 })
+// 期中繳款提醒（只是提醒櫃台，不是價格：不分生效日）
+const interim = reactive({ ...IPD_INTERIM_DEFAULT })
+const saveInterim = useAction(ipdChargeApi.saveIpdInterim, { success: (r) => `已儲存期中繳款提醒：${r.days ? `滿 ${r.days} 天` : '不看天數'}、${r.amount ? `還沒繳的達 ${r.amount.toLocaleString()} 元` : '不看金額'}` })
 let ipdLoaded = false
 watch(settings, (st) => {
   if (st && !ipdLoaded) {
     const c = st.ipdCopay ?? IPD_COPAY_DEFAULT
     Object.assign(ipd, { r0: c.rates[0], r1: c.rates[1], r2: c.rates[2], cap: c.cap })
+    Object.assign(interim, st.ipdInterim ?? IPD_INTERIM_DEFAULT)
     ipdLoaded = true
   }
 }, { immediate: true })
@@ -116,6 +120,16 @@ const saveIpd = useAction(ipdChargeApi.saveIpdCopay, { success: (r) => `已儲�
         <UButton :loading="saveIpd.pending.value" @click="saveIpd.run({ rates: [Number(ipd.r0), Number(ipd.r1), Number(ipd.r2)], cap: Number(ipd.cap) })">儲存</UButton>
       </div>
       <p class="mt-2 text-xs text-slate-500">健保費用平均到每一天，依住院第幾天的比率分段計算，加總超過上限就以上限收（展示用數值；年度累計上限、慢性病房的比率沒有做）。免部分負擔的身分不收。已結帳的收據不受影響。</p>
+    </section>
+    <!-- 期中繳款提醒：住院結帳清單、首頁待辦標「建議期中繳款」 -->
+    <section class="rounded-md border border-slate-200 p-3">
+      <h3 class="mb-2 text-sm font-semibold text-slate-700">住院期中繳款提醒</h3>
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="w-48"><UInput v-model="interim.days" type="number" min="0" label="距入院／上次繳款滿（天）" hint="0＝不看天數" :error="saveInterim.fieldErrors.value.days" /></div>
+        <div class="w-48"><UInput v-model="interim.amount" type="number" min="0" label="還沒繳的自付達（元）" hint="0＝不看金額" :error="saveInterim.fieldErrors.value.amount" /></div>
+        <UButton :loading="saveInterim.pending.value" @click="saveInterim.run({ days: Number(interim.days), amount: Number(interim.amount) })">儲存</UButton>
+      </div>
+      <p class="mt-2 text-xs text-slate-500">任一條件成立，住院結帳清單與櫃台首頁就提醒「建議期中繳款」（醫師簽准出院後不提醒，直接出院結帳）。期中繳款最多收到當時的費用，不收保證金；出院結帳時扣抵，多繳的退還。</p>
     </section>
     <section class="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
       <div>

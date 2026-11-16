@@ -723,7 +723,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   ipdScenarios.forEach((sc, i) => {
     const pt = ipdPatients[i]
-    const daysIn = int(1, 6)
+    // 腦梗塞（雙人房）住比較久：示範住院中費用查詢、期中繳款提醒（滿 30 天、部分負擔進第二段）。亂數照樣抽，其他人的資料不變
+    const rolled = int(1, 6)
+    const daysIn = i === 4 ? 32 : rolled
     const admitDate = addDays(T, -daysIn)
     const cls: Bed['bedClass'] = i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'
     const bed = bedsByClass(cls)[0] ?? bedsByClass('健保床')[0]
