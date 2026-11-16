@@ -5,6 +5,7 @@ import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
 import { doseLevel, doseNote } from './dose-rules'
+import { CONTROLLED_LEVEL_LABEL, licenseProblem, needsSpecialRx } from './controlled-rules'
 import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
@@ -122,6 +123,12 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
+      // 第一～三級管制藥：開立的醫師（會診醫師開的就是會診醫師）要有有效的管制藥品使用執照
+      if (needsSpecialRx(drug.controlled)) {
+        const doc = find.doctor(user.doctorId ?? a.doctorId)
+        const why = licenseProblem(doc?.controlledLicense, t.slice(0, 10))
+        if (why) failField('drugId', `${doc?.name ?? '醫師'}${why}，不能開立${CONTROLLED_LEVEL_LABEL[drug.controlled!]}管制藥 ${drug.name}`)
+      }
       if (!input.dose || input.dose <= 0) fail('請輸入劑量')
       const level = doseLevel(drug, input.dose)
       if (level === 'absurd') failField('dose', `${doseNote(drug, input.dose)}，請確認是否打錯`)

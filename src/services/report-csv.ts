@@ -1,6 +1,6 @@
 // 報表匯出（純函式）：CSV 與 Excel（report-xlsx.ts）都從這裡的「報表表格」產生——內容由服務層決定、兩種格式數字一致，頁面只負責觸發下載。
 import type { DailyReport } from './charge'
-import type { ControlledLedger } from './controlled'
+import type { ControlledLedger, ControlledReport } from './controlled'
 
 const PAY: Record<string, string> = { cash: '現金', card: '刷卡', mobile: '行動支付' }
 
@@ -107,11 +107,11 @@ export function controlledLedgerTable(r: ControlledLedger): { rows: Cells[]; hea
     ['藥品', `${r.drug.name}（${r.drug.nameZh}）`, `第 ${r.drug.controlled} 級`, r.drug.spec],
     ['地點', r.locationName, '期間', `${r.from} ～ ${r.to}`, '單位', r.drug.unit],
     [],
-    ['日期時間', '類別', '收入', '支出', '殘餘量銷毀', '結存', '單號', '病人', '病歷號', '開立醫師', '經手人', '見證人', '說明'],
+    ['日期時間', '類別', '收入', '支出', '殘餘量銷毀', '結存', '單號', '病人', '病歷號', '開立醫師', '領藥人', '經手人', '見證人', '說明'],
     ['', '期初', '', '', '', r.opening],
   ]
   for (const x of r.rows) {
-    rows.push([x.at, x.typeLabel, x.kind === 'in' ? x.qty : '', x.kind === 'out' ? x.qty : '', x.kind === 'residual' ? x.qty : '', x.balance, x.ref, x.patientName, x.chartNo, x.doctorName, x.userName, x.witnessName, x.reason])
+    rows.push([x.at, x.typeLabel, x.kind === 'in' ? x.qty : '', x.kind === 'out' ? x.qty : '', x.kind === 'residual' ? x.qty : '', x.balance, x.ref, x.patientName, x.chartNo, x.doctorName, x.receiver ? [x.receiver, x.receiverIdNo].filter(Boolean).join(' ') : '', x.userName, x.witnessName, x.reason])
   }
   rows.push([], ['收入合計', r.totalIn], ['支出合計', r.totalOut], ['殘餘量銷毀合計', r.residualTotal], ['期末結存', r.closing])
   return { rows, headRow: 4 }
@@ -122,3 +122,26 @@ export function controlledLedgerCsv(r: ControlledLedger): string {
 }
 
 export const controlledLedgerFileName = (r: Pick<ControlledLedger, 'drug' | 'locationName' | 'from' | 'to'>) => `管制藥簿冊_${r.drug.name.replace(/\s+/g, '')}_${r.locationName}_${r.from}_${r.to}.csv`
+
+/** 管制藥品收支結存申報表 → 表格（CSV 與 Excel 共用）：每種藥各地點一列，接全院合計 */
+export function controlledReportTable(r: ControlledReport): { rows: Cells[]; headRow: number; totalRows: number[] } {
+  const rows: Cells[] = [
+    ['管制藥品收支結存申報表'],
+    ['申報期間', `${r.from} ～ ${r.to}`],
+    [],
+    ['級別', '藥品', '中文名', '規格', '單位', '地點', '期初', '收入', '支出', '殘餘量銷毀', '期末'],
+  ]
+  const totalRows: number[] = []
+  for (const x of r.rows) {
+    if (!x.locationId) totalRows.push(rows.length)
+    rows.push([`第 ${x.controlled} 級`, x.drugName, x.nameZh, x.spec, x.unit, x.locationName, x.opening, x.totalIn, x.totalOut, x.residualTotal, x.closing])
+  }
+  rows.push([], ['說明：各地點的收入、支出含院內撥補；全院合計不含院內撥補（只是換地點）。殘餘量銷毀已含在支出的整支裡，不另扣結存。'])
+  return { rows, headRow: 3, totalRows }
+}
+
+export function controlledReportCsv(r: ControlledReport): string {
+  return '﻿' + controlledReportTable(r).rows.map(line).join('\r\n') + '\r\n'
+}
+
+export const controlledReportFileName = (r: Pick<ControlledReport, 'from' | 'to'>) => `管制藥申報_${r.from}_${r.to}.csv`

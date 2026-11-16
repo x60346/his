@@ -2,8 +2,8 @@
 //   收費報表：「明細」（一筆一列、表頭凍結，可直接篩選加總）、「合計」、區間報表另有「每日小計」
 //   管制藥簿冊：一張，抬頭在上、逐筆收支結存、合計在下（和紙本簿冊同一個樣子）
 import type { DailyReport } from './charge'
-import type { ControlledLedger } from './controlled'
-import { controlledLedgerFileName, controlledLedgerTable, dailyReportTable, reportFileName } from './report-csv'
+import type { ControlledLedger, ControlledReport } from './controlled'
+import { controlledLedgerFileName, controlledLedgerTable, controlledReportFileName, controlledReportTable, dailyReportTable, reportFileName } from './report-csv'
 import { buildXlsx, type XlsxSheet } from './xlsx'
 
 export function dailyReportXlsx(r: DailyReport): Uint8Array {
@@ -24,3 +24,11 @@ export function controlledLedgerXlsx(r: ControlledLedger): Uint8Array {
 }
 
 export const controlledLedgerXlsxFileName = (r: Pick<ControlledLedger, 'drug' | 'locationName' | 'from' | 'to'>) => controlledLedgerFileName(r).replace(/\.csv$/, '.xlsx')
+
+/** 管制藥品收支結存申報表：一張工作表，表頭與全院合計粗體 */
+export function controlledReportXlsx(r: ControlledReport): Uint8Array {
+  const t = controlledReportTable(r)
+  return buildXlsx([{ name: '收支結存申報', rows: t.rows, bold: [0, t.headRow, ...t.totalRows], freeze: t.headRow + 1 }])
+}
+
+export const controlledReportXlsxFileName = (r: Pick<ControlledReport, 'from' | 'to'>) => controlledReportFileName(r).replace(/\.csv$/, '.xlsx')

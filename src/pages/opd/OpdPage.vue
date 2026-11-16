@@ -17,10 +17,11 @@ import ProcedureEditor from './components/ProcedureEditor.vue'
 import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
 import OpdConsultDialog from './components/OpdConsultDialog.vue'
+import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
-import { autoQty, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import { autoQty, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -254,7 +255,20 @@ async function onComplete(): Promise<boolean> {
     })
     if (!ok) return false
   }
-  return (await complete.run({ confirmHighDose: high.length > 0 })) !== undefined
+  const done = (await complete.run({ confirmHighDose: high.length > 0 })) !== undefined
+  // 有第一～三級管制藥：完成就跳出專用處方箋（醫師印出、簽章；之後在這位病人的畫面也能重印）
+  if (done && specialRx.value.length) openSpecialRx(encounter.value!.id)
+  return done
+}
+
+/** 這張處方裡要專用處方箋的藥（第一～三級管制藥） */
+const specialRx = computed(() => draft.value.medications.map((m) => drugs.value.get(m.drugId)).filter((d) => d && needsSpecialRx(d.controlled)))
+const rxOpen = ref(false)
+/** 記下是哪一張病歷：「完成並叫下一位」會馬上換病人，對話框仍要印剛才那張 */
+const rxEncounterId = ref<string>()
+function openSpecialRx(id: string) {
+  rxEncounterId.value = id
+  rxOpen.value = true
 }
 
 /**
@@ -604,7 +618,14 @@ const lastOpen = ref(true)
             <UTextarea v-model="draft.plan" label="P 計畫" :rows="2" :disabled="!editable" @keydown="onPhraseKey($event, 'plan')" />
             <OrderSetBar v-if="editable" :draft="draft" @apply="applySet" />
             <section>
-              <h3 class="mb-2 text-sm font-semibold text-slate-700">藥品</h3>
+              <div class="mb-2 flex flex-wrap items-center gap-2">
+                <h3 class="text-sm font-semibold text-slate-700">藥品</h3>
+                <!-- 第一～三級管制藥：完成看診時檢查醫師執照、病人身分證號與地址（服務層），完成後印專用處方箋 -->
+                <span v-if="specialRx.length" class="rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-800">
+                  {{ specialRx.map((d) => `${d!.name}（${CONTROLLED_LEVEL_LABEL[d!.controlled!]}）`).join('、') }}：需專用處方箋
+                </span>
+                <UButton v-if="specialRx.length && encounter?.status === 'completed'" size="sm" variant="secondary" @click="openSpecialRx(encounter.id)">專用處方箋</UButton>
+              </div>
               <MedicationEditor v-model="draft.medications" :drugs="drugs" :freqs="freqs" :warnings="warnings ?? []" :default-days="defaultDays" :readonly="!editable" />
             </section>
             <section>
@@ -639,5 +660,6 @@ const lastOpen = ref(true)
       </div>
     </div>
     <OpdConsultDialog :item="answeringOpd" @close="answeringOpd = null" />
+    <ControlledRxDialog v-model="rxOpen" :encounter-id="rxEncounterId" />
   </div>
 </template>

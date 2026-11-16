@@ -9,6 +9,7 @@ import { checkAllergies, type AllergyWarning } from './allergy'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
+import { ID_NO_PATTERN, needsSpecialRx } from './controlled-rules'
 import { dispenseBlocker, dispenseOpen, returnedQty, rxExpired, rxValidUntil } from './rx-rules'
 import { consumeWitness, returnScrapRef, WITNESS_MIN, witnessFor } from './witness-core'
 import { effectiveTiming, timingApplies, timingText } from './drug-rules'
@@ -42,6 +43,8 @@ export interface DispenseItem {
   indication: string
   warning: string
   shortage: boolean
+  /** 管制藥品級別（1～4） */
+  controlled?: number
   /** 已經退了多少（門診退藥，可分次） */
   returned: number
   /** 門診藥局正在盤點這種藥（盲盤）：stock 不給看（0），畫面顯示「盤點中」；缺藥判斷 shortage 仍用真的量 */
@@ -71,6 +74,8 @@ export interface DispenseView extends Dispense, PatientBrief {
   rxValidUntil: string
   /** 已逾有效期：還沒發的看今天，已發的看發藥那天（紀錄上看得出是逾期後才發的）。只提醒、不擋 */
   rxExpired: boolean
+  /** 有第一～三級管制藥：要專用處方箋，發藥時要登記領藥人身分證號 */
+  specialRx: boolean
 }
 
 function dispenseView(d: Dispense): DispenseView {
@@ -103,6 +108,7 @@ function dispenseView(d: Dispense): DispenseView {
       indication: drug?.indication ?? '',
       warning: drug?.warning ?? '',
       shortage: dispenseOpen(d) && usable < m.qty,
+      ...(drug?.controlled ? { controlled: drug.controlled } : {}),
       returned: returnedQty(d, i),
       ...(req ? { restock: { qty: req.qty, outstanding: Math.max(0, req.qty - req.receivedQty), requestedAt: req.requestedAt, includesThis: req.dispenseIds.includes(d.id) } } : {}),
     }
@@ -122,6 +128,7 @@ function dispenseView(d: Dispense): DispenseView {
     dispenseDate: d.verifiedAt?.slice(0, 10) ?? today(),
     rxValidUntil: rxValidUntil(e.date),
     rxExpired: rxExpired(e.date, d.dispensedAt ?? today()),
+    specialRx: drugs.some((x) => needsSpecialRx(x.controlled)),
     ...(() => {
       const u = sessionUser()
       const why = u ? dispenseBlocker(d, u.id, !!db.securitySettings?.twoPersonDispense) : undefined
@@ -188,6 +195,8 @@ export interface PickupCheckInput {
   birthMMDD?: string
   proxyName?: string
   relation?: string
+  /** 第一～三級管制藥：領藥人的身分證號（本人要和病人資料相同） */
+  idNo?: string
 }
 
 export function dispense(id: string, check: PickupCheckInput = {}): Promise<DispenseView> {
@@ -198,6 +207,7 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     const blocked = dispenseBlocker(d, ph.id, !!db.securitySettings?.twoPersonDispense)
     if (blocked) fail(blocked, 'CONFLICT')
     const p = must(find.patient(d.patientId), '病患')
+    const e0 = () => must(db.encounters.find((x) => x.id === d.encounterId), '病歷')
     const v = fieldErrors()
     if (check.proxy) {
       if (!check.proxyName?.trim()) v.add('proxyName', '請輸入代領人姓名')
@@ -207,8 +217,17 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     } else if (check.birthMMDD !== p.birthDate.slice(5).replace('-', '')) {
       v.add('birthMMDD', '與病人資料不符，請再確認領藥的是不是本人')
     }
+    // 第一～三級管制藥：登記領藥人身分證號（本人要和病人資料一樣；代領的只檢查格式）
+    const special = e0().medications.some((m) => needsSpecialRx(find.drug(m.drugId)?.controlled))
+    const idNo = (check.idNo ?? '').trim().toUpperCase()
+    if (special) {
+      if (!idNo) v.add('idNo', `有管制藥品，請輸入${check.proxy ? '代領人' : '病人'}的身分證號`)
+      else if (!ID_NO_PATTERN.test(idNo)) v.add('idNo', '身分證號格式不正確（1 個英文字母＋9 個數字）')
+      else if (!check.proxy && idNo !== p.idNo.toUpperCase()) v.add('idNo', '與病人資料的身分證號不符，請再確認')
+      else if (check.proxy && idNo === p.idNo.toUpperCase()) v.add('idNo', '這是病人本人的身分證號：本人領藥請取消「他人代領」')
+    }
     v.done()
-    d.pickupCheck = check.proxy ? { method: 'proxy', proxyName: check.proxyName!.trim(), relation: check.relation!.trim() } : { method: 'birth' }
+    d.pickupCheck = { ...(check.proxy ? { method: 'proxy' as const, proxyName: check.proxyName!.trim(), relation: check.relation!.trim() } : { method: 'birth' as const }), ...(special ? { idNo } : {}) }
     const view = dispenseView(d)
     assertStock(view)
     // 每個品項寫一筆發藥異動；任何一項失敗，mutate 會整筆回滾（不會只扣一半）

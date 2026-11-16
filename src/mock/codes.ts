@@ -26,16 +26,18 @@ export const departments: Department[] = [
   { id: 'D08', code: 'REH', name: '復健科', active: true },
 ]
 
+/** 管制藥品使用執照（展示用）：DR08 鄭雅婷沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
+ * 有效期限依示範日期在 seed 填（空字串＝今年起算三年後年底、expired＝四個月前），示範哪一天打開都一樣 */
 export const doctors: Doctor[] = [
-  { id: 'DR01', name: '林子謙', deptId: 'D01', title: '主治醫師', licenseNo: 'A100231', active: true },
-  { id: 'DR02', name: '陳映如', deptId: 'D02', title: '主任', licenseNo: 'A100452', active: true },
-  { id: 'DR03', name: '黃柏翰', deptId: 'D02', title: '主治醫師', licenseNo: 'A100873', active: true },
-  { id: 'DR04', name: '張皓宇', deptId: 'D03', title: '主治醫師', licenseNo: 'A101094', active: true },
-  { id: 'DR05', name: '吳佳穎', deptId: 'D04', title: '主治醫師', licenseNo: 'A101315', active: true },
-  { id: 'DR06', name: '劉書妤', deptId: 'D05', title: '主治醫師', licenseNo: 'A101536', active: true },
-  { id: 'DR07', name: '蔡承恩', deptId: 'D06', title: '主治醫師', licenseNo: 'A101757', active: true },
+  { id: 'DR01', name: '林子謙', deptId: 'D01', title: '主治醫師', licenseNo: 'A100231', controlledLicense: { no: 'C11-0231', validUntil: '' }, active: true },
+  { id: 'DR02', name: '陳映如', deptId: 'D02', title: '主任', licenseNo: 'A100452', controlledLicense: { no: 'C11-0452', validUntil: '' }, active: true },
+  { id: 'DR03', name: '黃柏翰', deptId: 'D02', title: '主治醫師', licenseNo: 'A100873', controlledLicense: { no: 'C11-0873', validUntil: '' }, active: true },
+  { id: 'DR04', name: '張皓宇', deptId: 'D03', title: '主治醫師', licenseNo: 'A101094', controlledLicense: { no: 'C11-1094', validUntil: '' }, active: true },
+  { id: 'DR05', name: '吳佳穎', deptId: 'D04', title: '主治醫師', licenseNo: 'A101315', controlledLicense: { no: 'C11-1315', validUntil: '' }, active: true },
+  { id: 'DR06', name: '劉書妤', deptId: 'D05', title: '主治醫師', licenseNo: 'A101536', controlledLicense: { no: 'C11-1536', validUntil: '' }, active: true },
+  { id: 'DR07', name: '蔡承恩', deptId: 'D06', title: '主治醫師', licenseNo: 'A101757', controlledLicense: { no: 'C11-1757', validUntil: '' }, active: true },
   { id: 'DR08', name: '鄭雅婷', deptId: 'D07', title: '主治醫師', licenseNo: 'A101978', active: true },
-  { id: 'DR09', name: '許立群', deptId: 'D08', title: '主治醫師', licenseNo: 'A102199', active: true },
+  { id: 'DR09', name: '許立群', deptId: 'D08', title: '主治醫師', licenseNo: 'A102199', controlledLicense: { no: 'C08-2199', validUntil: 'expired' }, active: true },
 ]
 
 export const identities: Identity[] = [
@@ -220,6 +222,8 @@ const drugBase = [
   drug('M038', 'AC00038100', 'Insulin Glargine 100U/ml', 'Insulin glargine', '300 U/pen', 'PEN', '注射', 480, 900, 90, 10, 'HS', 'SC', true, 'U'),
   drug('M039', 'AC00039100', 'Morphine 10mg Inj', 'Morphine', '10 mg/amp', 'AMP', '注射', 18, 40, 120, 1, 'PRN', 'IM', true),
   drug('M040', 'AC00040100', 'Potassium Chloride 20mEq Inj', 'Potassium chloride', '20 mEq/amp', 'AMP', '注射', 12, 30, 160, 1, 'QD', 'IV', true),
+  // 門診示範用的第二級管制藥（要專用處方箋）：只放門診藥局、不進一般種子（seed 另外開帳，不抽亂數）
+  { ...drug('M041', 'AC00041100', 'Morphine 15mg Tab', 'Morphine sulfate', '15 mg/tab', 'TAB', '口服', 9, 20, 60, 1, 'Q12H', 'PO', true), safetyStock: 20 },
 ]
 
 /**
@@ -267,6 +271,7 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M038: ['長效胰島素，降血糖', '可能低血糖（冒冷汗、手抖），請隨身帶糖果；未開封冷藏，開封後室溫保存 28 天內用完；每次換注射部位'],
   M039: ['強效止痛', '可能嗜睡、呼吸變慢、便秘；不要喝酒'],
   M040: ['補充鉀離子', '須稀釋後緩慢點滴；注射處疼痛請告知醫護人員'],
+  M041: ['強效止痛（癌症或嚴重疼痛）', '管制藥品，請妥善保管、不可給他人使用；可能嗜睡、便秘、呼吸變慢，不要喝酒或開車'],
 }
 
 /**
@@ -326,10 +331,11 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M038: ['甘精胰島素'],
   M039: ['嗎啡注射劑'],
   M040: ['氯化鉀注射劑', ['KCl']],
+  M041: ['嗎啡錠', ['MST']],
 }
 
-/** 管制藥品級別：Morphine 第二級、Tramadol 第四級 */
-const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M031: 4 }
+/** 管制藥品級別：Morphine（注射、錠劑）第二級、Tramadol 第四級 */
+const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M041: 2, M031: 4 }
 
 export const drugs: Drug[] = drugBase.map((d) => ({
   ...d,

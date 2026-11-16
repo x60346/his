@@ -9,7 +9,8 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
 import ReturnDispenseDialog from './components/ReturnDispenseDialog.vue'
-import { dispenseOpen, pharmacyApi } from '@/services'
+import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
+import { CONTROLLED_LEVEL_LABEL, dispenseOpen, pharmacyApi } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -78,17 +79,19 @@ const returnsOf = computed(() => (d.value?.returns ?? []).map((r) => ({ ...r, te
 const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x) && x.id !== selectedId.value))
 // ---------- 發藥前確認身分：請病人說出出生月日，或登記代領人（比對在服務層） ----------
 const pickupOpen = ref(false)
-const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '' })
+const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '', idNo: '' })
 function onDispense() {
   if (!d.value) return
   give.fieldErrors.value = {}
-  pickup.value = { proxy: false, birthMMDD: '', proxyName: '', relation: '' }
+  pickup.value = { proxy: false, birthMMDD: '', proxyName: '', relation: '', idNo: '' }
   pickupOpen.value = true
 }
 async function confirmPickup() {
   if (!d.value) return
   const p = pickup.value
-  const check = p.proxy ? { proxy: true, proxyName: p.proxyName, relation: p.relation } : { birthMMDD: p.birthMMDD.trim() }
+  // 第一～三級管制藥：另外登記領藥人身分證號（服務層比對）
+  const idNo = d.value.specialRx ? { idNo: p.idNo.trim() } : {}
+  const check = p.proxy ? { proxy: true, proxyName: p.proxyName, relation: p.relation, ...idNo } : { birthMMDD: p.birthMMDD.trim(), ...idNo }
   if (await give.run(d.value.id, check)) {
     pickupOpen.value = false
     // 自動帶到下一張；分頁由上面的 watch 跟著那張單的狀態切換
@@ -107,6 +110,7 @@ function openRestock(it: DispenseItem) {
 
 // ---------- 藥袋 ----------
 const bagOpen = ref(false)
+const rxOpen = ref(false)
 const print = () => window.print()
 </script>
 
@@ -171,7 +175,7 @@ const print = () => window.print()
 
       <UCard :padded="false">
         <template #title>
-          <div class="text-sm font-semibold text-slate-800">處方內容<span v-if="d.refillSeq" class="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">慢箋第 {{ d.refillSeq }} 次</span></div>
+          <div class="text-sm font-semibold text-slate-800">處方內容<span v-if="d.refillSeq" class="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">慢箋第 {{ d.refillSeq }} 次</span><span v-if="d.specialRx" class="ml-2 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-800">管制藥專用處方箋</span></div>
           <div class="text-xs text-slate-500">{{ d.deptName }}・{{ d.doctorName }}｜診斷：{{ d.diagnoses.join('、') }}</div>
         </template>
         <table class="tabular w-full text-sm">
@@ -190,7 +194,7 @@ const print = () => window.print()
               <td class="px-4 py-2">
                 <div class="font-medium text-slate-800">{{ it.drugName }}</div>
                 <div v-if="it.drugNameZh" class="text-xs text-slate-600">{{ it.drugNameZh }}</div>
-                <div class="flex items-center gap-1 text-xs text-slate-500">{{ it.spec }}<UBadge v-if="it.highAlert" tone="purple">高警訊</UBadge></div>
+                <div class="flex items-center gap-1 text-xs text-slate-500">{{ it.spec }}<UBadge v-if="it.highAlert" tone="purple">高警訊</UBadge><UBadge v-if="it.controlled" tone="purple">{{ CONTROLLED_LEVEL_LABEL[it.controlled] }}管制</UBadge></div>
               </td>
               <td class="px-3 py-2 text-slate-700">{{ it.dose }} {{ it.doseUnit }}・{{ it.freq }}・{{ it.route }}<span v-if="it.timingShort" :class="['ml-1 rounded px-1 text-xs', it.timingShort === '飯前飯後皆可' ? 'text-slate-500' : 'bg-amber-100 font-medium text-amber-800']">{{ it.timingShort }}</span><span v-if="it.timingByDoctor" class="ml-1 rounded bg-sky-100 px-1 text-xs font-medium text-sky-800" title="醫師為這張處方指定的服用時機，和藥品主檔不同">醫師指定</span></td>
               <td class="px-3 py-2 text-right">{{ it.days }}</td>
@@ -234,6 +238,7 @@ const print = () => window.print()
           <template v-if="d.returnedAt && !returnsOf.length">　退藥：{{ d.returnedAt.slice(5).replace('-', '/') }}（{{ d.returnReason }}）</template>
         </span>
         <div class="ml-auto flex gap-2">
+          <UButton v-if="d.specialRx" variant="secondary" @click="rxOpen = true">專用處方箋</UButton>
           <UButton variant="secondary" :icon="Printer" @click="bagOpen = true">藥袋</UButton>
           <UButton v-if="d.status === 'pending'" :icon="ClipboardCheck" :disabled="shortages.length > 0" :loading="verify.pending.value" @click="verify.run(d.id)">核對處方</UButton>
           <UButton v-if="d.status === 'dispensed'" variant="ghost" :icon="Undo2" @click="returnOpen = true">退藥</UButton>
@@ -248,6 +253,7 @@ const print = () => window.print()
     <RestockRequestDialog v-model="restockOpen" :drug-id="restockItem?.drugId" :dispense-id="d?.id" :pickup-no="d?.pickupNo" />
 
     <ReturnDispenseDialog v-if="d" v-model="returnOpen" :dispense="d" />
+    <ControlledRxDialog v-model="rxOpen" :encounter-id="d?.encounterId" />
     <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
       <div v-if="d" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">
@@ -265,6 +271,8 @@ const print = () => window.print()
             <UInput v-model="pickup.relation" label="與病人關係" placeholder="例：配偶、子女" required :error="give.fieldErrors.value.relation" />
           </div>
         </template>
+        <!-- 第一～三級管制藥：領藥人身分證號（本人要和病人資料相同；代領登記代領人的） -->
+        <UInput v-if="d.specialRx" v-model="pickup.idNo" :label="pickup.proxy ? '代領人身分證號（管制藥品）' : '病人身分證號（管制藥品，請看證件）'" placeholder="例：A123456789" maxlength="10" required :error="give.fieldErrors.value.idNo" />
         <UCheckbox v-model="pickup.proxy" label="他人代領（改為登記代領人）" />
       </div>
       <template #footer>

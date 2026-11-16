@@ -54,7 +54,7 @@ export const consultApi = overNetwork(consult)
 export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
-export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions } from './controlled'
+export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
 export type { ExpandedEncounter } from './opd'
@@ -81,6 +81,7 @@ export * from './report-xlsx'
 export { XLSX_MIME } from './xlsx'
 export * from './phrase-rules'
 export * from './rx-rules'
+export * from './controlled-rules'
 export * from './stocktake-rules'
 export * from './purchase-rules'
 export * from './ud-rules'

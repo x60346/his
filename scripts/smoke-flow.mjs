@@ -4195,7 +4195,7 @@ try {
     } else ok(true, '今天的種子沒有「退 1 個部分負擔不變」的單')
 
     // 不可再用：退回後直接報廢，要另一位藥師覆核
-    const d4 = db().dispenses.find((d) => d.status === 'dispensed' && d.txnIds?.length && encOf(d).medications.every((m) => !counting(m.drugId)) && encOf(d).medications[0].qty >= 2)
+    const d4 = db().dispenses.find((d) => d.status === 'dispensed' && d.txnIds?.length && !d.returns?.length && encOf(d).medications.every((m) => !counting(m.drugId)) && encOf(d).medications[0].qty >= 2)
     const m4 = encOf(d4).medications[0]
     const loc4 = db().stockTxns.find((x) => x.id === d4.txnIds[0]).locationId
     const s4 = lotSum(m4.drugId, loc4)
@@ -4557,7 +4557,7 @@ try {
     const csv = CSV.controlledLedgerCsv(L)
     ok(csv.startsWith('\uFEFF') && csv.includes('管制藥品收支結存簿冊') && csv.includes('殘餘量銷毀') && csv.includes('孫佩君') && csv.includes(`期末結存,${L.closing}`), '匯出 CSV：表頭、逐筆（含殘餘量、見證人）、期末')
     const opts = await api.controlledApi.controlledLedgerOptions()
-    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 2 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
+    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 3 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
     // STAT 也一樣
     await as(docUser)
     const st = await api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 0.5, freq: 'STAT', route: 'IM', allowDuplicate: true })
@@ -4835,6 +4835,200 @@ try {
     ok(colOf(lc, 'F', 7).length === L.rows.length, `逐筆 ${L.rows.length} 列（每列都有結存）`)
     ok(RX.controlledLedgerXlsxFileName(L).endsWith('.xlsx') && RX.controlledLedgerXlsxFileName(L).startsWith('管制藥簿冊_'), '簿冊檔名')
     await as('clerk01')
+  }
+
+  // 管制藥專用處方箋、醫師使用執照、領藥人身分證號、定期申報（申報表的每一格＝簿冊的數字）
+  console.log('\n[管制藥專用處方箋、使用執照、申報]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const CR = await load('/src/services/controlled-rules.ts')
+    const CSV = await load('/src/services/report-csv.ts')
+    const XL = await load('/src/services/report-xlsx.ts')
+    const { addDays } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    ok([1, 2, 3].every((n) => CR.needsSpecialRx(n)) && !CR.needsSpecialRx(4) && !CR.needsSpecialRx(undefined), '第一～三級要專用處方箋與使用執照；第四級、非管制藥不用')
+    ok(CR.licenseProblem(undefined, T)?.includes('沒有') && CR.licenseProblem({ no: 'X', validUntil: addDaysT(-1) }, T)?.includes('到期') && !CR.licenseProblem({ no: 'X', validUntil: T }, T), '使用執照：沒有、昨天到期都不能開；到期當天仍可開')
+    const up = [[9, '玖'], [10, '壹拾'], [14, '壹拾肆'], [20, '貳拾'], [60, '陸拾'], [105, '壹佰零伍'], [1000, '壹仟'], [1010, '壹仟零壹拾'], [0.5, '零點伍']]
+    ok(up.every(([n, s]) => CR.chineseUpper(n) === s), `總量國字大寫：${up.map(([n]) => `${n}→${CR.chineseUpper(n)}`).join('、')}`)
+    ok(CR.ID_NO_PATTERN.test('A123456789') && !CR.ID_NO_PATTERN.test('A323456789') && !CR.ID_NO_PATTERN.test('a123456789') && !CR.ID_NO_PATTERN.test('A12345678'), '身分證號格式：1 個大寫英文字母＋1 或 2＋8 個數字')
+
+    const drug = (id) => db().drugs.find((d) => d.id === id)
+    const doc = (id) => db().doctors.find((d) => d.id === id)
+    const opd = db().stockLocations.find((l) => l.dispensesOpd).id
+    const m41Lots = db().drugLots.filter((l) => l.drugId === 'M041' && l.qty > 0)
+    ok(drug('M041').controlled === 2 && drug('M041').category === '口服' && m41Lots.length > 0 && m41Lots.every((l) => l.locationId === opd), '種子：Morphine 15mg 錠是第二級管制藥、只放門診藥局')
+    ok(!doc('DR08').controlledLicense && doc('DR09').controlledLicense.validUntil < T && db().doctors.filter((d) => !['DR08', 'DR09'].includes(d.id)).every((d) => d.controlledLicense?.validUntil >= T), '種子：DR08 沒有使用執照、DR09 已過期，其他醫師有效')
+
+    // 開一張門診：掛號 → 看診（醫師固定給有效執照，再依測試改）
+    const newVisit = async () => {
+      await as('clerk01')
+      const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
+      const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
+      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+      doc(sess.doctorId).controlledLicense = { no: 'C99-TEST', validUntil: addDaysT(365) }
+      await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
+      const ee = await api.opdApi.startConsult(vv.id, { allowParallel: true, allowNotCheckedIn: true })
+      return { vv, ee, ptId: pt.id, docId: sess.doctorId }
+    }
+    const draftOf = (meds, extra = {}) => ({ subjective: '癌症疼痛', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M54.5', name: '下背痛', primary: true }], medications: meds, procedures: [], refillTimes: 0, admissionRequested: false, ...extra })
+    const m41 = { drugId: 'M041', dose: 1, freq: 'Q12H', route: 'PO', days: 7, qty: 14, selfPay: false }
+    const m01 = { drugId: 'M001', dose: 1, freq: 'TID', route: 'PO', days: 3, qty: 9, selfPay: false }
+    const m31 = { drugId: 'M031', dose: 1, freq: 'TID', route: 'PO', days: 3, qty: 9, selfPay: false }
+
+    const A = await newVisit()
+    const pat = () => db().patients.find((p) => p.id === A.ptId)
+    ok(CR.ID_NO_PATTERN.test(pat().idNo) && !!pat().address, `示範病人有身分證號（${pat().idNo}）與地址`)
+    delete doc(A.docId).controlledLicense
+    let msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41])))
+    ok(msg.includes('沒有管制藥品使用執照') && msg.includes('Morphine 15mg Tab'), `沒有使用執照開第二級 → 「${msg}」`)
+    doc(A.docId).controlledLicense = { no: 'C99-OLD', validUntil: addDaysT(-1) }
+    msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41])))
+    ok(msg.includes('到期'), `使用執照已過期 → 「${msg}」`)
+    doc(A.docId).controlledLicense = { no: 'C99-TEST', validUntil: T }
+    const addr = pat().address
+    pat().address = ' '
+    msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41])))
+    ok(msg.includes('地址') && msg.includes('專用處方箋'), `病人沒有地址 → 「${msg}」`)
+    pat().address = addr
+    const idNo = pat().idNo
+    pat().idNo = ''
+    msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41])))
+    ok(msg.includes('身分證號'), `病人沒有身分證號 → 「${msg}」`)
+    pat().idNo = idNo
+    msg = await errOf(() => api.opdApi.completeEncounter(A.ee.id, draftOf([m41], { refillTimes: 2 })))
+    ok(msg.includes('一次調劑'), `第二級開成連續處方箋 → 「${msg}」`)
+    ok(db().encounters.find((e) => e.id === A.ee.id).status !== 'completed', '被擋下的都沒有完成看診')
+    await api.opdApi.completeEncounter(A.ee.id, draftOf([m41, m01]))
+    ok(db().encounters.find((e) => e.id === A.ee.id).status === 'completed', '執照到期當天、病人資料齊全：可以開第二級')
+
+    // 專用處方箋
+    const S = await api.controlledApi.specialRxSheet(A.ee.id)
+    ok(S.items.length === 1 && S.items[0].drugName === 'Morphine 15mg Tab' && S.items[0].controlled === 2 && S.items[0].qty === 14 && S.items[0].qtyUpper === '壹拾肆', '專用處方箋只列第一～三級的藥（Acetaminophen 照一般處方），總量 14 附國字大寫「壹拾肆」')
+    ok(S.patient.idNo === idNo && S.patient.address === addr && S.doctor.controlledLicenseNo === 'C99-TEST' && !!S.doctor.licenseNo && S.diagnoses[0].startsWith('M54.5'), '專用處方箋：病人身分證號、地址、診斷、醫師使用執照號碼')
+    await as('nurse01')
+    await expectError(() => api.controlledApi.specialRxSheet(A.ee.id), '護理師印專用處方箋')
+
+    // 第四級（Tramadol）：不用使用執照、不用專用處方箋
+    const B = await newVisit()
+    delete doc(B.docId).controlledLicense
+    await api.opdApi.completeEncounter(B.ee.id, draftOf([m31]))
+    ok(db().encounters.find((e) => e.id === B.ee.id).status === 'completed', '第四級管制藥（Tramadol）沒有使用執照也能開')
+    msg = await errOf(() => api.controlledApi.specialRxSheet(B.ee.id))
+    ok(msg.includes('不需要專用處方箋'), `只有第四級的處方不印專用處方箋 → 「${msg}」`)
+    doc(B.docId).controlledLicense = { no: 'C99-TEST', validUntil: addDaysT(365) }
+
+    // 藥局：領藥人身分證號
+    await as('clerk01')
+    const pv = await api.chargeApi.previewCharge(A.vv.id)
+    await api.chargeApi.pay(A.vv.id, { payMethod: 'cash', received: pv.patientTotal })
+    await as('ph01')
+    const dpA = () => db().dispenses.find((x) => x.visitId === A.vv.id)
+    const view = await api.pharmacyApi.verifyDispense(dpA().id)
+    ok(view.specialRx && view.items.find((i) => i.drugId === 'M041').controlled === 2 && !view.items.find((i) => i.drugId === 'M001').controlled, '調劑單標「要專用處方箋」，品項標出管制級別')
+    ok((await api.controlledApi.specialRxSheet(A.ee.id)).pickupNo === dpA().pickupNo, '藥師也能印（看）專用處方箋，批價後印出領藥號')
+    const birth = pat().birthDate.slice(5).replace('-', '')
+    let e = await (async () => { try { await api.pharmacyApi.dispense(dpA().id, { birthMMDD: birth }) } catch (x) { return x } })()
+    ok(e?.fields?.idNo?.includes('身分證號'), `第二級發藥沒填身分證號 → 「${e?.fields?.idNo}」`)
+    const wrong = idNo.slice(0, 9) + String((Number(idNo.at(-1)) + 1) % 10)
+    e = await (async () => { try { await api.pharmacyApi.dispense(dpA().id, { birthMMDD: birth, idNo: wrong }) } catch (x) { return x } })()
+    ok(e?.fields?.idNo?.includes('不符'), `本人的身分證號和病人資料不同 → 「${e?.fields?.idNo}」`)
+    e = await (async () => { try { await api.pharmacyApi.dispense(dpA().id, { proxy: true, proxyName: '王小明', relation: '兒子', idNo }) } catch (x) { return x } })()
+    ok(e?.fields?.idNo?.includes('本人'), `代領卻填病人自己的身分證號 → 「${e?.fields?.idNo}」`)
+    e = await (async () => { try { await api.pharmacyApi.dispense(dpA().id, { proxy: true, proxyName: '王小明', relation: '兒子', idNo: 'X12' }) } catch (x) { return x } })()
+    ok(e?.fields?.idNo?.includes('格式'), `代領人身分證號格式錯 → 「${e?.fields?.idNo}」`)
+    ok(dpA().status === 'verified', '被擋下的都沒有發藥')
+    await api.pharmacyApi.dispense(dpA().id, { proxy: true, proxyName: '王小明', relation: '兒子', idNo: 'b123456780' })
+    ok(dpA().status === 'dispensed' && dpA().pickupCheck.idNo === 'B123456780' && dpA().pickupCheck.proxyName === '王小明', '代領：登記代領人姓名、關係、身分證號（轉成大寫）')
+    const L = await api.controlledApi.controlledLedger({ drugId: 'M041', locationId: opd, from: addDaysT(-30), to: T })
+    const lr = L.rows.find((r) => r.kind === 'out')
+    ok(lr?.qty === 14 && lr.patientName === pat().name && lr.receiver === '代領：王小明（兒子）' && lr.receiverIdNo === 'B123456780' && L.closing === drug('M041').stock, '簿冊那一列：病人、開立醫師、領藥人與身分證號；期末＝帳上')
+    const csv = CSV.controlledLedgerCsv(L)
+    ok(csv.includes(',領藥人,') && csv.includes('代領：王小明（兒子） B123456780'), '簿冊 CSV 多一欄「領藥人」')
+    // 第四級的發藥：不用身分證號（簿冊記本人）
+    await as('clerk01')
+    const pvB = await api.chargeApi.previewCharge(B.vv.id)
+    await api.chargeApi.pay(B.vv.id, { payMethod: 'cash', received: pvB.patientTotal })
+    await as('ph01')
+    const dpB = db().dispenses.find((x) => x.visitId === B.vv.id)
+    await api.pharmacyApi.verifyDispense(dpB.id)
+    const vB = await api.pharmacyApi.dispense(dpB.id, { birthMMDD: db().patients.find((p) => p.id === B.ptId).birthDate.slice(5).replace('-', '') })
+    ok(!vB.specialRx && !db().dispenses.find((x) => x.id === dpB.id).pickupCheck.idNo, '第四級發藥照一般流程（只核對生日，不登記身分證號）')
+    const LB = await api.controlledApi.controlledLedger({ drugId: 'M031', locationId: opd, from: T, to: T })
+    ok(LB.rows.some((r) => r.receiver === '本人' && !r.receiverIdNo), '第四級的簿冊：領藥人記「本人」')
+
+    // 住院醫囑：第一～三級也檢查開立醫師的使用執照
+    const adm = db().admissions.find((x) => x.status === 'admitted')
+    const docUser = db().users.find((u) => u.doctorId === adm.doctorId).username
+    const keep = structuredClone(doc(adm.doctorId).controlledLicense)
+    delete doc(adm.doctorId).controlledLicense
+    await as(docUser)
+    msg = await errOf(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 1, freq: 'STAT', route: 'IM', allowDuplicate: true }))
+    ok(msg.includes('使用執照') && msg.includes('第二級'), `住院：沒有使用執照開 Morphine 注射 → 「${msg}」`)
+    const o4 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M031', content: '', dose: 1, freq: 'STAT', route: 'PO', allowDuplicate: true })
+    ok(!!o4.id, '住院：第四級不需要使用執照')
+    doc(adm.doctorId).controlledLicense = keep ?? { no: 'C99-TEST', validUntil: addDaysT(365) }
+    const o2 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 1, freq: 'STAT', route: 'IM', allowDuplicate: true })
+    ok(!!o2.id, '住院：有使用執照就能開')
+
+    // 系統管理：醫師的使用執照
+    await as('admin')
+    const d7 = structuredClone(doc('DR07'))
+    msg = await errOf(() => api.adminApi.saveDoctor({ ...d7, controlledLicense: { no: 'C11-NEW', validUntil: '' } }))
+    ok(!!msg, `使用執照有號碼沒有有效期限 → 「${msg}」`)
+    msg = await errOf(() => api.adminApi.saveDoctor({ ...d7, controlledLicense: { no: doc('DR01').controlledLicense.no, validUntil: addDaysT(100) } }))
+    ok(msg.includes('重複'), `使用執照號碼和別人重複 → 「${msg}」`)
+    await api.adminApi.saveDoctor({ ...d7, controlledLicense: { no: 'C11-NEW', validUntil: addDaysT(100) } })
+    ok(doc('DR07').controlledLicense.no === 'C11-NEW' && doc('DR07').controlledLicense.validUntil === addDaysT(100), '管理員更新使用執照')
+    const { controlledLicense: _x, ...noLic } = structuredClone(doc('DR07'))
+    await api.adminApi.saveDoctor(noLic)
+    ok(!doc('DR07').controlledLicense, '清空使用執照（之後不能開第一～三級）')
+    await api.adminApi.saveDoctor(d7)
+
+    // 定期申報
+    await as('ph01')
+    const R = await api.controlledApi.controlledReport({ from: addDaysT(-30), to: T })
+    const ctrl = db().drugs.filter((d) => d.controlled).map((d) => d.id)
+    ok(R.rows.length > 0 && R.rows.every((r) => ctrl.includes(r.drugId)) && ctrl.every((id) => R.rows.some((r) => r.drugId === id && !r.locationId)), `申報表：只有管制藥，每一種都有全院合計（${R.rows.length} 列）`)
+    ok(R.rows.every((r, i) => i === 0 || R.rows[i - 1].controlled <= r.controlled), '依級別排列')
+    ok(R.rows.every((r) => Math.abs(r.opening + r.totalIn - r.totalOut - r.closing) < 1e-9), '每一列：期初＋收入－支出＝期末')
+    let same = true
+    for (const r of R.rows.filter((x) => x.locationId)) {
+      const x = await api.controlledApi.controlledLedger({ drugId: r.drugId, locationId: r.locationId, from: R.from, to: R.to })
+      if (x.opening !== r.opening || x.totalIn !== r.totalIn || x.totalOut !== r.totalOut || x.closing !== r.closing || x.residualTotal !== r.residualTotal) same = false
+    }
+    ok(same, '各地點那一列＝同一期間那本簿冊的期初、收入、支出、殘餘量、期末')
+    const tot = (id) => R.rows.find((r) => r.drugId === id && !r.locationId)
+    ok(ctrl.every((id) => tot(id).closing === db().drugLots.filter((l) => l.drugId === id).reduce((n, l) => n + l.qty, 0)), '全院合計的期末＝全院帳上（所有批號加總）')
+    const locSum = (id, k) => R.rows.filter((r) => r.drugId === id && r.locationId).reduce((n, r) => n + r[k], 0)
+    ok(ctrl.some((id) => locSum(id, 'totalIn') > tot(id).totalIn) && ctrl.every((id) => tot(id).totalIn <= locSum(id, 'totalIn')), '全院合計不含院內撥補（病房常備補充只是換地點）')
+    ok(tot('M041').totalOut === 14, '全院支出含今天發的 Morphine 錠 14 顆')
+    const R2 = await api.controlledApi.controlledReport({ from: T, to: T })
+    ok(R2.rows.find((r) => r.drugId === 'M041' && !r.locationId).opening === tot('M041').closing + 14, '只看今天：期初是昨天的期末')
+    await expectError(() => api.controlledApi.controlledReport({ from: addDaysT(-400), to: T }), '申報期間超過一年')
+    await expectError(() => api.controlledApi.controlledReport({ from: T, to: addDaysT(-1) }), '結束日期早於起始日期')
+    await as('nurse01')
+    await expectError(() => api.controlledApi.controlledReport({ from: T, to: T }), '護理師看申報表')
+    await as('ph01')
+    const rcsv = CSV.controlledReportCsv(R)
+    ok(rcsv.startsWith('﻿') && rcsv.includes('管制藥品收支結存申報表') && rcsv.includes('全院合計') && rcsv.split('\r\n').length > R.rows.length + 4, '申報表 CSV：表頭、每一列、全院合計')
+    const bin = XL.controlledReportXlsx(R)
+    ok(bin[0] === 0x50 && bin[1] === 0x4b && XL.controlledReportXlsxFileName(R) === `管制藥申報_${R.from}_${R.to}.xlsx` && CSV.controlledReportFileName(R).endsWith('.csv'), '申報表匯出 Excel（zip 檔頭 PK）、檔名')
+    const ttab = CSV.controlledReportTable(R)
+    ok(ttab.totalRows.length === ctrl.length && ttab.totalRows.every((i) => ttab.rows[i][5] === '全院合計') && typeof ttab.rows[ttab.headRow + 1][6] === 'number', '申報表的全院合計列標粗體、數量是數字')
+
+    // 規則只在服務層：頁面不得自己判斷級別要不要專用處方箋
+    const { readFileSync } = await import('node:fs')
+    const pages = ['src/pages/opd/OpdPage.vue', 'src/pages/pharmacy/PharmacyPage.vue'].map((p) => readFileSync(p, 'utf8'))
+    ok(pages.every((s) => !/controlled\s*<=?\s*3/.test(s)) && pages[0].includes('needsSpecialRx'), '頁面用 needsSpecialRx（不自己寫「級別 ≤ 3」）')
   }
 
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班

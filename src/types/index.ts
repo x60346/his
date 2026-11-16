@@ -59,6 +59,8 @@ export interface Doctor {
   title: string
   /** 醫事人員代碼（展示用） */
   licenseNo: string
+  /** 管制藥品使用執照（號碼、有效期限最後一天）：沒有或過期不能開第一～三級管制藥（規則 controlled-rules.licenseProblem） */
+  controlledLicense?: { no: string; validUntil: string }
   active: boolean
 }
 
@@ -493,7 +495,7 @@ export interface Dispense {
   dispensedBy?: string
   dispensedAt?: string
   /** 發藥時怎麼確認身分：病人說出生日（birth），或他人代領（proxy，記代領人與關係） */
-  pickupCheck?: { method: 'birth' | 'proxy'; proxyName?: string; relation?: string }
+  pickupCheck?: { method: 'birth' | 'proxy'; proxyName?: string; relation?: string; idNo?: string }
   /** 發藥扣庫存的那幾筆異動：退藥時退回同幾個批號（舊資料沒有，用「領藥號＋發藥日」找） */
   txnIds?: string[]
   /** 門診退藥：全部退完時記下最後一次（狀態變 returned）；每一次退藥的明細在 returns */

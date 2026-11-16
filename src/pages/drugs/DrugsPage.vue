@@ -16,6 +16,7 @@ import LocationPanel from './components/LocationPanel.vue'
 import QuarantinePanel from './components/QuarantinePanel.vue'
 import WardStockAdminPanel from './components/WardStockAdminPanel.vue'
 import ControlledLedgerPanel from './components/ControlledLedgerPanel.vue'
+import ControlledReportPanel from './components/ControlledReportPanel.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import { inventoryApi, type InventoryRow } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
@@ -24,7 +25,7 @@ import { useWorkLocation } from '@/composables/useWorkLocation'
 const work = useWorkLocation()
 // 庫存／採購單／盤點單（首頁待辦帶 ?tab=purchase、?tab=stocktake 進來直接看）
 const route0 = useRoute()
-const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location', 'quarantine', 'ward', 'controlled'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
+const view = ref(['stocktake', 'purchase', 'transfer', 'supplier', 'location', 'quarantine', 'ward', 'controlled', 'controlledReport'].includes(String(route0.query.tab)) ? String(route0.query.tab) : 'stock')
 // 撥補單只有大型醫院（多個地點）才有
 const viewTabs = computed(() => [
   { key: 'stock', label: '庫存' },
@@ -34,6 +35,7 @@ const viewTabs = computed(() => [
   { key: 'stocktake', label: '盤點單' },
   { key: 'ward', label: '病房常備' },
   { key: 'controlled', label: '管制藥簿冊' },
+  { key: 'controlledReport', label: '管制藥申報' },
   { key: 'location', label: '庫存地點' },
 ])
 
@@ -105,6 +107,7 @@ const shown = computed(() => rows.value?.length ?? 0)
     <QuarantinePanel v-else-if="view === 'quarantine' && work.multi.value" />
     <WardStockAdminPanel v-else-if="view === 'ward'" />
     <ControlledLedgerPanel v-else-if="view === 'controlled'" />
+    <ControlledReportPanel v-else-if="view === 'controlledReport'" />
     <StocktakePanel v-else-if="view === 'stocktake'" :location-id="work.locationId.value" :location-name="work.location.value?.name" />
     <template v-else>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">

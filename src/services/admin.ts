@@ -223,7 +223,13 @@ export function saveDoctor(input: Omit<Doctor, 'id'> & { id?: string }): Promise
     if (!name) v.add('name', '請輸入姓名')
     if (!dept) v.add('deptId', '請選擇科別')
     if (!licenseNo) v.add('licenseNo', '請輸入醫事人員代碼')
+    // 管制藥品使用執照：可以沒有（就不能開第一～三級）；有填號碼就要有效期限
+    const licNo = input.controlledLicense?.no?.trim() ?? ''
+    const licUntil = input.controlledLicense?.validUntil ?? ''
+    if (licNo && !/^\d{4}-\d{2}-\d{2}$/.test(licUntil)) v.add('controlledLicenseUntil', '請輸入使用執照的有效期限')
+    if (!licNo && licUntil) v.add('controlledLicenseNo', '請輸入使用執照號碼（沒有執照就把有效期限清空）')
     v.done()
+    if (licNo && db.doctors.some((d) => d.controlledLicense?.no === licNo && d.id !== input.id)) failField('controlledLicenseNo', '管制藥品使用執照號碼重複', 'CONFLICT')
     if (!dept!.active) failField('deptId', `${dept!.name}已停用`)
     if (db.doctors.some((d) => d.licenseNo === licenseNo && d.id !== input.id)) failField('licenseNo', '醫事人員代碼重複', 'CONFLICT')
 
@@ -238,7 +244,8 @@ export function saveDoctor(input: Omit<Doctor, 'id'> & { id?: string }): Promise
       ].filter(Boolean)
       if (todo.length) failField('active', `${old.name}還有：${todo.join('；')}`, 'CONFLICT')
     }
-    const saved: Doctor = { id: old?.id ?? nextCode('DR', db.doctors.map((d) => d.id)), name, deptId: dept!.id, title: input.title.trim() || '主治醫師', licenseNo, active: input.active }
+    const saved: Doctor = { id: old?.id ?? nextCode('DR', db.doctors.map((d) => d.id)), name, deptId: dept!.id, title: input.title.trim() || '主治醫師', licenseNo, ...(licNo ? { controlledLicense: { no: licNo, validUntil: licUntil } } : {}), active: input.active }
+    if (old && !licNo) delete old.controlledLicense
     if (old) Object.assign(old, saved)
     else db.doctors.push(saved)
     audit(old ? '修改醫師' : '新增醫師', `${saved.id} ${name}（${dept!.name}）`)

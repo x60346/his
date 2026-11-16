@@ -84,7 +84,11 @@ function exportCsv() {
                 <td class="px-2 text-right text-emerald-700">{{ r.kind === 'in' ? `+${r.qty}` : '' }}</td>
                 <td class="px-2 text-right text-sky-700">{{ r.kind === 'out' ? `−${r.qty}` : r.kind === 'residual' ? `（銷毀 ${r.qty}）` : '' }}</td>
                 <td class="px-2 text-right font-semibold">{{ r.balance }}</td>
-                <td class="whitespace-nowrap px-2 text-xs">{{ r.patientName ? `${r.patientName} ${r.chartNo}` : '—' }}</td>
+                <td class="whitespace-nowrap px-2 text-xs">
+                  {{ r.patientName ? `${r.patientName} ${r.chartNo}` : '—' }}
+                  <!-- 門診發藥的領藥人：第一～三級另登記身分證號 -->
+                  <div v-if="r.receiver" class="text-slate-500">領藥：{{ r.receiver }}<span v-if="r.receiverIdNo" class="ml-1">{{ r.receiverIdNo }}</span></div>
+                </td>
                 <td class="whitespace-nowrap px-2 text-xs">{{ r.doctorName ?? '—' }}</td>
                 <td class="whitespace-nowrap px-2 text-xs">{{ r.userName }}</td>
                 <td class="whitespace-nowrap px-2 text-xs">{{ r.witnessName ?? '' }}</td>

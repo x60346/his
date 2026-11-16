@@ -7,6 +7,9 @@ import { Pencil, Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect, UTable, type Column } from '@/components/ui'
 import { adminApi, type DepartmentRow, type DoctorRow } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
+import { today } from '@/utils/date'
+
+const todayStr = today()
 
 const { data: depts } = useQuery(() => adminApi.listDepartments())
 const { data: doctors, loading } = useQuery(() => adminApi.listDoctors())
@@ -28,19 +31,23 @@ async function submitDept() {
 
 // ---------- 醫師 ----------
 const docOpen = ref(false)
-const docForm = reactive({ id: undefined as string | undefined, name: '', deptId: undefined as string | number | undefined, title: '主治醫師', licenseNo: '', active: true })
+const docForm = reactive({ id: undefined as string | undefined, name: '', deptId: undefined as string | number | undefined, title: '主治醫師', licenseNo: '', licNo: '', licUntil: '', active: true })
 const editingDoc = computed(() => doctors.value?.find((d) => d.id === docForm.id))
 function openDoc(d?: DoctorRow) {
   Object.assign(
     docForm,
-    d ? { id: d.id, name: d.name, deptId: d.deptId, title: d.title, licenseNo: d.licenseNo, active: d.active } : { id: undefined, name: '', deptId: deptFilter.value, title: '主治醫師', licenseNo: '', active: true },
+    d
+      ? { id: d.id, name: d.name, deptId: d.deptId, title: d.title, licenseNo: d.licenseNo, licNo: d.controlledLicense?.no ?? '', licUntil: d.controlledLicense?.validUntil ?? '', active: d.active }
+      : { id: undefined, name: '', deptId: deptFilter.value, title: '主治醫師', licenseNo: '', licNo: '', licUntil: '', active: true },
   )
   saveDoc.fieldErrors.value = {}
   docOpen.value = true
 }
 const saveDoc = useAction(adminApi.saveDoctor, { success: (d) => `已儲存醫師 ${d.name}` })
 async function submitDoc() {
-  if (await saveDoc.run({ ...docForm, deptId: String(docForm.deptId ?? '') })) docOpen.value = false
+  const { licNo, licUntil, ...rest } = docForm
+  const lic = licNo.trim() || licUntil ? { controlledLicense: { no: licNo.trim(), validUntil: licUntil } } : {}
+  if (await saveDoc.run({ ...rest, ...lic, deptId: String(docForm.deptId ?? '') })) docOpen.value = false
 }
 
 /** 停用前要處理的事（畫面提示用；服務層會再檢查） */
@@ -55,16 +62,17 @@ function blockers(d: DoctorRow) {
 }
 
 const columns: Column<DoctorRow>[] = [
-  { key: 'name', label: '醫師', width: '9rem' },
-  { key: 'licenseNo', label: '醫事人員代碼', width: '7rem' },
+  { key: 'name', label: '醫師', width: '7.5rem' },
+  // 管制藥品使用執照放在代碼下面（另開一欄會把「編輯」擠出畫面）
+  { key: 'licenseNo', label: '代碼・管制藥執照', width: '7.5rem' },
   { key: 'impact', label: '停用前需處理' },
-  { key: 'active', label: '狀態', width: '5rem' },
-  { key: 'act', label: '', width: '5rem', align: 'right' },
+  { key: 'active', label: '狀態', width: '4.5rem' },
+  { key: 'act', label: '', width: '4.5rem', align: 'right' },
 ]
 </script>
 
 <template>
-  <div class="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
+  <div class="grid grid-cols-1 gap-4 xl:grid-cols-[16rem_1fr]">
     <!-- 科別 -->
     <section class="self-start rounded-md border border-slate-200">
       <header class="flex items-center border-b border-slate-100 px-3 py-2">
@@ -98,6 +106,14 @@ const columns: Column<DoctorRow>[] = [
           <span v-else-if="!blockers(row).length" class="text-xs text-emerald-700">無，可直接停用</span>
           <span v-else class="text-xs text-slate-600">{{ blockers(row).join('・') }}</span>
         </template>
+        <template #cell-licenseNo="{ row }">
+          <div class="whitespace-nowrap">{{ row.licenseNo }}</div>
+          <div v-if="!row.controlledLicense" class="whitespace-nowrap text-xs text-slate-400">無管制藥執照</div>
+          <div v-else :class="['whitespace-nowrap text-xs', row.controlledLicense.validUntil < todayStr ? 'font-medium text-red-600' : 'text-slate-500']" :title="`管制藥品使用執照 ${row.controlledLicense.no}`">
+            <div>管制 {{ row.controlledLicense.no }}</div>
+            <div>{{ row.controlledLicense.validUntil < todayStr ? '已過期' : '至' }} {{ row.controlledLicense.validUntil }}</div>
+          </div>
+        </template>
         <template #cell-active="{ row }"><UBadge :tone="row.active ? 'green' : 'gray'">{{ row.active ? '在職' : '停用' }}</UBadge></template>
         <template #cell-name="{ row }">
           <div class="whitespace-nowrap font-medium">{{ row.name }}</div>
@@ -126,6 +142,9 @@ const columns: Column<DoctorRow>[] = [
         <USelect v-model="docForm.deptId" label="科別" required placeholder="請選擇" :options="(depts ?? []).filter((d) => d.active || d.id === docForm.deptId).map((d) => ({ label: d.name, value: d.id }))" :error="saveDoc.fieldErrors.value.deptId" />
         <UInput v-model="docForm.title" label="職稱" />
         <UInput v-model="docForm.licenseNo" label="醫事人員代碼" required :error="saveDoc.fieldErrors.value.licenseNo" />
+        <!-- 沒有執照（或過期）不能開第一～三級管制藥（服務層 controlled-rules.licenseProblem 擋） -->
+        <UInput v-model="docForm.licNo" label="管制藥品使用執照號碼" placeholder="沒有就留空" :error="saveDoc.fieldErrors.value.controlledLicenseNo" />
+        <UInput v-model="docForm.licUntil" type="date" label="執照有效期限" :error="saveDoc.fieldErrors.value.controlledLicenseUntil" />
         <div class="col-span-2">
           <UCheckbox v-model="docForm.active" label="在職" />
           <p v-if="saveDoc.fieldErrors.value.active" class="mt-1 text-xs text-red-600">{{ saveDoc.fieldErrors.value.active }}</p>

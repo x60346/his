@@ -966,7 +966,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       realOut.set(m.drugId, list)
     }
   }
+  /** 不走一般庫存帳重播的藥（不抽亂數、不用流水號：加進來不會改變其他藥與後面的種子資料），在迴圈後另外開帳 */
+  const FIXED_STOCK = new Set(['M041'])
   drugs.forEach((drug, di) => {
+    if (FIXED_STOCK.has(drug.id)) return
     // 展示用：幾種藥庫存偏低、一種缺貨（codes 的安全庫存是依原庫存的 15% 設的，不調低的話永遠不會「偏低」）
     const target = di === 8 ? 0 : di % 9 === 4 ? Math.round(drug.safetyStock * 0.6) : drug.stock
     const busy = target >= 500
@@ -1088,6 +1091,40 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (drug.category === '注射') safetyStocks.push({ locationId: 'LOC-IPD', drugId: drug.id, qty: 5 })
     }
   })
+
+  // 調劑單的 txnIds 要和處方同一個順序（退藥用 idx 對應第幾項）：上面是逐種藥重播，推進去的順序是藥品編號順序，
+  // 處方順序不同的那天（例：先開 M022 再開 M009）退藥就會對到別的藥
+  const txnById = new Map(stockTxns.map((x) => [x.id, x]))
+  for (const d of dispenses) {
+    if (!d.txnIds?.length) continue
+    const e = encounters.find((x) => x.id === d.encounterId)!
+    const pool = d.txnIds.map((tid) => txnById.get(tid)!)
+    d.txnIds = e.medications.map((m) => {
+      const i = pool.findIndex((x) => x.drugId === m.drugId)
+      return i < 0 ? '' : pool.splice(i, 1)[0].id
+    }).filter(Boolean)
+  }
+
+  // 門診示範用的第二級管制藥（Morphine 錠）：只放門診藥局，期初一批、之後沒有異動。
+  // 大型醫院期初一律進藥庫，當天整批撥給門診藥局（和其他藥一樣：藥局的批號都來自藥庫、撥出撥入成對）
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id))) {
+    const year = Number(T.slice(0, 4))
+    const at = `${addDays(T, -31)} 08:00`
+    const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}M`
+    const lot = (loc: string, qty: number, k: number) => ({ id: `LOT-${drug.id}-${k}`, drugId: drug.id, locationId: loc, lotNo, expiry: `${year + 2}-03-31`, qty, receivedAt: at })
+    const txn = (k: number, loc: string, type: StockTxn['type'], when: string, qty: number, balance: number, ref?: string): StockTxn =>
+      ({ id: `ST-${drug.id}-${k}`, drugId: drug.id, locationId: loc, at: when, type, qty, balance, lots: [{ lotNo, qty }], ...(ref ? { ref } : {}), userId: 'U301' })
+    const n = drug.stock
+    stockTxns.push(txn(1, recvLoc, 'opening', at, n, n))
+    if (opdLoc === recvLoc) {
+      drugLots.push(lot(opdLoc, n, 1))
+    } else {
+      const when = `${addDays(T, -31)} 09:00`
+      const ref = `撥補 TR${drug.id}-01`
+      stockTxns.push(txn(2, recvLoc, 'transfer-out', when, -n, 0, ref), txn(3, opdLoc, 'transfer-in', when, n, n, ref))
+      drugLots.push(lot(recvLoc, 0, 1), lot(opdLoc, n, 2))
+    }
+  }
 
   // 展示用（U25）：一張昨天提出、還沒到貨的補貨申請（第一種「偏低」的藥）——
   // 藥品庫存頁「待到貨」卡片與首頁待辦打開就有東西可看。數量用和畫面相同的建議公式；不抽亂數（不影響後面的種子資料）
@@ -1328,7 +1365,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     seededAt: T,
     users,
     departments: structuredClone(codes.departments),
-    doctors: structuredClone(codes.doctors),
+    doctors: structuredClone(codes.doctors).map((d) => (d.controlledLicense ? { ...d, controlledLicense: { ...d.controlledLicense, validUntil: d.controlledLicense.validUntil === 'expired' ? addDays(T, -140) : `${Number(T.slice(0, 4)) + 3}-12-31` } } : d)),
     identities: structuredClone(codes.identities),
     billingSettings: structuredClone(codes.billingSettings),
     discounts: structuredClone(codes.discounts),

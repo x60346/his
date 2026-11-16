@@ -5,6 +5,7 @@ import { db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { autoQty, doseUnitOf } from './billing'
 import { checkDays, doseLevel, doseNote } from './dose-rules'
+import { CONTROLLED_LEVEL_LABEL, ID_NO_PATTERN, licenseProblem, needsSpecialRx } from './controlled-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { audit, fail, must, mutate, query, requireUser, requirePermission } from './http'
 import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
@@ -149,6 +150,7 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
       }
     }
     cleanRxTimings(e.medications)
+    specialRxCheck(e)
     for (const p of e.procedures) usable.procedure(p.procId)
     for (const d of e.diagnoses) usable.icd(d.icd)
     if (e.refillTimes > 0 && v.caseType !== '04' && v.caseType !== '08') fail('連續處方箋需為慢性病案件（04）')
@@ -171,6 +173,23 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     audit('完成看診', `${find.patient(e.patientId)?.name} ${e.diagnoses.map((d) => d.icd).join(',')}${admission ? '（建議住院）' : ''}`)
     return { encounter: e, admission }
   })
+}
+
+/**
+ * 第一～三級管制藥（要專用處方箋）：醫師要有有效的管制藥品使用執照；病人要有身分證號與地址（處方箋必填）；
+ * 第一、二級以一次調劑為限，不能開成慢性病連續處方箋。規則見 controlled-rules
+ */
+function specialRxCheck(e: Encounter) {
+  const special = e.medications.map((m) => find.drug(m.drugId)!).filter((d) => needsSpecialRx(d.controlled))
+  if (!special.length) return
+  const names = special.map((d) => `${d.name}（${CONTROLLED_LEVEL_LABEL[d.controlled!]}管制藥）`).join('、')
+  const doc = find.doctor(e.doctorId)
+  const why = licenseProblem(doc?.controlledLicense, e.date)
+  if (why) fail(`${doc?.name ?? '醫師'}${why}，不能開立 ${names}`)
+  const p = must(find.patient(e.patientId), '病患')
+  const missing = [!ID_NO_PATTERN.test(p.idNo ?? '') && '身分證號', !p.address?.trim() && '地址'].filter(Boolean)
+  if (missing.length) fail(`開立 ${names}要用專用處方箋，病人的${missing.join('、')}必填：請先到病人資料補齊`)
+  if (e.refillTimes > 0 && special.some((d) => d.controlled! <= 2)) fail(`${names}以一次調劑為限，不能開成慢性病連續處方箋`)
 }
 
 /** 開藥時的過敏檢查（不擋，交給醫師判斷；畫面顯示警示） */
