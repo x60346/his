@@ -900,6 +900,8 @@ export interface Admission {
   attendingHistory?: { from: string; to: string; at: string; by: string; reason: string }[]
   /** 轉科紀錄（只增不改）：原科申請 → 新科接受／婉拒，或原科撤回。同一時間最多一筆 pending */
   deptTransfers?: DeptTransfer[]
+  /** 腕帶：報到時印第一條；遺失、弄濕重印要寫原因。條碼＝住院號（每次住院換新，舊腕帶掃了會被擋） */
+  wristband?: { printedAt: string; printedBy: string; reprints: { at: string; by: string; reason: string }[] }
   /** 期中繳款（只增不刪；作廢的標 voided） */
   interim?: IpdInterimPayment[]
   /** 退還期中繳款（出院結帳時多繳的） */
@@ -1107,6 +1109,29 @@ export interface MarRecord {
   udLineId?: string
   /** 管制藥注射劑給不是整數的劑量（例：Morphine 0.5 AMP）：整支扣、剩下的當場銷毀，另一位護理師見證 */
   residual?: { qty: number; witnessBy: string }
+  /**
+   * 給藥條碼核對：scanned＝掃了腕帶與藥品、都對；skipped＝略過（要選原因）。
+   * 沒有這個欄位＝當時不需要掃描（設定關閉、或功能上線前的紀錄）。只有「已給藥」才有
+   */
+  scan?: { mode: 'scanned' } | { mode: 'skipped'; reason: ScanSkipReason; note?: string }
+}
+
+/** 略過掃描的原因 */
+export type ScanSkipReason = 'wristband' | 'barcode' | 'scanner' | 'emergency'
+
+/** 掃描不符（差點給錯）：掃到別人的腕帶、舊腕帶、不是這一劑的藥。當場擋下，記下來給護理長看 */
+export interface ScanMismatch {
+  id: string
+  at: string
+  nurseId: string
+  /** 要給藥的那位病人 */
+  admissionId: string
+  orderId: string
+  kind: 'patient' | 'drug'
+  /** 掃到的條碼 */
+  code: string
+  /** 當時畫面上的說明（例：這是 503-2 董雅惠的腕帶） */
+  message: string
 }
 
 /**

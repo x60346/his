@@ -12,6 +12,7 @@ import * as pharmacy from './pharmacy'
 import * as admission from './admission'
 import * as ipd from './ipd'
 import * as nursing from './nursing'
+import * as scan from './scan'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -45,6 +46,7 @@ export const pharmacyApi = overNetwork(pharmacy)
 export const admissionApi = overNetwork(admission)
 export const ipdApi = overNetwork(ipd)
 export const nursingApi = overNetwork(nursing)
+export const scanApi = overNetwork(scan)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -103,6 +105,7 @@ export * from './rx-rules'
 export * from './controlled-rules'
 export * from './lab-rules'
 export * from './followup-rules'
+export * from './scan-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
 export * from './interaction-rules'
@@ -127,6 +130,8 @@ export type { UdWork, UdWorkGroup, UdWorkLine, UdReturnRow, UdDispenseView, UdDi
 export type { RefillView, NoShowItem, AfterDischargeOptions } from './booking'
 export type { MarView, OrderView } from './ipd'
 export type { WardPatient, MarBoard, PrnView, HandoverView, HandoverGroup, WardTask } from './nursing'
+export type { ScanPolicy, WristbandView, ScanDemoCodes, ScanStats } from './scan'
+export type { ScanInput } from './scan-work'
 export type { RoomRow } from './schedule'
 export type { SessionView, WeeklySlotView, SessionImpact, AffectedVisit, NoticeRow, SlotResult } from './schedule'
 export type { UserRow, UserInput, DepartmentRow, DoctorRow, DoctorImpact, AuditRow, DiscountInput } from './admin'

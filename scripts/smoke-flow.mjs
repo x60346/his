@@ -48,6 +48,15 @@ try {
   const http = await load('/src/services/http.ts')
   const dbm = await load('/src/mock/db.ts')
   const api = await load('/src/services/index.ts')
+  /**
+   * 重建展示資料。給藥條碼核對（預設開）只在「[給藥條碼核對]」那段測；其他段測的是別的規則，重建後先關掉掃描，
+   * 不然每一筆給藥都要先掃腕帶與藥品
+   */
+  const resetDb = (scale) => {
+    dbm.resetDatabase(scale)
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+  }
+  dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
   /** 住院開醫囑時醫師確認交互作用、重複用藥提醒（不是這段要測的東西時用；嚴重的帶原因） */
   const withRxOk = async (input) => ({ ...input, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(input.admissionId, input.drugId)).map((x) => [x.key, '測試確認'])) })
   const dateUtil = await load('/src/utils/date.ts')
@@ -3922,7 +3931,7 @@ try {
 
   console.log('\n[轉科]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const A = api.admissionApi
     const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
@@ -4009,7 +4018,7 @@ try {
   // 住院會診：主治開單 → 會診科回覆（看摘要）→ 建議轉科 → 一鍵帶入轉科申請；申請與回覆寫進病程紀錄
   console.log('\n[住院會診]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const CS = api.consultApi
     const db = () => dbm.db
     const seed1 = db().consults.find((c) => c.id === 'CS-SEED-1')
@@ -4078,7 +4087,7 @@ try {
   // 部分退藥 → 差額退費：藥局逐項退、可分次；櫃台用病人實際拿走的藥重算，退差額（先抵欠款），收據不作廢
   console.log('\n[部分退藥、部分退費]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const PH = api.pharmacyApi
     const C = api.chargeApi
@@ -4225,7 +4234,7 @@ try {
   // 停診搬到掛號頁＋可設定；藥庫作業（撥發、審核退回）可限定給個人；日結報表只限櫃台與管理員
   console.log('\n[停診權限、藥庫作業權限、日結報表]')
   {
-    dbm.resetDatabase('large')
+    resetDb('large')
     const db = () => dbm.db
     const PM = api.permissionApi
     const S = api.scheduleApi
@@ -4303,7 +4312,7 @@ try {
   // 誰能寫住院病人（care-team）：本科（主治、同科值班代理）、會診醫師（範圍內、只能動自己開的）；會診醫囑主治要已閱
   console.log('\n[住院寫入權限、會診醫師開醫囑]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const I = api.ipdApi
     const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
@@ -4398,7 +4407,7 @@ try {
   // 檢驗、處置未執行：櫃台標記（醫令照留）→ 同一個待退費流程退差額；退費前可撤銷
   console.log('\n[檢驗處置未執行、部分退費]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const C = api.chargeApi
     const B = await load('/src/services/billing.ts')
@@ -4484,7 +4493,7 @@ try {
   // 管制藥簿冊與殘餘量：Morphine 0.5 AMP——整支扣、殘餘見證銷毀；簿冊逐筆收支結存、病人、醫師、見證，期初＋收−支＝期末＝帳上
   console.log('\n[管制藥簿冊、殘餘量銷毀]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const DR = await load('/src/services/drug-rules.ts')
     const CSV = await load('/src/services/report-csv.ts')
@@ -4581,7 +4590,7 @@ try {
   // 優免送簽：櫃台送簽、主管在首頁核准或退回；核准綁掛號＋類別＋櫃台、當天有效、結帳用掉
   console.log('\n[優免送簽]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const C = api.chargeApi
     const makeConsulted = async () => {
@@ -4676,7 +4685,7 @@ try {
   // 門診會診：看診中請別科書面會診（病人不必另外掛號、不收費）；回覆留在這次就醫，申請的醫師看過按已閱
   console.log('\n[門診會診]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const CS = api.consultApi
     const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId)?.username
@@ -4747,7 +4756,7 @@ try {
   // 匯出 Excel：自己產生的 xlsx（不壓縮的 zip＋XML）。拆開檢查 zip 結構與 CRC、工作表、數字／文字型別、轉義；內容和 CSV 同一份報表表格
   console.log('\n[匯出 Excel]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const XL = await load('/src/services/xlsx.ts')
     const RX = await load('/src/services/report-xlsx.ts')
@@ -4848,7 +4857,7 @@ try {
   // 管制藥專用處方箋、醫師使用執照、領藥人身分證號、定期申報（申報表的每一格＝簿冊的數字）
   console.log('\n[管制藥專用處方箋、使用執照、申報]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const CR = await load('/src/services/controlled-rules.ts')
     const CSV = await load('/src/services/report-csv.ts')
@@ -5072,7 +5081,7 @@ try {
   // 檢驗：醫檢師登打、判讀（參考範圍、危急值、性別）、發報告、更正、醫師確認危急值；門診先批價、住院先採檢
   console.log('\n[檢驗報告]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const LR = await load('/src/services/lab-rules.ts')
     const L = api.labApi
@@ -5243,7 +5252,7 @@ try {
   // 影像報告：放射科判讀 X 光、超音波、電腦斷層，心電圖由開立醫師判讀；重要發現要確認；發出後只能補充
   console.log('\n[影像報告]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const IM = api.imagingApi
     let msg = ''
@@ -5384,7 +5393,7 @@ try {
   // 密碼過期太久鎖帳號（寬限天數、管理員重設解鎖、最後一位管理員不鎖）；藥車簽收單
   console.log('\n[密碼過期鎖帳號、藥車簽收單]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const PR = await load('/src/services/password-rules.ts')
     const A = api.authApi
@@ -5462,7 +5471,7 @@ try {
   // 住院結帳：每日計費 × 天數、藥依扣帳量、已執行的檢驗處置、差額床費、分段部分負擔＋上限；准出院才能結、結清才能出院
   console.log('\n[住院結帳]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const B = await load('/src/services/billing.ts')
     const IC = api.ipdChargeApi
@@ -5619,7 +5628,7 @@ try {
   // 出院帶藥：醫師在出院病摘開（一般 7 天、慢性病 30 天）、住院藥局調劑扣帳、列入住院帳單；調好後要改先退回
   console.log('\n[出院帶藥]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const DR = await load('/src/services/dose-rules.ts')
     const RX = api.dischargeRxApi
@@ -5720,7 +5729,7 @@ try {
   // 預約回診：醫師看診時約下次門診（同科、自己的為主）；正式掛號、醫師預約標記；重複要確認；慢性病依處方建議
   console.log('\n[預約回診]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const FR = await load('/src/services/followup-rules.ts')
     const BK = api.bookingApi
@@ -5794,10 +5803,149 @@ try {
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
   }
 
+  // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
+  console.log('\n[給藥條碼核對]')
+  {
+    dbm.resetDatabase('small') // 這一段要測掃描：不用 resetDb（它會關掉掃描）
+    const db = () => dbm.db
+    const NA = api.nursingApi
+    const SA = api.scanApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const A = (o) => ({ id: 'A1', admitNo: 'I261110001', patientId: 'P1', status: 'admitted', patientName: '甲', bedNo: '501-1', ...o })
+    const me = A()
+    const all = [me, A({ id: 'A2', admitNo: 'I261110002', patientId: 'P2', patientName: '乙', bedNo: '502-1' }), A({ id: 'A0', admitNo: 'I260901003', status: 'discharged' }), A({ id: 'A9', admitNo: 'I260801009', patientId: 'P9', patientName: '丙', status: 'discharged' })]
+    ok(api.checkPatientScan(' i261110001\n', me, all).ok && api.normalizeCode(' ab1 ') === 'AB1', '腕帶：本人這次住院的住院號（掃描槍的空白、換行、大小寫不影響）')
+    const r2 = api.checkPatientScan('I261110002', me, all)
+    ok(!r2.ok && r2.message.includes('病人不對') && r2.message.includes('502-1 乙'), `別床病人的腕帶 → 「${r2.message}」`)
+    const r0 = api.checkPatientScan('I260901003', me, all)
+    ok(!r0.ok && r0.message.includes('舊腕帶'), `本人上次住院的舊腕帶 → 「${r0.message}」`)
+    ok(api.checkPatientScan('I260801009', me, all).message.includes('已不在院') && api.checkPatientScan('XYZ', me, all).message.includes('不是本院') && !api.checkPatientScan('', me, all).ok, '已出院別人的腕帶、不認得的條碼、沒掃 → 擋')
+    const D = [{ nhiCode: 'AC1', name: 'Amoxicillin 250mg' }, { nhiCode: 'AC2', name: 'Amoxicillin 500mg' }]
+    const rd = api.checkDrugScan('AC2', D[0], D)
+    ok(api.checkDrugScan('ac1', D[0], D).ok && !rd.ok && rd.message.includes('Amoxicillin 500mg') && api.checkDrugScan('ZZ', D[0], D).message.includes('不認得'), `藥品：健保碼要一樣；拿錯規格 → 「${rd.message}」`)
+    ok(Object.keys(api.SCAN_SKIP_LABEL).length === 4, '略過原因：腕帶、藥品條碼、掃描器、緊急')
+
+    // 種子
+    const inpt = db().admissions.filter((a) => a.status === 'admitted')
+    ok(inpt.every((a) => a.wristband?.printedAt === a.admittedAt), `種子：住院中的 ${inpt.length} 位報到時都印了腕帶`)
+    ok(db().mar.filter((m) => m.status === 'given').every((m) => m.scan) && db().scanMismatches.length === 0, '種子：已給的藥都有掃描紀錄、沒有不符')
+    const ward = db().beds.find((b) => b.id === inpt[0].bedId).ward
+    await as('nurse01')
+    const st0 = await SA.scanStats(ward, T)
+    ok(st0.given === st0.scanned + st0.skipped + st0.notRequired && st0.skips.length === st0.skipped && st0.skips.every((x) => x.reason && x.nurseName), `掃描統計（${ward} 今天）：已給 ${st0.given}＝掃描 ${st0.scanned}＋略過 ${st0.skipped}＋不需要 ${st0.notRequired}`)
+    ok((await SA.scanPolicy()).requireScan && (await SA.scanPolicy()).demoAssist, '預設：給藥要掃描、有示範用模擬掃描')
+
+    // 給藥：臨時給藥（不必等藥局調劑）
+    const adm = inpt.find((a) => db().beds.find((b) => b.id === a.bedId).ward === ward)
+    const other = inpt.find((a) => a.id !== adm.id)
+    const docUser = db().users.find((u) => u.doctorId === adm.doctorId).username
+    const newStat = async (drugId = 'M001') => {
+      await as(docUser)
+      const o = await api.ipdApi.addOrder({ ...(await withRxOk({ admissionId: adm.id, type: 'stat', category: 'medication', drugId, content: '', dose: 1, freq: 'STAT', route: 'PO' })), allowDuplicate: true })
+      await as('nurse01')
+      return { o, m: db().mar.find((x) => x.orderId === o.id) }
+    }
+    const { o: o1, m: m1 } = await newStat()
+    const drug = db().drugs.find((d) => d.id === 'M001')
+    let msg = await errOf(() => NA.executeMar(m1.id, 'given'))
+    ok(msg.includes('請先掃描'), `沒掃描就給藥 → 「${msg}」`)
+    let r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'patient', code: other.admitNo })
+    ok(!r.ok && r.message.includes(db().patients.find((p) => p.id === other.patientId).name) && db().scanMismatches.length === 1 && db().auditLogs[0].action === '掃描不符', `掃到別人的腕帶 → 「${r.message}」，記下這次差點給錯、寫稽核`)
+    r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'patient', code: adm.admitNo })
+    ok(r.ok && r.message.includes('病人正確'), `本人腕帶 → 「${r.message}」`)
+    const wrong = db().drugs.find((d) => d.id !== 'M001' && d.active)
+    r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'drug', code: wrong.nhiCode })
+    ok(!r.ok && r.message.includes(wrong.name) && db().scanMismatches.length === 2 && db().scanMismatches[1].kind === 'drug', `拿錯藥 → 「${r.message}」`)
+    r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'drug', code: drug.nhiCode })
+    ok(r.ok, '正確的藥 → 通過')
+    msg = await errOf(() => NA.executeMar(m1.id, 'given', '', undefined, undefined, undefined, { patientCode: other.admitNo, drugCode: drug.nhiCode }))
+    ok(msg.includes('病人不對') && db().mar.find((x) => x.id === m1.id).status === 'pending', `直接呼叫 API 送別人的腕帶：服務層再核對、擋下 「${msg}」`)
+    msg = await errOf(() => NA.executeMar(m1.id, 'given', '', undefined, undefined, undefined, { patientCode: adm.admitNo, drugCode: wrong.nhiCode }))
+    ok(msg.includes('藥品不對'), '送錯的藥品條碼：服務層擋下')
+    await NA.executeMar(m1.id, 'given', '', undefined, undefined, undefined, { patientCode: ` ${adm.admitNo.toLowerCase()}\n`, drugCode: drug.nhiCode })
+    ok(db().mar.find((x) => x.id === m1.id).scan?.mode === 'scanned' && db().auditLogs[0].detail.includes('已掃描核對'), '兩個都對：給藥、記「已掃描」、稽核註明')
+    // 暫停、拒絕不用掃
+    const { m: m2 } = await newStat()
+    await NA.executeMar(m2.id, 'held', '病人外出檢查')
+    ok(db().mar.find((x) => x.id === m2.id).status === 'held' && !db().mar.find((x) => x.id === m2.id).scan, '暫停給藥不用掃描（沒有給）')
+    // 略過
+    const { m: m3 } = await newStat()
+    let f = await fieldsOf(() => NA.executeMar(m3.id, 'given', '', undefined, undefined, undefined, { skip: 'lazy' }))
+    ok(!!f.scan, '略過要選有效的原因')
+    await NA.executeMar(m3.id, 'given', '', undefined, undefined, undefined, { skip: 'scanner', note: '掃描器沒電' })
+    const rec3 = db().mar.find((x) => x.id === m3.id)
+    ok(rec3.scan?.mode === 'skipped' && rec3.scan.reason === 'scanner' && rec3.scan.note === '掃描器沒電' && db().auditLogs[0].detail.includes('未掃描（掃描器故障：掃描器沒電）'), '略過掃描：記原因與說明、稽核註明未掃描')
+    // PRN 也要掃
+    await as(docUser)
+    const prn = await api.ipdApi.addOrder({ ...(await withRxOk({ admissionId: adm.id, type: 'long', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'PRN', route: 'PO' })), allowDuplicate: true })
+    await as('nurse01')
+    msg = await errOf(() => NA.givePrn(prn.id, '疼痛分數 6 分'))
+    ok(msg.includes('請先掃描'), 'PRN 給藥也要掃描')
+    const pm = await NA.givePrn(prn.id, '疼痛分數 6 分', undefined, undefined, { patientCode: adm.admitNo, drugCode: drug.nhiCode })
+    ok(pm.scan?.mode === 'scanned', 'PRN 掃描通過後給藥')
+    // 統計
+    const st1 = await SA.scanStats(ward, T)
+    ok(st1.mismatches.length === 2 && st1.mismatches.some((x) => x.kind === 'patient') && st1.skips.some((x) => x.note === '掃描器沒電') && st1.given === st1.scanned + st1.skipped + st1.notRequired && st1.scanned === st0.scanned + 2, '統計：掃描不符 2 筆（病人、藥品）、略過有原因、數字對得起來')
+    await as('clerk01')
+    await expectError(() => SA.scanStats(ward, T), '櫃台看掃描統計')
+    // 示範用模擬掃描
+    await as('nurse01')
+    const { o: o4, m: m4 } = await newStat()
+    const demo = await SA.scanDemoCodes(adm.id, o4.id)
+    ok(demo.options.some((x) => x.kind === 'patient' && x.right && x.code === adm.admitNo) && demo.options.some((x) => x.kind === 'patient' && !x.right) && demo.options.some((x) => x.kind === 'drug' && x.right && x.code === drug.nhiCode) && demo.options.some((x) => x.kind === 'drug' && !x.right), '模擬掃描選單：本人、別床病人的腕帶、正確與拿錯的藥')
+    // 設定
+    await expectError(() => SA.saveScanPolicy({ requireScan: false, demoAssist: false }), '護理師改掃描設定')
+    await as('admin')
+    await SA.saveScanPolicy({ requireScan: false, demoAssist: false })
+    ok(db().auditLogs[0].action === '修改安全設定' && db().auditLogs[0].detail.includes('給藥需掃描條碼 開 → 關'), '管理員關閉掃描（寫稽核）')
+    await as('nurse01')
+    msg = await errOf(() => SA.scanDemoCodes(adm.id, o4.id))
+    ok(msg.includes('已關閉'), '關閉示範選單後不提供模擬條碼')
+    await NA.executeMar(m4.id, 'given')
+    ok(db().mar.find((x) => x.id === m4.id).status === 'given' && !db().mar.find((x) => x.id === m4.id).scan && (await SA.scanStats(ward, T)).notRequired === st1.notRequired + 1, '關閉後不用掃描就能給藥（統計列在「不需要掃描」）')
+    // 腕帶
+    await as('ph01')
+    await expectError(() => SA.getWristband(adm.id), '藥師看腕帶')
+    await as('nurse01')
+    const wb = await SA.getWristband(adm.id)
+    ok(wb.printed === 1 && wb.admitNo === adm.admitNo && wb.chartNo && wb.birthDate, '腕帶：住院號、病歷號、出生日期；已印 1 條')
+    f = await fieldsOf(() => SA.printWristband(adm.id))
+    ok(!!f.reason, '重印腕帶要寫原因')
+    const wb2 = await SA.printWristband(adm.id, '腕帶弄濕無法掃描')
+    ok(wb2.printed === 2 && wb2.reprints[0].reason === '腕帶弄濕無法掃描' && db().auditLogs[0].action === '重印腕帶', '重印：第 2 條、記原因與稽核')
+    const dis = db().admissions.find((a) => a.status === 'discharged')
+    msg = await errOf(() => SA.printWristband(dis.id))
+    ok(msg.includes('住院中'), `出院的病人印腕帶 → 「${msg}」`)
+    // 報到：住院中心報到後印第一條（不用原因）
+    await as('clerk01')
+    const rsv = db().admissions.find((a) => a.status === 'reserved')
+    const bed = db().beds.find((b) => b.status === 'empty')
+    const ci = await api.admissionApi.checkIn(rsv.id, bed.id)
+    ok(!ci.wristband && (await SA.getWristband(rsv.id)).printed === 0, '剛報到：還沒印腕帶（護理站標「未印腕帶」）')
+    const wb3 = await SA.printWristband(rsv.id)
+    ok(wb3.printed === 1 && db().auditLogs[0].action === '列印腕帶', '報到後印第一條：不用原因')
+  }
+
   // 預約未到追蹤（就醫日已過還沒報到、聯絡結果、改約）與出院後回診（醫師住院中預約、30 天內第一次回診比照經轉診）
   console.log('\n[預約未到與出院後回診]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const BK = api.bookingApi
     const errOf = async (fn) => {
@@ -5939,7 +6087,7 @@ try {
   // 住院中費用查詢與期中繳款：試算 − 已繳、提醒、收款與作廢、日結、出院結帳扣抵與退還多繳、費用明細表
   console.log('\n[期中繳款]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const IC = api.ipdChargeApi
     const errOf = async (fn) => {
@@ -6074,7 +6222,7 @@ try {
   // 轉診：轉入（持外院轉診單掛號、經轉診部分負擔、同一療程回診沿用、轉診回覆單）與轉出（看完診開轉診單、列印、作廢）
   console.log('\n[轉診]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const errOf = async (fn) => {
       try {
@@ -6245,7 +6393,7 @@ try {
   // 注意的確認即可、嚴重的要寫原因；原因存病歷／醫囑，藥局看得到
   console.log('\n[交互作用與重複用藥]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const errOf = async (fn) => {
       try {
@@ -6360,7 +6508,7 @@ try {
   // 診斷證明書：醫師開立、費用跟著帳單（門診批價、住院結帳）、收費後才能印；收費前可改可作廢、收費後只能作廢重開（不另收費）
   console.log('\n[診斷證明書]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const db = () => dbm.db
     const CT = api.certificateApi
     let msg = ''
@@ -6494,7 +6642,7 @@ try {
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const W = api.wardStockApi
     const db = () => dbm.db
     const wards = db().stockLocations.filter((l) => l.kind === 'ward')
@@ -6573,7 +6721,7 @@ try {
   // 第二人當場確認（共用 witness-core）：管制藥點班見證、報廢覆核；優免主管核准也走同一套（上面的優免測試）
   console.log('\n[管制藥雙人點班、報廢覆核]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const W = api.wardStockApi
     const WI = api.witnessApi
     const db = () => dbm.db
@@ -6642,7 +6790,7 @@ try {
     await expectError(() => WI.approveWitness({ purpose: 'wardCount', ward: other.ward, username: 'nurse02', password: '1234' }), '沒有管制藥卻要求見證')
     await W.countWard(other.ward, { lines: lines() })
     ok(!db().wardCounts.at(-1).witnessBy, '沒有管制藥：一個人點班即可')
-    dbm.resetDatabase('small')
+    resetDb('small')
 
     // 報廢一律要另一位藥師（或管理者）覆核
     await as('ph01')
@@ -6674,7 +6822,7 @@ try {
 
   console.log('\n[住院調劑（UD）]')
   {
-    dbm.resetDatabase('small')
+    resetDb('small')
     const { addDays, addMinutes } = await load('/src/utils/date.ts')
     const db = () => dbm.db
     const U = api.udApi
@@ -6956,7 +7104,7 @@ try {
     ok(large.safetyStocks.find((x) => x.locationId === 'LOC-WH' && x.drugId === 'M001')?.qty === m1.safetyStock * 3, '藥庫的安全庫存另外設定（主檔的 3 倍）')
 
     // 大型實際操作：重建 → 發藥扣門診藥局、進貨預設進藥庫、各地點庫存查得到
-    dbm.resetDatabase('large')
+    resetDb('large')
     ok(dbm.db.hospitalScale === 'large', '重建展示資料可選大型')
     await as('ph01')
     {
@@ -7336,7 +7484,7 @@ try {
     const dashL = await api.dashboardApi.getDashboard()
     ok(dashL.transferRequested === dbm.db.transfers.filter((x) => x.status === 'requested').length && dashL.transferIssued === 0, '首頁待辦（大型）：撥補待撥發、待簽收')
     ok(!Object.values(api).some((m) => m && typeof m === 'object' && ('inTransit' in m || 'inTransitTo' in m)), '內部查詢（運送中數量）不經 Api 對外')
-    dbm.resetDatabase('small')
+    resetDb('small')
     ok(dbm.db.hospitalScale === 'small' && dbm.db.stockLocations.filter((l) => l.kind === 'pharmacy' || l.kind === 'warehouse').length === 1, '再重建回小型')
     await as('ph01')
     await expectError(() => api.transferApi.requestTransfer({ toLocationId: 'LOC-PH', lines: [{ drugId: 'M001', qty: 1 }] }), '小型醫院（只有一個藥局）請領')

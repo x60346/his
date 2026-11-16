@@ -1597,6 +1597,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 腕帶與給藥掃描（示範，不抽亂數）：住院中的病人報到時都印了腕帶；已給的藥都掃描核對過，
+  // 只有第一個病房今天的第 2、第 5 筆略過（掃描器故障、腕帶弄濕），護理站「掃描統計」才有內容
+  for (const a of admissions.filter((x) => x.status === 'admitted')) a.wristband = { printedAt: a.admittedAt!, printedBy: 'U401', reprints: [] }
+  {
+    const ward0 = codes.wards[0]
+    const inWard0 = new Set(admissions.filter((a) => a.status === 'admitted' && beds.find((b) => b.id === a.bedId)?.ward === ward0).map((a) => a.id))
+    const given = mar.filter((m) => m.status === 'given').sort((x, y) => (x.executedAt ?? '').localeCompare(y.executedAt ?? ''))
+    for (const m of given) m.scan = { mode: 'scanned' }
+    const todays = given.filter((m) => m.executedAt?.startsWith(T) && inWard0.has(m.admissionId))
+    if (todays[1]) todays[1].scan = { mode: 'skipped', reason: 'scanner', note: '掃描器沒電，充電中' }
+    if (todays[4]) todays[4].scan = { mode: 'skipped', reason: 'wristband', note: '腕帶弄濕讀不到，已請櫃台重印' }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -1635,6 +1648,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     admissions,
     ipdOrders,
     mar,
+    scanMismatches: [],
     vitals,
     nursingNotes,
     progressNotes,

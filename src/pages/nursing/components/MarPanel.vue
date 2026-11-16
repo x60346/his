@@ -7,7 +7,8 @@ import { Check, CircleSlash, Clock, History, Pause } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WitnessDialog from '@/components/WitnessDialog.vue'
-import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, witnessApi, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
+import ScanDialog from '@/components/ScanDialog.vue'
+import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, SCAN_SKIP_LABEL, scanApi, witnessApi, type ScanInput, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -77,11 +78,36 @@ function withResidual(x: { residualQty?: number; unit: string; content: string; 
   residualFor.value = { orderId, subject: `${x.content}：給 ${x.dose} ${x.unit}、殘餘 ${x.residualQty} ${x.unit} 當場銷毀\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}`, go }
 }
 
+// ---------- 給藥前掃描（條碼核對）：設定開啟時，給藥、補登、PRN 都先過這一關，掃完（或選略過原因）才走原本的流程 ----------
+// 掃描結果 scanned 跟著送到服務層（executeMar／givePrn 會再核對一次）；暫停、拒絕不用掃
+const { data: policy } = useQuery(() => scanApi.scanPolicy())
+const scanned = ref<ScanInput>()
+const scanOpen = ref(false)
+const scanTarget = ref<{ admissionId: string; orderId: string; patientLabel: string; content: string; needDrug: boolean }>()
+let scanNext: (() => void) | null = null
+function scanGate(orderId: string, content: string, needDrug: boolean, next: () => void) {
+  if (!policy.value?.requireScan) {
+    scanned.value = undefined
+    return next()
+  }
+  scanTarget.value = { admissionId: props.admission.id, orderId, content, needDrug, patientLabel: `${props.admission.bed?.bedNo ?? ''} ${props.admission.patientName}（${props.admission.chartNo}）` }
+  scanNext = next
+  scanOpen.value = true
+}
+function onScanned(s: ScanInput) {
+  scanned.value = s
+  scanNext?.()
+}
+const scanLabel = (s: MarView['scan']) => (!s ? '' : s.mode === 'scanned' ? '已掃描' : `未掃描：${SCAN_SKIP_LABEL[s.reason]}${s.note ? `（${s.note}）` : ''}`)
+
 // ---------- 執行 ----------
 const exec = useAction(nursingApi.executeMar, { success: (m) => (m.status === 'given' ? '已記錄給藥' : '已記錄') })
 const done = useAction(nursingApi.completeStatOrder, { success: '已完成臨時醫囑' })
 
-async function give(m: MarView) {
+function give(m: MarView) {
+  scanGate(m.orderId, `${m.scheduledAt.slice(11)} ${m.content}・${dose(m)}`, true, () => giveAfterScan(m))
+}
+async function giveAfterScan(m: MarView) {
   // 醫囑有疑問、待醫師回覆：給藥暫停；緊急時寫原因強制（服務層一樣會擋，這裡先問）
   if (m.queried) {
     reasonFor.value = { kind: 'force-mar', mar: m }
@@ -95,7 +121,7 @@ async function give(m: MarView) {
     })
     if (!ok) return
   }
-  withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', undefined, undefined, w))
+  withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', undefined, undefined, w, scanned.value))
 }
 
 // ---------- 補登給藥時間：先給藥、後登打（規則 checkGivenAt 與服務層共用） ----------
@@ -105,6 +131,9 @@ const givenAtInput = ref('') // datetime-local：YYYY-MM-DDTHH:mm（可跨午夜
 const givenAt = computed(() => givenAtInput.value.replace('T', ' '))
 const backdateProblem = computed(() => (backdateFor.value ? checkGivenAt(backdateFor.value.scheduledAt, givenAt.value, props.clock) : null))
 function openBackdate(m: MarView) {
+  scanGate(m.orderId, `${m.scheduledAt.slice(11)} ${m.content}・${dose(m)}（補登）`, true, () => openBackdateAfterScan(m))
+}
+function openBackdateAfterScan(m: MarView) {
   exec.fieldErrors.value = {}
   // 預設預定時間（最常見：照時間給了、晚點才登打）；預定時間還沒到就預設現在
   givenAtInput.value = (m.scheduledAt <= props.clock ? m.scheduledAt : props.clock).replace(' ', 'T')
@@ -124,10 +153,10 @@ async function submitBackdate() {
   const at = givenAt.value
   if (m.residualQty) {
     backdateFor.value = null
-    withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', at, undefined, w))
+    withResidual(m, m.orderId, (w) => exec.run(m.id, 'given', '', at, undefined, w, scanned.value))
     return
   }
-  if (await exec.run(m.id, 'given', '', at)) backdateFor.value = null
+  if (await exec.run(m.id, 'given', '', at, undefined, undefined, scanned.value)) backdateFor.value = null
 }
 
 // 暫停、拒絕、PRN 共用一個原因對話框，以 reasonFor 記住「要做什麼」
@@ -173,17 +202,17 @@ async function confirmReason(note: string) {
   // 管制藥殘餘量：原因寫好了，接著請另一位護理師見證銷毀，見證後才送出
   if (r.kind === 'prn' && r.order.residualQty) {
     reasonFor.value = null
-    withResidual(r.order, r.order.id, (w) => prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined, w))
+    withResidual(r.order, r.order.id, (w) => prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined, w, scanned.value))
     return
   }
   if (r.kind === 'force-mar' && r.mar.residualQty) {
     reasonFor.value = null
-    withResidual(r.mar, r.mar.orderId, (w) => exec.run(r.mar.id, 'given', '', undefined, force, w))
+    withResidual(r.mar, r.mar.orderId, (w) => exec.run(r.mar.id, 'given', '', undefined, force, w, scanned.value))
     return
   }
   const ok =
-    r.kind === 'prn' ? await prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined)
-    : r.kind === 'force-mar' ? await exec.run(r.mar.id, 'given', '', undefined, force)
+    r.kind === 'prn' ? await prn.run(r.order.id, note, r.order.pendingQuery ? force : undefined, undefined, scanned.value)
+    : r.kind === 'force-mar' ? await exec.run(r.mar.id, 'given', '', undefined, force, undefined, scanned.value)
     : r.kind === 'force-stat' ? await done.run(r.order.id, force)
     : await exec.run(r.mar.id, r.kind, note)
   if (ok !== undefined) reasonFor.value = null
@@ -269,6 +298,7 @@ async function complete(o: OrderView) {
                 <UBadge :tone="statusView[m.status].tone">{{ statusView[m.status].label }}</UBadge>
                 <div class="tabular w-40 text-right text-xs">
                   {{ m.executedAt?.slice(11) }}<span v-if="m.recordedAt" class="text-amber-700">（{{ m.recordedAt.slice(11) }} 補登）</span>・{{ m.nurseName }}
+                  <div v-if="m.scan" :class="m.scan.mode === 'scanned' ? 'text-emerald-700' : 'text-amber-700'">{{ scanLabel(m.scan) }}</div>
                   <div v-if="m.residual" class="text-purple-700">殘餘 {{ m.residual.qty }} {{ m.unit }} 銷毀・見證 {{ m.residualWitnessName }}</div>
                 </div>
               </template>
@@ -292,7 +322,7 @@ async function complete(o: OrderView) {
                 <template v-if="o.lastGivenAt">上次 {{ o.lastGivenAt.slice(5) }}（{{ ago(o.lastGivenAt) }}）</template>
                 <template v-else>尚未使用</template>
               </span>
-              <UButton size="sm" variant="secondary" @click="reasonFor = { kind: 'prn', order: o }">給藥</UButton>
+              <UButton size="sm" variant="secondary" @click="scanGate(o.id, `${o.content}・${dose(o)}（PRN）`, !!o.drugId, () => (reasonFor = { kind: 'prn', order: o }))">給藥</UButton>
             </li>
           </ul>
         </section>
@@ -336,6 +366,7 @@ async function complete(o: OrderView) {
         <UButton type="submit" variant="success" :disabled="!!backdateProblem" :loading="exec.pending.value">補登給藥</UButton>
       </template>
     </UDialog>
+    <ScanDialog v-model="scanOpen" :target="scanTarget" :demo-assist="policy?.demoAssist" @done="onScanned" />
     <WitnessDialog
       v-model="residualOpen"
       title="管制藥殘餘量銷毀見證"

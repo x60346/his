@@ -20,7 +20,7 @@ import type {
   IcdCode,
   Identity,
   IpdOrder,
-  MarRecord,
+  MarRecord, ScanMismatch,
   NursingNote,
   OrderSet,
   Phrase,
@@ -76,7 +76,7 @@ export interface Database {
    */
   /** 權限的角色設定（只存和預設不同的；固定的權限不會出現在這裡）：permission-rules */
   permissionSettings?: Partial<Record<string, Role[]>>
-  securitySettings?: { idleLockMin?: number; twoPersonDispense?: boolean; passwordMaxDays?: number; passwordHistory?: number; passwordGraceDays?: number }
+  securitySettings?: { requireScan?: boolean; scanDemoAssist?: boolean; idleLockMin?: number; twoPersonDispense?: boolean; passwordMaxDays?: number; passwordHistory?: number; passwordGraceDays?: number }
   /** 門診診間 */
   rooms: Room[]
   weeklySlots: WeeklySlot[]
@@ -101,6 +101,8 @@ export interface Database {
   admissions: Admission[]
   ipdOrders: IpdOrder[]
   mar: MarRecord[]
+  /** 給藥掃描不符（差點給錯）的紀錄 */
+  scanMismatches: ScanMismatch[]
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
@@ -148,7 +150,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 74
+export const SCHEMA_VERSION = 75
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

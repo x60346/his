@@ -11,6 +11,8 @@ import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
 import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
+import WristbandDialog from '@/components/WristbandDialog.vue'
+import ScanStatsPanel from './components/ScanStatsPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -40,6 +42,7 @@ onMounted(() => (timer = setInterval(reload, 60_000)))
 onBeforeUnmount(() => clearInterval(timer))
 
 const admissionId = ref<string>()
+const wristbandOpen = ref(false)
 useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
 const adm = computed(() => patients.value?.find((p) => p.id === admissionId.value))
 // 換病房或病人出院後，取消選取
@@ -56,6 +59,7 @@ const tabs = computed(() =>
     ? [
         { key: 'tasks', label: '本班待辦' },
         { key: 'stock', label: '常備點班' },
+        { key: 'scan', label: '給藥掃描' },
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -129,6 +133,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
                     <UBadge v-if="p.unackedCount" tone="cyan">新醫囑 {{ p.unackedCount }}</UBadge>
                     <UBadge v-if="p.dischargeReady" tone="green">准出院</UBadge>
+                    <UBadge v-if="!p.wristband" tone="red" title="腕帶還沒印：給藥掃描要用">未印腕帶</UBadge>
                   </span>
                 </div>
                 <div class="mt-0.5 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天</div>
@@ -151,7 +156,9 @@ const wardTotals = computed(() => ({
           <PatientBanner :patient="adm">
             <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
             <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.doctorName }}</span>
+            <UButton size="sm" :variant="adm.wristband ? 'ghost' : 'secondary'" :class="!adm.wristband && 'text-red-700'" @click="wristbandOpen = true">{{ adm.wristband ? '重印腕帶' : '未印腕帶：列印' }}</UButton>
           </PatientBanner>
+          <WristbandDialog v-model="wristbandOpen" :admission-id="adm.id" />
           <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
           <IpdFeeStrip :admission-id="adm.id" />
           <!-- 醫師約好的出院後回診（有約才顯示）：出院衛教時提醒病人 -->
@@ -164,6 +171,7 @@ const wardTotals = computed(() => ({
           <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
           <!-- 沒選病人時顯示全病房的本班待辦（以前是空白的「請選擇病人」）；點一列跳到該病人的對應分頁 -->
           <WardStockPanel v-else-if="!adm && tab === 'stock'" :ward="ward" :clock="clock" />
+          <ScanStatsPanel v-else-if="!adm && tab === 'scan'" :ward="ward" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />

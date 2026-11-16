@@ -11,6 +11,7 @@ import { wardStockOut } from './stock-ledger'
 import { residualOf } from './drug-rules'
 import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
 import { udStage } from './ud-work'
+import { scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 
@@ -247,7 +248,7 @@ export function queryOrder(orderId: string, reason: string): Promise<{ ok: true 
  * 醫囑有疑問、待醫師回覆時，給藥要帶 force 並寫原因（例：醫師電話口頭確認、病人急需）——暫停、拒絕照常。
  * givenAt：補登實際給藥時間（只限 given）；不填就是現在。補登時 recordedAt 記下實際登打的時間。
  */
-export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string, force?: { reason: string }, witness?: string): Promise<MarRecord> {
+export function executeMar(marId: string, status: Exclude<MarRecord['status'], 'pending'>, note = '', givenAt?: string, force?: { reason: string }, witness?: string, scan?: ScanInput): Promise<MarRecord> {
   return mutate(() => {
     const nurse = requirePermission('mar.give')
     const m = must(db.mar.find((x) => x.id === marId), '給藥紀錄')
@@ -271,6 +272,8 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     if (status === 'given' && order.type === 'long' && udStage(m) !== 'verified') {
       fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5)}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
     }
+    // 給藥前核對病人與藥品（條碼）：暫停、拒絕沒有給，不用掃
+    const scanned = status === 'given' ? settleScan(admitted(m.admissionId), order, scan) : undefined
     // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
     const forced = status === 'given' ? holdForQuery(order, force) : undefined
     const res = status === 'given' ? residualCheck(order, nurse.id, witness) : undefined
@@ -279,35 +282,36 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     if (stock) m.stockFrom = stock.from
     if (res) m.residual = res.residual
     const noteText = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
-    Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id })
+    Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id, ...(scanned ? { scan: scanned } : {}) })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
     if (order.type === 'stat') {
       order.status = 'done'
       order.stopAt = at
     }
-    audit(forced ? '疑問期間仍給藥' : '給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${noteText ? `：${noteText}` : ''}${res ? `；${res.text}` : ''}`)
+    audit(forced ? '疑問期間仍給藥' : '給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${noteText ? `：${noteText}` : ''}${res ? `；${res.text}` : ''}${scanned ? `；${scanText(scanned)}` : ''}`)
     if (res) consumeWitness(witness)
     return m
   })
 }
 
 /** PRN（需要時）給藥：沒有排程，執行時直接新增一筆已給藥紀錄 */
-export function givePrn(orderId: string, note: string, force?: { reason: string }, witness?: string): Promise<MarRecord> {
+export function givePrn(orderId: string, note: string, force?: { reason: string }, witness?: string, scan?: ScanInput): Promise<MarRecord> {
   return mutate(() => {
     const nurse = requirePermission('mar.give')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.status !== 'active' || o.freq !== 'PRN') fail('此醫囑不是有效的 PRN 給藥')
     if (!note.trim()) failField('note', '請註明給藥原因（例：體溫 38.5°C）')
+    const scanned = settleScan(admitted(o.admissionId), o, scan)
     const forced = holdForQuery(o, force)
     const res = residualCheck(o, nurse.id, witness)
     // PRN 用病房常備藥：給的時候扣住院藥局
     const stock = wardStockOut(o, admitted(o.admissionId).admitNo, nurse.id, res?.ledger ?? {})
     const t = now()
     const text = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
-    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text, ...(stock ? { stockFrom: stock.from } : {}), ...(res ? { residual: res.residual } : {}) }
+    const m: MarRecord = { id: newId('MAR'), orderId: o.id, admissionId: o.admissionId, scheduledAt: t, status: 'given', executedAt: t, nurseId: nurse.id, note: text, ...(stock ? { stockFrom: stock.from } : {}), ...(res ? { residual: res.residual } : {}), ...(scanned ? { scan: scanned } : {}) }
     db.mar.push(m)
-    audit(forced ? '疑問期間仍給藥' : 'PRN 給藥', `${o.content}：${text}${res ? `；${res.text}` : ''}`)
+    audit(forced ? '疑問期間仍給藥' : 'PRN 給藥', `${o.content}：${text}${res ? `；${res.text}` : ''}${scanned ? `；${scanText(scanned)}` : ''}`)
     if (res) consumeWitness(witness)
     return m
   })

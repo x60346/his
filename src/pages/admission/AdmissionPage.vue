@@ -5,12 +5,13 @@
 //   checkin  報到：先選病人，再點一張可用的空床
 //   transfer 轉床：從住院資訊進入，再點一張可用的空床
 import { computed, ref, watch } from 'vue'
-import { ArrowRightLeft, CalendarPlus, DoorOpen, LogOut, Sparkles, UserCog, X } from 'lucide-vue-next'
+import { ArrowRightLeft, CalendarPlus, DoorOpen, LogOut, Sparkles, Tag, UserCog, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UQueryState, USelect, UTabs } from '@/components/ui'
 import BedCard from './components/BedCard.vue'
 import ReserveDialog from './components/ReserveDialog.vue'
 import DischargeDialog from './components/DischargeDialog.vue'
 import ChangeAttendingDialog from './components/ChangeAttendingDialog.vue'
+import WristbandDialog from '@/components/WristbandDialog.vue'
 import { admissionApi, masterApi, type AdmissionView } from '@/services'
 import type { BedView } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
@@ -99,14 +100,23 @@ function onBedClick(b: BedView) {
   selectedBedId.value = b.id
 }
 
+// 腕帶：報到後直接印；之後在病床資訊「腕帶」重印
+const wristbandFor = ref<string>()
+const wristbandOpen = ref(false)
 const checkIn = useAction(admissionApi.checkIn, { success: (a) => `${a.patientName} 已報到，住院號 ${a.admitNo}，床位 ${a.bed?.bedNo}` })
 const transfer = useAction(admissionApi.transferBed, { success: (a) => `${a.patientName} 已轉至 ${a.bed?.bedNo}，原床位改為清潔中` })
 async function confirmBed() {
   if (!target.value || !pendingBed.value) return
   const fn = mode.value === 'checkin' ? checkIn : transfer
+  const checkingIn = mode.value === 'checkin'
   const a = await fn.run(target.value.id, pendingBed.value.id)
   if (a) {
     confirmOpen.value = false
+    // 報到完成接著印腕帶（給藥時護理師要掃）
+    if (checkingIn) {
+      wristbandFor.value = a.id
+      wristbandOpen.value = true
+    }
     selectedBedId.value = pendingBed.value.id
     cancelMode()
   }
@@ -204,6 +214,7 @@ const reserveOpen = ref(false)
             <div class="mt-4 flex gap-2">
               <UButton size="sm" variant="secondary" :icon="ArrowRightLeft" @click="startTransfer">轉床</UButton>
               <UButton size="sm" variant="secondary" :icon="UserCog" @click="attendingTarget = occupied">變更主治醫師</UButton>
+              <UButton size="sm" variant="secondary" :icon="Tag" @click="(wristbandFor = occupied?.id), (wristbandOpen = true)">{{ occupied?.wristband ? '腕帶' : '印腕帶' }}</UButton>
               <UButton size="sm" variant="danger" :icon="LogOut" @click="dischargeOpen = true">辦理出院</UButton>
             </div>
           </UQueryState>
@@ -267,6 +278,7 @@ const reserveOpen = ref(false)
 
     <ReserveDialog v-model="reserveOpen" />
     <DischargeDialog v-model="dischargeOpen" :admission="occupied" />
+    <WristbandDialog v-model="wristbandOpen" :admission-id="wristbandFor" />
     <ChangeAttendingDialog v-model="attendingOpen" :admission="attendingTarget" />
   </div>
 </template>

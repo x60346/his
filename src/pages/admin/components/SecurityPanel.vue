@@ -2,7 +2,7 @@
 // 安全設定：閒置多久鎖定畫面（規則與服務層同一個 checkIdleMinutes）；密碼期限與歷史（checkPasswordPolicy）；調劑雙人核對（U24）。
 import { computed, ref, watch } from 'vue'
 import { UButton, UCard, UCheckbox, UInput } from '@/components/ui'
-import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_GRACE_MAX, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, UNLOCK_MAX_FAILS } from '@/services'
+import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_GRACE_MAX, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, scanApi, UNLOCK_MAX_FAILS } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: current } = useQuery(() => authApi.idleLockMinutes())
@@ -29,6 +29,10 @@ const savePw = useAction(authApi.savePasswordPolicy, {
 // 調劑雙人核對：勾了立即儲存（只有一個開關，不需要另外按儲存）
 const { data: policy } = useQuery(() => pharmacyApi.dispensePolicy())
 const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (p.twoPersonDispense ? '已開啟：核對與發藥須由不同藥師' : '已關閉：同一位藥師可以核對並發藥') })
+
+// 給藥條碼核對：勾了立即儲存
+const { data: scanPol } = useQuery(() => scanApi.scanPolicy())
+const saveScan = useAction(scanApi.saveScanPolicy, { success: (p) => (p.requireScan ? '已開啟：給藥要掃描腕帶與藥品條碼' : '已關閉：給藥不必掃描') })
 </script>
 
 <template>
@@ -75,6 +79,15 @@ const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (
       <UCheckbox :model-value="!!policy?.twoPersonDispense" :disabled="!policy || savePolicy.pending.value" label="核對與發藥須由不同藥師" @update:model-value="(v) => savePolicy.run(v)" />
       <p class="text-slate-600">開啟後，核對處方的藥師不能自己發藥，要由第二位藥師在發藥時再看一次（雙重核對）。</p>
       <p class="text-xs text-slate-500">預設關閉：只有一位藥師的診所開啟後會無法發藥。目前有 2 位藥師帳號（ph01、ph02）可以示範。</p>
+    </div>
+  </UCard>
+  <UCard title="給藥條碼核對" subtitle="住院給藥前掃病人腕帶與藥品條碼">
+    <div class="max-w-xl space-y-2 text-sm">
+      <UCheckbox :model-value="!!scanPol?.requireScan" :disabled="!scanPol || saveScan.pending.value" label="給藥需掃描條碼（腕帶＋藥品）" @update:model-value="(v) => saveScan.run({ requireScan: v, demoAssist: !!scanPol?.demoAssist })" />
+      <p class="text-slate-600">排程、PRN、臨時給藥都要先掃腕帶（住院號）再掃藥品（健保碼），病人或藥不對當場擋下並記錄。掃不了可以選原因略過，護理站「給藥掃描」看得到略過的比例。</p>
+      <p class="text-xs text-slate-500">預設開啟。沒有掃描器的醫院可以關閉（給藥就和以前一樣，不必掃）。</p>
+      <UCheckbox :model-value="!!scanPol?.demoAssist" :disabled="!scanPol || saveScan.pending.value" label="顯示「示範：模擬掃描」選單" @update:model-value="(v) => saveScan.run({ requireScan: !!scanPol?.requireScan, demoAssist: v })" />
+      <p class="text-xs text-slate-500">展示時沒有掃描槍，掃描框下方可以選「本人腕帶、別床病人的腕帶、正確的藥、拿錯的藥」當作掃了它。正式使用請關閉。</p>
     </div>
   </UCard>
   </div>
