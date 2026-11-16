@@ -20,6 +20,7 @@ import OpdConsultDialog from './components/OpdConsultDialog.vue'
 import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import LabReportList from '@/components/LabReportList.vue'
 import FollowUpDialog from './components/FollowUpDialog.vue'
+import CertificatePanel from '@/components/CertificatePanel.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
@@ -539,6 +540,8 @@ const lastOpen = ref(true)
         <span v-else class="min-w-0 flex-1 text-xs text-slate-500">還沒預約下次門診</span>
         <UButton size="sm" variant="secondary" :icon="CalendarPlus" @click="followOpen = true">預約回診</UButton>
       </div>
+      <!-- 診斷證明書：叫號後可開，費用跟著這次批價；批價後才能印 -->
+      <div v-if="encounter && visit.status !== 'registered'" class="rounded-lg border border-slate-200 bg-white px-3 py-2"><CertificatePanel :encounter-id="encounter.id" /></div>
       <!-- 這次看診的門診會診 -->
       <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <span class="pt-0.5 text-xs font-semibold text-slate-600">門診會診</span>

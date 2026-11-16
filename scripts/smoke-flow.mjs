@@ -5788,6 +5788,140 @@ try {
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
   }
 
+  // 診斷證明書：醫師開立、費用跟著帳單（門診批價、住院結帳）、收費後才能印；收費前可改可作廢、收費後只能作廢重開（不另收費）
+  console.log('\n[診斷證明書]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const CT = api.certificateApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const price = db().procedures.find((p) => p.id === 'P027').selfPrice
+    // 種子：已出院的病人有一張證明書，費用在住院收據裡、可以印
+    const seed = db().certificates.find((c) => c.id === 'MC-SEED-1')
+    const seedCharge = db().charges.find((c) => c.admissionId === seed.admissionId && !c.voided)
+    ok(seed && seedCharge.lines.some((l) => l.name.includes(seed.no) && l.amount === price * 2) && seed.stayFrom && seed.stayTo, `種子：已出院病人的證明書 ${seed.no}（2 份），證明書費 ${price * 2} 在住院收據裡`)
+    await as('clerk01')
+    let sv = (await CT.listCertificates({ admissionId: seed.admissionId }))[0]
+    ok(sv.feePaid && sv.printable && !sv.editable && sv.patient.idNo && sv.doctorLicenseNo, '種子證明書：已收費、可列印、不能直接改；列印資料有身分證號與醫事人員代碼')
+    sv = await CT.printCertificate(seed.id)
+    ok(sv.printed.length === 1 && db().auditLogs[0].action === '列印診斷證明書', '櫃台列印：記下誰、何時印、寫稽核')
+
+    // 門診：看完診開立
+    await as('clerk01')
+    const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended)
+    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+    const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
+    await as(drUser)
+    const ee = await api.opdApi.startConsult(vv.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.completeEncounter(ee.id, { subjective: '腰痛', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M54.5', name: '下背痛', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+    ok((await CT.certificateIssuable({ encounterId: ee.id })).ok, '看完診、還沒批價：可以開')
+    const draft = await CT.certificateDraft({ encounterId: ee.id })
+    ok(draft.diagnoses.includes('M54.5 下背痛') && draft.visitDate === T, '開立預設：病名帶這次的診斷、應診日期')
+    const f1 = await fieldsOf(() => CT.issueCertificate({ encounterId: ee.id, diagnoses: ' ', advice: '', purpose: '請假', copies: 0 }))
+    ok(f1.diagnoses && f1.advice && f1.copies, '病名、醫師囑言、份數一次標出')
+    msg = (await fieldsOf(() => CT.issueCertificate({ encounterId: ee.id, diagnoses: 'x', advice: 'y', purpose: '請假', copies: 11 }))).copies
+    ok(!!msg, `份數超過上限 → 「${msg}」`)
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== sess.doctorId).username
+    await as(other)
+    msg = await errOf(() => CT.issueCertificate({ encounterId: ee.id, diagnoses: 'x', advice: 'y', purpose: '請假', copies: 1 }))
+    ok(msg.includes('自己看的'), `別的醫師開 → 「${msg}」`)
+    await as('clerk01')
+    await expectError(() => CT.issueCertificate({ encounterId: ee.id, diagnoses: 'x', advice: 'y', purpose: '請假', copies: 1 }), '櫃台開證明書')
+    const before = (await api.chargeApi.previewCharge(vv.id)).patientTotal
+    await as(drUser)
+    const c1 = await CT.issueCertificate({ encounterId: ee.id, diagnoses: draft.diagnoses, advice: '宜休養三日', purpose: '請假', copies: 2 })
+    ok(/^\d+ 診字第 \d{6} 號$/.test(c1.no) && !c1.feePaid && c1.editable && !c1.printable, `開立 ${c1.no}：待批價收費、可改、還不能印`)
+    msg = await errOf(() => CT.printCertificate(c1.id))
+    ok(msg.includes('還沒收'), `還沒收費就印 → 「${msg}」`)
+    await as('clerk01')
+    let pv = await api.chargeApi.previewCharge(vv.id)
+    ok(pv.patientTotal === before + price * 2 && pv.lines.some((l) => l.name.includes(c1.no) && l.qty === 2 && l.patientPay), `批價試算多了證明書費 ${price} × 2（明細寫證明書字號）`)
+    await as(drUser)
+    await CT.updateCertificate(c1.id, { diagnoses: draft.diagnoses, advice: '宜休養五日', purpose: '保險理賠', copies: 3 })
+    await as('clerk01')
+    ok((await api.chargeApi.previewCharge(vv.id)).patientTotal === before + price * 3, '收費前改成 3 份：試算跟著變')
+    await as(drUser)
+    msg = (await fieldsOf(() => CT.voidCertificate(c1.id, ''))).reason
+    ok(!!msg, '作廢要寫原因')
+    await CT.voidCertificate(c1.id, '病人不需要了')
+    await as('clerk01')
+    ok((await api.chargeApi.previewCharge(vv.id)).patientTotal === before, '收費前作廢：證明書費一併取消')
+    await as(drUser)
+    const c2 = await CT.issueCertificate({ encounterId: ee.id, diagnoses: '下背痛', advice: '宜休養三日', purpose: '請假', copies: 1 })
+    // 批價
+    await as('clerk01')
+    pv = await api.chargeApi.previewCharge(vv.id)
+    await api.chargeApi.pay(vv.id, { payMethod: 'cash', received: pv.patientTotal })
+    const chId = db().charges.find((c) => c.visitId === vv.id && !c.voided).id
+    const rc = await api.chargeApi.getReceipt(chId)
+    ok(rc.lines.some((l) => l.name.includes(c2.no)) && rc.encounterId === ee.id && !rc.pendingRefund, '收據含證明書費、帶這次的病歷（批價頁列出證明書）；不會誤算出待退費')
+    const printed = await CT.printCertificate(c2.id)
+    ok(printed.printable && printed.feePaid, '批價後櫃台可以印')
+    await as(drUser)
+    const iss = await CT.certificateIssuable({ encounterId: ee.id })
+    ok(!iss.ok && iss.reason.includes('已批價'), `批價後不能再開（費用收不到）：「${iss.reason}」`)
+    msg = await errOf(() => CT.updateCertificate(c2.id, { diagnoses: '改', advice: '改', purpose: '請假', copies: 1 }))
+    ok(msg.includes('作廢重開'), `收費後直接改 → 「${msg}」`)
+    msg = await errOf(() => CT.voidCertificate(c2.id, '測試'))
+    ok(msg.includes('作廢重開'), `收費後直接作廢 → 「${msg}」`)
+    msg = (await fieldsOf(() => CT.reissueCertificate(c2.id, { diagnoses: '下背痛', advice: '宜休養三日', purpose: '請假', copies: 2, reason: '多一份' }))).copies
+    ok(msg?.includes('不能超過'), `重開份數比原本多 → 「${msg}」`)
+    const c3 = await CT.reissueCertificate(c2.id, { diagnoses: 'M54.5 下背痛（腰椎扭傷）', advice: '宜休養三日', purpose: '請假', copies: 1, reason: '病名寫得不完整' })
+    const old = db().certificates.find((c) => c.id === c2.id)
+    ok(c3.replaces === c2.id && c3.no !== c2.no && c3.printable && old.voided?.replacedBy === c3.id && c3.replacesNo === c2.no, `作廢重開：新字號 ${c3.no}、原本那張作廢並記下、新的不必再收費就能印`)
+    await as('clerk01')
+    ok(db().charges.filter((c) => c.visitId === vv.id && !c.voided).length === 1 && !(await api.chargeApi.getReceipt(chId)).pendingRefund, '重開不另收費、也不產生待退費')
+    const paidTotal = db().charges.find((c) => c.id === chId).patientTotal
+    await api.chargeApi.voidCharge(chId, '測試重新批價')
+    const pv2 = await api.chargeApi.previewCharge(vv.id)
+    ok(pv2.patientTotal === paidTotal && pv2.lines.some((l) => l.name.includes(c2.no)), '重開後收據作廢重新批價：證明書費照原本那張收（不會變免費）')
+    ok(!(await CT.listCertificates({ encounterId: ee.id })).find((x) => x.id === c3.id).printable, '收據作廢、還沒重新批價：重開的那張也暫時不能印')
+    await api.chargeApi.pay(vv.id, { payMethod: 'cash', received: pv2.patientTotal })
+    const rep = await api.chargeApi.dailyReport(T)
+    const f = rep.byFeeType
+    ok(f.reg + f.basicCopay + f.drugCopay + f.ipdCopay + f.selfPay + f.discount === rep.patientTotal, '日結：證明書費算自費項目，分類加總＝應收')
+    await as(drUser)
+    const hist = await api.opdApi.patientHistory(pt.id)
+    ok(hist.find((h) => h.id === ee.id)?.certificates.some((x) => x.startsWith(c3.no)) && !hist.find((h) => h.id === ee.id).certificates.some((x) => x.startsWith(c2.no)), '就診紀錄列出這次開的證明書（作廢的不列）')
+
+    // 住院：證明書費進住院帳單；結帳後不能再開
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    await as(db().users.find((u) => u.doctorId === ready.doctorId).username)
+    const ipdDraft = await CT.certificateDraft({ admissionId: ready.id })
+    ok(ipdDraft.stayFrom === ready.admittedAt.slice(0, 10) && ipdDraft.stayTo === T, '住院證明書預設住院期間（入院日到開立日）')
+    const ic = await CT.issueCertificate({ admissionId: ready.id, diagnoses: ipdDraft.diagnoses, advice: '宜休養兩週', purpose: '保險理賠', copies: 1 })
+    await as('clerk01')
+    const bill = (await api.ipdChargeApi.getIpdBill(ready.id)).bill
+    ok(bill.lines.some((l) => l.name.includes(ic.no) && l.amount === price), '住院帳單含證明書費（自費，不算部分負擔）')
+    await as('ph01')
+    await api.dischargeRxApi.dispenseDischargeRx(ready.id)
+    await as('clerk01')
+    await api.ipdChargeApi.payIpd(ready.id, { payMethod: 'card', received: 0 })
+    ok((await CT.listCertificates({ admissionId: ready.id }))[0].printable, '住院結帳後可以印')
+    await as(db().users.find((u) => u.doctorId === ready.doctorId).username)
+    msg = await errOf(() => CT.issueCertificate({ admissionId: ready.id, diagnoses: 'x', advice: 'y', purpose: '請假', copies: 1 }))
+    ok(msg.includes('已結帳'), `住院結帳後再開 → 「${msg}」`)
+    await as('nurse01')
+    await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

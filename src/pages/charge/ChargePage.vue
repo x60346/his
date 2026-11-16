@@ -13,6 +13,7 @@ import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
 import IpdBillingPanel from './components/IpdBillingPanel.vue'
+import CertificatePanel from '@/components/CertificatePanel.vue'
 import { chargeApi, checkCash, checkRepay, discountSummary } from '@/services'
 import type { DebtItem, ReceiptProcedure } from '@/services/charge'
 import ReasonDialog from '@/components/ReasonDialog.vue'
@@ -397,6 +398,8 @@ const identityOpen = ref(false)
               <UButton variant="secondary" :icon="Printer" @click="print">列印收據</UButton>
             </div>
           </div>
+          <!-- 這次看診開的診斷證明書：已收費，櫃台在這裡印給病人 -->
+          <div v-if="receipt.encounterId" class="no-print rounded-lg border border-slate-200 bg-white px-4 py-3"><CertificatePanel :encounter-id="receipt.encounterId" /></div>
           <div v-if="receipt.pendingRefund" class="no-print flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
             <Undo2 class="h-4 w-4 shrink-0" />
             <span class="min-w-0 flex-1">

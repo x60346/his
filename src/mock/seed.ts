@@ -45,6 +45,7 @@ import type {
   LabItemDef,
   LabReport,
   ImagingReport,
+  MedicalCertificate,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, calcIpdChargeLines, ipdDays, IPD_COPAY_DEFAULT, summarize } from '@/services/billing'
@@ -899,6 +900,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })
   }
 
+  // 診斷證明書（示範）：第一位已出院的病人，出院當天主治開了 2 份（請假用），費用在住院收據裡、可以列印
+  const certificates: MedicalCertificate[] = []
+  const certProc = codes.procedures.find((x) => x.id === 'P027')!
   // 已出院的住院結帳（不抽亂數）：出院當天 10:30 櫃台結帳。歷史住院沒有醫囑資料，帳單只有每日計費與部分負擔
   for (const a of admissions.filter((x) => x.status === 'discharged')) {
     const pt = patients.find((x) => x.id === a.patientId)!
@@ -908,8 +912,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       identity, from: a.admittedAt!, to: a.dischargedAt!, beds: [{ bedNo: '—', bedClass: '健保床', days, extraFee: 0 }],
       daily: codes.procedures.filter((x) => x.dailyFee), drugs: [], procedures: [], copay: codes.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
     })
-    const sum = summarize(lines)
     const day = a.dischargedAt!.slice(0, 10)
+    if (!certificates.length) {
+      const roc = Number(day.slice(0, 4)) - 1911
+      const no = `${roc} 診字第 ${String(next(`cert:${roc}`)).padStart(6, '0')} 號`
+      certificates.push({
+        id: 'MC-SEED-1', no, patientId: a.patientId, admissionId: a.id, deptId: a.deptId, doctorId: a.doctorId,
+        stayFrom: a.admittedAt!.slice(0, 10), stayTo: day, diagnoses: a.dischargeSummary?.diagnosis ?? a.diagnosis,
+        advice: `病人因上述疾病於 ${a.admittedAt!.slice(0, 10)} 住院治療，${day} 出院，宜休養一週，一週後門診追蹤。`,
+        purpose: '請假', copies: 2, issuedAt: `${day} 09:30`,
+      })
+      lines.push({ kind: 'self', name: `${certProc.name}（自費，${no}）`, qty: 2, unitPrice: certProc.selfPrice, amount: certProc.selfPrice * 2, patientPay: true })
+    }
+    const sum = summarize(lines)
     charges.push({
       id: `C-IPD-${a.admitNo}`, visitId: '', admissionId: a.id, ipd: meta, patientId: a.patientId, lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal,
       payMethod: 'card', received: sum.patientTotal, change: 0, receiptNo: `R${day.replace(/-/g, '')}${String(next(`receipt:${day}`)).padStart(4, '0')}`,
@@ -1577,6 +1592,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     preventRecords,
     labReports,
     imagingReports,
+    certificates,
     auditLogs: [],
     counters,
   }

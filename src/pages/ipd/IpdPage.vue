@@ -7,6 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
 import LabReportList from '@/components/LabReportList.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
@@ -378,6 +379,8 @@ async function submitNote() {
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
+          <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
+          <div class="rounded-md border border-slate-200 px-3 py-2"><CertificatePanel :admission-id="adm.id" /></div>
           <template v-if="ds?.signedAt">
             <div class="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <LogOut class="h-4 w-4" />已准予出院，等住院中心辦理手續。

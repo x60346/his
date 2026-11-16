@@ -10,6 +10,7 @@ import type { ChargeLine, PayMethod } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { HOSPITAL } from '@/utils/hospital'
+import CertificatePanel from '@/components/CertificatePanel.vue'
 import { money, payMethodLabel } from '@/utils/labels'
 import { toRoc } from '@/utils/date'
 
@@ -168,6 +169,8 @@ const print = () => window.print()
         <UButton v-if="!view.charge.canVoid" variant="ghost" @click="(voidOpen = true), (voidReason = '')">作廢重結</UButton>
         <UButton variant="secondary" :icon="Printer" @click="print">列印收據</UButton>
       </div>
+      <!-- 這次住院開的診斷證明書：結帳後櫃台在這裡印 -->
+      <div class="no-print rounded-lg border border-slate-200 bg-white px-4 py-3"><CertificatePanel :admission-id="view.admission.id" /></div>
     </div>
 
     <UDialog v-model="voidOpen" title="作廢住院收據" size="sm" @submit="onVoid">

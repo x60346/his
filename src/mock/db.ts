@@ -50,6 +50,7 @@ import type {
   DiscountRequest,
   LabReport,
   ImagingReport,
+  MedicalCertificate,
 } from '@/types'
 import { today } from '@/utils/date'
 import { buildSeed } from './seed'
@@ -117,6 +118,8 @@ export interface Database {
   labReports: LabReport[]
   /** 影像檢查報告 */
   imagingReports: ImagingReport[]
+  /** 診斷證明書 */
+  certificates: MedicalCertificate[]
   /** 組套（常用處方）：醫師個人或科室共用 */
   orderSets: OrderSet[]
   /** 醫師個人片語 */
@@ -143,7 +146,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 70
+export const SCHEMA_VERSION = 71
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

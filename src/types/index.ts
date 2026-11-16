@@ -1463,3 +1463,37 @@ export interface StockTxn {
   /** 見證、覆核的人（點班、報廢、管制藥殘餘量銷毀） */
   witnessBy?: string
 }
+
+/**
+ * 診斷證明書（醫師開立）：門診（encounterId）或住院（admissionId）。費用＝主檔「診斷證明書」自費價 × 份數，
+ * 跟著那次的帳單收（門診批價、住院結帳）；收費後才能列印。收費前可改、可作廢；收費後內容鎖定，
+ * 寫錯只能「作廢重開」（replaces：重開的不另收費）
+ */
+export interface MedicalCertificate {
+  id: string
+  /** 證明書字號：115 診字第 000123 號 */
+  no: string
+  patientId: string
+  encounterId?: string
+  admissionId?: string
+  deptId: string
+  doctorId: string
+  /** 門診：應診日期；住院：住院期間（stayTo 是出院日，還沒出院就是開立日） */
+  visitDate?: string
+  stayFrom?: string
+  stayTo?: string
+  /** 病名（預設帶這次的診斷，可改；多行） */
+  diagnoses: string
+  /** 醫師囑言（例：宜休養三日） */
+  advice: string
+  /** 用途：請假、保險、其他 */
+  purpose: string
+  copies: number
+  issuedAt: string
+  updatedAt?: string
+  /** 作廢重開的新證明書：原本那張的 id（不另收費） */
+  replaces?: string
+  voided?: { at: string; by: string; reason: string; replacedBy?: string }
+  /** 列印紀錄（誰、何時） */
+  printed?: { at: string; by: string }[]
+}

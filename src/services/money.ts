@@ -7,6 +7,7 @@ import { fail, failField, must } from './http'
 import { applyDiscount, calcChargeLines, outstandingOf, summarize } from './billing'
 import { keptMedications, returnedQty } from './rx-rules'
 import { billingLookup, find } from './views'
+import { certFeeLines, certsOfEncounter } from './certificate-fee'
 
 /** 收據號：依「開立那天」流水編號（結帳、收回欠款、預收共用同一個序號） */
 export const nextReceiptNo = (date: string) => `R${date.replace(/-/g, '')}${String(nextCounter(`receipt:${date}`)).padStart(4, '0')}`
@@ -97,7 +98,7 @@ export function pendingRefundOf(c: Charge): PendingRefund | undefined {
   if (!d?.returns?.length && !notDone.length) return undefined
   const v = must(find.visit(c.visitId), '掛號紀錄')
   // 病人實際拿走的藥＋實際做了的檢驗處置
-  const base = calcChargeLines(v, { ...e, medications: keptMedications(e.medications, d), procedures: e.procedures.filter((p) => !p.notDone) }, billingLookup(v.identityCode))
+  const base = [...calcChargeLines(v, { ...e, medications: keptMedications(e.medications, d), procedures: e.procedures.filter((p) => !p.notDone) }, billingLookup(v.identityCode)), ...certFeeLines(certsOfEncounter(e.id))]
   // 優免用結帳時的類別（之後被停用也照用，不必重新核准）
   const rule = c.discount ? db.discounts.find((x) => x.code === c.discount!.code) : undefined
   const sum = summarize(rule ? applyDiscount(base, rule) : base)

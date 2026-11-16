@@ -8,6 +8,7 @@ import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError, requirePermission } from './http'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { nextReceiptNo, nextRefundNo, pendingRefundOf, prepayAvailable, refundParts, refundPrepay, type PendingRefund } from './money'
+import { certFeeLines, certsOfEncounter } from './certificate-fee'
 import { consumeWitness, grantWitness, WITNESS_MIN, witnessFor } from './witness-core'
 
 export interface ChargeListItem extends VisitView {
@@ -60,7 +61,8 @@ function usableDiscount(code: string): DiscountRule {
 function buildPreview(visitId: string, discountCode?: string): ChargePreview {
   const v = must(find.visit(visitId), '掛號紀錄')
   const e = must(find.encounterOfVisit(visitId), '病歷')
-  const base = calcChargeLines(v, e, billingLookup(v.identityCode))
+  // 診斷證明書費跟著這次看診收（自費項目，優免打折也適用）
+  const base = [...calcChargeLines(v, e, billingLookup(v.identityCode)), ...certFeeLines(certsOfEncounter(e.id))]
   const rule = discountCode ? usableDiscount(discountCode) : undefined
   const lines = rule ? applyDiscount(base, rule) : base
   const sum = summarize(lines)
@@ -528,6 +530,8 @@ export interface ReceiptView extends Charge {
   procedures: ReceiptProcedure[]
   /** 有開藥時的領藥號 */
   pickupNo?: number
+  /** 這次看診的病歷（批價頁列出這次開的診斷證明書） */
+  encounterId?: string
 }
 
 function receiptOf(c: Charge): ReceiptView {
@@ -541,6 +545,7 @@ function receiptOf(c: Charge): ReceiptView {
     ...(pr ? { pendingRefund: pr } : {}),
     ...(c.refund ? { refundCashierName: nameOf.user(c.refund.cashierId) } : {}),
     procedures: receiptProcedures(c),
+    encounterId: find.encounterOfVisit(c.visitId)?.id,
   }
 }
 

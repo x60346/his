@@ -5,6 +5,7 @@ import { db } from '@/mock/db'
 import { diffDays, today } from '@/utils/date'
 import { calcIpdChargeLines, IPD_COPAY_DEFAULT, summarize, type IpdBillInput } from './billing'
 import { find } from './views'
+import { certFeeLines, certsOfAdmission } from './certificate-fee'
 
 /** 床位分段：每張床住了幾天（加總＝住院天數）。舊資料沒有床位紀錄，視為整段住目前的床 */
 function bedSegments(a: Admission, from: string, to: string, days: number): IpdBillInput['beds'] {
@@ -78,7 +79,7 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
   const from = (a.admittedAt ?? a.reservedAt).slice(0, 10)
   const p = find.patient(a.patientId)
   const identity = db.identities.find((x) => x.code === p?.defaultIdentity) ?? db.identities[0]
-  const { lines, meta } = calcIpdChargeLines({
+  const { lines: base, meta } = calcIpdChargeLines({
     identity, from, to,
     beds: bedSegments(a, from, to, Math.max(1, diffDays(from, to.slice(0, 10)))),
     daily: db.procedures.filter((x) => x.dailyFee && x.active),
@@ -86,6 +87,8 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
     procedures: proceduresOf(a),
     copay: db.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
   })
+  // 診斷證明書費（自費，不計入部分負擔）
+  const lines = [...base, ...certFeeLines(certsOfAdmission(a.id))]
   return { lines, meta, ...summarize(lines), identityCode: identity.code, identityName: identity.name }
 }
 

@@ -242,6 +242,8 @@ export interface HistoryItem extends Encounter {
   deptName: string
   medicationNames: string[]
   procedureNames: string[]
+  /** 這次看診開的診斷證明書（作廢的不列）：字號、份數 */
+  certificates: string[]
   /** 這次看診的門診會診（含回覆） */
   consults: { id: string; toDeptName: string; question: string; status: string; findings?: string; recommendation?: string; answeredByName?: string; suggestVisit?: boolean }[]
 }
@@ -263,6 +265,7 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
           ...(c.suggestVisit ? { suggestVisit: true } : {}),
         })),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),
+        certificates: db.certificates.filter((c) => c.encounterId === e.id && !c.voided).map((c) => `${c.no}（${c.copies} 份）`),
         procedureNames: e.procedures.map((p) => `${find.procedure(p.procId)?.name ?? p.procId}${p.notDone ? `（未執行：${p.notDone.reason}）` : ''}`),
       })),
   )
