@@ -357,7 +357,8 @@ export function saveBillingSettings(input: CopayValues & { from?: string }): Pro
     const before = copayOn(s, from)
     const values = pickCopay(input)
     const changes = applyChange<CopayValues>(s, s.changes, { ...values, from, by: u.id, at: now() }, keys)
-    db.billingSettings = { ...pickCopay(s), ...(changes.length ? { changes } : {}), updatedAt: now(), updatedBy: u.id }
+    // 住院部分負擔是另一組設定（ipd-charge.saveIpdCopay），這裡要留著，不然改門診參數會把它洗掉
+    db.billingSettings = { ...pickCopay(s), ...(changes.length ? { changes } : {}), ...(db.billingSettings.ipdCopay ? { ipdCopay: db.billingSettings.ipdCopay } : {}), updatedAt: now(), updatedBy: u.id }
     const after = copayOn(db.billingSettings, from)
     const changed = keys.filter((k) => before[k] !== after[k]).map((k) => `${k} ${before[k]}→${after[k]}`)
     audit('修改收費設定', changed.length ? `${from} 起：${changed.join('、')}` : '無變更')

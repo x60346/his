@@ -47,7 +47,7 @@ import type {
   ImagingReport,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
-import { autoQty, calcChargeLines, summarize } from '@/services/billing'
+import { autoQty, calcChargeLines, calcIpdChargeLines, ipdDays, IPD_COPAY_DEFAULT, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
 import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rules'
@@ -894,6 +894,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })
   }
 
+  // 已出院的住院結帳（不抽亂數）：出院當天 10:30 櫃台結帳。歷史住院沒有醫囑資料，帳單只有每日計費與部分負擔
+  for (const a of admissions.filter((x) => x.status === 'discharged')) {
+    const pt = patients.find((x) => x.id === a.patientId)!
+    const identity = identityMap.get(pt.defaultIdentity) ?? codes.identities[0]
+    const days = ipdDays(a.admittedAt!, a.dischargedAt!)
+    const { lines, meta } = calcIpdChargeLines({
+      identity, from: a.admittedAt!, to: a.dischargedAt!, beds: [{ bedNo: '—', bedClass: '健保床', days, extraFee: 0 }],
+      daily: codes.procedures.filter((x) => x.dailyFee), drugs: [], procedures: [], copay: codes.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
+    })
+    const sum = summarize(lines)
+    const day = a.dischargedAt!.slice(0, 10)
+    charges.push({
+      id: `C-IPD-${a.admitNo}`, visitId: '', admissionId: a.id, ipd: meta, patientId: a.patientId, lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal,
+      payMethod: 'card', received: sum.patientTotal, change: 0, receiptNo: `R${day.replace(/-/g, '')}${String(next(`receipt:${day}`)).padStart(4, '0')}`,
+      cashierId: 'U401', paidAt: `${day} 10:30`, voided: false,
+    })
+  }
+
   // 住院預約（待報到）：其中一筆由今日門診看診轉來
   const reserveRows: [Patient, string, string, string, Bed['bedClass'], number][] = [
     [patients[9], 'D05', 'DR06', 'N94.6 經痛，安排腹腔鏡檢查', '雙人房', 0],
@@ -1348,8 +1366,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 就醫序號：同一位病人依就醫時間（健保卡每次就醫加一）
   renumber(visits, (v) => v.patientId, (v) => v.createdAt, (v) => v.id, (v, n) => (v.cardSeq = String(n).padStart(4, '0')))
   // 收據號碼：同一天依收費時間
-  renumber(charges, (c) => visitById.get(c.visitId)!.date, (c) => c.paidAt, (c) => c.id, (c, n) => {
-    c.receiptNo = `R${visitById.get(c.visitId)!.date.replace(/-/g, '')}${String(n).padStart(4, '0')}`
+  // 住院收據沒有掛號：依結帳那天
+  const receiptDay = (c: Charge) => (c.admissionId ? c.paidAt.slice(0, 10) : visitById.get(c.visitId)!.date)
+  renumber(charges, receiptDay, (c) => c.paidAt, (c) => c.id, (c, n) => {
+    c.receiptNo = `R${receiptDay(c).replace(/-/g, '')}${String(n).padStart(4, '0')}`
   })
   // 領藥號：同一天依開單（批價）時間
   renumber(dispenses, (d) => visitById.get(d.visitId)!.date, (d) => d.createdAt, (d) => d.id, (d, n) => (d.pickupNo = n))

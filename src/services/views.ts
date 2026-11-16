@@ -41,6 +41,8 @@ export const usable = {
   procedure(id: string) {
     const p = must(find.procedure(id), `醫令 ${id}`)
     if (!p.active) fail(`${p.name} 已停用，不能開立`)
+    // 病房費、護理費、住院診察費：出院結帳依住院天數自動算，不能當醫令開（會重複收）
+    if (p.dailyFee) fail(`${p.name}是住院每日計費項目，出院結帳時自動帶入，不能另外開立`)
     return p
   },
   icd(code: string) {

@@ -29,6 +29,7 @@ import * as witness from './witness'
 import * as controlled from './controlled'
 import * as lab from './lab'
 import * as imaging from './imaging'
+import * as ipdCharge from './ipd-charge'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -58,6 +59,9 @@ export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
 export const labApi = overNetwork(lab)
 export const imagingApi = overNetwork(imaging)
+export const ipdChargeApi = overNetwork(ipdCharge)
+export type { IpdBillingItem, IpdBillView } from './ipd-charge'
+export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'

@@ -3,6 +3,7 @@
 // 金額全部來自服務層（previewCharge / pay），頁面只算「實收 − 應收 = 找零」。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Ban, CreditCard, Printer, ShieldCheck, Smartphone, Undo2, Wallet } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea } from '@/components/ui'
 import WitnessDialog from '@/components/WitnessDialog.vue'
@@ -11,6 +12,7 @@ import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ChargeLinesTable from './components/ChargeLinesTable.vue'
 import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
+import IpdBillingPanel from './components/IpdBillingPanel.vue'
 import { chargeApi, checkCash, checkRepay, discountSummary } from '@/services'
 import type { DebtItem, ReceiptProcedure } from '@/services/charge'
 import ReasonDialog from '@/components/ReasonDialog.vue'
@@ -20,7 +22,8 @@ import { periodLabel, today } from '@/utils/date'
 import { visitStatus } from '@/utils/labels'
 import type { PayMethod } from '@/types'
 
-const tab = ref('charge')
+// 首頁「住院待結帳」帶 ?tab=ipd 進來直接看住院結帳
+const tab = ref(['ipd', 'report'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'charge')
 
 // ---------- 清單 ----------
 const date = ref(today())
@@ -232,9 +235,10 @@ const identityOpen = ref(false)
 
 <template>
   <div class="space-y-4">
-    <UTabs v-model="tab" :tabs="[{ key: 'charge', label: '批價作業', count: pendingCount }, { key: 'report', label: '日結報表' }]" class="no-print" />
+    <UTabs v-model="tab" :tabs="[{ key: 'charge', label: '批價作業', count: pendingCount }, { key: 'ipd', label: '住院結帳' }, { key: 'report', label: '日結報表' }]" class="no-print" />
 
     <DailyReport v-if="tab === 'report'" />
+    <IpdBillingPanel v-else-if="tab === 'ipd'" />
 
     <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-[20rem_1fr]">
       <!-- 清單 -->

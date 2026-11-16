@@ -6,6 +6,7 @@ import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
+import { activeIpdChargeOf, ipdBillOf } from './ipd-bill'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
 import { stopOrderRecord, addChartNote } from './order-ops'
@@ -122,6 +123,7 @@ export function checkIn(admissionId: string, bedId: string): Promise<AdmissionVi
     a.status = 'admitted'
     a.bedId = bed.id
     a.admittedAt = t
+    a.bedHistory = [{ bedId: bed.id, from: t }]
     a.admitNo = `I${t.slice(2, 10).replace(/-/g, '')}${String(nextCounter('admitNo')).padStart(3, '0')}`
     audit('住院報到', `${a.admitNo} ${find.patient(a.patientId)?.name} → ${bed.bedNo}`)
     return admissionView(a)
@@ -138,6 +140,7 @@ export function transferBed(admissionId: string, bedId: string): Promise<Admissi
     releaseBed(a.bedId)
     const bed = takeBed(bedId, a.id)
     a.bedId = bed.id
+    ;(a.bedHistory ??= []).push({ bedId: bed.id, from: now() })
     audit('轉床', `${a.admitNo} ${from} → ${bed.bedNo}`)
     return admissionView(a)
   })
@@ -201,6 +204,8 @@ export interface DischargeCheck {
   activeLong: number
   /** 還沒到時間的給藥排程（出院時取消） */
   laterMar: number
+  /** 住院結帳：收據號（沒結帳就沒有）；結帳後費用有變動時 changed（收據金額、現在金額） */
+  billing: { receiptNo?: string; patientTotal?: number; changed?: { paid: number; now: number } }
 }
 
 function dischargeCheckOf(a: Admission, t: string): DischargeCheck {
@@ -213,6 +218,13 @@ function dischargeCheckOf(a: Admission, t: string): DischargeCheck {
     unacked: orders.filter(needsAck).length,
     activeLong: orders.filter((o) => o.type === 'long' && o.status === 'active').length,
     laterMar: pending.filter((m) => m.scheduledAt >= t).length,
+    billing: (() => {
+      const c = activeIpdChargeOf(a.id)
+      if (!c) return {}
+      const nowBill = ipdBillOf(a)
+      const changed = nowBill.patientTotal !== c.patientTotal || nowBill.nhiPoints !== c.nhiPoints
+      return { receiptNo: c.receiptNo, patientTotal: c.patientTotal, ...(changed ? { changed: { paid: c.patientTotal, now: nowBill.patientTotal } } : {}) }
+    })(),
   }
 }
 
@@ -241,6 +253,13 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const unfinished = check.overdueMar.length + check.pendingStat.length
     if (unfinished && !input.confirmUnfinished) {
       fail(`還有 ${check.overdueMar.length} 筆逾時未給藥、${check.pendingStat.length} 筆未執行的臨時醫囑，請確認後再辦理出院`, 'CONFLICT', 'confirmUnfinished')
+    }
+    // 住院費用要先結清（或依規則記欠款）才能出院；結帳後又有新費用（多住一天、又給了藥、又做了檢查）要作廢重結
+    const paid = activeIpdChargeOf(a.id)
+    if (!paid) fail('還沒結帳：請櫃台在「批價結帳 → 住院結帳」結清住院費用後再辦理出院', 'CONFLICT')
+    const now0 = ipdBillOf(a)
+    if (now0.patientTotal !== paid!.patientTotal || now0.nhiPoints !== paid!.nhiPoints) {
+      fail(`結帳後費用有變動（收據 ${paid!.patientTotal} 元，現在 ${now0.patientTotal} 元）：請櫃台作廢後重新結帳`, 'CONFLICT')
     }
     for (const o of db.ipdOrders.filter((o) => o.admissionId === a.id && o.status === 'active')) {
       o.status = 'stopped'
@@ -447,6 +466,7 @@ export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: 
       releaseBed(fromBed)
       const bed = takeBed(input.bedId, a.id)
       a.bedId = bed.id
+      ;(a.bedHistory ??= []).push({ bedId: bed.id, from: now() })
       Object.assign(x!, { fromBedId: fromBed, toBedId: bed.id })
       bedNote = `；轉床 ${from} → ${bed.bedNo}`
     }

@@ -7,7 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { Pencil } from 'lucide-vue-next'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USelect } from '@/components/ui'
-import { adminApi, chargeApi, discountSummary, drugCopay, masterApi, pickCopay, type DiscountInput, type IdentityView } from '@/services'
+import { adminApi, chargeApi, discountSummary, drugCopay, IPD_COPAY_DEFAULT, ipdChargeApi, masterApi, pickCopay, type DiscountInput, type IdentityView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { CopayValues, DiscountRule, Identity } from '@/types'
 import { today } from '@/utils/date'
@@ -88,10 +88,34 @@ const saveDc = useAction(adminApi.saveDiscount, { success: (d) => `已儲存優�
 async function submitDc() {
   if (await saveDc.run({ ...dcForm })) dcOpen.value = false
 }
+
+// ---------- 住院部分負擔（依住院日數分段的比率、每次住院上限；不分生效日，改了立即用於之後的結帳） ----------
+const ipd = reactive({ r0: 10, r1: 20, r2: 30, cap: 0 })
+let ipdLoaded = false
+watch(settings, (st) => {
+  if (st && !ipdLoaded) {
+    const c = st.ipdCopay ?? IPD_COPAY_DEFAULT
+    Object.assign(ipd, { r0: c.rates[0], r1: c.rates[1], r2: c.rates[2], cap: c.cap })
+    ipdLoaded = true
+  }
+}, { immediate: true })
+const saveIpd = useAction(ipdChargeApi.saveIpdCopay, { success: (r) => `已儲存住院部分負擔：${r.rates.join('%／')}%，每次住院上限 ${r.cap ? r.cap.toLocaleString() + ' 元' : '不設'}` })
 </script>
 
 <template>
   <div class="space-y-6">
+    <!-- 住院部分負擔：急性病房依住院第幾天分段，加每次住院上限（出院結帳用） -->
+    <section class="rounded-md border border-slate-200 p-3">
+      <h3 class="mb-2 text-sm font-semibold text-slate-700">住院部分負擔（急性病房）</h3>
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="w-32"><UInput v-model="ipd.r0" type="number" min="0" max="100" label="30 日內（%）" :error="saveIpd.fieldErrors.value.rate0" /></div>
+        <div class="w-32"><UInput v-model="ipd.r1" type="number" min="0" max="100" label="31–60 日（%）" :error="saveIpd.fieldErrors.value.rate1" /></div>
+        <div class="w-32"><UInput v-model="ipd.r2" type="number" min="0" max="100" label="61 日起（%）" :error="saveIpd.fieldErrors.value.rate2" /></div>
+        <div class="w-40"><UInput v-model="ipd.cap" type="number" min="0" label="每次住院上限（元）" hint="0＝不設上限" :error="saveIpd.fieldErrors.value.cap" /></div>
+        <UButton :loading="saveIpd.pending.value" @click="saveIpd.run({ rates: [Number(ipd.r0), Number(ipd.r1), Number(ipd.r2)], cap: Number(ipd.cap) })">儲存</UButton>
+      </div>
+      <p class="mt-2 text-xs text-slate-500">健保費用平均到每一天，依住院第幾天的比率分段計算，加總超過上限就以上限收（展示用數值；年度累計上限、慢性病房的比率沒有做）。免部分負擔的身分不收。已結帳的收據不受影響。</p>
+    </section>
     <section class="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
       <div>
         <h3 class="mb-2 text-sm font-semibold text-slate-700">部分負擔</h3>

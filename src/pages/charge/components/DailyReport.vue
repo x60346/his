@@ -71,7 +71,8 @@ const feeTypes = [
   { key: 'reg', label: '掛號費' },
   { key: 'basicCopay', label: '基本部分負擔' },
   { key: 'drugCopay', label: '藥品部分負擔' },
-  { key: 'selfPay', label: '自費項目（含自費診察費）' },
+  { key: 'ipdCopay', label: '住院部分負擔' },
+  { key: 'selfPay', label: '自費項目（含自費診察費、差額床費）' },
   { key: 'discount', label: '優免減免' },
 ] as const
 type RefundRow = DailyReport['refunds'][number]

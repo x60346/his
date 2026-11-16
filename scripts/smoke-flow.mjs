@@ -1357,6 +1357,7 @@ try {
     } catch (e) {
       ok(e.field === 'confirmUnfinished' && dbm.db.admissions.find((a) => a.id === adm.id).status === 'admitted', `有未執行項目、沒確認就出院 → 「${e.message}」`)
     }
+    await api.ipdChargeApi.payIpd(adm.id, { payMethod: 'card', received: 0 }) // 出院前要先結帳（住院結帳另有一段測試）
     await api.admissionApi.discharge(adm.id, { confirmUnfinished: true })
     ok(dbm.db.admissions.find((a) => a.id === adm.id).dischargeType === '治癒出院', '出院轉歸取自醫師簽署的病摘（重新簽署改成治癒出院）')
     const kept = dbm.db.mar.find((m) => m.id === overdueId)
@@ -3248,7 +3249,7 @@ try {
     ok(csv.includes(`退款,${rf.receiptNo}`) && csv.includes(`退款合計,${-todayAfter.refunded}`), '匯出 CSV：退款列（負數）與退款合計')
     await expectError(() => C.refundCharge(debt.id, '再退一次'), '已退費的再退一次')
     // 當天的收據：作廢就好，不開退款單
-    const todayCh = db().charges.find((c) => !c.voided && c.paidAt.startsWith(T) && !c.repayments?.length && !db().dispenses.some((d) => d.visitId === c.visitId && d.status === 'dispensed'))
+    const todayCh = db().charges.find((c) => !c.voided && !c.admissionId && c.paidAt.startsWith(T) && !c.repayments?.length && !db().dispenses.some((d) => d.visitId === c.visitId && d.status === 'dispensed'))
     if (todayCh) {
       ok((await C.getReceipt(todayCh.id)).cancel?.mode === 'void', '當天的收據：作廢')
       await expectError(() => C.refundCharge(todayCh.id, '測試'), '當天的收據退費（請用作廢）')
@@ -3652,7 +3653,7 @@ try {
     const fee = rep.byFeeType
     ok(rep.discountTotal === valid.reduce((n, c) => n + (c.discount?.amount ?? 0), 0) && rep.discounts.some((d) => d.name === '員工') && fee.discount === -rep.discountTotal,
       `日結：優免合計 ${rep.discountTotal} 元＝各收據減免加總，依類別列出`)
-    ok(fee.reg + fee.basicCopay + fee.drugCopay + fee.selfPay + fee.discount === rep.patientTotal, '日結依費用類別（含優免負數）加總＝應收合計')
+    ok(fee.reg + fee.basicCopay + fee.drugCopay + fee.ipdCopay + fee.selfPay + fee.discount === rep.patientTotal, '日結依費用類別（含優免負數）加總＝應收合計')
 
     // 優免主管核准：主管當場輸入自己的帳密；核准一次性、綁這次掛號＋類別＋櫃台；失敗的嘗試留稽核
     {
@@ -3891,7 +3892,7 @@ try {
       })
       // 3. 號碼依時間：看診號（同診次）、收據號、領藥號（同一天）、就醫序號（同一位病人）
       const seqBad = groupBy(db.visits, (v) => v.sessionId).flatMap((l) => ordered(l.sort((a, b) => a.seqNo - b.seqNo), (v) => v.createdAt, (v) => v.seqNo))
-      const rcBad = groupBy(db.charges, (c) => vById.get(c.visitId).date).flatMap((l) => ordered(l.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo)), (c) => c.paidAt, (c) => c.receiptNo))
+      const rcBad = groupBy(db.charges, (c) => (c.admissionId ? c.paidAt.slice(0, 10) : vById.get(c.visitId).date)).flatMap((l) => ordered(l.sort((a, b) => a.receiptNo.localeCompare(b.receiptNo)), (c) => c.paidAt, (c) => c.receiptNo))
       const pkBad = groupBy(db.dispenses, (d) => vById.get(d.visitId).date).flatMap((l) => ordered(l.sort((a, b) => a.pickupNo - b.pickupNo), (d) => d.createdAt, (d) => d.pickupNo))
       const csBad = groupBy(db.visits, (v) => v.patientId).flatMap((l) => ordered(l.sort((a, b) => a.cardSeq.localeCompare(b.cardSeq)), (v) => v.createdAt, (v) => v.cardSeq))
       ok(!future.length && !flowBad.length, `${label} 重建：沒有未來的時間（${future.length}）、掛號≤叫號≤完成≤批價≤發藥（違規 ${flowBad.length}）`)
@@ -5452,6 +5453,157 @@ try {
     await expectError(() => api.udApi.udCartSheet(ud.id), '護理師印藥車簽收單')
   }
 
+  // 住院結帳：每日計費 × 天數、藥依扣帳量、已執行的檢驗處置、差額床費、分段部分負擔＋上限；准出院才能結、結清才能出院
+  console.log('\n[住院結帳]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const B = await load('/src/services/billing.ts')
+    const IC = api.ipdChargeApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    ok(B.ipdDays('2026-11-10 14:00', '2026-11-13 10:00') === 3 && B.ipdDays('2026-11-10 09:00', '2026-11-10 17:00') === 1, '住院天數：入院當天算、出院當天不算；當天入院當天出院算 1 天')
+    const S = { rates: [10, 20, 30], cap: 57000 }
+    const c10 = B.ipdCopay(10000, 10, S)
+    ok(c10.amount === 1000 && c10.tiers.length === 1 && !c10.capped, '10 天、健保 10,000 點：部分負擔 10% ＝ 1,000')
+    const c45 = B.ipdCopay(45000, 45, S)
+    ok(c45.tiers.length === 2 && c45.tiers[0].amount === 3000 && c45.tiers[1].amount === 3000 && c45.amount === 6000, '45 天：第 1–30 天 10%、第 31–45 天 20%（費用平均到每天）')
+    const c70 = B.ipdCopay(70000, 70, S)
+    ok(c70.tiers.map((t) => t.rate).join() === '10,20,30' && c70.tiers[2].fromDay === 61 && c70.tiers[2].toDay === 70 && c70.amount === 3000 + 6000 + 3000, '70 天：三段 10%／20%／30%')
+    const big = B.ipdCopay(1000000, 10, S)
+    ok(big.amount === 57000 && big.capped === 100000 - 57000, '超過每次住院上限：收上限，記下減了多少')
+    ok(B.ipdCopay(1000000, 10, { rates: [10, 20, 30], cap: 0 }).amount === 100000, '上限 0＝不設上限')
+    const P = (id) => db().procedures.find((p) => p.id === id)
+    const ident = (code) => db().identities.find((i) => i.code === code)
+    const daily = db().procedures.filter((p) => p.dailyFee)
+    ok(daily.map((p) => p.id).sort().join() === 'P002,P029,P030', '每日計費：住院診察費、病房費、護理費')
+    const drug = db().drugs.find((d) => d.id === 'M036')
+    const base = { from: '2026-11-01', to: '2026-11-04', beds: [{ bedNo: '501-1', bedClass: '健保床', days: 2, extraFee: 0 }, { bedNo: '601-1', bedClass: '雙人房', days: 1, extraFee: 1500 }], daily, drugs: [{ drug, qty: 2, date: '2026-11-01' }, { drug, qty: 3, date: '2026-11-02' }], procedures: [{ proc: P('P003'), qty: 1, date: '2026-11-01' }], copay: S }
+    const r1 = B.calcIpdChargeLines({ ...base, identity: ident('01') })
+    const l = (k) => r1.lines.filter((x) => x.kind === k)
+    ok(l('ward').length === 3 && l('ward').every((x) => x.qty === 3) && l('drug').length === 1 && l('drug')[0].qty === 5 && l('procedure')[0].name.includes('CBC'), '帳單：每日計費 × 3 天；同一種藥同價合併（2＋3）；已執行的檢驗')
+    ok(l('self').length === 1 && l('self')[0].name.includes('雙人房') && l('self')[0].amount === 1500 && r1.meta.days === 3, '差額床費：雙人房住 1 天 × 1,500（自費）；健保床不收')
+    const nhi1 = r1.lines.filter((x) => !x.patientPay).reduce((n, x) => n + x.amount, 0)
+    const sum1 = B.summarize(r1.lines)
+    ok(l('copay-ipd')[0].amount === Math.round(nhi1 * 0.1) && sum1.nhiPoints === Math.round(nhi1 - l('copay-ipd')[0].amount) && sum1.patientTotal === 1500 + l('copay-ipd')[0].amount, '部分負擔 10% 由病人付、從申報點數扣掉；應付＝差額床費＋部分負擔')
+    const r4 = B.calcIpdChargeLines({ ...base, identity: ident('04') })
+    ok(!r4.lines.some((x) => x.kind === 'copay-ipd') && r4.meta.copay.length === 0, '重大傷病（免部分負擔）：沒有部分負擔')
+    const r9 = B.calcIpdChargeLines({ ...base, identity: ident('09') })
+    ok(r9.lines.every((x) => x.patientPay) && B.summarize(r9.lines).nhiPoints === 0, '自費身分：全部自費價、不申報健保')
+
+    // 種子
+    const disc = db().admissions.filter((a) => a.status === 'discharged')
+    const ipdCharges = db().charges.filter((c) => c.admissionId)
+    ok(disc.length > 0 && disc.every((a) => ipdCharges.some((c) => c.admissionId === a.id && !c.voided && c.ipd.days === B.ipdDays(a.admittedAt, a.dischargedAt) && c.paidAt < a.dischargedAt)), `種子：已出院的 ${disc.length} 位都有住院收據（出院前結帳、天數正確）`)
+    const nos = db().charges.map((c) => c.receiptNo)
+    ok(new Set(nos).size === nos.length, '收據號碼不重複（住院收據依結帳日編）')
+    ok(db().procedures.find((p) => p.id === 'P029').dailyFee && !(await api.masterApi.listProcedures({ keyword: '病房費' })).length && (await api.masterApi.listProcedures({ keyword: '病房費', includeInactive: true })).length === 1, '病房費不在開立選單（主檔管理看得到）')
+
+    // 准出院才能結帳
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    const notReady = db().admissions.find((a) => a.status === 'admitted' && !a.dischargeSummary?.signedAt)
+    ok(!!ready && !!notReady, '種子：一位已准出院、其他住院中')
+    db().patients.find((x) => x.id === ready.patientId).defaultIdentity = '01' // 測試部分負擔、現金不足：用一般健保身分
+    await as('nurse01')
+    await expectError(() => IC.listIpdBilling(), '護理師看住院結帳')
+    await as('clerk01')
+    const lst = await IC.listIpdBilling()
+    ok(lst[0].admissionId === ready.id && lst[0].dischargeReady && lst.some((x) => x.admissionId === notReady.id && !x.dischargeReady), '住院結帳清單：准出院的排最前面')
+    ok((await api.dashboardApi.getDashboard()).ipdToBill === db().admissions.filter((x) => x.status === 'admitted' && x.dischargeSummary?.signedAt).length, '櫃台首頁「住院待結帳」＝准出院還沒結帳的人數')
+    const nv = await IC.getIpdBill(notReady.id)
+    ok(nv.bill && nv.blocked?.includes('簽准出院'), '還沒准出院：可看試算、標出不能結帳')
+    msg = await errOf(() => IC.payIpd(notReady.id, { payMethod: 'card', received: 0 }))
+    ok(msg.includes('簽准出院'), `沒准出院就結帳 → 「${msg}」`)
+    msg = await errOf(() => api.admissionApi.discharge(ready.id, { confirmUnfinished: true }))
+    ok(msg.includes('還沒結帳'), `還沒結帳就辦出院 → 「${msg}」`)
+    // 帳單內容（獨立核對：藥＝UD 調劑扣帳減退回；檢驗處置＝已執行的臨時醫囑）
+    const rv = await IC.getIpdBill(ready.id)
+    const bill = rv.bill
+    const days = B.ipdDays(ready.admittedAt, T)
+    ok(bill.meta.days === days && bill.lines.filter((x) => x.kind === 'ward').every((x) => x.qty === days), `准出院的病人：住院 ${days} 天，每日計費 × ${days}`)
+    const udQty = db().udDispenses.flatMap((d) => d.lines).filter((x) => x.admissionId === ready.id && x.txnId).reduce((n, x) => n + x.qty - (x.returns ?? []).reduce((s, r) => s + r.qty, 0), 0)
+    const billDrugQty = bill.lines.filter((x) => x.kind === 'drug').reduce((n, x) => n + x.qty, 0)
+    ok(Math.abs(udQty - billDrugQty) < 1e-9, `藥費依扣帳量：UD 調劑扣帳減退回 ${udQty}＝帳單 ${billDrugQty}`)
+    const doneProcs = db().ipdOrders.filter((o) => o.admissionId === ready.id && o.category === 'procedure' && o.status === 'done' && o.procId)
+    ok(doneProcs.every((o) => bill.lines.some((x) => x.name.startsWith(P(o.procId).name))), `已執行的檢驗處置都在帳單上（${doneProcs.length} 項）`)
+    ok(bill.patientTotal === B.summarize(bill.lines).patientTotal && bill.lines.some((x) => x.kind === 'copay-ipd'), '應付＝明細加總；有部分負擔')
+    // 收款
+    msg = await errOf(() => IC.payIpd(ready.id, { payMethod: 'cash', received: 10 }))
+    ok(msg.includes('不足'), `現金不足沒勾欠款 → 「${msg}」`)
+    const ch = await IC.payIpd(ready.id, { payMethod: 'cash', received: 100, owe: { reason: '家屬下午補繳' } })
+    ok(ch.admissionId === ready.id && ch.owed === bill.patientTotal - 100 && ch.ipd.days === days && db().auditLogs[0].action === '住院結帳', `結帳：開收據 ${ch.receiptNo}、記欠款 ${ch.owed} 元、寫稽核`)
+    msg = await errOf(() => IC.payIpd(ready.id, { payMethod: 'card', received: 0 }))
+    ok(msg.includes('已經結帳'), `重複結帳 → 「${msg}」`)
+    const debts = await api.chargeApi.listDebts(ready.patientId)
+    ok(debts.some((d) => d.chargeId === ch.id && d.deptName.includes('住院') && d.outstanding === ch.owed), '欠款清單列出住院收據（標住院），批價頁照樣可收回')
+    const rep = await api.chargeApi.dailyReport(T)
+    const f = rep.byFeeType
+    ok(f.ipdCopay === ch.lines.filter((x) => x.kind === 'copay-ipd').reduce((n, x) => n + x.amount, 0) && f.reg + f.basicCopay + f.drugCopay + f.ipdCopay + f.selfPay + f.discount === rep.patientTotal && rep.byDept.some((d) => d.deptName.includes('（住院）')), '日結：住院部分負擔另列；費用類別加總＝應收；依科別標住院')
+    await expectError(() => api.chargeApi.getReceipt(ch.id), '用門診收據查住院收據')
+    await expectError(() => api.chargeApi.markProcedureNotDone(ch.id, 0, '測試'), '住院收據標未執行')
+    ok(!!(await api.dashboardApi.getDashboard()), '首頁（待退費計算）遇到住院收據不出錯')
+    // 結帳後又有新費用：出院被擋，作廢重結
+    await as(db().users.find((u) => u.doctorId === ready.doctorId).username)
+    const extra = await api.ipdApi.addOrder({ admissionId: ready.id, type: 'stat', category: 'procedure', procId: 'P011', content: '' })
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(extra.id)
+    msg = await errOf(() => api.admissionApi.discharge(ready.id, { confirmUnfinished: true }))
+    ok(msg.includes('費用有變動') && msg.includes(String(ch.patientTotal)), `結帳後又做了 CRP → 出院被擋 「${msg}」`)
+    await as('clerk01')
+    const view2 = await IC.getIpdBill(ready.id)
+    ok(!view2.charge.canVoid, '當天、還沒出院：可以作廢重結')
+    await api.chargeApi.voidCharge(ch.id, '結帳後又做了檢驗')
+    const ch2 = await IC.payIpd(ready.id, { payMethod: 'card', received: 0 })
+    ok(ch2.lines.some((x) => x.name.includes('CRP')) && ch2.patientTotal >= ch.patientTotal, '作廢後重新結帳：帳單含新的 CRP')
+    await as('nurse01')
+    await api.admissionApi.discharge(ready.id, { confirmUnfinished: true })
+    ok(db().admissions.find((a) => a.id === ready.id).status === 'discharged', '結清後可以出院')
+    await as('clerk01')
+    msg = await errOf(() => api.chargeApi.voidCharge(ch2.id, '測試'))
+    ok(msg.includes('已出院'), `出院後作廢住院收據 → 「${msg}」`)
+    ok((await IC.getIpdBill(ready.id)).charge.canVoid?.includes('出院') && (await IC.listIpdBilling()).some((x) => x.admissionId === ready.id && x.status === 'discharged' && x.receiptNo === ch2.receiptNo), '今天出院的仍在清單（看收據、重印）')
+
+    // 轉床：差額床費依住的天數
+    const tb = db().admissions.find((a) => a.status === 'admitted')
+    const dbl = db().beds.find((b) => b.status === 'empty' && b.extraFee > 0)
+    await api.admissionApi.transferBed(tb.id, dbl.id)
+    const a2 = db().admissions.find((a) => a.id === tb.id)
+    ok(a2.bedHistory?.length >= 1 && a2.bedHistory.at(-1).bedId === dbl.id, '轉床寫床位紀錄')
+    a2.bedHistory = [{ bedId: a2.bedHistory.length > 1 ? a2.bedHistory[0].bedId : db().beds.find((b) => b.extraFee === 0).id, from: a2.admittedAt }, { bedId: dbl.id, from: `${addDaysT(-1)} 10:00` }]
+    const tbBill = (await IC.getIpdBill(tb.id)).bill
+    const diff = tbBill.lines.find((x) => x.name.includes(dbl.bedNo))
+    ok(tbBill.meta.beds.reduce((n, b) => n + b.days, 0) === tbBill.meta.days && diff?.qty === 1 && diff.amount === dbl.extraFee, `轉到 ${dbl.bedClass} 住 1 天：差額床費 ${dbl.extraFee} × 1；各床天數加總＝住院天數`)
+    // 住很久：部分負擔分三段
+    a2.admittedAt = `${addDaysT(-70)} 10:00`
+    a2.bedHistory = [{ bedId: a2.bedHistory[0].bedId, from: a2.admittedAt }]
+    const longBill = (await IC.getIpdBill(tb.id)).bill
+    ok(longBill.meta.days === 70 && longBill.meta.copay.map((c) => c.rate).join() === '10,20,30', '住院 70 天：部分負擔分 10%／20%／30% 三段')
+
+    // 每日計費項目不能開成醫令；住院部分負擔設定
+    await as(db().users.find((u) => u.doctorId === tb.doctorId).username)
+    msg = await errOf(() => api.ipdApi.addOrder({ admissionId: tb.id, type: 'stat', category: 'procedure', procId: 'P029', content: '' }))
+    ok(msg.includes('每日計費'), `把病房費開成醫令 → 「${msg}」`)
+    await as('clerk01')
+    await expectError(() => IC.saveIpdCopay({ rates: [10, 20, 30], cap: 50000 }), '櫃台改住院部分負擔')
+    await as('admin')
+    msg = await errOf(() => IC.saveIpdCopay({ rates: [10, 120, 30], cap: 50000 }))
+    ok(!!msg, `比率 120% → 「${msg}」`)
+    await IC.saveIpdCopay({ rates: [5, 10, 15], cap: 30000 })
+    const bs = await api.adminApi.getBillingSettings()
+    await api.adminApi.saveBillingSettings({ basicCopay: bs.basicCopay, drugCopayFreeUpTo: bs.drugCopayFreeUpTo, drugCopayStep: bs.drugCopayStep, drugCopayPerStep: bs.drugCopayPerStep, drugCopayMax: bs.drugCopayMax + 1, from: '' })
+    ok(db().billingSettings.ipdCopay?.rates.join() === '5,10,15' && db().billingSettings.ipdCopay.cap === 30000, '存門診部分負擔參數不會洗掉住院部分負擔設定')
+    await as('clerk01')
+    ok((await IC.getIpdBill(tb.id)).bill.meta.copay[0].rate === 5, '新設定用於之後的結帳試算')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {
@@ -5873,6 +6025,8 @@ try {
       if (dis) {
         await as(db().users.find((u) => u.doctorId === dis.doctorId).username)
         await api.ipdApi.saveDischargeSummary(dis.id, { diagnosis: dis.diagnosis, course: '測試', condition: '穩定', followUp: '門診追蹤', dischargeType: '治癒' }, true)
+        await as('clerk01')
+        await api.ipdChargeApi.payIpd(dis.id, { payMethod: 'card', received: 0 }) // 出院前先結帳
         await as('nurse01')
         await api.admissionApi.discharge(dis.id, { confirmUnfinished: true })
         const disWard = db().beds.find((b) => b.id === dis.bedId).ward

@@ -383,7 +383,7 @@ const labItemsOf: Record<string, LabItemDef[]> = {
 
 const procedureBase: Procedure[] = [
   { id: 'P001', code: '00109C', name: '一般門診診察費', category: '診察', points: 352, selfPrice: 400, active: true },
-  { id: 'P002', code: '00217A', name: '住院診察費（每日）', category: '診察', points: 461, selfPrice: 500, active: true },
+  { id: 'P002', code: '00217A', name: '住院診察費（每日）', category: '診察', points: 461, selfPrice: 500, dailyFee: true, active: true },
   { id: 'P003', code: '08011C', name: '全套血液檢查 CBC', category: '檢驗', points: 145, selfPrice: 250, active: true },
   { id: 'P004', code: '09005C', name: '飯前血糖 AC sugar', category: '檢驗', points: 45, selfPrice: 100, active: true },
   { id: 'P005', code: '09006C', name: '糖化血色素 HbA1c', category: '檢驗', points: 200, selfPrice: 350, active: true },
@@ -410,6 +410,9 @@ const procedureBase: Procedure[] = [
   { id: 'P026', code: '42003C', name: '中度物理治療', category: '復健', points: 280, selfPrice: 400, active: true },
   { id: 'P027', code: 'SELF01', name: '診斷證明書', category: '處置', points: 0, selfPrice: 150, active: true },
   { id: 'P028', code: 'SELF02', name: '流感疫苗（自費）', category: '處置', points: 0, selfPrice: 800, active: true },
+  // 住院每日計費（出院結帳依天數帶入；門診、醫囑都不能開）。點數為展示用近似值
+  { id: 'P029', code: '03005B', name: '病房費（急性一般病床，每日）', category: '處置', points: 1230, selfPrice: 1800, dailyFee: true, active: true },
+  { id: 'P030', code: '03026B', name: '護理費（急性一般病床，每日）', category: '處置', points: 620, selfPrice: 900, dailyFee: true, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

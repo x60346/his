@@ -304,6 +304,12 @@ export interface CancelMode {
 
 // 內部函式（不 export：services 裡 export 的都會變成 API）
 function cancelModeOf(c: Charge): CancelMode {
+  if (c.admissionId) {
+    // 住院收據：出院前、當天可以作廢重結（帳單算錯、結帳後又有新費用）；出院後不能作廢也不能退費
+    const discharged = find.admission(c.admissionId)?.status === 'discharged'
+    const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length ? 'void' : 'refund'
+    return { mode, refundAmount: 0, ...(discharged ? { blocked: '病人已出院：住院收據不能作廢或退費' } : mode === 'refund' ? { blocked: '住院收據只能在結帳當天、出院前作廢重結' } : {}) }
+  }
   const dispensed = db.dispenses.find((d) => d.visitId === c.visitId && d.status === 'dispensed')
   // 部分退費過的不能作廢（退款單已經開出去了）
   const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length && !c.partialRefunds?.length ? 'void' : 'refund'
@@ -354,12 +360,13 @@ export function refundReturnedDrugs(chargeId: string): Promise<Charge> {
 /** 取消後的共同處理：調劑單拿掉（已退藥的也拿掉——退藥紀錄留在庫存帳與稽核）、掛號回到待批價，醫師可修改病歷。
  * 「未執行」也清掉：重新批價時由醫師決定醫令（沒做的刪掉），不然重新批價會照收 */
 function reopenVisit(c: Charge) {
+  if (c.admissionId) return // 住院收據：沒有掛號、調劑單要回復，作廢後重新結帳即可
   db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
   for (const x of find.encounterOfVisit(c.visitId)?.procedures ?? []) delete x.notDone
   must(find.visit(c.visitId), '掛號紀錄').status = 'consulted'
 }
 
-/** 作廢（只限當天、沒收回過欠款）：已發藥的不可作廢（需先退藥）；作廢後掛號回到待批價，醫師可修改病歷 */
+/** 作廢（只限當天、沒收回過欠款）：已發藥的不可作廢（需先退藥）；作廢後掛號回到待批價，醫師可修改病歷。住院收據出院前可作廢重結 */
 export function voidCharge(chargeId: string, reason: string): Promise<Charge> {
   return mutate(() => {
     requirePermission('charge.pay')
@@ -428,8 +435,9 @@ function debtsOf(patientId: string): DebtItem[] {
     .filter((c) => c.patientId === patientId && outstandingOf(c) > 0)
     .map((c) => {
       const v = find.visit(c.visitId)
+      const a = c.admissionId ? find.admission(c.admissionId) : undefined
       return {
-        chargeId: c.id, receiptNo: c.receiptNo, date: v?.date ?? c.paidAt.slice(0, 10), deptName: nameOf.dept(v?.deptId),
+        chargeId: c.id, receiptNo: c.receiptNo, date: v?.date ?? c.paidAt.slice(0, 10), deptName: a ? `${nameOf.dept(a.deptId)}（住院）` : nameOf.dept(v?.deptId),
         patientTotal: c.patientTotal, owed: c.owed ?? 0, outstanding: outstandingOf(c), oweReason: c.oweReason, repayments: c.repayments ?? [],
       }
     })
@@ -478,6 +486,7 @@ export function markProcedureNotDone(chargeId: string, idx: number, reason: stri
     const cashier = requirePermission('charge.pay')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
+    if (c.admissionId) fail('住院收據沒有「未執行」：沒做的檢驗處置本來就不會算進住院帳單', 'CONFLICT')
     const e = must(find.encounterOfVisit(c.visitId), '病歷')
     const x = e.procedures[idx]
     if (!x) fail('找不到這項檢驗或處置，請重新整理')
@@ -536,7 +545,11 @@ function receiptOf(c: Charge): ReceiptView {
 }
 
 export function getReceipt(chargeId: string): Promise<ReceiptView> {
-  return query(() => receiptOf(must(db.charges.find((x) => x.id === chargeId), '收費紀錄')))
+  return query(() => {
+    const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
+    if (c.admissionId) fail('這是住院收據，請到「住院結帳」查看', 'CONFLICT')
+    return receiptOf(c)
+  })
 }
 
 export interface ChargeDetail {
@@ -636,7 +649,7 @@ export interface DailyReport {
   /** 依收費人員：交班時各自對自己的錢箱，所以是實際收到的錢；加總 = 實收 */
   byCashier: { cashierName: string; count: number; repayCount: number; prepayCount: number; refundCount: number; collected: number }[]
   /** 依費用類別（取自收據當時存下的明細，不用現在的設定重算）；加總 = 收入合計 */
-  byFeeType: { reg: number; basicCopay: number; drugCopay: number; selfPay: number; discount: number }
+  byFeeType: { reg: number; basicCopay: number; drugCopay: number; ipdCopay: number; selfPay: number; discount: number }
   /** 優免：依類別的筆數與減免金額（正數）；合計 = discountTotal */
   discounts: { name: string; count: number; amount: number }[]
   discountTotal: number
@@ -653,6 +666,9 @@ export const REPORT_MONTHLY_AFTER = 62
  * 日結報表；給 to 就是區間報表（含頭尾兩天）。所有合計都依同一個「是否在期間內」判斷：
  * 收據看結帳日、收回欠款看收回日、未收款看就醫日。
  */
+/** 收據的科別：門診看掛號；住院看住院科別（標「住院」，日結依科別分得出門診、住院） */
+const chargeDeptName = (c: Charge) => (c.admissionId ? `${nameOf.dept(find.admission(c.admissionId)?.deptId)}（住院）` : nameOf.dept(find.visit(c.visitId)?.deptId))
+
 export function dailyReport(date: string, to: string = date): Promise<DailyReport> {
   return query(() => {
     // 收入報表：只有櫃台（批價頁）與管理員看得到——以前只靠畫面藏，直接呼叫 API 誰都拿得到
@@ -673,7 +689,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
     const dept = new Map<string, DailyReport['byDept'][number]>()
     for (const c of valid) {
       byPayMethod[c.payMethod] += c.patientTotal - (c.owed ?? 0) - (c.prepaidApplied ?? 0)
-      const deptName = nameOf.dept(find.visit(c.visitId)?.deptId)
+      const deptName = chargeDeptName(c)
       const row = dept.get(deptName) ?? { deptName, count: 0, patientTotal: 0, nhiPoints: 0 }
       row.count++
       row.patientTotal += c.patientTotal
@@ -687,7 +703,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       cashier.set(name, row)
       return row
     }
-    const byFeeType = { reg: 0, basicCopay: 0, drugCopay: 0, selfPay: 0, discount: 0 }
+    const byFeeType = { reg: 0, basicCopay: 0, drugCopay: 0, ipdCopay: 0, selfPay: 0, discount: 0 }
     const disc = new Map<string, { name: string; count: number; amount: number }>()
     for (const c of valid) {
       const row = cashierRow(c.cashierId)
@@ -697,6 +713,8 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       const reg = sum('reg')
       const basic = sum('copay-basic')
       const drug = sum('copay-drug')
+      const ipd = sum('copay-ipd')
+      byFeeType.ipdCopay += ipd
       byFeeType.reg += reg
       byFeeType.basicCopay += basic
       byFeeType.drugCopay += drug
@@ -710,7 +728,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
         disc.set(d.name, d)
       }
       // 自費（含自費身分的診察費）用「收據總額 − 其他類」：收據總額四捨五入過，這樣各類加總一定等於收入合計
-      byFeeType.selfPay += c.patientTotal - reg - basic - drug - off
+      byFeeType.selfPay += c.patientTotal - reg - basic - drug - ipd - off
     }
     // 收回欠款：算在收回那天（原收據可能是更早的日子）。作廢的收據不會有收回紀錄（有收回就不能作廢）
     const repayments: DailyReport['repayments'] = []
@@ -839,7 +857,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       charges: all
         .map((c) => {
           const p = find.patient(c.patientId)
-          return { ...c, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', deptName: nameOf.dept(find.visit(c.visitId)?.deptId), cashierName: nameOf.user(c.cashierId) }
+          return { ...c, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', deptName: chargeDeptName(c), cashierName: nameOf.user(c.cashierId) }
         })
         .sort((a, b) => a.receiptNo.localeCompare(b.receiptNo)),
     }

@@ -52,6 +52,10 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
 
         <UQueryState :loading="loading && !check" :ready="!!check">
           <template v-if="check">
+            <!-- 住院費用：結清（或記欠款）才能出院；結帳後又有新費用要櫃台作廢重結（服務層 discharge 擋） -->
+            <p v-if="!check.billing.receiptNo" class="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">住院費用還沒結帳：請櫃台在「批價結帳 → 住院結帳」結清後再辦理出院。</p>
+            <p v-else-if="check.billing.changed" class="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">結帳後費用有變動（收據 {{ check.billing.changed.paid }} 元，現在 {{ check.billing.changed.now }} 元）：請櫃台作廢後重新結帳。</p>
+            <p v-else class="mb-2 text-sm text-emerald-700">住院費用已結帳（收據 {{ check.billing.receiptNo }}，{{ check.billing.patientTotal }} 元）。</p>
             <!-- 還沒做完的事：要逐項看過、勾選確認 -->
             <div v-if="unfinished" class="space-y-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
               <div class="font-medium text-red-800">還有 {{ unfinished }} 項未執行</div>
@@ -73,7 +77,7 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">{{ ready ? '取消' : '關閉' }}</UButton>
-      <UButton v-if="ready" variant="danger" :disabled="unfinished > 0 && !confirmUnfinished" :loading="discharge.pending.value" @click="submit">確認出院</UButton>
+      <UButton v-if="ready" variant="danger" :disabled="(unfinished > 0 && !confirmUnfinished) || !check?.billing.receiptNo || !!check?.billing.changed" :loading="discharge.pending.value" @click="submit">確認出院</UButton>
     </template>
   </UDialog>
 </template>

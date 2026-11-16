@@ -82,6 +82,23 @@ export interface Identity {
  * 收費參數：規則（怎麼算）寫在 billing.ts 的純函式，參數（算多少）放在這裡由管理員維護。
  * 藥品部分負擔：健保藥費 ≤ drugCopayFreeUpTo 免收；超過後每 drugCopayStep 元加收 drugCopayPerStep 元，上限 drugCopayMax。
  */
+/** 住院帳單的計費資訊：住院天數（入院當天算、出院當天不算，至少 1 天）、各床等天數、部分負擔分段 */
+export interface IpdBillMeta {
+  from: string
+  to: string
+  days: number
+  beds: { bedNo: string; bedClass: string; days: number; extraFee: number }[]
+  copay: { fromDay: number; toDay: number; rate: number; amount: number }[]
+  /** 部分負擔超過每次住院上限，被截掉多少 */
+  capped?: number
+}
+
+/** 住院部分負擔：急性病房依住院日數分段（30 日內、31–60 日、61 日起）的比率（%）與每次住院上限（元） */
+export interface IpdCopaySettings {
+  rates: [number, number, number]
+  cap: number
+}
+
 export interface CopayValues {
   /** 門診基本部分負擔（元） */
   basicCopay: number
@@ -94,6 +111,8 @@ export interface CopayValues {
 /** 部分負擔參數：欄位是最早的值；之後的調整在 changes（某天起整組參數），某天的值用 billing.copayOn(設定, 日期) 查 */
 export interface BillingSettings extends CopayValues {
   changes?: (DatedChange & CopayValues)[]
+  /** 住院部分負擔（沒設定用 billing.IPD_COPAY_DEFAULT） */
+  ipdCopay?: IpdCopaySettings
   updatedAt?: string
   updatedBy?: string
 }
@@ -348,7 +367,7 @@ export interface Encounter {
 
 export interface ChargeLine {
   /** discount：優免（負數，病人自付欄） */
-  kind: 'reg' | 'copay-basic' | 'copay-drug' | 'drug' | 'procedure' | 'consult' | 'self' | 'discount'
+  kind: 'reg' | 'copay-basic' | 'copay-drug' | 'drug' | 'procedure' | 'consult' | 'self' | 'discount' | 'ward' | 'copay-ipd'
   name: string
   qty: number
   /** 單價（元或點） */
@@ -360,10 +379,14 @@ export interface ChargeLine {
 
 export type PayMethod = 'cash' | 'card' | 'mobile'
 
-/** 門診批價結帳紀錄 */
+/** 批價結帳紀錄（門診一次就醫一張；住院出院結帳一張，visitId 為空字串、記 admissionId） */
 export interface Charge {
   id: string
   visitId: string
+  /** 住院結帳：哪一次住院（門診收據沒有） */
+  admissionId?: string
+  /** 住院結帳的計費期間與部分負擔分段（收據、帳單顯示用；結帳時就存下，之後設定改了也不變） */
+  ipd?: IpdBillMeta
   patientId: string
   lines: ChargeLine[]
   /** 健保申報點數合計 */
@@ -588,6 +611,8 @@ export interface Procedure {
   priceChanges?: (DatedChange & { points: number; selfPrice: number })[]
   /** 檢驗醫令包含哪些檢驗值（CBC＝WBC、Hb、PLT）：報告逐項登打，依參考範圍、危急值判讀 */
   labItems?: LabItemDef[]
+  /** 住院每日計費的項目（病房費、護理費、住院診察費）：出院結帳依住院天數自動帶入，門診與醫囑都不能開 */
+  dailyFee?: boolean
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
   imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
   active: boolean
@@ -726,6 +751,8 @@ export interface Admission {
   deptId: string
   doctorId: string
   bedId?: string
+  /** 床位紀錄（報到、轉床、轉科換床各記一筆）：差額床費依住了幾天算。舊資料沒有，視為整段住目前的床 */
+  bedHistory?: { bedId: string; from: string }[]
   /** 預約希望床等 */
   preferBedClass: Bed['bedClass']
   reason: string

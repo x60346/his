@@ -9,7 +9,8 @@
 //   5. 自費身分：所有項目以自費價計算，不申報健保
 //   6. 價格一律看「看診日」：藥價、醫令點數、掛號費、部分負擔都可以排定某天起生效（dated-rules），
 //      調整前看診、調整後才批價的，收看診那天的價格
-import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Drug, Encounter, Identity, Procedure, Visit } from '@/types'
+import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Drug, Encounter, Identity, IpdBillMeta, IpdCopaySettings, Procedure, Visit } from '@/types'
+import { diffDays } from '@/utils/date'
 import { drugPriceOn } from './drug-rules'
 import { valueOn } from './dated-rules'
 
@@ -211,7 +212,7 @@ export function summarize(lines: ChargeLine[]): { nhiPoints: number; patientTota
   const nhi = lines.filter((l) => !l.patientPay).reduce((s, l) => s + l.amount, 0)
   const pt = lines.filter((l) => l.patientPay).reduce((s, l) => s + l.amount, 0)
   // 部分負擔由病患支付，申報點數需扣除
-  const copay = lines.filter((l) => l.kind === 'copay-basic' || l.kind === 'copay-drug').reduce((s, l) => s + l.amount, 0)
+  const copay = lines.filter((l) => l.kind === 'copay-basic' || l.kind === 'copay-drug' || l.kind === 'copay-ipd').reduce((s, l) => s + l.amount, 0)
   return { nhiPoints: Math.max(0, Math.round(nhi - copay)), patientTotal: Math.round(pt) }
 }
 
@@ -231,4 +232,92 @@ export function doseUnitOf(d: Pick<Drug, 'unit' | 'doseUnit'>): string {
 export function autoQty(d: Pick<Drug, 'unit' | 'doseUnit'>, dose: number, timesPerDay: number, days: number): number | null {
   if (doseUnitOf(d) !== d.unit) return null
   return calcQty(dose, timesPerDay, days)
+}
+
+// ---------- 住院帳單（出院結帳） ----------
+
+/**
+ * 住院部分負擔預設：急性病房 30 日內 10%、31–60 日 20%、61 日起 30%；每次住院上限（展示用數值，實際依健保署每年公告）。
+ * 收費設定可改（BillingSettings.ipdCopay）
+ */
+export const IPD_COPAY_DEFAULT: IpdCopaySettings = { rates: [10, 20, 30], cap: 57000 }
+
+/** 住院天數：入院當天算、出院（結帳）當天不算；當天入院當天出院算 1 天 */
+export const ipdDays = (from: string, to: string) => Math.max(1, diffDays(from.slice(0, 10), to.slice(0, 10)))
+
+/**
+ * 住院部分負擔：健保費用平均到每一天，依「住院第幾天」的比率分段計算（30 日內、31–60 日、61 日起），
+ * 加總後超過每次住院上限就截掉。回傳各段（帳單上列出來，病人看得懂為什麼是這個數）
+ */
+export function ipdCopay(nhiTotal: number, days: number, s: IpdCopaySettings): { amount: number; tiers: IpdBillMeta['copay']; capped?: number } {
+  const perDay = nhiTotal / Math.max(1, days)
+  const bounds: [number, number][] = [[1, 30], [31, 60], [61, Number.POSITIVE_INFINITY]]
+  const tiers: IpdBillMeta['copay'] = []
+  bounds.forEach(([from, to], i) => {
+    const end = Math.min(to, days)
+    if (end < from) return
+    tiers.push({ fromDay: from, toDay: end, rate: s.rates[i], amount: Math.round((perDay * (end - from + 1) * s.rates[i]) / 100) })
+  })
+  const raw = tiers.reduce((n, t) => n + t.amount, 0)
+  const amount = s.cap > 0 ? Math.min(raw, s.cap) : raw // 上限 0＝不設上限
+  return { amount, tiers, ...(raw > amount ? { capped: raw - amount } : {}) }
+}
+
+export interface IpdBillInput {
+  identity: Identity
+  /** 入院日、結帳日（YYYY-MM-DD 或含時間） */
+  from: string
+  to: string
+  /** 各床位住了幾天（加總＝住院天數）；差額床費依 extraFee */
+  beds: { bedNo: string; bedClass: string; days: number; extraFee: number }[]
+  /** 每日計費項目（病房費、護理費、住院診察費），依住院天數 */
+  daily: Procedure[]
+  /** 藥：實際扣帳的量（調劑扣的減退回的，加病房常備給藥扣的），date 用來查當天的藥價 */
+  drugs: { drug: Drug; qty: number; date: string }[]
+  /** 已執行的檢驗、處置、影像 */
+  procedures: { proc: Procedure; qty: number; date: string }[]
+  copay: IpdCopaySettings
+}
+
+/**
+ * 住院帳單明細（純函式：結帳、試算、種子、測試共用）。
+ *   - 每日計費 × 天數；藥依扣帳量、當天藥價；檢驗處置依執行日的點數（點數 0 的一律自費）
+ *   - 差額床費（雙人房、單人房）＝每日差額 × 那張床住的天數，自費
+ *   - 自費身分：全部用自費價、沒有部分負擔；免部分負擔的身分（重大傷病、低收入等）部分負擔 0
+ *   - 部分負擔依健保費用分段計算（ipdCopay），從申報點數扣掉、由病人付
+ */
+export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; meta: IpdBillMeta } {
+  const self = input.identity.selfPay
+  const days = ipdDays(input.from, input.to)
+  const lines: ChargeLine[] = []
+  const add = (l: ChargeLine) => {
+    const same = lines.find((x) => x.kind === l.kind && x.name === l.name && x.unitPrice === l.unitPrice)
+    if (same) {
+      same.qty = Math.round((same.qty + l.qty) * 100) / 100
+      same.amount = round(same.amount + l.amount)
+    } else lines.push(l)
+  }
+  for (const p of input.daily) {
+    const price = procPriceOn(p, input.from.slice(0, 10))
+    add(self ? { kind: 'self', name: `${p.name}（自費）`, qty: days, unitPrice: price.selfPrice, amount: price.selfPrice * days, patientPay: true } : { kind: 'ward', name: p.name, qty: days, unitPrice: price.points, amount: price.points * days, patientPay: false })
+  }
+  for (const x of input.drugs) {
+    if (x.qty <= 0) continue
+    const price = drugPriceOn(x.drug, x.date.slice(0, 10))
+    add(self ? { kind: 'self', name: `${x.drug.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: x.drug.name, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false })
+  }
+  for (const x of input.procedures) {
+    const price = procPriceOn(x.proc, x.date.slice(0, 10))
+    add(self || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: x.proc.name, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
+  }
+  for (const b of input.beds) {
+    if (b.extraFee > 0 && b.days > 0) lines.push({ kind: 'self', name: `差額床費（${b.bedClass} ${b.bedNo}）`, qty: b.days, unitPrice: b.extraFee, amount: b.extraFee * b.days, patientPay: true })
+  }
+  const nhiTotal = lines.filter((l) => !l.patientPay).reduce((n, l) => n + l.amount, 0)
+  const cp = self || input.identity.copayExempt ? { amount: 0, tiers: [] as IpdBillMeta['copay'] } : ipdCopay(nhiTotal, days, input.copay)
+  if (cp.amount > 0) lines.push({ kind: 'copay-ipd', name: '住院部分負擔', qty: 1, unitPrice: cp.amount, amount: cp.amount, patientPay: true })
+  return {
+    lines,
+    meta: { from: input.from.slice(0, 10), to: input.to.slice(0, 10), days, beds: input.beds, copay: cp.tiers, ...('capped' in cp && cp.capped ? { capped: cp.capped } : {}) },
+  }
 }
