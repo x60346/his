@@ -27,6 +27,7 @@ import * as consult from './consult'
 import * as wardStock from './ward-stock'
 import * as witness from './witness'
 import * as controlled from './controlled'
+import * as lab from './lab'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -54,6 +55,8 @@ export const consultApi = overNetwork(consult)
 export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
+export const labApi = overNetwork(lab)
+export type { LabWorkItem, LabReportView, LabTrend } from './lab'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
@@ -82,6 +85,7 @@ export { XLSX_MIME } from './xlsx'
 export * from './phrase-rules'
 export * from './rx-rules'
 export * from './controlled-rules'
+export * from './lab-rules'
 export * from './stocktake-rules'
 export * from './purchase-rules'
 export * from './ud-rules'

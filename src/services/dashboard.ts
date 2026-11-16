@@ -9,6 +9,7 @@ import { pendingRefundOf } from './money'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
+import { labAckCount, labWorkCount } from './lab-work'
 
 export interface DashboardStats {
   date: string
@@ -36,6 +37,10 @@ export interface DashboardStats {
   opdConsultIncoming?: number
   /** 我的病人（我是主治）有會診醫師新開、還沒按已閱的醫囑：病人數 */
   consultOrdersUnseen?: number
+  /** 醫師：危急值或更正過、待我確認的檢驗報告 */
+  labAcks?: number
+  /** 檢驗科：可以登打的待檢驗（住院還沒採檢的不算） */
+  labWork?: number
   consultUrgent?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -124,6 +129,7 @@ export function getDashboard(): Promise<DashboardStats> {
         const myDept = db.doctors.find((d) => d.id === me.doctorId)?.deptId
         return {
           orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length,
+          labAcks: labAckCount(me.doctorId),
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,
           transferIncoming: db.admissions.filter((a) => {
             const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined
@@ -143,6 +149,7 @@ export function getDashboard(): Promise<DashboardStats> {
         }
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
+      ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount() } : {}),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {
             transferRequested: db.transfers.filter((x) => x.status === 'requested' && x.kind !== 'return').length,

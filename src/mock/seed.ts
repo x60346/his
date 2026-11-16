@@ -41,6 +41,9 @@ import type {
   Consult,
   WardStockItem,
   WardCount,
+  Gender,
+  LabItemDef,
+  LabReport,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
@@ -50,6 +53,7 @@ import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rul
 import { udPerDose } from '@/services/ud-rules'
 import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
+import { buildLabValues } from '@/services/lab-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -229,6 +233,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount'] },
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
     { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
+    // 醫檢師：登打檢驗結果、發報告
+    { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true },
   ]
   // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
   // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
@@ -1360,6 +1366,82 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 檢驗報告（不抽亂數、不用流水號：數值由 id 雜湊決定，加進來不改變其他種子資料）----------
+  // 以前（今天以前）完成、已批價的門診檢驗都已發報告；今天的留在檢驗科待檢驗清單。
+  // 示範危急值：dr01 最近一份門診檢驗、和一位住院病人昨天的 CBC，都還沒確認（首頁、看診頁上方會提醒）
+  const labReports: LabReport[] = []
+  {
+    const hash = (s: string) => {
+      let h = 2166136261
+      for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0
+      return h / 4294967296
+    }
+    const sample = (def: LabItemDef, key: string, gender: Gender): string => {
+      const r = hash(key)
+      if (def.options) return r < 0.85 ? def.options[0] : def.options[1]
+      const f = gender === 'F' && def.lowF !== undefined
+      const low = (f ? def.lowF : def.low) ?? 0
+      const high = (f ? def.highF : def.high) ?? low * 2
+      const dec = /\./.test(String(def.high ?? def.low ?? '')) ? 1 : 0
+      // 八成在參考範圍內，其餘略高（展示用的異常）
+      const v = r < 0.8 ? low + (high - low) * (0.2 + 0.6 * hash(key + 'v')) : high * (1.05 + 0.3 * hash(key + 'h'))
+      return v.toFixed(dec)
+    }
+    let seq = 0
+    const labNo = (at: string) => `L${at.slice(0, 10).replace(/-/g, '')}${String(9000 + ++seq)}`
+    const procMap = new Map(codes.procedures.map((x) => [x.id, x]))
+    for (const e of encounters) {
+      if (e.status !== 'completed' || e.date >= T || !e.completedAt) continue
+      const v = visits.find((x) => x.id === e.visitId)
+      if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
+      const pt = patients.find((x) => x.id === e.patientId)!
+      for (const x of e.procedures) {
+        const defs = procMap.get(x.procId)?.labItems
+        if (!defs?.length || x.notDone) continue
+        const input = Object.fromEntries(defs.map((d) => [d.code, sample(d, `${e.id}:${d.code}`, pt.gender)]))
+        const at = addMinutes(e.completedAt, 45)
+        labReports.push({ id: `LR-SEED-${labReports.length + 1}`, no: labNo(at), patientId: e.patientId, procId: x.procId, encounterId: e.id, doctorId: e.doctorId, orderedAt: e.completedAt, values: buildLabValues(defs, input, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+      }
+    }
+    // 住院：入院時的檢驗（臨時醫囑，護理師已採檢）——今天以前採檢的都已發報告；今天的留在待檢驗
+    for (const o of ipdOrders) {
+      const defs = o.procId ? procMap.get(o.procId)?.labItems : undefined
+      if (!defs?.length || o.type !== 'stat' || o.status !== 'done' || !o.stopAt || o.stopAt.slice(0, 10) >= T) continue
+      const a = admissions.find((x) => x.id === o.admissionId)!
+      const pt = patients.find((x) => x.id === a.patientId)!
+      const input = Object.fromEntries(defs.map((d) => [d.code, sample(d, `${o.id}:${d.code}`, pt.gender)]))
+      const at = addMinutes(o.stopAt, 60)
+      labReports.push({ id: `LR-SEED-${labReports.length + 1}`, no: labNo(at), patientId: a.patientId, procId: o.procId!, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: buildLabValues(defs, input, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+    }
+    // 歷史的都當作醫師已看過（只有下面兩份示範危急值待確認）
+    // 示範一：最近一份門診血糖或 CBC 改成危急值（血糖 452 或白血球 1.6）；優先挑 dr01 的（第一個醫師帳號），沒有就挑別的醫師
+    const crit = [...labReports].reverse().filter((r) => r.encounterId && ['P003', 'P004'].includes(r.procId))
+    const dr01 = crit.find((r) => r.doctorId === 'DR01') ?? crit[0]
+    if (dr01) {
+      const pt = patients.find((x) => x.id === dr01.patientId)!
+      const defs = procMap.get(dr01.procId)!.labItems!
+      const input = Object.fromEntries(dr01.values.map((v) => [v.code, v.value]))
+      if (dr01.procId === 'P004') input['GLU-AC'] = '452'
+      else input.WBC = '1.6'
+      dr01.values = buildLabValues(defs, input, pt.gender).values
+    }
+    // 示範二：住院病人昨天早上的 CBC（臨時醫囑，護理師已採檢），血色素 6.8 危急，主治還沒確認
+    const adm = admissions.find((a) => a.status === 'admitted')
+    if (adm) {
+      const pt = patients.find((x) => x.id === adm.patientId)!
+      const orderedAt = `${addDays(T, -1)} 06:00`
+      ipdOrders.push({ id: 'IO-SEED-LAB1', admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '全套血液檢查 CBC', startAt: orderedAt, stopAt: `${addDays(T, -1)} 06:20`, status: 'done', doctorId: adm.doctorId, createdAt: orderedAt, ackAt: `${addDays(T, -1)} 06:10`, ackBy: 'U201' })
+      const at = `${addDays(T, -1)} 07:05`
+      labReports.push({ id: 'LR-SEED-IPD1', no: labNo(at), patientId: adm.patientId, procId: 'P003', orderId: 'IO-SEED-LAB1', admissionId: adm.id, doctorId: adm.doctorId, orderedAt, values: buildLabValues(procMap.get('P003')!.labItems!, { WBC: '12.4', Hb: '6.8', PLT: '210' }, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+    }
+    for (const r of labReports) {
+      if (r.values.some((v) => v.critical) && r !== dr01 && r.id !== 'LR-SEED-IPD1') {
+        r.ackBy = users.find((u) => u.doctorId === r.doctorId)?.id
+        r.ackAt = addMinutes(r.reportedAt, 20)
+      }
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -1411,6 +1493,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     handovers,
     preventItems: structuredClone(codes.preventItems),
     preventRecords,
+    labReports,
     auditLogs: [],
     counters,
   }

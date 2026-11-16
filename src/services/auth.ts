@@ -27,7 +27,7 @@ const toSessionUser = (u: User): SessionUser => {
   }
 }
 
-const roleText: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價' }
+const roleText: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價', lab: '醫檢師' }
 
 /** 帳號有多個角色、登入時沒指定：先不登入，回傳可選的角色讓登入頁問一次（不先用第一個角色登入，稽核才不會多一筆沒意義的切換） */
 export type LoginResult = SessionUser | { chooseRole: Role[] }

@@ -5,7 +5,7 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { CheckCircle2, ChevronsRight, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
+import { CheckCircle2, ChevronsRight, FlaskConical, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
 } from '@/components/ui'
@@ -18,10 +18,11 @@ import OrderSetBar from './components/OrderSetBar.vue'
 import HistoryList from './components/HistoryList.vue'
 import OpdConsultDialog from './components/OpdConsultDialog.vue'
 import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
+import LabReportList from '@/components/LabReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
-import { autoQty, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import { autoQty, labApi, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -115,7 +116,7 @@ const canConsult = computed(() => !isAdmin && !!visit.value && ['in-consult', 'c
 const CONSULT_STATUS: Record<string, { label: string; tone: 'yellow' | 'green' | 'gray' }> = { pending: { label: '待回覆', tone: 'yellow' }, answered: { label: '已回覆', tone: 'green' }, cancelled: { label: '已撤回', tone: 'gray' } }
 // 「看診」一頁照 SOAP 順序排（生命徵象 → S/O → A＋診斷 → P＋醫令），「歷史病歷」另一頁。
 // 以前拆成 SOAP／診斷／醫令／歷史四個分頁：寫主訴看不到上次處方、開藥看不到剛寫的評估，檢查出錯還會自動跳分頁。
-const tab = ref<'visit' | 'history'>('visit')
+const tab = ref<'visit' | 'history' | 'labs'>('visit')
 type Section = 'so' | 'dx' | 'orders'
 const sectionEls: Partial<Record<Section, HTMLElement>> = {}
 const setSection = (k: Section) => (el: unknown) => {
@@ -413,7 +414,11 @@ const bmi = computed(() => {
 const tabs = computed(() => [
   { key: 'visit', label: '看診' },
   { key: 'history', label: '歷史病歷', count: history.value?.length },
+  { key: 'labs', label: '檢驗報告', count: labs.value?.reports.length },
 ])
+// 檢驗報告：分頁數量、上方「待確認」提醒（危急值或更正過、還沒按已知悉）
+const { data: labs } = useQuery(async () => (visit.value ? labApi.patientLabs(visit.value.patientId) : undefined), [() => visit.value?.patientId])
+const labAlerts = computed(() => (labs.value?.reports ?? []).filter((r) => r.needsAck))
 // 段落捷徑（固定在看診頁上方）：頁面變長了，點一下就捲到該段，並看得到診斷、醫令的數量
 const sectionLinks = computed(() => [
   { key: 'so' as Section, label: 'S／O' },
@@ -506,6 +511,12 @@ const lastOpen = ref(true)
           <button type="button" class="ml-1 rounded border border-current px-1 text-xs font-medium opacity-80 hover:opacity-100" title="病人當場告知的過敏，直接記錄（只能新增；移除請到病患資料）" @click="openAllergy">＋過敏</button>
         </template>
       </PatientBanner>
+      <!-- 檢驗危急值（或更正過）還沒確認：紅條提醒，點了到「檢驗報告」分頁按已知悉 -->
+      <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        <FlaskConical class="h-4 w-4 shrink-0" />
+        <span class="min-w-0 flex-1"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
+        <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
+      </div>
       <!-- 這次看診的門診會診 -->
       <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <span class="pt-0.5 text-xs font-semibold text-slate-600">門診會診</span>
@@ -554,7 +565,7 @@ const lastOpen = ref(true)
       </div>
 
       <UCard v-if="visit.status !== 'registered' || history?.length" :padded="false">
-        <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="visit.status === 'registered' ? tabs.filter((t) => t.key === 'history') : tabs" /></div>
+        <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="visit.status === 'registered' ? tabs.filter((t) => t.key !== 'visit') : tabs" /></div>
         <!-- 段落捷徑：固定在上方，點一下捲到該段 -->
         <div v-if="tab === 'visit' && visit.status !== 'registered'" class="sticky top-0 z-[5] flex gap-1.5 border-b border-slate-100 bg-white/95 px-4 py-1.5 backdrop-blur">
           <button v-for="s in sectionLinks" :key="s.key" type="button" class="rounded-full border border-slate-200 px-2.5 py-0.5 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-700" @click="goSection(s.key)">
@@ -641,6 +652,7 @@ const lastOpen = ref(true)
             </section>
           </div>
 
+          <div v-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="visit.patientId" /></div>
           <HistoryList v-if="tab === 'history'" :items="history ?? []" :drugs="drugs" :readonly="!editable" :busy="expandEncounter.pending.value" @copy="copyFrom" />
         </div>
       </UCard>

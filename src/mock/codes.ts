@@ -11,6 +11,7 @@ import type {
   Identity,
   PreventItem,
   Procedure,
+  LabItemDef,
 } from '@/types'
 
 export const departments: Department[] = [
@@ -347,7 +348,36 @@ export const drugs: Drug[] = drugBase.map((d) => ({
   ...(controlledOf[d.id] ? { controlled: controlledOf[d.id] } : {}),
 }))
 
-export const procedures: Procedure[] = [
+/**
+ * 檢驗醫令包含的檢驗值、參考範圍與危急值（展示用的常見成人值；實際依各醫院、儀器而定，不是臨床標準）。
+ * 危急值：超過就要立刻通知醫師、醫師要確認（lab-rules）
+ */
+const NEG = { options: ['陰性', '微量', '1+', '2+', '3+'], normal: ['陰性'] }
+const labItemsOf: Record<string, LabItemDef[]> = {
+  P003: [
+    { code: 'WBC', name: '白血球', unit: '10³/µL', low: 4.0, high: 10.0, critLow: 2.0, critHigh: 30.0 },
+    { code: 'Hb', name: '血色素', unit: 'g/dL', low: 13.5, high: 17.5, lowF: 12.0, highF: 16.0, critLow: 7.0, critHigh: 20.0 },
+    { code: 'PLT', name: '血小板', unit: '10³/µL', low: 150, high: 400, critLow: 50, critHigh: 1000 },
+  ],
+  P004: [{ code: 'GLU-AC', name: '飯前血糖', unit: 'mg/dL', low: 70, high: 99, critLow: 40, critHigh: 400 }],
+  P005: [{ code: 'HbA1c', name: '糖化血色素', unit: '%', low: 4.0, high: 5.6 }],
+  P006: [{ code: 'T-CHO', name: '總膽固醇', unit: 'mg/dL', high: 199 }],
+  P007: [{ code: 'TG', name: '三酸甘油酯', unit: 'mg/dL', high: 149 }],
+  P008: [{ code: 'CRE', name: '肌酸酐', unit: 'mg/dL', low: 0.7, high: 1.3, lowF: 0.5, highF: 1.1, critHigh: 10.0 }],
+  P009: [{ code: 'GPT', name: '丙胺酸轉胺酶', unit: 'U/L', high: 40, critHigh: 1000 }],
+  P010: [
+    { code: 'U-PRO', name: '尿蛋白', ...NEG },
+    { code: 'U-GLU', name: '尿糖', ...NEG },
+    { code: 'U-OB', name: '尿潛血', ...NEG },
+  ],
+  P011: [{ code: 'CRP', name: 'C 反應蛋白', unit: 'mg/dL', high: 0.5 }],
+  P012: [
+    { code: 'FLU-A', name: 'A 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
+    { code: 'FLU-B', name: 'B 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
+  ],
+}
+
+const procedureBase: Procedure[] = [
   { id: 'P001', code: '00109C', name: '一般門診診察費', category: '診察', points: 352, selfPrice: 400, active: true },
   { id: 'P002', code: '00217A', name: '住院診察費（每日）', category: '診察', points: 461, selfPrice: 500, active: true },
   { id: 'P003', code: '08011C', name: '全套血液檢查 CBC', category: '檢驗', points: 145, selfPrice: 250, active: true },
@@ -377,6 +407,8 @@ export const procedures: Procedure[] = [
   { id: 'P027', code: 'SELF01', name: '診斷證明書', category: '處置', points: 0, selfPrice: 150, active: true },
   { id: 'P028', code: 'SELF02', name: '流感疫苗（自費）', category: '處置', points: 0, selfPrice: 800, active: true },
 ]
+
+export const procedures: Procedure[] = procedureBase.map((p) => (labItemsOf[p.id] ? { ...p, labItems: labItemsOf[p.id] } : p))
 
 export const preventItems: PreventItem[] = [
   { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },

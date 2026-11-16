@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, Package, PhoneCall, Pill, Receipt, Stethoscope, Truck, Users,
+  AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, Package, PhoneCall, Pill, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
 import { dashboardApi, opdApi } from '@/services'
@@ -12,6 +12,7 @@ import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
 import { useCan } from '@/composables/useCan'
 import DiscountRequestsCard from '@/components/DiscountRequestsCard.vue'
+import LabAcksCard from '@/components/LabAcksCard.vue'
 import { money } from '@/utils/labels'
 
 const auth = useAuth()
@@ -46,6 +47,8 @@ const todos = computed<Todo[]>(() => {
   if (!s.value) return []
   const role = auth.user?.role
   const list: (Todo & { roles: string[] })[] = [
+    { roles: ['lab'], label: '待檢驗', count: s.value.labWork ?? 0, hint: '門診已批價、住院已採檢的，登打後發報告', route: 'lab', icon: FlaskConical, urgent: true },
+    { roles: ['doctor'], label: '待確認檢驗', count: s.value.labAcks ?? 0, hint: '危急值或更正過的檢驗報告，在下方清單按「已知悉」', route: 'home', icon: FlaskConical, urgent: true },
     { roles: ['doctor'], label: '待回覆會診', count: s.value.consultIncoming ?? 0, hint: s.value.consultUrgent ? `其中急會診 ${s.value.consultUrgent} 張` : '他科請本科會診的住院病人', route: 'ipd', icon: Stethoscope, urgent: !!s.value.consultUrgent },
     { roles: ['doctor'], label: '轉入申請', count: s.value.transferIncoming ?? 0, hint: '他科申請轉入本科的住院病人，待接受', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '待回覆門診會診', count: s.value.opdConsultIncoming ?? 0, hint: '他科看診時請本科書面會診（病人不必在場）', route: 'opd', icon: Stethoscope, urgent: true },
@@ -95,6 +98,8 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
   <div v-if="s" class="space-y-5">
     <!-- 待核准優免：有「可核准優免」的人才查（主管在首頁直接核准，不必到櫃台） -->
     <DiscountRequestsCard v-if="can('charge.approveDiscount')" />
+    <!-- 待確認的檢驗報告（危急值、更正）：醫師在首頁直接確認 -->
+    <LabAcksCard v-if="auth.user?.role === 'doctor'" />
     <!-- 我的待辦 -->
     <section v-if="todos.length">
       <h2 class="mb-2 text-sm font-semibold text-slate-600">{{ auth.user?.name }}，您目前的待辦</h2>

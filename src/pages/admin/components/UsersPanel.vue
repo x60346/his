@@ -35,7 +35,7 @@ const columns: Column<UserRow>[] = [
 const editOpen = ref(false)
 const permLabel = (k: string) => PERMISSIONS.find((p) => p.key === k)?.label ?? k
 const form = reactive({ id: undefined as string | undefined, username: '', name: '', roles: ['clerk'] as Role[], doctorId: undefined as string | number | undefined, active: true, password: '' })
-const roleOrder: Role[] = ['doctor', 'nurse', 'pharmacist', 'clerk', 'admin']
+const roleOrder: Role[] = ['doctor', 'nurse', 'pharmacist', 'clerk', 'lab', 'admin']
 function toggleRole(role: Role, on: boolean) {
   form.roles = on ? [...form.roles, role] : form.roles.filter((x) => x !== role)
 }

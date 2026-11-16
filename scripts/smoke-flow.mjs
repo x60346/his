@@ -5057,6 +5057,177 @@ try {
     ok(pages.every((s) => !/controlled\s*<=?\s*3/.test(s)) && pages[0].includes('needsSpecialRx'), '頁面用 needsSpecialRx（不自己寫「級別 ≤ 3」）')
   }
 
+  // 檢驗：醫檢師登打、判讀（參考範圍、危急值、性別）、發報告、更正、醫師確認危急值；門診先批價、住院先採檢
+  console.log('\n[檢驗報告]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const LR = await load('/src/services/lab-rules.ts')
+    const L = api.labApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const proc = (id) => db().procedures.find((p) => p.id === id)
+    const def = (procId, code) => proc(procId).labItems.find((d) => d.code === code)
+    const hb = def('P003', 'Hb')
+    ok(LR.labRefText(hb, 'M') === '13.5–17.5' && LR.labRefText(hb, 'F') === '12–16' && LR.labRefText(def('P006', 'T-CHO'), 'M') === '≤ 199' && LR.labRefText(def('P010', 'U-PRO'), 'F') === '陰性', '參考範圍文字：血色素依性別、只有上限的寫「≤」、文字型寫正常值')
+    const j = (procId, code, v, g = 'M') => LR.judgeLab(def(procId, code), v, g)
+    ok(j('P004', 'GLU-AC', '85').flag === '' && j('P004', 'GLU-AC', '130').flag === 'H' && j('P004', 'GLU-AC', '65').flag === 'L' && !j('P004', 'GLU-AC', '130').critical, '數值判讀：範圍內正常、高於 H、低於 L')
+    ok(j('P004', 'GLU-AC', '401').critical && j('P004', 'GLU-AC', '39').critical && !j('P004', 'GLU-AC', '400').critical && !j('P004', 'GLU-AC', '40').critical, '危急值：超過危急界線才算（界線本身不算）')
+    ok(j('P003', 'Hb', '12.5', 'F').flag === '' && j('P003', 'Hb', '12.5', 'M').flag === 'L', '血色素 12.5：女性正常、男性偏低（依病人性別）')
+    ok(j('P010', 'U-PRO', '陰性').flag === '' && j('P010', 'U-PRO', '2+').flag === 'A' && 'error' in j('P010', 'U-PRO', '很多'), '文字型：正常值以外標「異常」，不在選項裡的不收')
+    ok(['', ' ', 'abc', '1,2', '-3', '1.2.3'].every((v) => 'error' in j('P004', 'GLU-AC', v)), '數值型：空白、文字、逗號、負數、格式錯都不收')
+    const bv = LR.buildLabValues(proc('P003').labItems, { WBC: '5.1', Hb: '' }, 'M')
+    ok(Object.keys(bv.errors).sort().join() === 'Hb,PLT' && bv.values.length === 1, '一次標出所有沒填好的項目（不是一次一個）')
+    ok(LR.labNeedsAck({ values: [{ critical: true }] }) && !LR.labNeedsAck({ values: [{ critical: true }], ackAt: 'x' }) && LR.labNeedsAck({ values: [{}], corrections: [{}] }) && !LR.labNeedsAck({ values: [{ flag: 'H' }] }), '要醫師確認：有危急值或更正過、還沒確認；只是偏高不用')
+
+    // 種子
+    ok(db().users.find((u) => u.username === 'lab01')?.roles.join() === 'lab', '種子：醫檢師帳號 lab01')
+    ok(db().procedures.filter((p) => p.category === '檢驗').every((p) => p.labItems?.length), '每個檢驗醫令都有檢驗項目')
+    const pastLab = db().encounters.filter((e) => e.status === 'completed' && e.date < T && ['charged', 'dispensed'].includes(db().visits.find((v) => v.id === e.visitId)?.status)).flatMap((e) => e.procedures.filter((x) => proc(x.procId)?.labItems && !x.notDone).map((x) => ({ e, x })))
+    ok(pastLab.length > 0 && pastLab.every(({ e, x }) => db().labReports.some((r) => r.encounterId === e.id && r.procId === x.procId)), `種子：以前已批價的門診檢驗都有報告（${pastLab.length} 份）`)
+    const pastIpd = db().ipdOrders.filter((o) => o.type === 'stat' && o.status === 'done' && proc(o.procId ?? '')?.labItems && o.stopAt.slice(0, 10) < T)
+    ok(pastIpd.length > 0 && pastIpd.every((o) => db().labReports.some((r) => r.orderId === o.id)), `種子：今天以前採檢的住院檢驗都有報告（${pastIpd.length} 份）`)
+    ok(db().labReports.every((r) => { const g = db().patients.find((p) => p.id === r.patientId).gender; const re = LR.buildLabValues(proc(r.procId).labItems, Object.fromEntries(r.values.map((v) => [v.code, v.value])), g).values; return JSON.stringify(re) === JSON.stringify(r.values) }), '種子報告的判讀和規則一致（重算一樣）')
+    const seedAcks = db().labReports.filter((r) => LR.labNeedsAck(r))
+    ok(seedAcks.some((r) => r.orderId === 'IO-SEED-LAB1' && r.values.find((v) => v.code === 'Hb').critical) && seedAcks.some((r) => r.encounterId && (r.doctorId === 'DR01' || !db().labReports.some((x) => x.encounterId && x.doctorId === 'DR01' && ['P003', 'P004'].includes(x.procId)))) && seedAcks.length === 2, `種子：兩份危急值待確認（${seedAcks.map((r) => r.id).join(',')}；門診 ${seedAcks.find((r) => r.encounterId)?.doctorId}，優先 dr01；一位住院病人昨天的 CBC 血色素 6.8）`)
+
+    // 門診：完成看診 → 批價後才出現在待檢驗
+    await as('clerk01')
+    const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
+    const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
+    const pt = db().patients.find((x) => x.gender === 'F' && !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+    const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+    const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
+    await as(drUser)
+    const ee = await api.opdApi.startConsult(vv.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.completeEncounter(ee.id, { subjective: '口渴多尿', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'E11.9', name: '第二型糖尿病', primary: true }], medications: [], procedures: [{ procId: 'P004', qty: 1, selfPay: false }, { procId: 'P003', qty: 1, selfPay: false }, { procId: 'P013', qty: 1, selfPay: false }], refillTimes: 0, admissionRequested: false })
+    await as('lab01')
+    const keyOf = (procId) => `E:${ee.id}:${procId}`
+    ok(!(await L.listLabWork()).some((w) => w.key.startsWith(`E:${ee.id}`)), '還沒批價：不在待檢驗清單（先批價再檢驗）')
+    await as('clerk01')
+    const pv = await api.chargeApi.previewCharge(vv.id)
+    await api.chargeApi.pay(vv.id, { payMethod: 'cash', received: pv.patientTotal })
+    await as('lab01')
+    let work = await L.listLabWork()
+    const mine = work.filter((w) => w.key.startsWith(`E:${ee.id}`))
+    ok(mine.map((w) => w.procId).sort().join() === 'P003,P004' && mine[0].source === 'opd' && mine.find((w) => w.procId === 'P003').items.find((i) => i.code === 'Hb').ref === '12–16', '批價後出現：只有檢驗（X 光不列）；女性病人的血色素參考範圍 12–16')
+    await as(drUser)
+    await expectError(() => L.reportLab({ key: keyOf('P004'), values: { 'GLU-AC': '100' } }), '醫師發檢驗報告')
+    await expectError(() => L.listLabWork(), '醫師看待檢驗清單')
+    await as('lab01')
+    const f1 = await fieldsOf(() => L.reportLab({ key: keyOf('P003'), values: { WBC: '5', Hb: 'abc' } }))
+    ok(f1.Hb?.includes('數字') && f1.PLT && !f1.WBC, `沒填好的一次標出：${Object.entries(f1).map(([k, v]) => `${k}「${v}」`).join('、')}`)
+    const r1 = await L.reportLab({ key: keyOf('P004'), values: { 'GLU-AC': ' 455 ' } })
+    ok(/^L\d{8}\d{4}$/.test(r1.no) && r1.values[0].value === '455' && r1.values[0].flag === 'H' && r1.values[0].critical && r1.needsAck && r1.hasCritical, `發報告 ${r1.no}：血糖 455 偏高且危急，要醫師確認`)
+    ok(db().auditLogs[0].action.includes('危急值') && db().auditLogs[0].detail.includes('飯前血糖 455'), '稽核寫明危急值')
+    ok(!(await L.listLabWork()).some((w) => w.key === keyOf('P004')), '發了就從待檢驗拿掉')
+    msg = await errOf(() => L.reportLab({ key: keyOf('P004'), values: { 'GLU-AC': '100' } }))
+    ok(msg.includes('更正'), `同一項再發一次 → 「${msg}」`)
+
+    // 批價「未執行」：已發報告的不能標；沒發的可以，標了就不列、不能發
+    await as('clerk01')
+    const ch = db().charges.find((c) => c.visitId === vv.id && !c.voided)
+    const enc = () => db().encounters.find((e) => e.id === ee.id)
+    msg = await errOf(() => api.chargeApi.markProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P004'), '病人說沒抽'))
+    ok(msg.includes('已經發出檢驗報告'), `已發報告的標未執行 → 「${msg}」`)
+    await api.chargeApi.markProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P003'), '病人未抽血即離開')
+    await as('lab01')
+    ok(!(await L.listLabWork()).some((w) => w.key === keyOf('P003')), '櫃台標「未執行」的檢驗不列在待檢驗')
+    msg = await errOf(() => L.reportLab({ key: keyOf('P003'), values: { WBC: '5', Hb: '13', PLT: '200' } }))
+    ok(msg.includes('未執行'), `未執行的發報告 → 「${msg}」`)
+    await as('clerk01')
+    await api.chargeApi.unmarkProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P003'))
+    await as('lab01')
+    const r2 = await L.reportLab({ key: keyOf('P003'), values: { WBC: '6.2', Hb: '12.5', PLT: '180' } })
+    ok(r2.values.every((v) => !v.flag && !v.critical) && !r2.needsAck, '撤銷未執行後可以發；女性血色素 12.5 正常、不需確認')
+
+    // 醫師確認危急值
+    const otherDr = db().users.find((u) => u.doctorId && u.doctorId !== sess.doctorId).username
+    await as(otherDr)
+    msg = await errOf(() => L.ackLab(r1.id))
+    ok(msg.includes('開立醫師'), `別的醫師按已知悉 → 「${msg}」`)
+    ok(!(await L.patientLabs(pt.id)).reports.find((r) => r.id === r1.id).canAck, '別的醫師的畫面上沒有「已知悉」按鈕（canAck）')
+    await as('nurse01')
+    await expectError(() => L.ackLab(r1.id), '護理師按已知悉')
+    const nurseView = await L.patientLabs(pt.id)
+    ok(nurseView.reports.length >= 2, '護理師可以看檢驗報告')
+    await as('clerk01')
+    await expectError(() => L.patientLabs(pt.id), '櫃台看檢驗報告')
+    await as(drUser)
+    ok((await api.dashboardApi.getDashboard()).labAcks >= 1 && (await L.myLabAcks()).some((r) => r.id === r1.id), '開立醫師：首頁「待確認檢驗」與清單有這份')
+    const pl = await L.patientLabs(pt.id)
+    ok(pl.reports[0].reportedAt >= pl.reports.at(-1).reportedAt && pl.reports.find((r) => r.id === r1.id).canAck && pl.trends.find((t) => t.code === 'GLU-AC').points.at(-1).value === '455' && pl.trends.every((t) => t.points.length <= 6), '病人的報告新的在前、開立醫師可確認；趨勢最後一筆是 455、最多 6 筆')
+    const a1 = await L.ackLab(r1.id)
+    ok(!a1.needsAck && a1.ackAt && db().labReports.find((r) => r.id === r1.id).ackBy === db().users.find((u) => u.username === drUser).id, '按「已知悉」：記下誰、何時，不再待確認')
+    msg = await errOf(() => L.ackLab(r1.id))
+    ok(msg.includes('已經確認'), `再按一次 → 「${msg}」`)
+
+    // 更正
+    await as('lab01')
+    let ff = await fieldsOf(() => L.correctLab(r1.id, { values: { 'GLU-AC': '145' }, reason: '' }))
+    ok(!!ff.reason, `更正沒寫原因 → 「${ff.reason}」`)
+    ff = await fieldsOf(() => L.correctLab(r1.id, { values: { 'GLU-AC': '455' }, reason: '重驗' }))
+    ok(ff.reason?.includes('沒有改變'), `數值沒變 → 「${ff.reason}」`)
+    const c1 = await L.correctLab(r1.id, { values: { 'GLU-AC': '145' }, reason: '登打錯誤（多打一個 5）' })
+    ok(c1.values[0].value === '145' && c1.values[0].flag === 'H' && !c1.hasCritical && c1.corrections.length === 1 && c1.corrections[0].before[0].value === '455' && c1.needsAck && !c1.ackAt, '更正：新值重新判讀、舊值留著、醫師要重新確認')
+    ok(db().auditLogs[0].detail.includes('455 → 145') && db().auditLogs[0].detail.includes('登打錯誤'), '稽核寫明更正前後與原因')
+    ok((await L.listLabReports({ date: T })).some((r) => r.id === r1.id), '今天的「已報告」有這份')
+    await as(drUser)
+    ok((await L.myLabAcks()).some((r) => r.id === r1.id && r.corrections.length), '更正後回到醫師的待確認')
+    await L.ackLab(r1.id)
+
+    // 住院：臨時醫囑 → 護理師採檢（執行）→ 才能發報告
+    const adm = db().admissions.find((a) => a.status === 'admitted' && a.id !== db().ipdOrders.find((o) => o.id === 'IO-SEED-LAB1')?.admissionId)
+    const attendingUser = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(attendingUser)
+    const io = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P011', content: '' })
+    await as('lab01')
+    let w = (await L.listLabWork()).find((x) => x.key === `O:${io.id}`)
+    const cntBefore = (await api.dashboardApi.getDashboard()).labWork
+    ok(w?.awaitingCollection && w.source === 'ipd' && /\d/.test(w.where), `住院檢驗：還沒採檢列在清單（${w?.where}）但標「待採檢」`)
+    msg = await errOf(() => L.reportLab({ key: `O:${io.id}`, values: { CRP: '3.2' } }))
+    ok(msg.includes('採檢'), `還沒採檢就發報告 → 「${msg}」`)
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(io.id)
+    await as('lab01')
+    w = (await L.listLabWork()).find((x) => x.key === `O:${io.id}`)
+    ok(w && !w.awaitingCollection && (await api.dashboardApi.getDashboard()).labWork === cntBefore + 1, '護理師執行（採檢）後可以登打；首頁待檢驗數 +1')
+    const r3 = await L.reportLab({ key: `O:${io.id}`, values: { CRP: '3.2' } })
+    ok(r3.source === 'ipd' && r3.admissionId === adm.id && r3.values[0].flag === 'H' && !r3.needsAck, '住院報告：CRP 3.2 偏高（沒有危急值，不需確認）')
+    await as(attendingUser)
+    const io2 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P004', content: '' })
+    await api.ipdApi.stopOrder(io2.id, '重複開立')
+    await as('lab01')
+    ok(!(await L.listLabWork()).some((x) => x.key === `O:${io2.id}`), '停止的檢驗醫囑不列')
+    // 種子的住院危急值：主治確認
+    const seedIpd = db().labReports.find((r) => r.id === 'LR-SEED-IPD1')
+    const att = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === seedIpd.admissionId).doctorId).username
+    await as(att)
+    ok((await L.myLabAcks()).some((r) => r.id === seedIpd.id), '住院危急值出現在主治醫師的待確認')
+    await L.ackLab(seedIpd.id)
+    ok(!LR.labNeedsAck(db().labReports.find((r) => r.id === seedIpd.id)), '主治醫師確認住院危急值')
+
+    // 規則只在 lab-rules：頁面不自己比參考範圍
+    const { readFileSync } = await import('node:fs')
+    const pg = ['src/pages/lab/LabPage.vue', 'src/components/LabReportList.vue', 'src/components/LabAcksCard.vue'].map((p) => readFileSync(p, 'utf8'))
+    ok(pg.every((s) => !/critHigh|critLow|\.high\b|\.low\b/.test(s)) && pg[0].includes('judgeLab'), '頁面用 judgeLab 判讀（不自己比參考範圍、危急值）')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

@@ -11,7 +11,7 @@ export interface DatedChange {
 
 export type Gender = 'M' | 'F'
 export type Period = 'AM' | 'PM' | 'NIGHT'
-export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk'
+export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab'
 
 /** 系統使用者（展示用帳號，密碼明文存於 mock） */
 export interface User {
@@ -586,7 +586,69 @@ export interface Procedure {
   selfPrice: number
   /** 點數／自費價調整：from 這天起（依看診日，規則見 dated-rules） */
   priceChanges?: (DatedChange & { points: number; selfPrice: number })[]
+  /** 檢驗醫令包含哪些檢驗值（CBC＝WBC、Hb、PLT）：報告逐項登打，依參考範圍、危急值判讀 */
+  labItems?: LabItemDef[]
   active: boolean
+}
+
+/**
+ * 一個檢驗值的定義。數值型：參考範圍（含端點；女性不同時另設 lowF／highF）、危急值；
+ * 文字型：可選的結果（options）與哪些算正常（normal）。判讀規則見 lab-rules
+ */
+export interface LabItemDef {
+  code: string
+  name: string
+  unit?: string
+  low?: number
+  high?: number
+  lowF?: number
+  highF?: number
+  /** 危急值：低於 critLow 或高於 critHigh（要立刻通知醫師） */
+  critLow?: number
+  critHigh?: number
+  options?: string[]
+  normal?: string[]
+}
+
+/** H 偏高、L 偏低、A 異常（文字型）、'' 正常 */
+export type LabFlag = '' | 'H' | 'L' | 'A'
+
+/** 報告上的一個檢驗值：單位與參考範圍在發報告時一起存下（主檔日後改範圍，舊報告不會跟著變） */
+export interface LabValue {
+  code: string
+  name: string
+  unit?: string
+  /** 參考範圍文字（例：4.0–10.0、陰性） */
+  ref: string
+  value: string
+  flag: LabFlag
+  critical?: boolean
+}
+
+/**
+ * 檢驗報告（醫檢師發出）。來源：門診看診的檢驗醫令（encounterId＋procId），或住院臨時醫囑（orderId）。
+ * 還沒發的不存：待檢驗清單由醫令推算（見 lab.listLabWork）
+ */
+export interface LabReport {
+  id: string
+  /** 檢驗單號 */
+  no: string
+  patientId: string
+  procId: string
+  encounterId?: string
+  orderId?: string
+  admissionId?: string
+  /** 開立醫師 */
+  doctorId: string
+  orderedAt: string
+  values: LabValue[]
+  reportedBy: string
+  reportedAt: string
+  /** 更正（發出後改值）：寫原因、留舊值；更正後要醫師重新確認 */
+  corrections?: { at: string; by: string; reason: string; before: LabValue[] }[]
+  /** 醫師確認（有危急值或更正過的才需要）：沒有＝待確認 */
+  ackBy?: string
+  ackAt?: string
 }
 
 export interface IcdCode {
