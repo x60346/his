@@ -588,7 +588,37 @@ export interface Procedure {
   priceChanges?: (DatedChange & { points: number; selfPrice: number })[]
   /** 檢驗醫令包含哪些檢驗值（CBC＝WBC、Hb、PLT）：報告逐項登打，依參考範圍、危急值判讀 */
   labItems?: LabItemDef[]
+  /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
+  imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
   active: boolean
+}
+
+/**
+ * 影像檢查報告（判讀醫師寫「所見」與「結論」）。來源同檢驗：門診看診的醫令（encounterId＋procId）或住院臨時醫囑（orderId）。
+ * 發出後不能改原文，只能加「補充報告」（addenda）——醫師可能已依原報告處置
+ */
+export interface ImagingReport {
+  id: string
+  /** 報告單號 */
+  no: string
+  patientId: string
+  procId: string
+  encounterId?: string
+  orderId?: string
+  admissionId?: string
+  /** 開立醫師 */
+  doctorId: string
+  orderedAt: string
+  findings: string
+  impression: string
+  /** 重要發現（例：氣胸、腦出血）：要開立醫師（住院含主治）確認，比照檢驗危急值 */
+  significant?: boolean
+  /** 判讀醫師（醫師 id） */
+  readerId: string
+  reportedAt: string
+  addenda?: { at: string; by: string; text: string; significant?: boolean }[]
+  ackBy?: string
+  ackAt?: string
 }
 
 /**

@@ -10,6 +10,7 @@ import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
+import { imagingAckCount, imagingWorkCount } from './imaging-work'
 
 export interface DashboardStats {
   date: string
@@ -41,6 +42,9 @@ export interface DashboardStats {
   labAcks?: number
   /** 檢驗科：可以登打的待檢驗（住院還沒採檢的不算） */
   labWork?: number
+  /** 醫師：待我判讀的影像（放射科；心電圖是開立醫師自己）、待我確認的影像報告（重要發現或補充） */
+  imagingWork?: number
+  imagingAcks?: number
   consultUrgent?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -130,6 +134,8 @@ export function getDashboard(): Promise<DashboardStats> {
         return {
           orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length,
           labAcks: labAckCount(me.doctorId),
+          imagingWork: imagingWorkCount(me.doctorId),
+          imagingAcks: imagingAckCount(me.doctorId),
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,
           transferIncoming: db.admissions.filter((a) => {
             const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined

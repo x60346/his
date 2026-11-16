@@ -44,6 +44,7 @@ import type {
   Gender,
   LabItemDef,
   LabReport,
+  ImagingReport,
 } from '@/types'
 import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, summarize } from '@/services/billing'
@@ -252,6 +253,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (!rooms.some((x) => x.roomNo === roomNo)) rooms.push({ roomNo, location: `${roomNo[0]} 樓 ${codes.departments[deptIdx].name}區`, active: true })
   }
   codes.doctors.forEach((d) => {
+    // 放射科不看門診（判讀影像）：不排門診表，也不影響其他醫師的排班與種子
+    if (codes.departments.find((x) => x.id === d.deptId)?.code === 'RAD') return
     const deptIdx = codes.departments.findIndex((x) => x.id === d.deptId)
     const sameDept = codes.doctors.filter((x) => x.deptId === d.deptId)
     const k = sameDept.indexOf(d)
@@ -1442,6 +1445,58 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 影像報告（同檢驗：不抽亂數、不用流水號；今天以前的都已判讀）----------
+  // 放射科 DR10 判讀 X 光、超音波、電腦斷層；心電圖由開立醫師判讀。大多正常，少數有發現（依 id 雜湊決定）。
+  // 示範重要發現：第二位住院病人昨天下午的胸部 X 光「左側氣胸」，主治還沒確認
+  const imagingReports: ImagingReport[] = []
+  {
+    const hash = (s: string) => {
+      let h = 2166136261
+      for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0
+      return h / 4294967296
+    }
+    const ABNORMAL: Record<string, { findings: string; impression: string }> = {
+      P013: { findings: '右下肺野可見斑片狀浸潤，其餘肺野清晰；心臟大小正常。', impression: '右下肺浸潤，請配合臨床考慮肺炎。' },
+      P014: { findings: '內側關節間隙變窄，股骨與脛骨邊緣可見骨刺。', impression: '退化性膝關節炎。' },
+      P015: { findings: 'L4–L5 椎間盤間隙變窄，椎體邊緣骨刺；排列無滑脫。', impression: '腰椎退化性變化。' },
+      P016: { findings: '肝臟實質回音增強，無局部病灶；膽囊、胰臟、脾臟、兩側腎臟無明顯異常。', impression: '輕度脂肪肝。' },
+      P017: { findings: '竇性心搏過速，心跳 108 次／分；間期正常，無 ST-T 變化。', impression: '竇性心搏過速。' },
+    }
+    const textOf = (procId: string, key: string) => (ABNORMAL[procId] && hash(key) < 0.25 ? ABNORMAL[procId] : codes.procedures.find((x) => x.id === procId)!.imaging!.normal)
+    let seq = 0
+    const no = (at: string) => `R${at.slice(0, 10).replace(/-/g, '')}${String(9000 + ++seq)}`
+    const procMap = new Map(codes.procedures.map((x) => [x.id, x]))
+    for (const e of encounters) {
+      if (e.status !== 'completed' || e.date >= T || !e.completedAt) continue
+      const v = visits.find((x) => x.id === e.visitId)
+      if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
+      for (const x of e.procedures) {
+        const im = procMap.get(x.procId)?.imaging
+        if (!im || x.notDone) continue
+        const at = addMinutes(e.completedAt, im.reader === 'orderer' ? 20 : 120)
+        imagingReports.push({ id: `IR-SEED-${imagingReports.length + 1}`, no: no(at), patientId: e.patientId, procId: x.procId, encounterId: e.id, doctorId: e.doctorId, orderedAt: e.completedAt, ...textOf(x.procId, e.id), readerId: im.reader === 'orderer' ? e.doctorId : 'DR10', reportedAt: at })
+      }
+    }
+    for (const o of ipdOrders) {
+      const im = o.procId ? procMap.get(o.procId)?.imaging : undefined
+      if (!im || o.type !== 'stat' || o.status !== 'done' || !o.stopAt || o.stopAt.slice(0, 10) >= T) continue
+      const a = admissions.find((x) => x.id === o.admissionId)!
+      const at = addMinutes(o.stopAt, 90)
+      imagingReports.push({ id: `IR-SEED-${imagingReports.length + 1}`, no: no(at), patientId: a.patientId, procId: o.procId!, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, ...textOf(o.procId!, o.id), readerId: im.reader === 'orderer' ? o.doctorId : 'DR10', reportedAt: at })
+    }
+    const adm = admissions.filter((a) => a.status === 'admitted')[1]
+    if (adm) {
+      const orderedAt = `${addDays(T, -1)} 13:30`
+      ipdOrders.push({ id: 'IO-SEED-IMG1', admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P013', content: '胸部 X 光', startAt: orderedAt, stopAt: `${addDays(T, -1)} 14:00`, status: 'done', doctorId: adm.doctorId, createdAt: orderedAt, ackAt: `${addDays(T, -1)} 13:40`, ackBy: 'U201' })
+      const at = `${addDays(T, -1)} 14:40`
+      imagingReports.push({
+        id: 'IR-SEED-IPD1', no: no(at), patientId: adm.patientId, procId: 'P013', orderId: 'IO-SEED-IMG1', admissionId: adm.id, doctorId: adm.doctorId, orderedAt,
+        findings: '左側肺尖可見無肺紋理區，肺邊緣距胸壁約 2 公分，估計氣胸約 20%；縱膈腔無偏移。右肺清晰。', impression: '左側氣胸（約 20%），建議立即處置。',
+        significant: true, readerId: 'DR10', reportedAt: at,
+      })
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -1494,6 +1549,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     preventItems: structuredClone(codes.preventItems),
     preventRecords,
     labReports,
+    imagingReports,
     auditLogs: [],
     counters,
   }

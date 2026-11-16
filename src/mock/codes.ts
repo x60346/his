@@ -25,6 +25,8 @@ export const departments: Department[] = [
   { id: 'D06', code: 'ORT', name: '骨科', active: true },
   { id: 'D07', code: 'ENT', name: '耳鼻喉科', active: true },
   { id: 'D08', code: 'REH', name: '復健科', active: true },
+  // 放射科：判讀影像（不看門診，seed 不排門診表）
+  { id: 'D09', code: 'RAD', name: '放射科', active: true },
 ]
 
 /** 管制藥品使用執照（展示用）：DR08 鄭雅婷沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
@@ -39,6 +41,8 @@ export const doctors: Doctor[] = [
   { id: 'DR07', name: '蔡承恩', deptId: 'D06', title: '主治醫師', licenseNo: 'A101757', controlledLicense: { no: 'C11-1757', validUntil: '' }, active: true },
   { id: 'DR08', name: '鄭雅婷', deptId: 'D07', title: '主治醫師', licenseNo: 'A101978', active: true },
   { id: 'DR09', name: '許立群', deptId: 'D08', title: '主治醫師', licenseNo: 'A102199', controlledLicense: { no: 'C08-2199', validUntil: 'expired' }, active: true },
+  // 放射科醫師：判讀 X 光、超音波、電腦斷層（不看門診）
+  { id: 'DR10', name: '杜明遠', deptId: 'D09', title: '主治醫師', licenseNo: 'A102420', controlledLicense: { no: 'C11-2420', validUntil: '' }, active: true },
 ]
 
 export const identities: Identity[] = [
@@ -408,7 +412,17 @@ const procedureBase: Procedure[] = [
   { id: 'P028', code: 'SELF02', name: '流感疫苗（自費）', category: '處置', points: 0, selfPrice: 800, active: true },
 ]
 
-export const procedures: Procedure[] = procedureBase.map((p) => (labItemsOf[p.id] ? { ...p, labItems: labItemsOf[p.id] } : p))
+/** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */
+const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
+  P013: { reader: 'radiology', normal: { findings: '心臟大小正常，縱膈腔無增寬。兩側肺野清晰，無浸潤或肋膜積液，肋膈角銳利。', impression: '胸部 X 光無明顯異常。' } },
+  P014: { reader: 'radiology', normal: { findings: '關節間隙正常，無骨折或脫位，無明顯骨刺。', impression: '膝關節 X 光無明顯異常。' } },
+  P015: { reader: 'radiology', normal: { findings: '腰椎排列正常，椎體高度維持，椎間盤間隙無明顯狹窄。', impression: '腰椎 X 光無明顯異常。' } },
+  P016: { reader: 'radiology', normal: { findings: '肝臟大小正常、實質回音均勻，無局部病灶。膽囊無結石，膽管無擴張。胰臟、脾臟、兩側腎臟無明顯異常。', impression: '腹部超音波無明顯異常。' } },
+  P017: { reader: 'orderer', normal: { findings: '竇性心律，心跳 72 次／分；PR、QRS、QT 間期正常，無 ST-T 變化。', impression: '正常心電圖。' } },
+  P018: { reader: 'radiology', normal: { findings: '腦實質無出血、梗塞或腫塊，腦室大小正常，中線無偏移。', impression: '頭部電腦斷層無明顯異常。' } },
+}
+
+export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id] } : {}), ...(imagingOf[p.id] ? { imaging: imagingOf[p.id] } : {}) }))
 
 export const preventItems: PreventItem[] = [
   { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },

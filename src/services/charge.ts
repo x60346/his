@@ -483,7 +483,7 @@ export function markProcedureNotDone(chargeId: string, idx: number, reason: stri
     if (!x) fail('找不到這項檢驗或處置，請重新整理')
     if (x.notDone) fail('這一項已經標未執行了', 'CONFLICT')
     // 檢驗已經發報告：做過了，不能說沒做（要退費得先請檢驗科處理）
-    if (db.labReports.some((r) => r.encounterId === e.id && r.procId === x.procId)) fail(`「${find.procedure(x.procId)?.name}」已經發出檢驗報告，不能標未執行`, 'CONFLICT')
+    if (db.labReports.some((r) => r.encounterId === e.id && r.procId === x.procId) || db.imagingReports.some((r) => r.encounterId === e.id && r.procId === x.procId)) fail(`「${find.procedure(x.procId)?.name}」已經發出報告，不能標未執行`, 'CONFLICT')
     const why = reason?.trim()
     if (!why) failField('reason', '請寫原因（例：病人未抽血即離開、證明書不需要了）')
     x.notDone = { reason: why!, by: cashier.id, at: now() }

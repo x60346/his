@@ -28,6 +28,7 @@ import * as wardStock from './ward-stock'
 import * as witness from './witness'
 import * as controlled from './controlled'
 import * as lab from './lab'
+import * as imaging from './imaging'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -56,6 +57,8 @@ export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
 export const labApi = overNetwork(lab)
+export const imagingApi = overNetwork(imaging)
+export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'

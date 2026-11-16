@@ -4408,9 +4408,11 @@ try {
       return B.summarize(rule ? B.applyDiscount(base, rule) : base)
     }
     const withProc = db().charges.filter((c) => !c.voided && !c.partialRefunds && encOf(c)?.procedures.length && db().dispenses.find((d) => d.visitId === c.visitId)?.status !== 'returned')
-    const c1 = withProc.find((c) => encOf(c).procedures.some((x) => !x.selfPay))
+    // 已經發出檢驗、影像報告的不能標未執行（做過了）：挑還沒有報告的處置
+    const reported = (c, x) => [...db().labReports, ...db().imagingReports].some((r) => r.encounterId === encOf(c).id && r.procId === x.procId)
+    const c1 = withProc.find((c) => encOf(c).procedures.some((x) => !x.selfPay && !reported(c, x)))
     ok(!!c1, '種子有開了檢驗處置的收據')
-    const k = encOf(c1).procedures.findIndex((x) => !x.selfPay)
+    const k = encOf(c1).procedures.findIndex((x) => !x.selfPay && !reported(c1, x))
     await as('nurse01')
     await expectError(() => C.markProcedureNotDone(c1.id, k, '病人未抽血'), '護理師標未執行（只有批價）')
     await as('clerk01')
@@ -5144,7 +5146,7 @@ try {
     const ch = db().charges.find((c) => c.visitId === vv.id && !c.voided)
     const enc = () => db().encounters.find((e) => e.id === ee.id)
     msg = await errOf(() => api.chargeApi.markProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P004'), '病人說沒抽'))
-    ok(msg.includes('已經發出檢驗報告'), `已發報告的標未執行 → 「${msg}」`)
+    ok(msg.includes('已經發出報告'), `已發報告的標未執行 → 「${msg}」`)
     await api.chargeApi.markProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P003'), '病人未抽血即離開')
     await as('lab01')
     ok(!(await L.listLabWork()).some((w) => w.key === keyOf('P003')), '櫃台標「未執行」的檢驗不列在待檢驗')
@@ -5226,6 +5228,147 @@ try {
     const { readFileSync } = await import('node:fs')
     const pg = ['src/pages/lab/LabPage.vue', 'src/components/LabReportList.vue', 'src/components/LabAcksCard.vue'].map((p) => readFileSync(p, 'utf8'))
     ok(pg.every((s) => !/critHigh|critLow|\.high\b|\.low\b/.test(s)) && pg[0].includes('judgeLab'), '頁面用 judgeLab 判讀（不自己比參考範圍、危急值）')
+  }
+
+  // 影像報告：放射科判讀 X 光、超音波、電腦斷層，心電圖由開立醫師判讀；重要發現要確認；發出後只能補充
+  console.log('\n[影像報告]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const IM = api.imagingApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const proc = (id) => db().procedures.find((p) => p.id === id)
+    ok(db().procedures.filter((p) => p.category === '影像').every((p) => p.imaging?.normal.findings && p.imaging.normal.impression) && proc('P017').imaging.reader === 'orderer' && proc('P013').imaging.reader === 'radiology', '每個影像醫令都有判讀者與正常範本；心電圖由開立醫師判讀')
+    const rad = db().doctors.find((d) => d.id === 'DR10')
+    ok(rad && db().departments.find((x) => x.id === rad.deptId)?.code === 'RAD' && db().users.find((u) => u.doctorId === 'DR10')?.username === 'dr10', '種子：放射科醫師 dr10')
+    ok(!db().sessions.some((s) => s.doctorId === 'DR10') && !db().weeklySlots.some((s) => s.doctorId === 'DR10'), '放射科醫師不排門診')
+    const pastOpd = db().encounters.filter((e) => e.status === 'completed' && e.date < T && ['charged', 'dispensed'].includes(db().visits.find((v) => v.id === e.visitId)?.status)).flatMap((e) => e.procedures.filter((x) => proc(x.procId)?.imaging && !x.notDone).map((x) => ({ e, x })))
+    const pastIpd = db().ipdOrders.filter((o) => o.type === 'stat' && o.status === 'done' && proc(o.procId ?? '')?.imaging && o.stopAt.slice(0, 10) < T)
+    ok(pastOpd.every(({ e, x }) => db().imagingReports.some((r) => r.encounterId === e.id && r.procId === x.procId)) && pastIpd.length > 0 && pastIpd.every((o) => db().imagingReports.some((r) => r.orderId === o.id)), `種子：以前的門診（${pastOpd.length}）、住院（${pastIpd.length}）影像都已判讀`)
+    ok(db().imagingReports.every((r) => (proc(r.procId).imaging.reader === 'orderer' ? r.readerId === r.doctorId : r.readerId === 'DR10')), '種子：心電圖由開立醫師、其他由放射科判讀')
+    const sig = db().imagingReports.filter((r) => r.significant && !r.ackAt)
+    ok(sig.length === 1 && sig[0].orderId === 'IO-SEED-IMG1' && sig[0].impression.includes('氣胸'), '種子：一份重要發現待確認（住院胸部 X 光：左側氣胸）')
+
+    // 門診：胸部 X 光（放射科）＋心電圖（開立醫師）
+    await as('clerk01')
+    const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
+    const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
+    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+    const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
+    const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
+    await as(drUser)
+    const ee = await api.opdApi.startConsult(vv.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.completeEncounter(ee.id, { subjective: '胸痛', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'J18.9', name: '肺炎', primary: true }], medications: [], procedures: [{ procId: 'P013', qty: 1, selfPay: false }, { procId: 'P017', qty: 1, selfPay: false }], refillTimes: 0, admissionRequested: false })
+    const keyOf = (p) => `E:${ee.id}:${p}`
+    await as('dr10')
+    ok(!(await IM.listImagingWork()).some((w) => w.key.startsWith(`E:${ee.id}`)), '還沒批價：不在待判讀')
+    await as('clerk01')
+    const pv = await api.chargeApi.previewCharge(vv.id)
+    await api.chargeApi.pay(vv.id, { payMethod: 'cash', received: pv.patientTotal })
+    await as('dr10')
+    let work = await IM.listImagingWork()
+    const cxr = work.find((w) => w.key === keyOf('P013'))
+    ok(cxr && cxr.clinical.includes('J18.9') && cxr.normal.impression.includes('無明顯異常') && !work.some((w) => w.key === keyOf('P017')), '放射科的待判讀：有胸部 X 光（附診斷、正常範本），沒有心電圖')
+    ok((await api.dashboardApi.getDashboard()).imagingWork === work.filter((w) => !w.awaitingExam).length, '放射科首頁「待判讀影像」數量＝清單')
+    await as(drUser)
+    work = await IM.listImagingWork()
+    ok(work.some((w) => w.key === keyOf('P017')) && !work.some((w) => w.key === keyOf('P013')), '開立醫師的待判讀：只有自己開的心電圖')
+    msg = await errOf(() => IM.reportImaging({ key: keyOf('P013'), findings: 'x', impression: 'y' }))
+    ok(msg.includes('放射科'), `開立醫師判讀 X 光 → 「${msg}」`)
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== sess.doctorId && u.doctorId !== 'DR10').username
+    await as(other)
+    msg = await errOf(() => IM.reportImaging({ key: keyOf('P017'), findings: 'x', impression: 'y' }))
+    ok(msg.includes('開立醫師'), `別的醫師判讀心電圖 → 「${msg}」`)
+    await as('nurse01')
+    await expectError(() => IM.reportImaging({ key: keyOf('P013'), findings: 'x', impression: 'y' }), '護理師發影像報告')
+    await as(drUser)
+    const ekg = await IM.reportImaging({ key: keyOf('P017'), findings: proc('P017').imaging.normal.findings, impression: '正常心電圖。' })
+    ok(ekg.readerId === sess.doctorId && !ekg.needsAck && /^R\d{12}$/.test(ekg.no), `開立醫師判讀心電圖 ${ekg.no}：沒有重要發現，不需確認`)
+    await as('dr10')
+    const f1 = await fieldsOf(() => IM.reportImaging({ key: keyOf('P013'), findings: ' ', impression: '' }))
+    ok(f1.findings && f1.impression, '所見、結論都要寫（一次標出）')
+    const r1 = await IM.reportImaging({ key: keyOf('P013'), findings: '右側肺尖無肺紋理區，估計氣胸約 30%。', impression: '右側氣胸。', significant: true })
+    ok(r1.readerId === 'DR10' && r1.significant && r1.needsAck && db().auditLogs[0].action.includes('重要發現'), '放射科發報告：重要發現要醫師確認、稽核標明')
+    msg = await errOf(() => IM.reportImaging({ key: keyOf('P013'), findings: 'x', impression: 'y' }))
+    ok(msg.includes('補充'), `同一項再發一次 → 「${msg}」`)
+    await as('clerk01')
+    const ch = db().charges.find((c) => c.visitId === vv.id && !c.voided)
+    msg = await errOf(() => api.chargeApi.markProcedureNotDone(ch.id, db().encounters.find((e) => e.id === ee.id).procedures.findIndex((x) => x.procId === 'P013'), '病人沒照'))
+    ok(msg.includes('已經發出報告'), `已判讀的影像標未執行 → 「${msg}」`)
+
+    // 確認重要發現
+    await as(other)
+    msg = await errOf(() => IM.ackImaging(r1.id))
+    ok(msg.includes('開立醫師'), `別的醫師確認 → 「${msg}」`)
+    await as('nurse01')
+    const nv = await IM.patientImaging(pt.id)
+    ok(nv.reports.length === 2 && nv.reports.every((r) => !r.canAck && !r.canAddendum), '護理師可以看影像報告（不能確認、不能補充）')
+    await as('clerk01')
+    await expectError(() => IM.patientImaging(pt.id), '櫃台看影像報告')
+    await as(drUser)
+    ok((await api.dashboardApi.getDashboard()).imagingAcks >= 1 && (await IM.myImagingAcks()).some((r) => r.id === r1.id), '開立醫師首頁有待確認的影像')
+    const pv2 = await IM.patientImaging(pt.id)
+    ok(pv2.reports.find((r) => r.id === r1.id).canAck && !pv2.reports.find((r) => r.id === r1.id).canAddendum && pv2.reports.find((r) => r.id === ekg.id).canAddendum, '開立醫師：X 光可確認不能補充；自己判讀的心電圖可以補充')
+    await IM.ackImaging(r1.id)
+    ok(db().imagingReports.find((r) => r.id === r1.id).significant && db().imagingReports.find((r) => r.id === r1.id).ackAt, '確認後記下時間')
+    msg = await errOf(() => IM.ackImaging(r1.id))
+    ok(msg.includes('已經確認'), `再確認一次 → 「${msg}」`)
+
+    // 補充報告：原文不改、醫師要重新確認
+    await as(drUser)
+    msg = await errOf(() => IM.addImagingAddendum(r1.id, { text: '改看' }))
+    ok(msg.includes('判讀醫師'), `開立醫師補充放射科的報告 → 「${msg}」`)
+    await as('dr10')
+    let ff = await fieldsOf(() => IM.addImagingAddendum(r1.id, { text: ' ' }))
+    ok(!!ff.text, '補充要寫內容')
+    const ad = await IM.addImagingAddendum(r1.id, { text: '與追蹤片比較，氣胸範圍縮小至約 10%。' })
+    ok(ad.findings.includes('約 30%') && ad.impression === '右側氣胸。' && ad.addenda.length === 1 && ad.needsAck && !ad.ackAt, '補充：原文不變、加一段、醫師要重新確認')
+    ok((await IM.listImagingReports({ date: T })).some((r) => r.id === r1.id), '放射科今天的「已報告」有這份')
+    await as(drUser)
+    ok((await IM.myImagingAcks()).some((r) => r.id === r1.id && r.addenda.length), '補充後回到開立醫師的待確認')
+
+    // 住院：入院胸部 X 光（今天以前的已判讀）；新的臨時醫囑要護理師執行後才能判讀
+    const adm = db().admissions.find((a) => a.status === 'admitted')
+    const att = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(att)
+    const io = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P016', content: '' })
+    await as('dr10')
+    const w1 = (await IM.listImagingWork()).find((w) => w.key === `O:${io.id}`)
+    ok(w1?.awaitingExam && w1.clinical === adm.diagnosis, '住院影像：還沒做列出「待檢查」，臨床資訊是入院診斷')
+    msg = await errOf(() => IM.reportImaging({ key: `O:${io.id}`, findings: 'x', impression: 'y' }))
+    ok(msg.includes('還沒做檢查'), `還沒做就判讀 → 「${msg}」`)
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(io.id)
+    await as('dr10')
+    const r3 = await IM.reportImaging({ key: `O:${io.id}`, ...proc('P016').imaging.normal })
+    ok(r3.admissionId === adm.id && r3.source === 'ipd' && !r3.needsAck, '護理師執行後可判讀；住院報告記在這次住院')
+    // 種子的重要發現：主治確認
+    const seedSig = db().imagingReports.find((r) => r.id === 'IR-SEED-IPD1')
+    const sAtt = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === seedSig.admissionId).doctorId).username
+    await as(sAtt)
+    ok((await IM.patientImaging(seedSig.patientId)).reports.find((r) => r.id === seedSig.id).canAck, '主治醫師的畫面上可確認住院重要發現')
+    await IM.ackImaging(seedSig.id)
+    ok(!!db().imagingReports.find((r) => r.id === seedSig.id).ackAt, '主治醫師確認氣胸')
+
+    const { readFileSync } = await import('node:fs')
+    const pg = readFileSync('src/pages/imaging/ImagingPage.vue', 'utf8')
+    ok(!/isRadiologist|reader === 'radiology' \?/.test(pg), '判讀頁不自己判斷誰能判讀（服務層篩好清單）')
   }
 
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班

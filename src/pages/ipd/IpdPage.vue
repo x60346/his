@@ -4,10 +4,11 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { ArrowRightLeft, FlaskConical, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
+import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import LabReportList from '@/components/LabReportList.vue'
+import ImagingReportList from '@/components/ImagingReportList.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import OrderDialog from './components/OrderDialog.vue'
 import ReviseOrderDialog from './components/ReviseOrderDialog.vue'
@@ -18,7 +19,7 @@ import RequestTransferDialog from './components/RequestTransferDialog.vue'
 import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
 import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
-import { consultApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
+import { consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
 import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
@@ -141,12 +142,15 @@ const tabs = computed(() => [
   { key: 'orders', label: '醫囑', count: orders.value?.filter((o) => o.status === 'active').length },
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
+  { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
 
 // 檢驗報告：分頁數量、上方「待確認」紅條（危急值或更正過）
 const { data: labs } = useQuery(async () => (adm.value ? labApi.patientLabs(adm.value.patientId) : undefined), [() => adm.value?.patientId])
 const labAlerts = computed(() => (labs.value?.reports ?? []).filter((r) => r.needsAck))
+const { data: imgs } = useQuery(async () => (adm.value ? imagingApi.patientImaging(adm.value.patientId) : undefined), [() => adm.value?.patientId])
+const imgAlerts = computed(() => (imgs.value?.reports ?? []).filter((r) => r.needsAck))
 
 // ---------- 出院病摘 ----------
 // 已簽署（准予出院）就唯讀；要改先「取消准予出院」，內容會留成草稿
@@ -261,6 +265,11 @@ async function submitNote() {
         <span class="min-w-0 flex-1"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
       </div>
+      <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
+        <ScanLine class="h-4 w-4 shrink-0" />
+        <span class="min-w-0 flex-1"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
+        <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
+      </div>
       <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <ArrowRightLeft class="h-4 w-4" />
         <span class="min-w-0 flex-1">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5) }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
@@ -351,6 +360,7 @@ async function submitNote() {
 
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
+        <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <template v-if="ds?.signedAt">
             <div class="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
