@@ -82,3 +82,17 @@ export function applyDaysToAll<T extends DaysRow>(
 
 /** 處方裡出現的天數（由小到大、不重複）；超過一種就是「天數不一致」 */
 export const distinctDays = (rows: readonly Pick<DaysRow, 'days'>[]) => [...new Set(rows.map((r) => r.days))].sort((a, b) => a - b)
+
+// ---------- 出院帶藥天數 ----------
+/** 出院帶藥：一般以 7 日為限；慢性病依病情最多 30 日（健保規定的精神，展示用） */
+export const DISCHARGE_RX_DAYS = 7
+export const DISCHARGE_RX_CHRONIC_DAYS = 30
+
+/** 出院帶藥天數檢查：有問題回傳訊息 */
+export function dischargeRxDaysProblem(days: number | undefined, chronic: boolean): string | null {
+  const base = checkDays(days)
+  if (base) return base
+  const max = chronic ? DISCHARGE_RX_CHRONIC_DAYS : DISCHARGE_RX_DAYS
+  if (days! > max) return chronic ? `慢性病出院帶藥最多 ${max} 天` : `出院帶藥最多 ${max} 天（慢性病請勾「慢性病」，最多 ${DISCHARGE_RX_CHRONIC_DAYS} 天）`
+  return null
+}

@@ -61,6 +61,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['clerk'], label: '住院待結帳', count: s.value.ipdToBill, hint: '醫師已簽准出院：結清住院費用後才能辦出院', route: 'charge', query: { tab: 'ipd' }, icon: Receipt, urgent: true },
     { roles: ['clerk'], label: '待退費', count: s.value.pendingRefunds, hint: '部分退藥、檢驗處置未執行後，退還病人差額（可能是前幾天看的診）', route: 'charge', icon: Receipt, urgent: true },
     { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
+    { roles: ['pharmacist'], label: '出院帶藥待調劑', count: s.value.dischargeRxToDispense, hint: '醫師已簽准出院：調好後櫃台才能結帳', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院補調劑', count: s.value.udExtra, hint: '今天的劑量還沒調劑（新開的醫囑），護理師在等', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院待核對', count: s.value.udVerify, hint: '已調劑的藥盒，核對通過才送病房', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院待退藥', count: s.value.udReturns, hint: '病房已送回，待點收入庫', route: 'ud', icon: Pill },

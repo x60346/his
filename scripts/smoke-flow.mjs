@@ -3112,7 +3112,7 @@ try {
     ok(ng.find((o) => o.id === o2.id)?.needsAck && ng.find((o) => o.id === o1.id)?.lastReply?.resolution === 'modified', '護理站：新醫囑待核對、舊醫囑看得到醫師的修改回覆')
     const { readFileSync } = await import('node:fs')
     const src = readFileSync('src/services/ipd.ts', 'utf8')
-    ok((src.match(/doseLevel\(/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 2, '開立與修改共用 createOrder：劑量、重複、服用時機的檢查只有一份')
+    ok((src.match(/doseLevel\(drug,/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 2, '開立與修改共用 createOrder：劑量、重複、服用時機的檢查只有一份')
   }
 
   // 門診退藥：已發出的藥整張收回，退回發出時的批號；之後櫃台才能作廢或退費
@@ -5524,14 +5524,20 @@ try {
     ok(msg.includes('簽准出院'), `沒准出院就結帳 → 「${msg}」`)
     msg = await errOf(() => api.admissionApi.discharge(ready.id, { confirmUnfinished: true }))
     ok(msg.includes('還沒結帳'), `還沒結帳就辦出院 → 「${msg}」`)
-    // 帳單內容（獨立核對：藥＝UD 調劑扣帳減退回；檢驗處置＝已執行的臨時醫囑）
+    // 出院帶藥要先由住院藥局調劑（扣帳）才能結帳
+    msg = await errOf(() => IC.payIpd(ready.id, { payMethod: 'card', received: 0 }))
+    ok(msg.includes('出院帶藥還沒調劑') && (await IC.getIpdBill(ready.id)).blocked?.includes('出院帶藥'), `出院帶藥還沒調劑就結帳 → 「${msg}」`)
+    await as('ph01')
+    await api.dischargeRxApi.dispenseDischargeRx(ready.id)
+    await as('clerk01')
+    // 帳單內容（獨立核對：藥＝UD 調劑扣帳減退回＋出院帶藥；檢驗處置＝已執行的臨時醫囑）
     const rv = await IC.getIpdBill(ready.id)
     const bill = rv.bill
     const days = B.ipdDays(ready.admittedAt, T)
     ok(bill.meta.days === days && bill.lines.filter((x) => x.kind === 'ward').every((x) => x.qty === days), `准出院的病人：住院 ${days} 天，每日計費 × ${days}`)
-    const udQty = db().udDispenses.flatMap((d) => d.lines).filter((x) => x.admissionId === ready.id && x.txnId).reduce((n, x) => n + x.qty - (x.returns ?? []).reduce((s, r) => s + r.qty, 0), 0)
+    const udQty = db().udDispenses.flatMap((d) => d.lines).filter((x) => x.admissionId === ready.id && x.txnId).reduce((n, x) => n + x.qty - (x.returns ?? []).reduce((s, r) => s + r.qty, 0), 0) + (db().admissions.find((x) => x.id === ready.id).dischargeSummary.meds ?? []).reduce((n, m) => n + m.qty, 0)
     const billDrugQty = bill.lines.filter((x) => x.kind === 'drug').reduce((n, x) => n + x.qty, 0)
-    ok(Math.abs(udQty - billDrugQty) < 1e-9, `藥費依扣帳量：UD 調劑扣帳減退回 ${udQty}＝帳單 ${billDrugQty}`)
+    ok(Math.abs(udQty - billDrugQty) < 1e-9, `藥費依扣帳量：UD 調劑扣帳減退回＋出院帶藥 ${udQty}＝帳單 ${billDrugQty}`)
     const doneProcs = db().ipdOrders.filter((o) => o.admissionId === ready.id && o.category === 'procedure' && o.status === 'done' && o.procId)
     ok(doneProcs.every((o) => bill.lines.some((x) => x.name.startsWith(P(o.procId).name))), `已執行的檢驗處置都在帳單上（${doneProcs.length} 項）`)
     ok(bill.patientTotal === B.summarize(bill.lines).patientTotal && bill.lines.some((x) => x.kind === 'copay-ipd'), '應付＝明細加總；有部分負擔')
@@ -5602,6 +5608,107 @@ try {
     ok(db().billingSettings.ipdCopay?.rates.join() === '5,10,15' && db().billingSettings.ipdCopay.cap === 30000, '存門診部分負擔參數不會洗掉住院部分負擔設定')
     await as('clerk01')
     ok((await IC.getIpdBill(tb.id)).bill.meta.copay[0].rate === 5, '新設定用於之後的結帳試算')
+  }
+
+  // 出院帶藥：醫師在出院病摘開（一般 7 天、慢性病 30 天）、住院藥局調劑扣帳、列入住院帳單；調好後要改先退回
+  console.log('\n[出院帶藥]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const DR = await load('/src/services/dose-rules.ts')
+    const RX = api.dischargeRxApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message + (e.fields ? JSON.stringify(e.fields) : '') : `（非預期的錯誤）${e.message}`
+      }
+    }
+    ok(!DR.dischargeRxDaysProblem(7, false) && DR.dischargeRxDaysProblem(8, false)?.includes('慢性病') && !DR.dischargeRxDaysProblem(30, true) && DR.dischargeRxDaysProblem(31, true) && DR.dischargeRxDaysProblem(0, false), '天數：一般最多 7 天（超過提示勾慢性病）、慢性病最多 30 天、至少 1 天')
+    // 種子：已准出院那位有出院帶藥、還沒調劑
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    ok(ready.dischargeSummary.meds?.length === 2 && !ready.dischargeRx, '種子：已准出院的病人有 2 項出院帶藥、還沒調劑')
+    await as('ph01')
+    ok((await api.dashboardApi.getDashboard()).dischargeRxToDispense === 1, '藥局首頁「出院帶藥待調劑」1 位')
+    let lst = await RX.listDischargeRx()
+    ok(lst[0].admissionId === ready.id && lst[0].status === 'pending' && lst[0].items.every((i) => i.indication && i.warning && i.stock >= i.qty), '出院帶藥清單：待調劑、品項帶作用與警語（藥袋用）、庫存夠')
+    await as('nurse01')
+    await expectError(() => RX.listDischargeRx(), '護理師看出院帶藥清單')
+
+    // 醫師開立：另一位住院病人
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.dischargeSummary?.signedAt && x.id !== ready.id)
+    const docU = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(docU)
+    const base = { diagnosis: a.diagnosis, course: '治療後改善', condition: '穩定', followUp: '一週後門診', dischargeType: '改善出院' }
+    const m = (o) => ({ drugId: 'M004', dose: 1, freq: 'TID', route: 'PO', days: 5, qty: 0, selfPay: false, ...o })
+    await api.ipdApi.saveDischargeSummary(a.id, { ...base, meds: [m({ days: 10 })] }, false)
+    ok(db().admissions.find((x) => x.id === a.id).dischargeSummary.meds[0].qty === 30, '存草稿：10 天先存著（簽署才擋天數）；總量自動算 1×3×10＝30')
+    msg = await errOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, meds: [m({ days: 10 })] }, true))
+    ok(msg.includes('7 天') && !db().admissions.find((x) => x.id === a.id).dischargeSummary.signedAt, `簽署時一般出院帶藥 10 天 → 「${msg}」`)
+    msg = await errOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, meds: [m({ dose: 50 })] }, true))
+    ok(msg.includes('打錯'), `劑量明顯打錯 → 「${msg}」`)
+    const hi = db().drugs.find((d) => d.id === 'M004')
+    const highDose = [2, 3, 4].find((x) => DR.doseLevel(hi, x) === 'high')
+    if (highDose) {
+      msg = await errOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, meds: [m({ dose: highDose })] }, true))
+      ok(msg.includes('偏高'), `劑量偏高沒確認 → 「${msg}」`)
+    } else ok(true, '（M004 沒有偏高的劑量可測）')
+    msg = await errOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, meds: [m({ drugId: 'M038', dose: 10, freq: 'HS', route: 'SC' })] }, true))
+    ok(msg.includes('總量'), `換算不了的藥沒填總量 → 「${msg}」`)
+    await api.ipdApi.saveDischargeSummary(a.id, { ...base, chronicRx: true, meds: [m({ days: 28 }), m({ drugId: 'M001', freq: 'QID', days: 3, qty: 0 })] }, true)
+    const ds = db().admissions.find((x) => x.id === a.id).dischargeSummary
+    ok(ds.signedAt && ds.chronicRx && ds.meds.map((x) => x.qty).join() === '84,12' && ds.meds.every((x) => !('_manual' in x)), '慢性病 28 天可以簽署；總量自動算（84、12）')
+    const av = await api.admissionApi.getAdmission(a.id)
+    ok(av.dischargeMedTexts?.length === 2 && av.dischargeMedTexts[0].includes('共 84') && av.dischargeRxStatus === 'pending', '病摘顯示出院帶藥（一行一項）與「待調劑」')
+
+    // 住院藥局調劑
+    const ipdLoc = db().stockLocations.find((l) => l.dispensesIpd).id
+    const qtyAt = (drugId) => db().drugLots.filter((l) => l.drugId === drugId && l.locationId === ipdLoc).reduce((n, l) => n + l.qty, 0)
+    const before = qtyAt('M004')
+    await as(docU)
+    await expectError(() => RX.dispenseDischargeRx(a.id), '醫師調劑出院帶藥')
+    await as('ph01')
+    const r = await RX.dispenseDischargeRx(a.id)
+    const adm = () => db().admissions.find((x) => x.id === a.id)
+    ok(r.status === 'dispensed' && r.pharmacistName === '方建志' && qtyAt('M004') === before - 84 && adm().dischargeRx.txnIds.length === 2, '調劑完成：從住院藥局扣帳（M004 −84）、記調劑藥師')
+    ok(db().stockTxns.filter((t) => adm().dischargeRx.txnIds.includes(t.id)).every((t) => t.ref === `出院帶藥 ${a.admitNo}` && t.patientId === a.patientId), '扣帳異動單號「出院帶藥 住院號」、記病人')
+    msg = await errOf(() => RX.dispenseDischargeRx(a.id))
+    ok(msg.includes('已經調劑'), `重複調劑 → 「${msg}」`)
+    await as('clerk01')
+    const bill1 = (await api.ipdChargeApi.getIpdBill(a.id)).bill
+    ok(bill1.lines.some((x) => x.kind === 'drug' && x.name === hi.name && x.qty >= 84) && !(await api.ipdChargeApi.getIpdBill(a.id)).blocked, '調好後：住院帳單有出院帶藥的藥費，可以結帳')
+    // 醫師要改：先退回
+    await as(docU)
+    msg = await errOf(() => api.ipdApi.cancelDischargeOrder(a.id, '病人又發燒'))
+    ok(msg.includes('退回'), `藥已調好就取消准出院 → 「${msg}」`)
+    await as('ph01')
+    msg = await errOf(() => RX.returnDischargeRx(a.id, ' '))
+    ok(msg.includes('原因'), '退回要寫原因')
+    await RX.returnDischargeRx(a.id, '醫師要改處方')
+    ok(qtyAt('M004') === before && !adm().dischargeRx && db().stockTxns.some((t) => t.type === 'return' && t.ref === `出院帶藥退回 ${a.admitNo}`), '退回：藥回到住院藥局（原批號）、可以重新調劑')
+    await as('clerk01')
+    const bill2 = (await api.ipdChargeApi.getIpdBill(a.id))
+    ok(!bill2.bill.lines.some((x) => x.kind === 'drug' && x.qty >= 84) && bill2.blocked?.includes('出院帶藥'), '退回後：帳單不含出院帶藥、又要等調劑才能結帳')
+    await as(docU)
+    await api.ipdApi.cancelDischargeOrder(a.id, '要改出院帶藥')
+    ok(!adm().dischargeSummary.signedAt && adm().dischargeSummary.meds.length === 2, '退回後醫師可以取消准出院（處方留在草稿）')
+
+    // 種子那位走完：調劑 → 結帳 → 出院；出院後不能退回
+    await as('ph01')
+    await RX.dispenseDischargeRx(ready.id)
+    await as('clerk01')
+    await api.ipdChargeApi.payIpd(ready.id, { payMethod: 'card', received: 0 })
+    await as('nurse01')
+    await api.admissionApi.discharge(ready.id, { confirmUnfinished: true })
+    await as('ph01')
+    lst = await RX.listDischargeRx()
+    ok(lst.some((x) => x.admissionId === ready.id && x.discharged && x.status === 'dispensed'), '今天出院的仍在清單（重印藥袋）')
+    msg = await errOf(() => RX.returnDischargeRx(ready.id, '測試'))
+    ok(msg.includes('已出院'), `出院後退回 → 「${msg}」`)
+    const { readFileSync } = await import('node:fs')
+    ok(!/DISCHARGE_RX_DAYS\s*[<>]|days\s*>\s*7/.test(readFileSync('src/pages/ipd/IpdPage.vue', 'utf8')), '頁面不自己判斷天數上限（服務層 dischargeRxDaysProblem）')
   }
 
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班

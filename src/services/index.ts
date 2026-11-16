@@ -30,6 +30,7 @@ import * as controlled from './controlled'
 import * as lab from './lab'
 import * as imaging from './imaging'
 import * as ipdCharge from './ipd-charge'
+import * as dischargeRx from './discharge-rx'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -60,6 +61,8 @@ export const controlledApi = overNetwork(controlled)
 export const labApi = overNetwork(lab)
 export const imagingApi = overNetwork(imaging)
 export const ipdChargeApi = overNetwork(ipdCharge)
+export const dischargeRxApi = overNetwork(dischargeRx)
+export type { DischargeRxView, DischargeRxItem } from './discharge-rx'
 export type { IpdBillingItem, IpdBillView } from './ipd-charge'
 export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'

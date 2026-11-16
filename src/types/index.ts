@@ -751,6 +751,8 @@ export interface Admission {
   deptId: string
   doctorId: string
   bedId?: string
+  /** 出院帶藥已調劑（住院藥局，扣帳異動單號「出院帶藥 住院號」）；退回後清掉（退回異動「出院帶藥退回 住院號」） */
+  dischargeRx?: { dispensedBy: string; dispensedAt: string; txnIds: string[] }
   /** 床位紀錄（報到、轉床、轉科換床各記一筆）：差額床費依住了幾天算。舊資料沒有，視為整段住目前的床 */
   bedHistory?: { bedId: string; from: string }[]
   /** 預約希望床等 */
@@ -863,6 +865,10 @@ export interface DischargeSummary {
   writtenAt: string
   /** 簽署時間＝准予出院；沒有就是草稿 */
   signedAt?: string
+  /** 出院帶藥（帶回家吃的藥）：簽署時一起確認，住院藥局調劑扣帳後列入住院帳單。selfPay 不用（依病人身分） */
+  meds?: MedicationOrder[]
+  /** 慢性病：出院帶藥天數上限 30 天（一般 7 天，規則 dose-rules.dischargeRxDaysProblem） */
+  chronicRx?: boolean
 }
 
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'

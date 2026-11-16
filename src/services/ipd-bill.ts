@@ -45,8 +45,9 @@ function drugsOf(a: Admission): IpdBillInput['drugs'] {
       out.push({ drug, qty: l.qty - back, date: txn?.at ?? d.dispensedAt })
     }
   }
+  // 病房常備、藥局直送、出院帶藥（單號結尾是住院號）；出院帶藥退回的扣掉
   for (const t of db.stockTxns) {
-    if (t.type !== 'dispense' || !t.ref?.endsWith(` ${a.admitNo}`)) continue
+    if ((t.type !== 'dispense' && t.type !== 'return') || !t.ref?.endsWith(` ${a.admitNo}`)) continue
     const drug = find.drug(t.drugId)
     if (drug) out.push({ drug, qty: -t.qty, date: t.at })
   }
@@ -90,3 +91,6 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
 
 /** 這次住院目前有效的住院收據（沒作廢、沒退費） */
 export const activeIpdChargeOf = (admissionId: string): Charge | undefined => db.charges.find((c) => c.admissionId === admissionId && !c.voided)
+
+/** 有出院帶藥但藥局還沒調劑（調好才結帳：帳單依扣帳量） */
+export const dischargeRxPending = (a: Admission) => !!a.dischargeSummary?.meds?.length && !a.dischargeRx

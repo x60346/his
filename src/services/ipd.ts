@@ -1,10 +1,11 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
-import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote } from '@/types'
+import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote, MedicationOrder } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
-import { doseLevel, doseNote } from './dose-rules'
+import { dischargeRxDaysProblem, doseLevel, doseNote } from './dose-rules'
+import { autoQty } from './billing'
 import { CONTROLLED_LEVEL_LABEL, licenseProblem, needsSpecialRx } from './controlled-rules'
 import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
@@ -353,7 +354,10 @@ export function addProgressNote(input: Pick<ProgressNote, 'admissionId' | 'subje
 }
 
 // ---------- 出院病摘（醫師） ----------
-export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType'>
+export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType' | 'meds' | 'chronicRx'> & {
+  /** 出院帶藥有劑量偏高的，醫師已確認（不存進病摘） */
+  confirmHighDose?: boolean
+}
 
 /** 簽署前的必填檢查：一次列出所有空白欄位 */
 export function dischargeSummaryProblems(input: DischargeSummaryInput): Record<string, string> {
@@ -379,18 +383,47 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
     else if (![input.diagnosis, input.course, input.condition, input.followUp].some((x) => x.trim())) fail('病摘是空白的，不需要儲存')
+    const meds = dischargeMeds(input, sign)
     const t = now()
     const trim = (x: string) => x.trim()
     a.dischargeSummary = {
       diagnosis: trim(input.diagnosis), course: trim(input.course), condition: trim(input.condition), followUp: trim(input.followUp),
       dischargeType: input.dischargeType, doctorId: user.doctorId ?? a.doctorId, writtenAt: t, ...(sign ? { signedAt: t } : {}),
+      ...(meds.length ? { meds, ...(input.chronicRx ? { chronicRx: true } : {}) } : {}),
     }
     audit(sign ? '准予出院' : '出院病摘草稿', `${a.admitNo} ${find.patient(a.patientId)?.name}${sign ? `（${input.dischargeType}）` : ''}`)
     return a.dischargeSummary
   })
 }
 
-/** 取消准予出院（例：病人又發燒）：簽署取消，內容保留成草稿 */
+/**
+ * 出院帶藥的檢查（存草稿只擋明顯打錯的；簽署時天數上限、劑量偏高要確認都要過）：
+ * 藥要能用、劑量 > 0、天數（一般 7 天、慢性病 30 天）、總量自動換算（換算不了要填）。回傳整理過的處方
+ */
+function dischargeMeds(input: DischargeSummaryInput, sign: boolean): MedicationOrder[] {
+  const out: MedicationOrder[] = []
+  for (const m of input.meds ?? []) {
+    const d = usable.drug(m.drugId)
+    if (!(m.dose > 0)) fail(`出院帶藥 ${d.name} 的劑量必須大於 0`)
+    if (!find.freq(m.freq)) fail(`出院帶藥 ${d.name} 請選擇頻率`)
+    const days = dischargeRxDaysProblem(m.days, !!input.chronicRx)
+    if (days && sign) failField('meds', `${d.name}：${days}`)
+    const level = doseLevel(d, m.dose)
+    if (level === 'absurd') fail(`出院帶藥 ${d.name}：${doseNote(d, m.dose)}，請確認是否打錯`)
+    if (sign && level === 'high' && !input.confirmHighDose) fail(`出院帶藥 ${d.name} 劑量偏高：${doseNote(d, m.dose)}，如確定請確認`, 'CONFLICT')
+    let qty = m.qty
+    if (!(qty > 0)) {
+      const q = autoQty(d, m.dose, find.freq(m.freq)?.timesPerDay ?? 1, m.days)
+      if (q === null) fail(`出院帶藥 ${d.name} 的給藥單位與調劑單位不同，請填寫總量`)
+      qty = q!
+    }
+    if (!Number.isInteger(qty)) fail(`出院帶藥 ${d.name} 的總量要是整數（${d.unit}）`)
+    out.push({ drugId: d.id, dose: m.dose, freq: m.freq, route: m.route, days: m.days, qty, selfPay: false, ...(m.timing ? { timing: m.timing } : {}) })
+  }
+  return out
+}
+
+/** 取消准予出院（例：病人又發燒）：簽署取消，內容保留成草稿。出院帶藥已調劑的要藥局先退回 */
 export function cancelDischargeOrder(admissionId: string, reason: string): Promise<DischargeSummary> {
   return mutate(() => {
     const user = requireUser('doctor')
@@ -398,6 +431,7 @@ export function cancelDischargeOrder(admissionId: string, reason: string): Promi
     requireCare(user.doctorId, a, '取消准予出院', { consult: false })
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('病人尚未准予出院', 'CONFLICT')
+    if (a.dischargeRx) fail('出院帶藥已經調劑：請住院藥局先「退回」，才能取消准予出院、修改處方', 'CONFLICT')
     if (!reason.trim()) failField('reason', '請輸入取消原因')
     delete ds!.signedAt
     audit('取消准予出院', `${a.admitNo} ${find.patient(a.patientId)?.name}：${reason.trim()}`)

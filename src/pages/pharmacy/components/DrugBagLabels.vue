@@ -2,12 +2,25 @@
 // 藥袋標籤：每種藥一張。用法寫成病人看得懂的中文，高警訊藥品加註警語。
 // 藥師法規定的藥袋欄位都要有：病人姓名、性別、藥名、劑量、數量、用法、作用或適應症、警語或副作用、
 // 藥局名稱地址、調劑者姓名、調劑日期。作用與警語來自藥品主檔（主檔必填），調劑者由服務層決定。
-import type { DispenseView } from '@/services/pharmacy'
+import type { DispenseItem } from '@/services/pharmacy'
 import { HOSPITAL } from '@/utils/hospital'
 import { masterApi } from '@/services'
 import { toRoc } from '@/utils/date'
 
-defineProps<{ d: DispenseView }>()
+/** 門診調劑單、出院帶藥共用：只要這些欄位。pickupNo 沒有（出院帶藥）就印「出院帶藥」；pharmacy 預設門診藥局 */
+export interface BagSource {
+  items: Pick<DispenseItem, 'drugId' | 'drugName' | 'drugNameZh' | 'spec' | 'route' | 'freqLabel' | 'dose' | 'doseUnit' | 'timingText' | 'days' | 'qty' | 'unit' | 'indication' | 'warning' | 'highAlert'>[]
+  patientName: string
+  gender: 'M' | 'F'
+  age: number
+  chartNo: string
+  dispenseDate: string
+  pickupNo?: number
+  doctorName: string
+  deptName: string
+  pharmacistName: string
+}
+defineProps<{ d: BagSource; pharmacy?: string }>()
 
 const routeName = (code: string) => masterApi.staticCodes.routes.find((r) => r.code === code)?.name ?? code
 </script>
@@ -18,8 +31,8 @@ const routeName = (code: string) => masterApi.staticCodes.routes.find((r) => r.c
     <article v-for="it in d.items" :key="it.drugId" class="break-inside-avoid rounded-md border-2 border-slate-800 p-3 text-sm text-slate-900 print:h-[134mm]">
       <header class="mb-2 border-b border-slate-300 pb-1">
         <div class="flex items-baseline justify-between">
-          <span class="font-bold">{{ HOSPITAL.name }} {{ HOSPITAL.pharmacy }}</span>
-          <span class="tabular text-xs">領藥號 {{ d.pickupNo }}</span>
+          <span class="font-bold">{{ HOSPITAL.name }} {{ pharmacy ?? HOSPITAL.pharmacy }}</span>
+          <span class="tabular text-xs">{{ d.pickupNo ? `領藥號 ${d.pickupNo}` : '出院帶藥' }}</span>
         </div>
         <div class="text-[10px] text-slate-600">{{ HOSPITAL.address }}・電話 {{ HOSPITAL.phone }}</div>
       </header>
@@ -45,7 +58,7 @@ const routeName = (code: string) => masterApi.staticCodes.routes.find((r) => r.c
       </div>
       <footer class="mt-2 text-[10px] text-slate-600">
         處方醫師 {{ d.doctorName }}（{{ d.deptName }}）・調劑藥師 {{ d.pharmacistName || '＿＿＿＿' }}<br />
-        如有疑問請洽{{ HOSPITAL.pharmacy }} {{ HOSPITAL.phone }}
+        如有疑問請洽{{ pharmacy ?? HOSPITAL.pharmacy }} {{ HOSPITAL.phone }}
       </footer>
     </article>
   </div>

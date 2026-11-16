@@ -7,7 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
 import { checkCash, IPD_COPAY_DEFAULT, outstandingOf } from './billing'
 import { nextReceiptNo } from './money'
-import { activeIpdChargeOf, ipdBillOf, type IpdBill } from './ipd-bill'
+import { activeIpdChargeOf, dischargeRxPending, ipdBillOf, type IpdBill } from './ipd-bill'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import type { PayInput } from './charge'
 
@@ -73,6 +73,7 @@ export function getIpdBill(admissionId: string): Promise<IpdBillView> {
     } else if (a.status === 'admitted') {
       view.bill = ipdBillOf(a)
       if (!a.dischargeSummary?.signedAt) view.blocked = '醫師還沒簽准出院：可以先看試算，簽准後才能結帳'
+      else if (dischargeRxPending(a)) view.blocked = '出院帶藥還沒調劑：住院藥局調好（扣帳）後帳單才完整，才能結帳'
     }
     return view
   })
@@ -86,6 +87,7 @@ export function payIpd(admissionId: string, input: Pick<PayInput, 'payMethod' | 
     if (a.status !== 'admitted') fail('只有住院中的病人可以結帳', 'CONFLICT')
     if (!a.dischargeSummary?.signedAt) fail('醫師還沒簽准出院，不能結帳', 'CONFLICT')
     if (activeIpdChargeOf(a.id)) fail('這次住院已經結帳了', 'CONFLICT')
+    if (dischargeRxPending(a)) fail('出院帶藥還沒調劑：請住院藥局先調劑，再結帳', 'CONFLICT')
     const bill = ipdBillOf(a)
     const due = bill.patientTotal
     const received = input.payMethod === 'cash' ? input.received : due

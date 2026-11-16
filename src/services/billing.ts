@@ -301,8 +301,9 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
     const price = procPriceOn(p, input.from.slice(0, 10))
     add(self ? { kind: 'self', name: `${p.name}（自費）`, qty: days, unitPrice: price.selfPrice, amount: price.selfPrice * days, patientPay: true } : { kind: 'ward', name: p.name, qty: days, unitPrice: price.points, amount: price.points * days, patientPay: false })
   }
+  // 退回的是負數（出院帶藥退回）：和扣帳的同藥同價合併抵銷，合併後數量是 0 的整列拿掉
   for (const x of input.drugs) {
-    if (x.qty <= 0) continue
+    if (x.qty === 0) continue
     const price = drugPriceOn(x.drug, x.date.slice(0, 10))
     add(self ? { kind: 'self', name: `${x.drug.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: x.drug.name, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false })
   }
@@ -310,6 +311,7 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
     const price = procPriceOn(x.proc, x.date.slice(0, 10))
     add(self || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: x.proc.name, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
   }
+  for (let i = lines.length - 1; i >= 0; i--) if ((lines[i].kind === 'drug' || lines[i].kind === 'self') && lines[i].qty <= 0) lines.splice(i, 1)
   for (const b of input.beds) {
     if (b.extraFee > 0 && b.days > 0) lines.push({ kind: 'self', name: `差額床費（${b.bedClass} ${b.bedNo}）`, qty: b.days, unitPrice: b.extraFee, amount: b.extraFee * b.days, patientPay: true })
   }

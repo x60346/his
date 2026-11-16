@@ -7,6 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
+import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
 import LabReportList from '@/components/LabReportList.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
@@ -21,7 +22,7 @@ import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
 import { consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
-import { admissionApi, ipdApi, isAbnormal, masterApi, nursingApi, type VitalKey } from '@/services'
+import { admissionApi, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -156,6 +157,15 @@ const imgAlerts = computed(() => (imgs.value?.reports ?? []).filter((r) => r.nee
 // 已簽署（准予出院）就唯讀；要改先「取消准予出院」，內容會留成草稿
 const dischargeTypes = masterApi.staticCodes.dischargeTypes
 const dsForm = reactive({ diagnosis: '', course: '', condition: '', followUp: '', dischargeType: '' as string | number })
+// 出院帶藥：和門診開藥同一個編輯元件（劑量、頻率、天數、總量自動換算）；天數上限、劑量檢查在服務層
+const dsMeds = ref<MedRow[]>([])
+const dsChronic = ref(false)
+const { data: drugList } = useQuery(() => masterApi.listDrugs({ includeInactive: true }))
+const { data: freqList } = useQuery(() => masterApi.listFrequencies())
+const drugMap = computed(() => new Map((drugList.value ?? []).map((d) => [d.id, d])))
+const freqs = computed(() => freqList.value ?? [])
+const medKey = computed(() => dsMeds.value.map((m) => m.drugId).join(','))
+const { data: medWarnings } = useQuery(async () => (adm.value && medKey.value ? opdApi.allergyWarnings(adm.value.patientId, medKey.value.split(',')) : []), [medKey, () => adm.value?.patientId])
 // 換病人、或病摘存檔／簽署／取消後，表單換成資料庫裡的內容。用字串當 key：adm 每次重新查詢都是新物件，直接看物件會一直重設、把正在打的字洗掉
 watch(
   () => `${adm.value?.id}|${ds.value?.writtenAt}|${ds.value?.signedAt}`,
@@ -164,13 +174,19 @@ watch(
     Object.assign(dsForm, d
       ? { diagnosis: d.diagnosis, course: d.course, condition: d.condition, followUp: d.followUp, dischargeType: d.dischargeType }
       : { diagnosis: adm.value?.diagnosis ?? '', course: '', condition: '', followUp: '', dischargeType: '' })
+    dsMeds.value = (d?.meds ?? []).map((m) => ({ ...m }))
+    dsChronic.value = !!d?.chronicRx
   },
   { immediate: true },
 )
 const saveDs = useAction(ipdApi.saveDischargeSummary, { success: (d) => (d.signedAt ? '已簽署出院病摘，准予出院；住院中心可辦理手續' : '已儲存病摘草稿') })
-function onSaveDs(sign: boolean) {
+async function onSaveDs(sign: boolean) {
   if (!adm.value) return
-  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType) }, sign)
+  // 劑量偏高：簽署時列出來請醫師確認一次（和門診同一條規則 doseLevel；服務層會再檢查）
+  const high = dsMeds.value.map((m) => ({ m, d: drugMap.value.get(m.drugId) })).filter((x) => x.d && doseLevel(x.d, x.m.dose) === 'high')
+  if (sign && high.length && !(await ui.confirm({ title: '出院帶藥劑量偏高', message: `${high.map((x) => `・${x.d!.name}：${doseNote(x.d!, x.m.dose)}`).join('\n')}\n\n確定劑量無誤？`, okText: '劑量無誤', danger: true }))) return
+  const meds = dsMeds.value.map(({ _manual: _m, _qtyStale: _q, ...m }) => m)
+  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType), meds, chronicRx: dsChronic.value, ...(high.length ? { confirmHighDose: true } : {}) }, sign)
 }
 const cancelOpen = ref(false)
 const cancelReason = ref('')
@@ -367,7 +383,7 @@ async function submitNote() {
               <LogOut class="h-4 w-4" />已准予出院，等住院中心辦理手續。
               <UButton class="ml-auto" size="sm" variant="secondary" @click="openCancel">取消准予出院</UButton>
             </div>
-            <DischargeSummaryView :summary="ds" :doctor-name="adm.summaryDoctorName" />
+            <DischargeSummaryView :summary="ds" :doctor-name="adm.summaryDoctorName" :med-texts="adm.dischargeMedTexts" :rx-status="adm.dischargeRxStatus" />
           </template>
           <template v-else>
             <p class="text-xs text-slate-500">
@@ -381,6 +397,16 @@ async function submitNote() {
             <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" @keydown="phrase.onKey($event, (v) => (dsForm.course = v))" />
             <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" @keydown="phrase.onKey($event, (v) => (dsForm.condition = v))" />
             <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" @keydown="phrase.onKey($event, (v) => (dsForm.followUp = v))" />
+            <!-- 出院帶藥：簽署時一起確認；住院藥局調劑扣帳後列入住院帳單 -->
+            <section class="space-y-2 rounded-md border border-slate-200 p-3">
+              <div class="flex flex-wrap items-center gap-3">
+                <h4 class="text-sm font-semibold text-slate-700">出院帶藥</h4>
+                <span class="text-xs text-slate-500">一般最多 {{ DISCHARGE_RX_DAYS }} 天；慢性病最多 {{ DISCHARGE_RX_CHRONIC_DAYS }} 天。沒有就不用填</span>
+                <label class="ml-auto flex items-center gap-1.5 text-sm"><input v-model="dsChronic" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-brand-600" />慢性病</label>
+              </div>
+              <MedicationEditor v-model="dsMeds" :drugs="drugMap" :freqs="freqs" :warnings="medWarnings ?? []" :default-days="DISCHARGE_RX_DAYS" no-self-pay />
+              <p v-if="saveDs.fieldErrors.value.meds" class="text-xs text-red-600">{{ saveDs.fieldErrors.value.meds }}</p>
+            </section>
             <PhraseHint :phrase="phrase" />
             <div class="flex justify-end gap-2">
               <UButton variant="secondary" :loading="saveDs.pending.value" @click="onSaveDs(false)">儲存草稿</UButton>

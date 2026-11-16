@@ -154,7 +154,7 @@ const fields = computed(() => {
                 </button>
               </div>
               <div v-if="openSummary === a.id && a.dischargeSummary" class="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <DischargeSummaryView :summary="a.dischargeSummary" :doctor-name="a.summaryDoctorName" />
+                <DischargeSummaryView :summary="a.dischargeSummary" :doctor-name="a.summaryDoctorName" :med-texts="a.dischargeMedTexts" />
               </div>
             </li>
           </ul>

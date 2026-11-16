@@ -47,7 +47,7 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
       <template v-else>
         <section class="rounded-md border border-slate-200 p-3">
           <h3 class="mb-2 font-semibold text-slate-700">出院病摘（醫師簽署）</h3>
-          <DischargeSummaryView v-if="admission?.dischargeSummary" :summary="admission.dischargeSummary" :doctor-name="admission.summaryDoctorName" />
+          <DischargeSummaryView v-if="admission?.dischargeSummary" :summary="admission.dischargeSummary" :doctor-name="admission.summaryDoctorName" :med-texts="admission.dischargeMedTexts" :rx-status="admission.dischargeRxStatus" />
         </section>
 
         <UQueryState :loading="loading && !check" :ready="!!check">

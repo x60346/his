@@ -818,6 +818,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         course: '入院後給予靜脈抗生素治療，第二天起退燒，尿液培養為大腸桿菌，對目前抗生素敏感。',
         condition: '體溫正常 48 小時，解尿疼痛改善，進食正常，可自行下床活動。',
         followUp: '口服抗生素再服用 5 天；一週後泌尿科門診追蹤尿液檢查。如再發燒或腰痛請立即回診。',
+        // 出院帶藥（住院藥局還沒調劑：藥局首頁「出院帶藥待調劑」、櫃台要等調好才能結帳）
+        meds: [
+          { drugId: 'M004', dose: 1, freq: 'TID', route: 'PO', days: 5, qty: 15, selfPay: false },
+          { drugId: 'M001', dose: 1, freq: 'TID', route: 'PO', days: 3, qty: 9, selfPay: false },
+        ],
       }
     }
   }

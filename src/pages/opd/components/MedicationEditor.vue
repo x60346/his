@@ -24,6 +24,8 @@ const props = defineProps<{
   warnings: AllergyWarning[]
   defaultDays: number
   readonly?: boolean
+  /** 不顯示「自費」勾選（出院帶藥：依病人身分計價，不逐項自費） */
+  noSelfPay?: boolean
 }>()
 const ui = useUi()
 const routes = masterApi.staticCodes.routes
@@ -141,7 +143,7 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
     <!-- 寬度夠（≥ WIDE_PX）一種藥一行、上面一列表頭；不夠時分兩段：藥名＋刪除一行，各欄位（附小標題）一行——不再左右捲動，總量、自費、刪除都看得到 -->
     <div v-else ref="boxEl" class="rounded-md border border-slate-200 text-sm">
       <div v-if="wide" :class="['grid items-center gap-x-2 whitespace-nowrap rounded-t-md bg-slate-50 px-2 py-2 text-xs text-slate-500', COLS]">
-        <span>藥品</span><span>劑量</span><span>頻率／時機</span><span>途徑</span><span>天數</span><span>總量</span><span class="text-center">自費</span><span />
+        <span>藥品</span><span>劑量</span><span>頻率／時機</span><span>途徑</span><span>天數</span><span>總量</span><span class="text-center">{{ noSelfPay ? '' : '自費' }}</span><span />
       </div>
       <div
         v-for="(r, i) in rows"
@@ -222,7 +224,8 @@ const warningOf = (drugId: string) => props.warnings.filter((w) => w.drugId === 
           </div>
           <div v-if="!convertible(r) && !readonly" class="mt-0.5 text-[11px] text-amber-700">無法由劑量換算，請填寫</div>
         </div>
-        <label :class="wide ? 'flex justify-center pt-2' : 'order-3 flex flex-col items-center'">
+        <span v-if="noSelfPay" />
+        <label v-else :class="wide ? 'flex justify-center pt-2' : 'order-3 flex flex-col items-center'">
           <span v-if="!wide" class="mb-0.5 text-xs text-slate-500">自費</span>
           <input v-model="r.selfPay" type="checkbox" :class="['h-4 w-4 rounded border-slate-300 text-brand-600', !wide && 'mt-2']" aria-label="自費" :disabled="readonly" />
         </label>

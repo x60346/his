@@ -12,6 +12,7 @@ import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/
 import { udApi, type UdIssueRow, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WardRefillCard from './components/WardRefillCard.vue'
+import DischargeRxCard from './components/DischargeRxCard.vue'
 import UdCartSheetDialog from './components/UdCartSheetDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -101,6 +102,9 @@ function openSheet(id: string) {
         <p class="text-sm text-slate-600">
           扣帳地點：<b>{{ w.locationName }}</b>・PRN 與臨時（STAT）給藥用病房常備藥，護理師給藥時直接扣，不在這裡調劑
         </p>
+
+        <!-- 出院帶藥：調好櫃台才能住院結帳，放最上面 -->
+        <DischargeRxCard />
 
         <UCard v-if="w.issues.length" :padded="false" class="border-red-300">
           <template #title>

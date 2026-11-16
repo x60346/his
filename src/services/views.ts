@@ -2,6 +2,7 @@
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
 import type { Admission, DeptTransfer, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
+import { doseUnitOf } from './billing'
 import { ageOf, diffDays, today } from '@/utils/date'
 import { outstandingOf, type BillingLookup } from './billing'
 import { fail, must } from './http'
@@ -218,6 +219,9 @@ export function visitView(v: Visit): VisitView {
 }
 
 export interface AdmissionView extends Admission, PatientBrief {
+  /** 出院帶藥（給人看的一行一項：藥名、劑量、頻率、途徑、天數、總量）；dischargeRxStatus：pending 待藥局調劑、dispensed 已調劑 */
+  dischargeMedTexts?: string[]
+  dischargeRxStatus?: 'pending' | 'dispensed'
   doctorName: string
   deptName: string
   bed?: Bed
@@ -268,6 +272,15 @@ export function admissionView(a: Admission): AdmissionView {
     days: a.admittedAt ? diffDays(a.admittedAt, end) + 1 : 0,
     dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
+    ...(a.dischargeSummary?.meds?.length
+      ? {
+          dischargeMedTexts: a.dischargeSummary.meds.map((m) => {
+            const d = find.drug(m.drugId)
+            return `${d?.name ?? m.drugId}・每次 ${m.dose} ${d ? doseUnitOf(d) : ''}・${find.freq(m.freq)?.label ?? m.freq}・${m.route}・${m.days} 天，共 ${m.qty} ${d?.unit ?? ''}`
+          }),
+          dischargeRxStatus: a.dischargeRx ? ('dispensed' as const) : ('pending' as const),
+        }
+      : {}),
     // 護理師提出、待醫師回覆的醫囑疑問（醫師的住院病人清單標出來）
     openQueries: db.ipdOrders.filter((o) => o.admissionId === a.id && !!openQuery(o)).length,
     consultOrdersUnseen: db.ipdOrders.filter((o) => o.admissionId === a.id && o.consultId && !o.consultSeenAt).length,

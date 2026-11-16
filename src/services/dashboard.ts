@@ -11,7 +11,7 @@ import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
-import { activeIpdChargeOf } from './ipd-bill'
+import { activeIpdChargeOf, dischargeRxPending } from './ipd-bill'
 
 export interface DashboardStats {
   date: string
@@ -58,6 +58,8 @@ export interface DashboardStats {
   pendingRefunds: number
   /** 醫師已簽准出院、還沒住院結帳的病人（櫃台待辦） */
   ipdToBill: number
+  /** 准出院、出院帶藥還沒調劑（住院藥局待辦） */
+  dischargeRxToDispense: number
   wardCountDue: number
   /** 藥車交接：已核對送出、病房還沒點收的藥盒（護理站，全院）；病房回報不符、藥局還沒處理的（住院藥局） */
   udToReceive: number
@@ -119,6 +121,7 @@ export function getDashboard(): Promise<DashboardStats> {
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
+      dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
       ipdToBill: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)).length,
       wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,
       wardCountDue: (() => {
