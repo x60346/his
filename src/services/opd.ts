@@ -267,6 +267,10 @@ export interface HistoryItem extends Encounter {
   procedureNames: string[]
   /** 這次看診開的診斷證明書（作廢的不列）：字號、份數 */
   certificates: string[]
+  /** 這次開的轉診單（作廢的不列）：「台大醫院 心臟內科（進一步檢查）」 */
+  referralsOut: string[]
+  /** 這次是外院轉入：「○○診所 轉入」（同一療程的回診也標） */
+  referralFrom?: string
   /** 這次看診的門診會診（含回覆） */
   consults: { id: string; toDeptName: string; question: string; status: string; findings?: string; recommendation?: string; answeredByName?: string; suggestVisit?: boolean }[]
 }
@@ -289,6 +293,11 @@ export function patientHistory(patientId: string, excludeVisitId?: string): Prom
         })),
         medicationNames: e.medications.map((m) => find.drug(m.drugId)?.name ?? m.drugId),
         certificates: db.certificates.filter((c) => c.encounterId === e.id && !c.voided).map((c) => `${c.no}（${c.copies} 份）`),
+        referralsOut: db.referrals.filter((r) => r.encounterId === e.id && !r.voided).map((r) => `${r.toHospital} ${r.toDept}（${r.purpose}${r.urgent ? '，急' : ''}）`),
+        ...(() => {
+          const r = find.visit(e.visitId)?.referralIn
+          return r ? { referralFrom: `${r.fromHospital} 轉入${r.inheritedFrom ? '（同一療程回診）' : ''}${r.reply ? '・已回覆' : ''}` } : {}
+        })(),
         procedureNames: e.procedures.map((p) => `${find.procedure(p.procId)?.name ?? p.procId}${p.notDone ? `（未執行：${p.notDone.reason}）` : ''}`),
       })),
   )

@@ -900,6 +900,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })
   }
 
+  // 外院轉診（示範，不抽亂數）：家醫科 dr01 今天還沒看的第一位掛號，持康健診所 3 天前開的轉診單（櫃台掛號時登錄）
+  const refVisit = visits.filter((v) => v.date === T && v.doctorId === 'DR01' && v.status === 'registered' && !v.refillOf).sort((a, b) => a.sessionId.localeCompare(b.sessionId) || a.seqNo - b.seqNo)[0]
+  if (refVisit) refVisit.referralIn = { fromHospital: '康健診所', issuedOn: addDays(T, -3), diagnosis: 'J20.9 急性支氣管炎（反覆發作）', purpose: '進一步檢查', recordedBy: 'U401', recordedAt: refVisit.createdAt }
+
   // 診斷證明書（示範）：第一位已出院的病人，出院當天主治開了 2 份（請假用），費用在住院收據裡、可以列印
   const certificates: MedicalCertificate[] = []
   const certProc = codes.procedures.find((x) => x.id === 'P027')!
@@ -1593,6 +1597,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     labReports,
     imagingReports,
     certificates,
+    referrals: [],
     auditLogs: [],
     counters,
   }

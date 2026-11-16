@@ -21,13 +21,15 @@ import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import LabReportList from '@/components/LabReportList.vue'
 import FollowUpDialog from './components/FollowUpDialog.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
+import ReferralPanel from '@/components/ReferralPanel.vue'
+import ReferralReplyDialog from '@/components/ReferralReplyDialog.vue'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
-import { autoQty, bookingApi, imagingApi, labApi, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import { autoQty, bookingApi, referralApi, imagingApi, labApi, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -42,6 +44,10 @@ const ui = useUi()
 
 // ---------- 醫師與候診清單 ----------
 const isAdmin = auth.user?.role === 'admin'
+// 轉診待回覆：我看過、持外院轉診單、還沒開回覆單的（可能是前幾天的病人）
+const { data: pendingReplies } = useQuery(async () => (auth.user?.role === 'doctor' ? referralApi.listPendingReferralReplies() : []))
+const replyVisitId = ref<string>()
+const replyOpen = ref(false)
 const doctorId = ref<string | number | undefined>(auth.user?.doctorId ?? 'DR01')
 const { data: doctors } = useQuery(async () => (isAdmin ? masterApi.listDoctors() : []))
 const todayStr = useToday() // 跨日時候診清單換成新的一天
@@ -497,6 +503,13 @@ const lastOpen = ref(true)
           <div class="text-xs text-slate-700">建議：{{ c.recommendation }}<UBadge v-if="c.suggestVisit" tone="blue" class="ml-1">建議掛{{ c.toDeptName }}門診</UBadge></div>
         </div>
       </div>
+      <div v-if="pendingReplies?.length" class="border-b border-cyan-200 bg-cyan-50 p-2">
+        <div class="px-1 pb-1 text-xs font-semibold text-cyan-900">轉診待回覆（{{ pendingReplies.length }}）</div>
+        <div v-for="r in pendingReplies" :key="r.visitId" class="flex items-center gap-2 rounded px-2 py-1 text-sm">
+          <span class="min-w-0 flex-1 truncate">{{ r.patientName }}<span class="text-xs text-slate-500">・{{ r.date.slice(5).replace('-', '/') }}・{{ r.fromHospital }}</span></span>
+          <UButton size="sm" variant="secondary" @click="(replyVisitId = r.visitId), (replyOpen = true)">回覆</UButton>
+        </div>
+      </div>
       <UQueryState :loading="queueLoading" :ready="!!queue?.length" empty-title="今天沒有掛號病人">
       <ul class="max-h-[calc(100vh-12rem)] divide-y divide-slate-100 overflow-y-auto">
         <li v-for="v in queue" :key="v.id">
@@ -562,6 +575,10 @@ const lastOpen = ref(true)
       </div>
       <!-- 診斷證明書：叫號後可開，費用跟著這次批價；批價後才能印 -->
       <div v-if="encounter && visit.status !== 'registered'" class="rounded-lg border border-slate-200 bg-white px-3 py-2"><CertificatePanel :encounter-id="encounter.id" /></div>
+      <!-- 轉診：外院轉入（櫃台登錄，看完診開回覆單）、轉出（看完診開轉診單） -->
+      <div v-if="visit.referralIn || (encounter && visit.status !== 'registered')" class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+        <ReferralPanel :visit-id="visit.id" :encounter-id="encounter?.id" :completed="encounter?.status === 'completed'" :doctor-id="visit.doctorId" />
+      </div>
       <!-- 這次看診的門診會診 -->
       <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <span class="pt-0.5 text-xs font-semibold text-slate-600">門診會診</span>
@@ -722,6 +739,7 @@ const lastOpen = ref(true)
     <OpdConsultDialog :item="answeringOpd" @close="answeringOpd = null" />
     <ControlledRxDialog v-model="rxOpen" :encounter-id="rxEncounterId" />
     <RxAlertConfirm ref="rxConfirm" />
+    <ReferralReplyDialog v-model="replyOpen" :visit-id="replyVisitId" />
     <FollowUpDialog v-model="followOpen" :visit-id="visit?.id" />
   </div>
 </template>

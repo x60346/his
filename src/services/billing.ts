@@ -1,7 +1,7 @@
 // 門診批價計算（純函式，seed 與服務層共用）。
 // 規則為展示用的簡化版本：
 //   1. 掛號費依就醫身分
-//   2. 基本部分負擔：每次固定金額（免部分負擔身分、預防保健案件免收）
+//   2. 基本部分負擔：每次固定金額，經轉診（持外院轉診單）收較低的金額（免部分負擔身分、預防保健案件免收）
 //   3. 藥品部分負擔：健保藥費在免收額度以下免收，超過後每一級距加收固定金額，有上限
 //   金額都來自 BillingSettings（管理員可調整）；這裡只有「怎麼算」，沒有「算多少」
 //      （免部分負擔身分、慢性病連續處方調劑免收）
@@ -15,10 +15,10 @@ import { drugPriceOn } from './drug-rules'
 import { valueOn } from './dated-rules'
 
 // ---------- 某天的價格（依看診日） ----------
-export const COPAY_KEYS = ['basicCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
+export const COPAY_KEYS = ['basicCopay', 'basicCopayReferred', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
 
 /** 只取部分負擔參數（不帶 changes、修改人） */
-export const pickCopay = (s: CopayValues): CopayValues => ({ basicCopay: s.basicCopay, drugCopayFreeUpTo: s.drugCopayFreeUpTo, drugCopayStep: s.drugCopayStep, drugCopayPerStep: s.drugCopayPerStep, drugCopayMax: s.drugCopayMax })
+export const pickCopay = (s: CopayValues): CopayValues => ({ basicCopay: s.basicCopay, basicCopayReferred: s.basicCopayReferred, drugCopayFreeUpTo: s.drugCopayFreeUpTo, drugCopayStep: s.drugCopayStep, drugCopayPerStep: s.drugCopayPerStep, drugCopayMax: s.drugCopayMax })
 
 /** 醫令某天的點數與自費價 */
 export function procPriceOn(p: Pick<Procedure, 'points' | 'selfPrice' | 'priceChanges'>, date: string): { points: number; selfPrice: number } {
@@ -67,15 +67,16 @@ function consultLine(identity: Identity, consult: Procedure | undefined, date: s
     : { kind: 'consult', name: consult.name, qty: 1, unitPrice: price.points, amount: price.points, patientPay: false }
 }
 
-/** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收 */
-function basicCopayLine(identity: Identity, caseType: string, s: CopayValues): ChargeLine | undefined {
+/** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收；經轉診（referred）收經轉診的金額 */
+function basicCopayLine(identity: Identity, caseType: string, s: CopayValues, referred = false): ChargeLine | undefined {
   if (identity.selfPay || identity.copayExempt || caseType === 'A3') return undefined
-  return { kind: 'copay-basic', name: '門診基本部分負擔', qty: 1, unitPrice: s.basicCopay, amount: s.basicCopay, patientPay: true }
+  const amount = referred ? s.basicCopayReferred : s.basicCopay
+  return { kind: 'copay-basic', name: referred ? '門診基本部分負擔（經轉診）' : '門診基本部分負擔', qty: 1, unitPrice: amount, amount, patientPay: true }
 }
 
 /** 掛號時就確定的收費項目（掛號頁預估用，date＝看診日）；批價時這幾行與它完全相同，再加上看診內容的項目 */
-export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>, date: string): ChargeLine[] {
-  return [regLine(identity, date), consultLine(identity, lk.procedure(CONSULT_PROC_ID), date), basicCopayLine(identity, caseType, copayOn(lk.settings, date))].filter((l): l is ChargeLine => !!l)
+export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>, date: string, referred = false): ChargeLine[] {
+  return [regLine(identity, date), consultLine(identity, lk.procedure(CONSULT_PROC_ID), date), basicCopayLine(identity, caseType, copayOn(lk.settings, date), referred)].filter((l): l is ChargeLine => !!l)
 }
 
 export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup): ChargeLine[] {
@@ -119,7 +120,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     }
   }
 
-  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay)
+  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay, !!visit.referralIn)
   if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
     const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, copay)

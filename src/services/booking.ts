@@ -4,13 +4,15 @@ import { prepayAvailable, refundPrepay, takePrepay } from './money'
 import { commitIfPossible, db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission, sessionUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
 import { FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, refillFollowUpDays } from './followup-rules'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
 import { fixedCharges } from './billing'
 import { checkInProblem } from './queue-rules'
+import { referralInProblem, type ReferralInInput } from './referral-rules'
+import { buildReferralIn } from './referral-work'
 import { refillState, supersededBy, supplyDays, type RefillFill, type RefillState } from './refill-rules'
 
 export interface VisitQuery {
@@ -55,6 +57,8 @@ export interface RegisterInput {
   checkIn?: boolean
   /** 掛號預收（選填，只限掛號批價人員）：批價時扣抵、多退少補 */
   prepay?: { amount: number; payMethod: PayMethod }
+  /** 病人持外院轉診單（選填）：基本部分負擔收經轉診的金額 */
+  referralIn?: ReferralInInput
 }
 
 /**
@@ -105,6 +109,8 @@ function createVisit(input: RegisterInput): Visit {
     preventItems,
     createdAt: now(),
     ...(input.checkIn ? { checkedInAt: now() } : {}),
+    // 轉診單：有效期依就醫日（referral-rules），欄位錯誤一次標出
+    ...(input.referralIn ? { referralIn: buildReferralIn(input.referralIn, session.date, sessionUser()?.id ?? '') } : {}),
   }
   db.visits.push(v)
   return v
@@ -143,9 +149,13 @@ export function rescheduleVisit(visitId: string, input: Omit<RegisterInput, 'pat
       v.prepay = old.prepay
       delete old.prepay
     }
+    // 轉診單跟著改期（新日期仍在有效期內；同一療程沿用的不看有效期）
+    const ref = old.referralIn
+    const keepRef = !!ref && !v.referralIn && (!!ref.inheritedFrom || !referralInProblem(ref.issuedOn, v.date))
+    if (keepRef) v.referralIn = { ...ref! }
     const s = find.session(v.sessionId)!
     old.cancelReason = `改期至 ${s.date} ${periodLabel[s.period]} ${nameOf.dept(s.deptId)} ${nameOf.doctor(s.doctorId)} 第 ${v.seqNo} 號`
-    audit('改期', `${find.patient(v.patientId)?.name}：${old.date} #${old.seqNo} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}`)
+    audit('改期', `${find.patient(v.patientId)?.name}：${old.date} #${old.seqNo} → ${s.date} ${s.period} ${s.roomNo} 診 #${v.seqNo}${ref && !keepRef && !v.referralIn ? `（轉診單 ${ref.issuedOn} 開單，到新日期已過期，沒有沿用）` : ''}`)
     return visitView(v)
   })
 }
@@ -184,11 +194,12 @@ export interface FeeEstimate {
  * 計算與批價共用 billing.fixedCharges，兩邊數字一致。收錢仍在批價（掛號不收費）。
  */
 /** date：看診日（掛號頁選的診次日期；空白＝今天）——掛號費、部分負擔有排定調整時，看診那天的價格才對 */
-export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false, date?: string): Promise<FeeEstimate> {
+/** referred：持外院轉診單（基本部分負擔收經轉診的金額） */
+export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false, date?: string, referred = false): Promise<FeeEstimate> {
   return query(() => {
     const caseType = effectiveCaseType(inputCaseType, withPrevent)
     const lk = billingLookup(identityCode)
-    const lines = fixedCharges(lk.identity, caseType, lk, date || today()).filter((l) => l.patientPay)
+    const lines = fixedCharges(lk.identity, caseType, lk, date || today(), referred).filter((l) => l.patientPay)
     const copayNote = lk.identity.selfPay ? '自費身分' : lk.identity.copayExempt ? `${lk.identity.name}免部分負擔` : caseType === 'A3' ? '預防保健免部分負擔' : undefined
     return { lines, total: lines.reduce((s, l) => s + l.amount, 0), copayNote }
   })
@@ -448,6 +459,11 @@ export function bookFollowUp(visitId: string, input: { sessionId: string; confir
     const caseType = v.caseType === 'A3' || v.caseType === '08' ? '01' : v.caseType
     const nv = createVisit({ patientId: v.patientId, sessionId: s.id, identityCode: v.identityCode, caseType })
     nv.followUpOf = { visitId: v.id, doctorId: u.doctorId!, at: now() }
+    // 同一療程的回診沿用轉診身分（經轉診部分負擔）；回覆單在持單那次開，這裡不帶
+    if (v.referralIn) {
+      const { reply: _r, ...r } = v.referralIn
+      nv.referralIn = { ...r, inheritedFrom: v.referralIn.inheritedFrom ?? v.id }
+    }
     audit('預約回診', `${nameOf.patient(v.patientId)} → ${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}（${nameOf.doctor(u.doctorId)} 看診時預約）`)
     return visitView(nv)
   })

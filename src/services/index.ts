@@ -32,6 +32,7 @@ import * as imaging from './imaging'
 import * as ipdCharge from './ipd-charge'
 import * as dischargeRx from './discharge-rx'
 import * as certificate from './certificate'
+import * as referral from './referral'
 
 export const authApi = overNetwork(auth)
 export const masterApi = overNetwork(master)
@@ -64,7 +65,9 @@ export const imagingApi = overNetwork(imaging)
 export const ipdChargeApi = overNetwork(ipdCharge)
 export const dischargeRxApi = overNetwork(dischargeRx)
 export const certificateApi = overNetwork(certificate)
+export const referralApi = overNetwork(referral)
 export type { CertificateView, CertificateInput } from './certificate'
+export type { ReferralInView, ReferralOutView, ReferralOutInput, ReferralReplyInput, PendingReferralReply } from './referral'
 export type { DischargeRxView, DischargeRxItem } from './discharge-rx'
 export type { IpdBillingItem, IpdBillView } from './ipd-charge'
 export type { IpdBill } from './ipd-bill'
@@ -101,6 +104,7 @@ export * from './controlled-rules'
 export * from './lab-rules'
 export * from './followup-rules'
 export * from './certificate-rules'
+export * from './referral-rules'
 export * from './interaction-rules'
 export * from './stocktake-rules'
 export * from './purchase-rules'

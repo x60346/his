@@ -351,6 +351,7 @@ export function saveBillingSettings(input: CopayValues & { from?: string }): Pro
       if (!Number.isInteger(n) || n < 0 || n > 10000) v.add(k, '需為 0–10000 的整數')
     }
     if (input.drugCopayStep < 1) v.add('drugCopayStep', '級距至少 1 元（不能為 0，否則無法計算）')
+    if (input.basicCopayReferred > input.basicCopay) v.add('basicCopayReferred', '經轉診的不能比未經轉診的高（轉診是為了讓病人少付）')
     if (input.drugCopayMax < input.drugCopayPerStep) v.add('drugCopayMax', '上限不能小於每級加收金額')
     v.done()
     const s = db.billingSettings

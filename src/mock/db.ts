@@ -51,6 +51,7 @@ import type {
   LabReport,
   ImagingReport,
   MedicalCertificate,
+  ReferralOut,
 } from '@/types'
 import { today } from '@/utils/date'
 import { buildSeed } from './seed'
@@ -120,6 +121,7 @@ export interface Database {
   imagingReports: ImagingReport[]
   /** 診斷證明書 */
   certificates: MedicalCertificate[]
+  referrals: ReferralOut[]
   /** 組套（常用處方）：醫師個人或科室共用 */
   orderSets: OrderSet[]
   /** 醫師個人片語 */
@@ -146,7 +148,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 71
+export const SCHEMA_VERSION = 72
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

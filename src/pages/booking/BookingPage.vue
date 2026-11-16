@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { useCan } from '@/composables/useCan'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X, CalendarX } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
@@ -9,9 +9,11 @@ import {
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import RegistrationSlip from '@/components/RegistrationSlip.vue'
 import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
+import ReferralInForm from '@/components/ReferralInForm.vue'
+import ReferralInDialog from '@/components/ReferralInDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
 import DailyAdjust from '@/components/DailyAdjust.vue'
-import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type VisitView } from '@/services'
+import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type ReferralInInput, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
 import type { SessionView } from '@/services/schedule'
 import { useAction, useQuery } from '@/composables/useService'
@@ -122,7 +124,12 @@ watch(patient, (p) => {
   identityCode.value = p?.defaultIdentity ?? '01'
   caseType.value = '01'
   preventItems.value = []
+  refOn.value = false
 })
+// 外院轉診單（選填）：病人持轉診單來，基本部分負擔收經轉診的金額；有效期依就醫日（referral-rules）
+const refOn = ref(false)
+const refForm = reactive<ReferralInInput>({ fromHospital: '', issuedOn: '', diagnosis: '', purpose: '' })
+watch(refOn, (on) => on && Object.assign(refForm, { fromHospital: '', issuedOn: '', diagnosis: '', purpose: '' }))
 // 慢箋：病人來領第 2、3 次藥，不必掛號看診——在這裡登記，直接去批價、領藥
 // ---------- 掛號預收（選填，只限掛號批價人員）：預設帶預估應收，可以改；批價時扣抵、多退少補 ----------
 const canPrepay = computed(() => auth.user?.role === 'clerk')
@@ -160,8 +167,8 @@ function togglePrevent(code: string, on: boolean) {
 // ---------- 預估應收（掛號不收費；讓櫃台答得出「今天要多少錢」）----------
 // 只含掛號當下就確定的項目；計算與批價共用 billing.fixedCharges，所以和批價時的數字一致
 const { data: estimate } = useQuery(
-  () => bookingApi.estimateFee(String(identityCode.value), String(caseType.value), preventItems.value.length > 0, selectedSession.value?.date),
-  [identityCode, caseType, () => preventItems.value.length, () => selectedSession.value?.date],
+  () => bookingApi.estimateFee(String(identityCode.value), String(caseType.value), preventItems.value.length > 0, selectedSession.value?.date, refOn.value),
+  [identityCode, caseType, () => preventItems.value.length, () => selectedSession.value?.date, refOn],
 )
 const feeText = (e: { lines: { kind: string; amount: number }[] }) =>
   e.lines.map((l) => `${{ reg: '掛號費', consult: '診察費', 'copay-basic': '基本部分負擔' }[l.kind] ?? l.kind} ${l.amount}`).join('＋')
@@ -176,7 +183,7 @@ function openSlip(v: VisitView) {
   slipOpen.value = true
 }
 // 掛號完成卡片上的預估：用實際掛進去的身分與案件分類（可能已轉成 A3）
-const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType, false, lastResult.value.date) : undefined), [lastResult])
+const { data: lastEstimate } = useQuery(async () => (lastResult.value ? bookingApi.estimateFee(lastResult.value.identityCode, lastResult.value.caseType, false, lastResult.value.date, !!lastResult.value.referralIn) : undefined), [lastResult])
 const register = useAction(bookingApi.register, { success: (v) => `掛號完成：${v.patientName} ${v.deptName} 第 ${v.seqNo} 號` })
 const canRegister = computed(() => !!patient.value && !!selectedSession.value)
 
@@ -198,6 +205,7 @@ function startReschedule(u: VisitView) {
   caseType.value = u.caseType === 'A3' ? '01' : u.caseType // A3 是「只做預防保健」自動轉的，改回 01 由系統重新判斷
   preventItems.value = [...u.preventItems]
   sessionId.value = undefined
+  refOn.value = false // 改期時轉診單跟著原掛號走（服務層判斷有效期），不在這裡重填
 }
 watch(patient, () => (rescheduling.value = undefined))
 
@@ -220,9 +228,11 @@ async function submit() {
     preventItems: preventItems.value,
     checkIn: sessionIsToday.value && checkInNow.value,
     ...(canPrepay.value && prepayOn.value && prepayAmount.value ? { prepay: { amount: Number(prepayAmount.value), payMethod: prepayMethod.value } } : {}),
+    ...(refOn.value ? { referralIn: { ...refForm } } : {}),
   })
   if (v) {
     lastResult.value = v
+    refOn.value = false
     prepayOn.value = false
     prepayAmount.value = undefined
     // 掛完清掉病人，準備服務下一位；診次保留（櫃台常連續掛同一診）
@@ -283,6 +293,9 @@ async function onCancel(v: VisitView) {
 // 更正就醫身分：病人看完卡片才發現選錯，是最常更正的時機；收費前都可以改（規則在服務層）
 const identityVisit = ref<VisitView>()
 const identityOpen = ref(false)
+// 補登／更正外院轉診單（還沒批價）
+const refOpen = ref(false)
+const refVisit = ref<VisitView>()
 function openIdentity(v: VisitView) {
   identityVisit.value = v
   identityOpen.value = true
@@ -457,6 +470,10 @@ function openIdentity(v: VisitView) {
               </div>
               <p v-if="preventItems.length && caseType === '01'" class="mt-1 text-xs text-slate-500">僅做預防保健時，系統會以 A3 案件申報（免基本部分負擔）。</p>
             </div>
+            <div v-if="!rescheduling" class="space-y-1.5 text-sm">
+              <UCheckbox v-model="refOn">病人持外院轉診單（基本部分負擔收經轉診的金額）</UCheckbox>
+              <ReferralInForm v-if="refOn" v-model="refForm" class="pl-6" :visit-date="selectedSession?.date" :errors="register.fieldErrors.value" />
+            </div>
             <div v-if="estimate" class="rounded-md border border-slate-200 px-3 py-2 text-sm">
               <div class="flex items-baseline justify-between gap-2">
                 <span class="text-slate-600">預估應收</span>
@@ -528,6 +545,7 @@ function openIdentity(v: VisitView) {
           <div class="tabular text-xs text-slate-500">{{ row.chartNo }}</div>
           <!-- 醫師看診時預約的回診 -->
           <UBadge v-if="row.followUpByName" tone="blue" :title="`${row.followUpByName} 醫師看診時預約`">醫師預約</UBadge>
+          <UBadge v-if="row.referralIn" tone="cyan" :title="`${row.referralIn.fromHospital} ${row.referralIn.issuedOn} 開單${row.referralIn.inheritedFrom ? '（同一療程回診沿用）' : ''}`">外院轉診</UBadge>
         </template>
         <template #cell-status="{ row }">
           <span class="inline-flex items-center gap-1">
@@ -538,6 +556,7 @@ function openIdentity(v: VisitView) {
         <template #cell-actions="{ row }">
           <UButton v-if="row.canCheckIn" size="sm" variant="secondary" :loading="checkIn.pending.value" @click="checkIn.run(row.id)">報到</UButton>
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
+          <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status) && !row.refillOf && can('visit.register')" size="sm" variant="ghost" @click="(refVisit = row), (refOpen = true)">轉診單</UButton>
           <UButton v-if="row.status === 'registered' && !row.refillOf" size="sm" variant="ghost" @click="openSlip(row)">補印</UButton>
           <UButton v-if="row.status === 'registered' || (row.refillOf && row.status === 'consulted')" size="sm" variant="ghost" @click="onCancel(row)">退掛</UButton>
         </template>
@@ -547,6 +566,7 @@ function openIdentity(v: VisitView) {
 
     <RegistrationSlip v-model="slipOpen" :visit="slipVisit" />
     <PatientEditDialog v-model="editOpen" :prefill="prefill" @saved="(p) => (patient = p)" />
+    <ReferralInDialog v-model="refOpen" :visit="refVisit" />
     <IdentityCorrectDialog v-model="identityOpen" :visit-id="identityVisit?.id" :identity-code="identityVisit?.identityCode" :subject="identityVisit && `${identityVisit.patientName}（${identityVisit.deptName} 第 ${identityVisit.seqNo} 號）・目前身分 ${identityVisit.identityName}`" />
   </div>
 </template>

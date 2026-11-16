@@ -100,8 +100,10 @@ export interface IpdCopaySettings {
 }
 
 export interface CopayValues {
-  /** 門診基本部分負擔（元） */
+  /** 門診基本部分負擔（元）：未經轉診 */
   basicCopay: number
+  /** 門診基本部分負擔（元）：經轉診（持外院轉診單、或同一療程醫師約的回診） */
+  basicCopayReferred: number
   drugCopayFreeUpTo: number
   drugCopayStep: number
   drugCopayPerStep: number
@@ -237,6 +239,66 @@ export interface Visit {
    * 收據作廢或退費後預收款還在，重新批價時再扣抵；退掛、停診才退還
    */
   prepay?: VisitPrepay
+  /** 外院轉入：病人持轉診單（櫃台掛號時登錄；基本部分負擔收經轉診的金額） */
+  referralIn?: ReferralIn
+}
+
+/** 外院轉入的轉診單（櫃台登錄；規則見 services/referral-rules.ts） */
+export interface ReferralIn {
+  /** 轉出院所 */
+  fromHospital: string
+  /** 轉診單開單日（從這天起 90 天內有效） */
+  issuedOn: string
+  /** 轉診單上的診斷 */
+  diagnosis: string
+  /** 轉診目的（轉診單上寫的，選填） */
+  purpose?: string
+  /** 同一療程醫師約的回診沿用轉診身分：原本持單那次的掛號 id（沿用的不必再回覆） */
+  inheritedFrom?: string
+  recordedBy: string
+  recordedAt: string
+  /** 本院醫師給轉出院所的轉診回覆單 */
+  reply?: ReferralReply
+}
+
+export interface ReferralReply {
+  /** 本院診斷 */
+  diagnosis: string
+  /** 處置與治療經過 */
+  treatment: string
+  /** 建議（後續追蹤、回原院所繼續治療…） */
+  advice: string
+  doctorId: string
+  at: string
+  printed?: { at: string; by: string }[]
+}
+
+/** 轉出的轉診單（醫師在看診頁開立，病人帶到別家醫院） */
+export interface ReferralOut {
+  id: string
+  /** 轉診單號：115 轉字第 000001 號 */
+  no: string
+  patientId: string
+  encounterId: string
+  deptId: string
+  doctorId: string
+  /** 看診日 */
+  date: string
+  /** 建議轉診院所、科別 */
+  toHospital: string
+  toDept: string
+  /** 轉診目的（REFERRAL_PURPOSES） */
+  purpose: string
+  urgent: boolean
+  /** 病情摘要（預設帶這次的 S／O／A，醫師可改） */
+  summary: string
+  /** 開立當下的快照：診斷、用藥、檢驗檢查（之後病歷改了，已印出的單不會跟著變） */
+  diagnoses: string[]
+  meds: string[]
+  exams: string[]
+  issuedAt: string
+  printed?: { at: string; by: string }[]
+  voided?: { at: string; by: string; reason: string }
 }
 
 export interface VisitPrepay {

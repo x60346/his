@@ -5610,7 +5610,7 @@ try {
     ok(!!msg, `比率 120% → 「${msg}」`)
     await IC.saveIpdCopay({ rates: [5, 10, 15], cap: 30000 })
     const bs = await api.adminApi.getBillingSettings()
-    await api.adminApi.saveBillingSettings({ basicCopay: bs.basicCopay, drugCopayFreeUpTo: bs.drugCopayFreeUpTo, drugCopayStep: bs.drugCopayStep, drugCopayPerStep: bs.drugCopayPerStep, drugCopayMax: bs.drugCopayMax + 1, from: '' })
+    await api.adminApi.saveBillingSettings({ basicCopay: bs.basicCopay, basicCopayReferred: bs.basicCopayReferred, drugCopayFreeUpTo: bs.drugCopayFreeUpTo, drugCopayStep: bs.drugCopayStep, drugCopayPerStep: bs.drugCopayPerStep, drugCopayMax: bs.drugCopayMax + 1, from: '' })
     ok(db().billingSettings.ipdCopay?.rates.join() === '5,10,15' && db().billingSettings.ipdCopay.cap === 30000, '存門診部分負擔參數不會洗掉住院部分負擔設定')
     await as('clerk01')
     ok((await IC.getIpdBill(tb.id)).bill.meta.copay[0].rate === 5, '新設定用於之後的結帳試算')
@@ -5792,6 +5792,176 @@ try {
     ok(ob.suggestions[0].label.includes('81 天後') && ob.suggestions[0].date === addDaysT(81) && ob.suggestions.length === 4, '慢性病連續處方（28 天 × 3 次）：第一個建議是 81 天後（藥用完前）')
     const vb = await BK.bookFollowUp(B.vv.id, { sessionId: ob.suggestions[0].session.id })
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
+  }
+
+  // 轉診：轉入（持外院轉診單掛號、經轉診部分負擔、同一療程回診沿用、轉診回覆單）與轉出（看完診開轉診單、列印、作廢）
+  console.log('\n[轉診]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const RR = api
+    /** 完成看診（用藥提醒照實確認，不是這段要測的） */
+    const completeOk = async (eid, draft) => api.opdApi.completeEncounter(eid, draft, { rxAlertReasons: Object.fromEntries((await api.opdApi.rxAlerts(eid, draft.medications.map((m) => m.drugId))).map((x) => [x.key, '測試確認'])) })
+    // 規則
+    ok(RR.referralValidUntil('2026-01-01') === '2026-03-31' && !RR.referralInProblem('2026-01-01', '2026-03-31') && RR.referralInProblem('2026-01-01', '2026-04-01').includes('過期'), '轉診單 90 天內有效（含開單日）：1/1 開單到 3/31 還能用、4/1 過期')
+    ok(RR.referralInProblem(addDaysT(1), T).includes('晚於') && RR.referralInProblem('', T).includes('開單日期'), '開單日不能晚於就醫日、要填')
+    const ce = RR.checkReferralInInput({ fromHospital: ' ', issuedOn: '', diagnosis: '' }, T)
+    ok(ce.fromHospital && ce.issuedOn && ce.diagnosis, '轉出院所、開單日期、診斷一次標出')
+    const s0 = db().billingSettings
+    ok(s0.basicCopayReferred === 50 && s0.basicCopay === 80, '預設：基本部分負擔未經轉診 80、經轉診 50')
+
+    // 種子：dr01 今天第一位候診持康健診所的轉診單
+    const seedV = db().visits.find((v) => v.referralIn && v.date === T)
+    ok(seedV?.doctorId === 'DR01' && seedV.referralIn.fromHospital === '康健診所' && seedV.status === 'registered', `種子：${db().patients.find((p) => p.id === seedV.patientId).name} 持康健診所轉診單掛 dr01`)
+
+    // 掛號時登錄
+    await as('clerk01')
+    const sess = (await api.scheduleApi.listSessions({ date: T })).filter((x) => !x.full && !x.closed && !x.suspended)
+    const s1 = sess.find((x) => x.deptId === 'D01') ?? sess[0]
+    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.patientId === x.id && v.date >= T) && db().identities.find((i) => i.code === x.defaultIdentity && !i.selfPay && !i.copayExempt))
+    const est0 = await api.bookingApi.estimateFee('01', '01', false, T)
+    const est1 = await api.bookingApi.estimateFee('01', '01', false, T, true)
+    ok(est0.total - est1.total === 30 && est1.lines.some((l) => l.name.includes('經轉診')), `掛號預估：持轉診單少 30 元（${est0.total} → ${est1.total}）`)
+    const f1 = await fieldsOf(() => api.bookingApi.register({ patientId: pt.id, sessionId: s1.id, identityCode: '01', caseType: '01', referralIn: { fromHospital: '康健診所', issuedOn: addDaysT(-91), diagnosis: 'x' } }))
+    ok(f1.issuedOn?.includes('過期') && !db().visits.some((v) => v.patientId === pt.id && v.date === T), `轉診單過期 → 「${f1.issuedOn}」，沒有掛上`)
+    const ref = { fromHospital: '康健診所', issuedOn: addDaysT(-10), diagnosis: 'I10 高血壓（控制不佳）', purpose: '進一步檢查' }
+    const v1 = await api.bookingApi.register({ patientId: pt.id, sessionId: s1.id, identityCode: '01', caseType: '01', referralIn: ref })
+    ok(v1.referralIn?.fromHospital === '康健診所' && v1.referralIn.recordedBy === db().users.find((u) => u.username === 'clerk01').id && db().auditLogs[0].action === '掛號', '掛號時登錄轉診單：記下誰登錄')
+
+    // 看診：上方顯示轉診資訊
+    const drUser = db().users.find((u) => u.doctorId === s1.doctorId).username
+    await as(drUser)
+    let iv = await api.referralApi.getReferralIn(v1.id)
+    ok(iv.referral.diagnosis.startsWith('I10') && !iv.canReply, '看診頁看得到轉診單；還沒看完不能回覆')
+    const ee = await api.opdApi.startConsult(v1.id, { allowParallel: true, allowNotCheckedIn: true })
+    let msg = await errOf(() => api.referralApi.referralReplyDraft(v1.id))
+    ok(msg.includes('完成看診後'), `看診中開回覆單 → 「${msg}」`)
+    await completeOk(ee.id, { subjective: '頭暈', objective: 'BP 168/98', assessment: '高血壓控制不佳', plan: '調整降壓藥，兩週後回診', vitals: {}, diagnoses: [{ icd: 'I10', name: '高血壓', primary: true }], medications: [{ drugId: 'M012', dose: 1, freq: 'QD', route: 'PO', days: 14, qty: 0, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false })
+    await as('clerk01')
+    const pv = await api.chargeApi.previewCharge(v1.id)
+    const basic = pv.lines.find((l) => l.kind === 'copay-basic')
+    ok(basic.amount === 50 && basic.name.includes('經轉診'), '批價：基本部分負擔收經轉診的 50 元')
+
+    // 收費前補登／更正／取消
+    msg = (await fieldsOf(() => api.referralApi.setReferralIn(v1.id, { ...ref, issuedOn: addDaysT(1) }))).issuedOn
+    ok(msg?.includes('晚於'), `更正成未來的開單日 → 「${msg}」`)
+    await api.referralApi.setReferralIn(v1.id, null)
+    ok((await api.chargeApi.previewCharge(v1.id)).lines.find((l) => l.kind === 'copay-basic').amount === 80 && db().auditLogs[0].action === '取消轉診單', '收費前取消轉診單：改回 80 元、寫稽核')
+    await api.referralApi.setReferralIn(v1.id, ref)
+    ok(db().auditLogs[0].action === '補登轉診單' && (await api.chargeApi.previewCharge(v1.id)).lines.find((l) => l.kind === 'copay-basic').amount === 50, '收費前補登：又是 50 元')
+    await as('ph01')
+    await expectError(() => api.referralApi.setReferralIn(v1.id, null), '藥師改轉診單')
+
+    // 回覆單
+    await as(drUser)
+    iv = await api.referralApi.getReferralIn(v1.id)
+    ok(iv.canReply && (await api.referralApi.listPendingReferralReplies()).some((x) => x.visitId === v1.id) && (await api.dashboardApi.getDashboard()).referralReplies >= 1, '看完診：可以回覆，列在醫師待辦（首頁「轉診待回覆」）')
+    const rd = await api.referralApi.referralReplyDraft(v1.id)
+    ok(rd.diagnosis === 'I10 高血壓' && rd.treatment.includes('Amlodipine') && rd.advice.includes('兩週後回診'), '回覆單預設：本院診斷、這次用藥、計畫')
+    const rf = await fieldsOf(() => api.referralApi.saveReferralReply(v1.id, { diagnosis: '', treatment: '', advice: '' }))
+    ok(rf.diagnosis && rf.advice, '回覆單：診斷、建議必填')
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== s1.doctorId).username
+    await as(other)
+    msg = await errOf(() => api.referralApi.saveReferralReply(v1.id, rd))
+    ok(msg.includes('看診的醫師'), `別的醫師回覆 → 「${msg}」`)
+    await as(drUser)
+    await api.referralApi.saveReferralReply(v1.id, { ...rd, advice: '血壓已調整，請回康健診所繼續追蹤' })
+    ok(!(await api.referralApi.listPendingReferralReplies()).some((x) => x.visitId === v1.id) && db().auditLogs[0].action === '轉診回覆', '回覆後不在待辦、寫稽核')
+    await as('clerk01')
+    await api.referralApi.setReferralIn(v1.id, ref)
+    ok(!!db().visits.find((v) => v.id === v1.id).referralIn.reply, '更正轉診單不會洗掉醫師的回覆')
+    msg = await errOf(() => api.referralApi.setReferralIn(v1.id, null))
+    ok(msg.includes('回覆'), `已回覆再取消轉診 → 「${msg}」`)
+    iv = await api.referralApi.printReferralReply(v1.id)
+    ok(iv.referral.reply.printed.length === 1 && iv.patient.name === pt.name && !!iv.doctorLicenseNo, '櫃台列印回覆單：記下列印、帶病人與醫師資料')
+
+    // 批價後不能改
+    const pv2 = await api.chargeApi.previewCharge(v1.id)
+    await api.chargeApi.pay(v1.id, { payMethod: 'cash', received: pv2.patientTotal })
+    msg = await errOf(() => api.referralApi.setReferralIn(v1.id, { ...ref, fromHospital: '別家' }))
+    ok(msg.includes('已經批價'), `批價後更正轉診單 → 「${msg}」`)
+
+    // 同一療程：醫師約的回診沿用
+    await as(drUser)
+    const opts = await api.bookingApi.followUpOptions(v1.id)
+    const fu = await api.bookingApi.bookFollowUp(v1.id, { sessionId: opts.suggestions[0].session.id })
+    const fv = db().visits.find((v) => v.id === fu.id)
+    ok(fv.referralIn?.inheritedFrom === v1.id && !fv.referralIn.reply, '醫師約的回診沿用轉診身分（不帶回覆單）')
+    const lk = { identity: db().identities.find((i) => i.code === fv.identityCode), settings: db().billingSettings, drug: (id) => db().drugs.find((d) => d.id === id), procedure: (id) => db().procedures.find((p) => p.id === id) }
+    ok(api.calcChargeLines(fv, { medications: [], procedures: [] }, lk).find((l) => l.kind === 'copay-basic').amount === 50, '回診的基本部分負擔也是經轉診的 50 元')
+    iv = await api.referralApi.getReferralIn(fv.id)
+    ok(iv.inheritedText?.includes('同一療程') && !iv.canReply, '回診標「同一療程」、不必再回覆')
+    // 自己另外掛的不算
+    await as('clerk01')
+    const sOther = (await api.scheduleApi.listSessions({ date: addDaysT(1) })).find((x) => !x.full && !x.closed && !x.suspended && x.deptId !== s1.deptId)
+    if (sOther) {
+      const v3 = await api.bookingApi.register({ patientId: pt.id, sessionId: sOther.id, identityCode: '01', caseType: '01' })
+      ok(!v3.referralIn, '病人自己另外掛的不算轉診')
+    }
+
+    // 轉出
+    const s2 = sess.find((x) => x.id !== s1.id && x.deptId === s1.deptId) ?? sess.find((x) => x.id !== s1.id)
+    const pt2 = db().patients.find((x) => x.id !== pt.id && !db().visits.some((v) => v.patientId === x.id && v.date >= T))
+    const v2 = await api.bookingApi.register({ patientId: pt2.id, sessionId: s2.id, identityCode: '01', caseType: '01' })
+    const dr2 = db().users.find((u) => u.doctorId === s2.doctorId).username
+    await as(dr2)
+    const e2 = await api.opdApi.startConsult(v2.id, { allowParallel: true, allowNotCheckedIn: true })
+    msg = await errOf(() => api.referralApi.referralOutDraft(e2.id))
+    ok(msg.includes('完成看診後'), `看診中開轉診單 → 「${msg}」`)
+    await completeOk(e2.id, { subjective: '胸悶三天', objective: 'EKG ST 下降', assessment: '疑似心絞痛', plan: '轉心臟內科', vitals: {}, diagnoses: [{ icd: 'I25.10', name: '冠狀動脈粥狀硬化心臟病', primary: true }], medications: [{ drugId: 'M019', dose: 1, freq: 'QD', route: 'PO', days: 7, qty: 0, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false })
+    const od = await api.referralApi.referralOutDraft(e2.id)
+    ok(od.summary.includes('胸悶三天') && od.summary.includes('EKG') && od.purpose === '進一步檢查', '轉診單預設：病情摘要帶主訴、檢查、評估')
+    const of = await fieldsOf(() => api.referralApi.issueReferral(e2.id, { ...od, toHospital: '', toDept: '', purpose: 'x', summary: ' ' }))
+    ok(of.toHospital && of.toDept && of.purpose && of.summary, '院所、科別、目的、摘要一次標出')
+    const ro = await api.referralApi.issueReferral(e2.id, { ...od, toHospital: '展示醫學中心', toDept: '心臟內科', urgent: true })
+    ok(/^\d+ 轉字第 \d{6} 號$/.test(ro.no) && ro.diagnoses[0].startsWith('I25.10') && ro.meds[0].includes('Aspirin') && ro.patient.allergies && !!ro.doctorLicenseNo, `開立 ${ro.no}：快照診斷、用藥、過敏，附醫師資料`)
+    await as(drUser)
+    msg = await errOf(() => api.referralApi.issueReferral(e2.id, { ...od, toHospital: 'x', toDept: 'y' }))
+    ok(msg.includes('自己看的'), `別的醫師開 → 「${msg}」`)
+    await as('clerk01')
+    const pr = await api.referralApi.printReferral(ro.id)
+    ok(pr.printed.length === 1 && (await api.referralApi.listReferralsOut({ patientId: pt2.id })).length === 1, '櫃台可以重印、查得到這位病人的轉診單')
+    await as(dr2)
+    const hist = await api.opdApi.patientHistory(pt2.id)
+    ok(hist.find((h) => h.id === e2.id)?.referralsOut[0].includes('展示醫學中心 心臟內科'), '就診紀錄列出轉出')
+    msg = (await fieldsOf(() => api.referralApi.voidReferral(ro.id, ''))).reason
+    ok(!!msg, '作廢要寫原因')
+    await api.referralApi.voidReferral(ro.id, '病人決定先在本院觀察')
+    msg = await errOf(() => api.referralApi.printReferral(ro.id))
+    ok(msg.includes('作廢'), `作廢後列印 → 「${msg}」`)
+    ok(!(await api.opdApi.patientHistory(pt2.id)).find((h) => h.id === e2.id).referralsOut.length, '作廢的不列在就診紀錄')
+
+    // 改期：轉診單跟著走（新日期還在有效期內）；過期就不沿用
+    await as('clerk01')
+    const tmr = (await api.scheduleApi.listSessions({ date: addDaysT(1) })).filter((x) => !x.full && !x.closed && !x.suspended)
+    const sv = db().visits.find((v) => v.id === seedV.id)
+    const rs1 = await api.bookingApi.rescheduleVisit(sv.id, { sessionId: tmr[0].id, identityCode: sv.identityCode, caseType: sv.caseType })
+    ok(rs1.referralIn?.fromHospital === '康健診所', '改期到明天：轉診單跟著改過去')
+    db().visits.find((v) => v.id === rs1.id).referralIn.issuedOn = addDaysT(-89)
+    const rs2 = await api.bookingApi.rescheduleVisit(rs1.id, { sessionId: tmr[1].id, identityCode: sv.identityCode, caseType: sv.caseType })
+    ok(!rs2.referralIn && db().auditLogs[0].detail.includes('已過期，沒有沿用'), '改期後超過 90 天：轉診單不沿用，稽核寫明')
+
+    // 收費設定：經轉診不能比未經轉診高
+    await as('admin')
+    const bs = await api.adminApi.getBillingSettings()
+    msg = (await fieldsOf(() => api.adminApi.saveBillingSettings({ ...bs, basicCopayReferred: bs.basicCopay + 1, from: '' }))).basicCopayReferred
+    ok(msg?.includes('不能比'), `經轉診比未經轉診高 → 「${msg}」`)
   }
 
   // 交互作用與重複用藥：純函式規則；門診比對病人還在吃的本院藥（各科、慢箋、出院帶藥），住院比對執行中醫囑；

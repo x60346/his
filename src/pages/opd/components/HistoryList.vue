@@ -32,6 +32,8 @@ defineEmits<{ copy: [item: HistoryItem, only?: 'medications'] }>()
       <div v-if="h.plan" class="text-slate-700"><span class="text-slate-500">計畫：</span>{{ h.plan }}</div>
       <div v-if="h.procedures.length" class="text-slate-700"><span class="text-slate-500">處置：</span>{{ h.procedureNames.join('、') }}</div>
       <div v-if="h.certificates?.length" class="text-slate-700"><span class="text-slate-500">診斷證明書：</span>{{ h.certificates.join('、') }}</div>
+      <div v-if="h.referralFrom" class="text-slate-700"><span class="text-slate-500">轉診：</span>{{ h.referralFrom }}</div>
+      <div v-if="h.referralsOut?.length" class="text-slate-700"><span class="text-slate-500">轉出：</span>{{ h.referralsOut.join('、') }}</div>
       <div v-for="c in h.consults" :key="c.id" class="text-slate-700"><span class="text-slate-500">會診 {{ c.toDeptName }}：</span>{{ c.question }}<template v-if="c.findings">；{{ c.answeredByName }} 回覆：{{ c.findings }}／{{ c.recommendation }}<template v-if="c.suggestVisit">（建議掛{{ c.toDeptName }}門診）</template></template><template v-else>（待回覆）</template></div>
       <ul v-if="h.medications.length" class="mt-1.5 space-y-0.5 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
         <li v-for="m in h.medications" :key="m.drugId" class="tabular">

@@ -67,7 +67,7 @@ export const discounts: DiscountRule[] = [
 ]
 
 /** 收費參數預設值（展示用的簡化規則） */
-export const billingSettings: BillingSettings = { basicCopay: 80, drugCopayFreeUpTo: 100, drugCopayStep: 100, drugCopayPerStep: 20, drugCopayMax: 200 }
+export const billingSettings: BillingSettings = { basicCopay: 80, basicCopayReferred: 50, drugCopayFreeUpTo: 100, drugCopayStep: 100, drugCopayPerStep: 20, drugCopayMax: 200 }
 
 export const caseTypes = [
   { code: '01', name: '西醫一般案件' },

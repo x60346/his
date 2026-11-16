@@ -12,6 +12,7 @@ import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
 import { activeIpdChargeOf, dischargeRxPending } from './ipd-bill'
+import { pendingReplyVisits } from './referral-work'
 
 export interface DashboardStats {
   date: string
@@ -35,6 +36,8 @@ export interface DashboardStats {
   consultIncoming?: number
   /** 我申請的門診會診已回覆、還沒看 */
   consultReplies?: number
+  /** 醫師：持外院轉診單、我看過、還沒開轉診回覆單 */
+  referralReplies?: number
   /** 待我（我這科）回覆的門診會診 */
   opdConsultIncoming?: number
   /** 我的病人（我是主治）有會診醫師新開、還沒按已閱的醫囑：病人數 */
@@ -140,6 +143,7 @@ export function getDashboard(): Promise<DashboardStats> {
         const myDept = db.doctors.find((d) => d.id === me.doctorId)?.deptId
         return {
           orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length,
+          referralReplies: pendingReplyVisits(me.doctorId).length,
           labAcks: labAckCount(me.doctorId),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
