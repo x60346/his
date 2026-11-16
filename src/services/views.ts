@@ -200,12 +200,15 @@ export interface VisitView extends Visit, PatientBrief {
   roomLocation: string
   /** 現在可以報到（今天、候診中、還沒報到；規則 checkInProblem，服務層 checkIn 用同一條） */
   canCheckIn: boolean
+  /** 醫師預約的回診：預約的醫師 */
+  followUpByName?: string
 }
 
 export function visitView(v: Visit): VisitView {
   const s = find.session(v.sessionId)
   return {
     ...v,
+    ...(v.followUpOf ? { followUpByName: nameOf.doctor(v.followUpOf.doctorId) } : {}),
     ...patientBrief(v.patientId),
     doctorName: nameOf.doctor(v.doctorId),
     deptName: nameOf.dept(v.deptId),

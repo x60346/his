@@ -5,7 +5,7 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { clonePlain } from '@/utils/clone'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { CheckCircle2, ChevronsRight, FlaskConical, ScanLine, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
+import { CalendarPlus, CheckCircle2, ChevronsRight, FlaskConical, ScanLine, Lock, Megaphone, Pencil, Save, ShieldCheck, SkipForward } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, UQueryState, USelect, UStatusBadge, UTabs, UTextarea,
 } from '@/components/ui'
@@ -19,11 +19,12 @@ import HistoryList from './components/HistoryList.vue'
 import OpdConsultDialog from './components/OpdConsultDialog.vue'
 import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import LabReportList from '@/components/LabReportList.vue'
+import FollowUpDialog from './components/FollowUpDialog.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
 import PhraseHint from '@/components/PhraseHint.vue'
 import { usePhrases } from '@/composables/usePhrases'
-import { autoQty, imagingApi, labApi, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
+import { autoQty, bookingApi, imagingApi, labApi, CONTROLLED_LEVEL_LABEL, needsSpecialRx, consultApi, doseLevel, doseNote, masterApi, nextInQueue, opdApi, type IncomingOpdConsult, patientApi, preventApi, ServiceError, type ExpandedOrders, type ExpandedOrderSet } from '@/services'
 import type { EncounterDraft, HistoryItem, QueueItem } from '@/services/opd'
 import { Cancelled, useAction, useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -423,6 +424,10 @@ const { data: labs } = useQuery(async () => (visit.value ? labApi.patientLabs(vi
 const labAlerts = computed(() => (labs.value?.reports ?? []).filter((r) => r.needsAck))
 const { data: imgs } = useQuery(async () => (visit.value ? imagingApi.patientImaging(visit.value.patientId) : undefined), [() => visit.value?.patientId])
 const imgAlerts = computed(() => (imgs.value?.reports ?? []).filter((r) => r.needsAck))
+// 預約回診：看診中或看完（當天）都可以約；已約的列在上方（避免重複約）
+const canFollowUp = computed(() => !isAdmin && !!visit.value && visit.value.date === todayStr.value && ['in-consult', 'consulted', 'charged', 'dispensed'].includes(visit.value.status))
+const followOpen = ref(false)
+const { data: follow } = useQuery(async () => (canFollowUp.value && visit.value ? bookingApi.followUpOptions(visit.value.id) : undefined), [() => visit.value?.id, canFollowUp, followOpen])
 // 段落捷徑（固定在看診頁上方）：頁面變長了，點一下就捲到該段，並看得到診斷、醫令的數量
 const sectionLinks = computed(() => [
   { key: 'so' as Section, label: 'S／O' },
@@ -526,6 +531,13 @@ const lastOpen = ref(true)
         <ScanLine class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-1"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
+      </div>
+      <!-- 預約回診：已約的下次門診；按鈕開預約對話框 -->
+      <div v-if="canFollowUp" class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+        <span class="text-xs font-semibold text-slate-600">回診</span>
+        <span v-if="follow?.existing.length" class="min-w-0 flex-1 text-slate-700">已預約 {{ follow.existing.map((x) => `${x.date.slice(5).replace('-', '/')} ${x.period === 'AM' ? '上午' : x.period === 'PM' ? '下午' : '夜診'} ${x.doctorName} #${x.seqNo}`).join('、') }}</span>
+        <span v-else class="min-w-0 flex-1 text-xs text-slate-500">還沒預約下次門診</span>
+        <UButton size="sm" variant="secondary" :icon="CalendarPlus" @click="followOpen = true">預約回診</UButton>
       </div>
       <!-- 這次看診的門診會診 -->
       <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
@@ -684,5 +696,6 @@ const lastOpen = ref(true)
     </div>
     <OpdConsultDialog :item="answeringOpd" @close="answeringOpd = null" />
     <ControlledRxDialog v-model="rxOpen" :encounter-id="rxEncounterId" />
+    <FollowUpDialog v-model="followOpen" :visit-id="visit?.id" />
   </div>
 </template>

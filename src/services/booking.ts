@@ -1,11 +1,12 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { ChargeLine, Encounter, Visit, VisitStatus, PayMethod } from '@/types'
+import type { ChargeLine, ClinicSession, Encounter, Visit, VisitStatus, PayMethod } from '@/types'
 import { prepayAvailable, refundPrepay, takePrepay } from './money'
-import { db, nextCounter, newId } from '@/mock/db'
+import { commitIfPossible, db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
+import { FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, refillFollowUpDays } from './followup-rules'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
 import { fixedCharges } from './billing'
@@ -339,5 +340,115 @@ export function registerRefill(encounterId: string): Promise<VisitView> {
     })
     audit('慢箋領藥登記', `${p.chartNo} ${p.name} 第 ${v.refillSeq}/${e.refillTimes} 次（原處方 ${first.date} ${doctor}）`)
     return visitView(v)
+  })
+}
+
+// ---------- 醫師預約回診 ----------
+const PERIOD_ORDER: Record<string, number> = { AM: 0, PM: 1, NIGHT: 2 }
+
+export interface FollowUpSession {
+  id: string
+  date: string
+  period: ClinicSession['period']
+  roomNo: string
+  doctorId: string
+  doctorName: string
+  booked: number
+  limit: number
+  /** 不能掛的原因（額滿、停診、截止）；沒有＝可以掛 */
+  blocked?: string
+  /** 是看這次診的醫師自己的診 */
+  mine: boolean
+}
+
+export interface FollowUpOptions {
+  visitId: string
+  patientName: string
+  deptId: string
+  deptName: string
+  /** 快速選項：1／2／4 週後、慢性病依處方；每個找好最近一個可掛的自己的診（找不到就沒有 session） */
+  suggestions: { label: string; date: string; session?: FollowUpSession }[]
+  /** 這位病人在這一科已有的未來掛號（含剛約的）：避免重複約 */
+  existing: { visitId: string; date: string; period: ClinicSession['period']; doctorName: string; seqNo: number; byFollowUp: boolean }[]
+}
+
+/** 醫師只能替「今天自己看的這位病人」約回診（醫師不能一般掛號） */
+function followUpSource(visitId: string) {
+  const u = requireUser('doctor')
+  const v = must(find.visit(visitId), '掛號紀錄')
+  if (v.doctorId !== u.doctorId) fail('只能替自己今天看的病人預約回診', 'FORBIDDEN')
+  if (v.date !== today()) fail('只能在看診當天預約回診', 'CONFLICT')
+  if (!['in-consult', 'consulted', 'charged', 'dispensed'].includes(v.status)) fail('叫號看診後才能預約回診', 'CONFLICT')
+  return { u, v }
+}
+
+function followUpSession(s: ClinicSession, mineId: string): FollowUpSession {
+  const booked = db.visits.filter((x) => x.sessionId === s.id && x.status !== 'cancelled').length
+  const blocked = s.suspended ? `停診（${s.suspended.reason}）` : booked >= s.limit ? '額滿' : isSessionClosed(s) ? '已截止' : undefined
+  return { id: s.id, date: s.date, period: s.period, roomNo: s.roomNo, doctorId: s.doctorId, doctorName: nameOf.doctor(s.doctorId), booked, limit: s.limit, ...(blocked ? { blocked } : {}), mine: s.doctorId === mineId }
+}
+
+/** 某天這一科的診次（自己的在前）：預約回診時選 */
+export function followUpSessions(visitId: string, date: string): Promise<FollowUpSession[]> {
+  return query(() => {
+    const { v } = followUpSource(visitId)
+    if (date <= today()) fail('回診要約在明天以後')
+    if (ensureSessions(date)) commitIfPossible()
+    return db.sessions
+      .filter((s) => s.date === date && s.deptId === v.deptId)
+      .map((s) => followUpSession(s, v.doctorId))
+      .sort((a, b) => Number(b.mine) - Number(a.mine) || PERIOD_ORDER[a.period] - PERIOD_ORDER[b.period])
+  })
+}
+
+/** 預約回診的選項：快速建議（找好自己的診次）與已有的未來掛號 */
+export function followUpOptions(visitId: string): Promise<FollowUpOptions> {
+  return query(() => {
+    const { v } = followUpSource(visitId)
+    const t = today()
+    const e = find.encounterOfVisit(v.id)
+    const picks: { label: string; days: number }[] = FOLLOW_UP_PICKS.map((p) => ({ ...p }))
+    const refillDays = e ? refillFollowUpDays(Math.max(0, ...e.medications.map((m) => m.days)), e.refillTimes) : undefined
+    if (refillDays) picks.unshift({ label: `慢性病處方用完前（${refillDays} 天後）`, days: refillDays })
+    let created = false
+    const suggestions = picks.map((p) => {
+      const date = addDays(t, p.days)
+      // 從目標日往後找最近一個可以掛的自己的診
+      for (let k = 0; k <= FOLLOW_UP_SEARCH_DAYS; k++) {
+        const d = addDays(date, k)
+        created = ensureSessions(d) || created
+        const s = db.sessions.filter((x) => x.date === d && x.doctorId === v.doctorId).map((x) => followUpSession(x, v.doctorId)).find((x) => !x.blocked)
+        if (s) return { label: p.label, date, session: s }
+      }
+      return { label: p.label, date }
+    })
+    if (created) commitIfPossible()
+    const existing = db.visits
+      .filter((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.date > t && x.status === 'registered')
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((x) => ({ visitId: x.id, date: x.date, period: find.session(x.sessionId)!.period, doctorName: nameOf.doctor(x.doctorId), seqNo: x.seqNo, byFollowUp: !!x.followUpOf }))
+    return { visitId: v.id, patientName: nameOf.patient(v.patientId), deptId: v.deptId, deptName: nameOf.dept(v.deptId), suggestions, existing }
+  })
+}
+
+/**
+ * 預約回診：掛進同科的未來診次（身分、案件類別沿用這次；只做預防保健的 A3 改一般案件）。和掛號同一套檢查（createVisit）。
+ * 這一科已有未來掛號：要確認（confirmDuplicate）——有時確實要約兩次（一週後看報告、一個月後追蹤）
+ */
+export function bookFollowUp(visitId: string, input: { sessionId: string; confirmDuplicate?: boolean }): Promise<VisitView> {
+  return mutate(() => {
+    const { u, v } = followUpSource(visitId)
+    const date = (input.sessionId ?? '').slice(1, 9).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+    if (date <= today()) fail('回診要約在明天以後')
+    ensureSessions(date)
+    const s = must(find.session(input.sessionId), '診次')
+    if (s.deptId !== v.deptId) fail('回診只能約同一科（要看別科請轉診或會診）')
+    const dup = db.visits.filter((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.date > today() && x.status === 'registered')
+    if (dup.length && !input.confirmDuplicate) fail(`已經預約 ${dup.map((x) => `${x.date.slice(5).replace('-', '/')} ${nameOf.doctor(x.doctorId)}`).join('、')}，確定要再約一次？`, 'CONFLICT', 'confirmDuplicate')
+    const caseType = v.caseType === 'A3' || v.caseType === '08' ? '01' : v.caseType
+    const nv = createVisit({ patientId: v.patientId, sessionId: s.id, identityCode: v.identityCode, caseType })
+    nv.followUpOf = { visitId: v.id, doctorId: u.doctorId!, at: now() }
+    audit('預約回診', `${nameOf.patient(v.patientId)} → ${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}（${nameOf.doctor(u.doctorId)} 看診時預約）`)
+    return visitView(nv)
   })
 }

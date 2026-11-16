@@ -526,6 +526,8 @@ function openIdentity(v: VisitView) {
         <template #cell-patientName="{ row }">
           <div>{{ row.patientName }}</div>
           <div class="tabular text-xs text-slate-500">{{ row.chartNo }}</div>
+          <!-- 醫師看診時預約的回診 -->
+          <UBadge v-if="row.followUpByName" tone="blue" :title="`${row.followUpByName} 醫師看診時預約`">醫師預約</UBadge>
         </template>
         <template #cell-status="{ row }">
           <span class="inline-flex items-center gap-1">

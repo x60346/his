@@ -208,6 +208,8 @@ export interface Visit {
   firstVisit: boolean
   /** 本次掛號附帶的預防保健項目代碼 */
   preventItems: string[]
+  /** 醫師在看診時預約的回診：哪一次看診、哪位醫師、何時（櫃台掛號清單標「醫師預約」） */
+  followUpOf?: { visitId: string; doctorId: string; at: string }
   createdAt: string
   /**
    * 報到時間：病人人到了。現場掛號同時報到；事先預約的到院後由櫃台按「報到」。

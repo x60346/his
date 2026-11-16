@@ -30,11 +30,11 @@ async function print() {
 </script>
 
 <template>
-  <UDialog v-model="open" title="掛號單" size="sm">
+  <UDialog v-model="open" :title="visit?.followUpOf ? '預約回診單' : '掛號單'" size="sm">
     <div v-if="visit" class="print-area mx-auto w-[80mm] max-w-full bg-white p-3 font-sans text-[13px] leading-snug text-black">
       <header class="border-b border-dashed border-black pb-1.5 text-center">
         <div class="text-base font-bold">{{ HOSPITAL.name }}</div>
-        <div class="text-xs">門診掛號單（展示用）</div>
+        <div class="text-xs">{{ visit?.followUpOf ? `門診預約回診單（${visit.followUpByName} 醫師預約・展示用）` : '門診掛號單（展示用）' }}</div>
       </header>
 
       <div class="mt-2 text-center">

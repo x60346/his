@@ -5711,6 +5711,83 @@ try {
     ok(!/DISCHARGE_RX_DAYS\s*[<>]|days\s*>\s*7/.test(readFileSync('src/pages/ipd/IpdPage.vue', 'utf8')), '頁面不自己判斷天數上限（服務層 dischargeRxDaysProblem）')
   }
 
+  // 預約回診：醫師看診時約下次門診（同科、自己的為主）；正式掛號、醫師預約標記；重複要確認；慢性病依處方建議
+  console.log('\n[預約回診]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const FR = await load('/src/services/followup-rules.ts')
+    const BK = api.bookingApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    ok(FR.refillFollowUpDays(28, 3) === 81 && FR.refillFollowUpDays(28, 0) === undefined && FR.refillFollowUpDays(0, 2) === undefined && FR.FOLLOW_UP_PICKS.map((p) => p.days).join() === '7,14,28', '建議：1／2／4 週；慢性病連續處方 28 天 × 3 次 → 用完前 3 天（81 天後）')
+    // 掛一位今天的病人
+    const newVisit = async (caseType = '01') => {
+      await as('clerk01')
+      const ss = await api.scheduleApi.listSessions({ date: T })
+      const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
+      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date >= T && v.patientId === x.id))
+      const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: pt.defaultIdentity, caseType })
+      return { vv, sess, pt, drUser: db().users.find((u) => u.doctorId === sess.doctorId).username }
+    }
+    const A = await newVisit()
+    await as(A.drUser)
+    msg = await errOf(() => BK.followUpOptions(A.vv.id))
+    ok(msg.includes('叫號看診後'), `還沒叫號就約回診 → 「${msg}」`)
+    await api.opdApi.startConsult(A.vv.id, { allowParallel: true, allowNotCheckedIn: true })
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== A.sess.doctorId).username
+    await as(other)
+    msg = await errOf(() => BK.followUpOptions(A.vv.id))
+    ok(msg.includes('自己今天看的'), `別的醫師替這位病人約 → 「${msg}」`)
+    await as('nurse01')
+    await expectError(() => BK.bookFollowUp(A.vv.id, { sessionId: A.sess.id }), '護理師用醫師預約')
+    await as(A.drUser)
+    const o = await BK.followUpOptions(A.vv.id)
+    ok(o.suggestions.length === 3 && o.suggestions.every((s) => s.session && s.session.mine && !s.session.blocked && s.session.date >= s.date && s.session.date <= dateUtil.addDays(s.date, FR.FOLLOW_UP_SEARCH_DAYS)) && !o.existing.length, '快速選項：1／2／4 週後各找好最近一個可掛的自己的診')
+    msg = await errOf(() => BK.followUpSessions(A.vv.id, T))
+    ok(msg.includes('明天以後'), `選今天 → 「${msg}」`)
+    const d7 = o.suggestions[0].session.date
+    const ses = await BK.followUpSessions(A.vv.id, d7)
+    ok(ses.length > 0 && ses[0].mine && ses.every((s) => db().sessions.find((x) => x.id === s.id).deptId === A.vv.deptId), '選日期：同科的診次，自己的在前')
+    const otherDept = db().sessions.find((s) => s.date > T && s.deptId !== A.vv.deptId)
+    msg = await errOf(() => BK.bookFollowUp(A.vv.id, { sessionId: otherDept.id }))
+    ok(msg.includes('同一科'), `約別科 → 「${msg}」`)
+    const v1 = await BK.bookFollowUp(A.vv.id, { sessionId: o.suggestions[1].session.id })
+    const nv = db().visits.find((x) => x.id === v1.id)
+    ok(nv.status === 'registered' && nv.date === o.suggestions[1].session.date && nv.patientId === A.pt.id && nv.identityCode === A.vv.identityCode && nv.caseType === A.vv.caseType && nv.followUpOf?.visitId === A.vv.id && nv.followUpOf.doctorId === A.sess.doctorId && v1.seqNo > 0, `預約成功：正式掛號（${v1.date} #${v1.seqNo}）、身分與案件類別沿用、記下哪次看診約的`)
+    ok(v1.followUpByName === db().doctors.find((d) => d.id === A.sess.doctorId).name && db().auditLogs[0].action === '預約回診', '掛號顯示「醫師預約」（預約醫師）、寫稽核')
+    const o2 = await BK.followUpOptions(A.vv.id)
+    ok(o2.existing.length === 1 && o2.existing[0].byFollowUp && o2.existing[0].seqNo === v1.seqNo, '看診頁列出已約的回診')
+    let e = await (async () => { try { await BK.bookFollowUp(A.vv.id, { sessionId: o.suggestions[2].session.id }) } catch (x) { return x } })()
+    ok(e?.code === 'CONFLICT' && e.field === 'confirmDuplicate' && e.message.includes('已經預約'), `已約過又約 → 「${e?.message}」（要確認）`)
+    const v2 = await BK.bookFollowUp(A.vv.id, { sessionId: o.suggestions[2].session.id, confirmDuplicate: true })
+    ok(!!v2.id && (await BK.followUpOptions(A.vv.id)).existing.length === 2, '確認後可以再約一次（一週後看報告、一個月後追蹤）')
+    msg = await errOf(() => BK.bookFollowUp(A.vv.id, { sessionId: o.suggestions[2].session.id, confirmDuplicate: true }))
+    ok(msg.includes('已掛過此診'), `同一個診次約兩次 → 「${msg}」（和掛號同一套檢查）`)
+    // 看完診（已批價）也可以約；櫃台掛號清單看得到
+    await api.opdApi.completeEncounter(db().encounters.find((x) => x.visitId === A.vv.id).id, { subjective: '頭痛', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'R51', name: '頭痛', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false }).catch(() => null)
+    ok(!!(await BK.followUpOptions(A.vv.id)), '看完診（同一天）仍可預約回診')
+    await as('clerk01')
+    const lst = await api.bookingApi.listVisits({ date: v1.date })
+    ok(lst.some((x) => x.id === v1.id && x.followUpByName), '櫃台掛號清單：這筆標「醫師預約」')
+    // 慢性病連續處方：依處方建議回診日
+    const B = await newVisit('04')
+    await as(B.drUser)
+    const eb = await api.opdApi.startConsult(B.vv.id, { allowParallel: true, allowNotCheckedIn: true })
+    await api.opdApi.completeEncounter(eb.id, { subjective: '血壓追蹤', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'I10', name: '本態性高血壓', primary: true }], medications: [{ drugId: 'M012', dose: 1, freq: 'QD', route: 'PO', days: 28, qty: 28, selfPay: false }], procedures: [], refillTimes: 3, admissionRequested: false })
+    const ob = await BK.followUpOptions(B.vv.id)
+    ok(ob.suggestions[0].label.includes('81 天後') && ob.suggestions[0].date === addDaysT(81) && ob.suggestions.length === 4, '慢性病連續處方（28 天 × 3 次）：第一個建議是 81 天後（藥用完前）')
+    const vb = await BK.bookFollowUp(B.vv.id, { sessionId: ob.suggestions[0].session.id })
+    ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {
