@@ -2028,7 +2028,7 @@ try {
     ok(r.unpaid.length === days.reduce((a, x) => a + x.unpaid.length, 0), `未收款名單含期間內每一天（${r.unpaid.length} 位，帶就醫日）`)
     const single = await C.dailyReport(T)
     ok(single.date === T && single.to === T && single.byDay.length === 1, '只給一天：照舊是日結報表')
-    for (const [a, b, msg] of [[T, addDays(T, -1), '結束日期早於起始日期'], [addDays(T, -31), T, '超過 31 天']]) {
+    for (const [a, b, msg] of [[T, addDays(T, -1), '結束日期早於起始日期'], [addDays(T, -366), T, '超過一年（367 天）']]) {
       try {
         await C.dailyReport(a, b)
         ok(false, `${msg}應被擋下`)
@@ -2036,7 +2036,10 @@ try {
         ok(e.field === 'to', `${msg} → 「${e.message}」（標在結束日期）`)
       }
     }
-    ok(!!(await C.dailyReport(addDays(T, -30), T)), '剛好 31 天可以查')
+    const y = await C.dailyReport(addDays(T, -365), T)
+    ok(y.byDay.length === 366 && y.byDay.reduce((a, d) => a + d.collected, 0) === y.collected, '剛好一年（366 天）可以查，每日小計加總＝實收')
+    ok(y.byMonth?.length >= 12 && y.byMonth.reduce((a, m) => a + m.collected, 0) === y.collected && y.byMonth.reduce((a, m) => a + m.count, 0) === y.count && y.byMonth.every((m) => /^\d{4}-\d{2}$/.test(m.date)), `超過兩個月有依月份小計（${y.byMonth?.length} 個月），加總＝實收、收據數`)
+    ok(!(await C.dailyReport(addDays(T, -61), T)).byMonth && !!(await C.dailyReport(addDays(T, -62), T)).byMonth, '62 天以內照舊依日期；63 天起改依月份')
 
     const X = await load('/src/services/report-csv.ts')
     ok(X.csvCell('a,b') === '"a,b"' && X.csvCell('說"好"') === '"說""好"""' && X.csvCell('第一行\n第二行') === '"第一行\n第二行"', 'CSV 欄位：逗號、引號、換行要加引號（引號重複一次）')
@@ -5369,6 +5372,84 @@ try {
     const { readFileSync } = await import('node:fs')
     const pg = readFileSync('src/pages/imaging/ImagingPage.vue', 'utf8')
     ok(!/isRadiologist|reader === 'radiology' \?/.test(pg), '判讀頁不自己判斷誰能判讀（服務層篩好清單）')
+  }
+
+  // 密碼過期太久鎖帳號（寬限天數、管理員重設解鎖、最後一位管理員不鎖）；藥車簽收單
+  console.log('\n[密碼過期鎖帳號、藥車簽收單]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const PR = await load('/src/services/password-rules.ts')
+    const A = api.authApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const age = (daysLeft) => ({ expiresOn: '', daysLeft, expired: daysLeft <= 0, warn: false })
+    ok(PR.passwordLocked(age(-31), 30) && !PR.passwordLocked(age(-30), 30) && !PR.passwordLocked(age(-500), 0) && !PR.passwordLocked(age(5), 30) && !PR.passwordLocked(null, 30), '鎖定規則：過期天數超過寬限才鎖（剛好 30 天還沒鎖）；寬限 0＝不鎖；沒過期不鎖')
+    ok(['-1', '366', '1.5'].every((g) => PR.checkPasswordPolicy({ maxDays: 90, history: 3, graceDays: Number(g) }).graceDays) && !PR.checkPasswordPolicy({ maxDays: 90, history: 3, graceDays: 0 }).graceDays && PR.PASSWORD_GRACE_DEFAULT === 30, '寬限天數：0–365 的整數，預設 30')
+    const user = (n) => db().users.find((u) => u.username === n)
+    ok(user('clerk03').passwordSetOn === addDaysT(-130), '種子：clerk03 的密碼 130 天前設定（90 天到期，已過期 40 天）')
+    let msg = await errOf(() => A.login('clerk03', 'wrong'))
+    ok(msg === '帳號或密碼錯誤', '密碼錯的不說帳號鎖了（不能拿來試帳號）')
+    msg = await errOf(() => A.login('clerk03', '1234'))
+    ok(msg.includes('已過期 40 天') && msg.includes('鎖定') && msg.includes('管理員'), `鎖定的帳號登入 → 「${msg}」`)
+    await as('admin')
+    const row = (await api.adminApi.listUsers()).find((u) => u.username === 'clerk03')
+    ok(row.passwordState?.locked === 40 && !(await api.adminApi.listUsers()).find((u) => u.username === 'nurse02').passwordState?.locked, '帳號列表標出鎖定（過期 40 天）；快到期的 nurse02 沒有')
+    const pol = await A.passwordPolicy()
+    ok(pol.graceDays === 30, '密碼原則讀得到寬限天數')
+    msg = await errOf(() => A.savePasswordPolicy({ maxDays: 90, history: 3, graceDays: 400 }))
+    ok(!!msg, `寬限 400 天 → 「${msg}」`)
+    let saved = await A.savePasswordPolicy({ maxDays: 90, history: 3, graceDays: 0 })
+    ok(saved.graceDays === 0 && saved.lockedUsers === 0 && saved.expiredUsers >= 1, '寬限設 0：沒有鎖定的帳號（clerk03 改算「已過期」）')
+    const g0 = await A.login('clerk03', '1234')
+    ok(g0.passwordExpired, '寬限 0：clerk03 可以登入，但要先改密碼')
+    await as('admin')
+    saved = await A.savePasswordPolicy({ maxDays: 90, history: 3 })
+    ok(saved.graceDays === 0, '沒送寬限天數＝不改（舊的呼叫方式照用）')
+    saved = await A.savePasswordPolicy({ maxDays: 90, history: 3, graceDays: 30 })
+    ok(saved.lockedUsers === 1 && db().auditLogs[0].detail.includes('寬限 0→30'), '改回 30 天：回報 1 個帳號鎖定，稽核寫明')
+    // 管理員重設密碼＝解鎖
+    await api.adminApi.resetPassword(user('clerk03').id, 'Temp1234')
+    const r1 = await A.login('clerk03', 'Temp1234')
+    ok(!!r1 && user('clerk03').mustChangePassword, '管理員重設密碼後可以登入（要先改密碼）')
+    await expectError(() => api.chargeApi.dailyReport(T), '重設後還沒改密碼就要用')
+    await A.changeOwnPassword({ current: 'Temp1234', next: 'NewPass88' })
+    ok(!!(await api.chargeApi.dailyReport(T)), '改完密碼就正常使用')
+    // 已登入的分頁：密碼放到過期太久，下一個動作就被擋
+    await as('nurse01')
+    user('nurse01').passwordSetOn = addDaysT(-200)
+    msg = await errOf(() => api.nursingApi.listWardTasks('5A 內科病房'))
+    ok(msg.includes('鎖定'), `已登入的人過期太久，下一個動作 → 「${msg}」`)
+    user('nurse01').passwordSetOn = T
+    // 最後一位管理員不鎖；有其他可用的管理員就會鎖
+    user('admin').passwordSetOn = addDaysT(-200)
+    const ad = await A.login('admin', '1234')
+    ok(ad.passwordExpired, '唯一的管理員過期太久：不鎖，只要求改密碼（不然沒人能解鎖）')
+    user('clerk02').roles = ['clerk', 'admin']
+    msg = await errOf(() => A.login('admin', '1234'))
+    ok(msg.includes('鎖定'), `另有可用的管理員（clerk02）時，管理員一樣會鎖 → 「${msg}」`)
+    user('clerk02').passwordSetOn = addDaysT(-200)
+    ok((await A.login('admin', '1234')).passwordExpired, '兩位管理員都過期太久：都不鎖（總要留人能解鎖）')
+    user('clerk02').roles = ['clerk']
+    user('clerk02').passwordSetOn = T
+    user('admin').passwordSetOn = T
+
+    // 藥車簽收單
+    const ud = db().udDispenses.find((d) => d.id === 'UD-SEED-1')
+    await as('ph01')
+    const sh = await api.udApi.udCartSheet(ud.id)
+    const boxes = sh.wards.flatMap((w) => w.boxes)
+    ok(sh.no === ud.no && sh.wards.length >= 1 && sh.wards.every((w, i) => i === 0 || sh.wards[i - 1].ward <= w.ward) && sh.wards.every((w) => w.boxes.every((b, i) => i === 0 || w.boxes[i - 1].bedNo <= b.bedNo)), `簽收單：依病房分張（${sh.wards.map((w) => w.ward).join('、')}）、依床號排`)
+    ok(boxes.length === ud.boxes.filter((b) => b.status === 'verified' && ud.lines.some((l) => l.admissionId === b.admissionId && l.qty > 0)).length && boxes.every((b) => b.lines.every((l) => l.qty > 0 && l.doses > 0)), '只印已核對送出的藥盒；床邊已有（數量 0）的不印')
+    ok(boxes.every((b) => b.receivedByName === '孫佩君' && b.receivedAt && b.verifiedByName), '已點收的印出系統記錄的點收人與時間、核對藥師')
+    await as('nurse01')
+    await expectError(() => api.udApi.udCartSheet(ud.id), '護理師印藥車簽收單')
   }
 
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班

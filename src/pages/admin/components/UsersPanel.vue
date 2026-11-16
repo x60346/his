@@ -96,6 +96,7 @@ async function submitPw() {
         <span class="tabular font-medium">{{ row.username }}</span><UBadge v-if="row.id === auth.user?.id" tone="blue" class="ml-1">我</UBadge>
         <UBadge v-for="g in row.grants ?? []" :key="g" tone="blue" class="ml-1" title="指定給這個帳號的權限（系統管理 → 權限）">{{ permLabel(g) }}</UBadge>
         <UBadge v-if="row.mustChangePassword" tone="yellow" class="ml-1" title="管理員設定的密碼，本人登入後須先變更">待改密碼</UBadge>
+        <UBadge v-else-if="row.passwordState?.locked !== undefined" tone="red" class="ml-1" :title="`${row.passwordState.expiresOn} 到期，已過期 ${row.passwordState.locked} 天；按「重設密碼」解鎖`">已鎖定（密碼過期）</UBadge>
         <UBadge v-else-if="row.passwordState?.expired" tone="red" class="ml-1" :title="`${row.passwordState.expiresOn} 到期；登入後須先變更`">密碼過期</UBadge>
         <UBadge v-else-if="row.passwordState" tone="yellow" class="ml-1" :title="`${row.passwordState.expiresOn} 到期`">密碼 {{ row.passwordState.daysLeft }} 天後到期</UBadge>
       </template>

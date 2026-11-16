@@ -234,12 +234,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount'] },
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
     { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
+    // 長期沒登入的櫃台（示範「密碼過期太久鎖帳號」：130 天前設定的密碼，90 天到期、過期 40 天 > 寬限 30 天）
+    { id: 'U403', username: 'clerk03', password: '1234', name: '呂佳蓉', roles: ['clerk'], active: true },
     // 醫檢師：登打檢驗結果、發報告
     { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true },
   ]
   // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
   // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
-  for (const u of users) u.passwordSetOn = u.username === 'nurse02' ? addDays(T, -80) : T
+  for (const u of users) u.passwordSetOn = u.username === 'nurse02' ? addDays(T, -80) : u.username === 'clerk03' ? addDays(T, -130) : T
   const doctorUser = (doctorId: string) => users.find((u) => u.doctorId === doctorId)!.id
 
   // ---------- 每週門診表 ----------

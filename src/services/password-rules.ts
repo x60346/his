@@ -59,9 +59,19 @@ export function reusedPassword(next: string, recent: readonly string[], n: numbe
   return k === 1 ? '不可與目前密碼相同' : `不可與最近 ${k} 次用過的密碼相同`
 }
 
+/** 過期後寬限幾天就鎖帳號（預設 30；0＝不鎖）：過期一個月還沒改的，多半是很少登入或已離職的帳號 */
+export const PASSWORD_GRACE_DEFAULT = 30
+export const PASSWORD_GRACE_MAX = 365
+
+/** 密碼過期太久、要鎖帳號（要管理員重設）：過期的天數超過寬限天數。寬限 0＝不鎖 */
+export function passwordLocked(age: PasswordAge | null, graceDays: number): boolean {
+  return !!age && age.expired && graceDays > 0 && -age.daysLeft > graceDays
+}
+
 /** 密碼原則設定檢查（管理頁即時提示與服務層共用） */
-export function checkPasswordPolicy(p: { maxDays?: number; history?: number }): { maxDays?: string; history?: string } {
-  const e: { maxDays?: string; history?: string } = {}
+export function checkPasswordPolicy(p: { maxDays?: number; history?: number; graceDays?: number }): { maxDays?: string; history?: string; graceDays?: string } {
+  const e: { maxDays?: string; history?: string; graceDays?: string } = {}
+  if (p.graceDays !== undefined && (!Number.isInteger(p.graceDays) || p.graceDays < 0 || p.graceDays > PASSWORD_GRACE_MAX)) e.graceDays = `0（不鎖）–${PASSWORD_GRACE_MAX} 天的整數`
   const [lo, hi] = PASSWORD_MAX_DAYS_RANGE
   if (!Number.isInteger(p.maxDays) || (p.maxDays !== 0 && (p.maxDays! < lo || p.maxDays! > hi))) e.maxDays = `0（不限）或 ${lo}–${hi} 天的整數`
   if (!Number.isInteger(p.history) || p.history! < 0 || p.history! > PASSWORD_HISTORY_MAX) e.history = `0–${PASSWORD_HISTORY_MAX} 的整數（0＝只擋和目前相同）`

@@ -603,6 +603,8 @@ export interface DailyReport {
   to: string
   /** 依日期小計（區間報表用；單日只有一列）：加總 = 各合計 */
   byDay: { date: string; count: number; patientTotal: number; newDebt: number; repaid: number; prepaidIn: number; prepaidApplied: number; refunded: number; collected: number }[]
+  /** 依月份小計（期間超過 REPORT_MONTHLY_AFTER 天才有，畫面改看這個；date 是 YYYY-MM）。匯出照樣用每日小計 */
+  byMonth?: DailyReport['byDay']
   count: number
   voidedCount: number
   /** 應收合計：當日有效收據的金額（含記欠款的部分）。依科別、依費用類別都以這個為準 */
@@ -642,8 +644,10 @@ export interface DailyReport {
   unpaid: { visitId: string; date: string; patientName: string; chartNo: string; deptName: string; doctorName: string; estimate: number }[]
 }
 
-/** 區間報表最多幾天（月報表為上限；再長請分段匯出） */
-export const REPORT_MAX_DAYS = 31
+/** 區間報表最多幾天（年報表為上限） */
+export const REPORT_MAX_DAYS = 366
+/** 期間超過幾天，畫面的小計改成依月份（不然一年有三百多列） */
+export const REPORT_MONTHLY_AFTER = 62
 
 /**
  * 日結報表；給 to 就是區間報表（含頭尾兩天）。所有合計都依同一個「是否在期間內」判斷：
@@ -657,7 +661,7 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) v.add('from', '請選擇起始日期')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(to ?? '')) v.add('to', '請選擇結束日期')
     else if (to < date) v.add('to', '結束日期不能早於起始日期')
-    else if (diffDays(date, to) + 1 > REPORT_MAX_DAYS) v.add('to', `一次最多 ${REPORT_MAX_DAYS} 天，請分段查詢`)
+    else if (diffDays(date, to) + 1 > REPORT_MAX_DAYS) v.add('to', '一次最多一年（366 天），請分段查詢')
     v.done()
     const inRange = (at: string) => at.slice(0, 10) >= date && at.slice(0, 10) <= to
     const all = db.charges.filter((c) => inRange(c.paidAt))
@@ -797,10 +801,20 @@ export function dailyReport(date: string, to: string = date): Promise<DailyRepor
       const pap = dayValid.reduce((s, c) => s + (c.prepaidApplied ?? 0), 0)
       byDay.push({ date: d, count: dayValid.length, patientTotal: total, newDebt: debt, repaid: back, prepaidIn: pin, prepaidApplied: pap, refunded: rf, collected: total - debt - pap + back + pin - rf })
     }
+    // 依月份小計：每日小計逐月加總（和每日小計同一份數字，不另算）
+    const byMonth = diffDays(date, to) + 1 > REPORT_MONTHLY_AFTER
+      ? [...byDay.reduce((m, d) => {
+          const k = d.date.slice(0, 7)
+          const x = m.get(k) ?? { date: k, count: 0, patientTotal: 0, newDebt: 0, repaid: 0, prepaidIn: 0, prepaidApplied: 0, refunded: 0, collected: 0 }
+          for (const f of ['count', 'patientTotal', 'newDebt', 'repaid', 'prepaidIn', 'prepaidApplied', 'refunded', 'collected'] as const) x[f] += d[f]
+          return m.set(k, x)
+        }, new Map<string, DailyReport['byDay'][number]>()).values()]
+      : undefined
     return {
       date,
       to,
       byDay,
+      ...(byMonth ? { byMonth } : {}),
       count: valid.length,
       voidedCount: all.length - valid.length,
       voidedTotal: all.filter((c) => c.voided && !c.refund).reduce((s, c) => s + c.patientTotal, 0),

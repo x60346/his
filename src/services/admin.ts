@@ -7,7 +7,7 @@
 import type { BillingSettings, CopayValues, Department, DiscountRule, Doctor, Identity, Role, User } from '@/types'
 import { db, replaceDatabase, SCHEMA_VERSION, type Database } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { audit, fail, failField, fieldErrors, must, mutate, passwordAgeOf, query, requireUser, sessionUser, failFields, requirePermission } from './http'
+import { audit, fail, failField, fieldErrors, must, mutate, passwordAgeOf, passwordLockOf, query, requireUser, sessionUser, failFields, requirePermission } from './http'
 import { checkDiscountRule, copayOn, COPAY_KEYS, discountSummary, pickCopay, regFeeOn } from './billing'
 import { applyChange, checkFrom, nextChange } from './dated-rules'
 import { PASSWORD_HISTORY_MAX, passwordProblem } from './password-rules'
@@ -33,7 +33,7 @@ export interface UserRow extends SafeUser {
   /** 最近一次登入（取自稽核紀錄；紀錄只保留最近 500 筆，太久以前的會查不到） */
   lastLoginAt?: string
   /** 密碼狀態：過期、快到期（提醒期內）；管理員設定還沒改的看 mustChangePassword */
-  passwordState?: { expired: boolean; daysLeft: number; expiresOn: string }
+  passwordState?: { expired: boolean; daysLeft: number; expiresOn: string; /** 過期太久已鎖定：過期幾天（要重設密碼才能登入） */ locked?: number }
 }
 
 export function listUsers(): Promise<UserRow[]> {
@@ -45,7 +45,8 @@ export function listUsers(): Promise<UserRow[]> {
       lastLoginAt: db.auditLogs.find((l) => l.action === '登入' && l.userId === u.id)?.at,
       ...(() => {
         const age = u.mustChangePassword ? null : passwordAgeOf(u)
-        return age && (age.expired || age.warn) ? { passwordState: { expired: age.expired, daysLeft: age.daysLeft, expiresOn: age.expiresOn } } : {}
+        const locked = passwordLockOf(u)
+        return age && (age.expired || age.warn) ? { passwordState: { expired: age.expired, daysLeft: age.daysLeft, expiresOn: age.expiresOn, ...(locked !== null ? { locked } : {}) } } : {}
       })(),
     }))
   })

@@ -2,7 +2,7 @@
 // 將來改接真實後端時，這個檔案會換成 fetch 包裝，其餘服務的函式簽章不變。
 import type { Role, User } from '@/types'
 import { PERMISSIONS, permDef, permits, rolesOf, type PermKey } from './permission-rules'
-import { PASSWORD_MAX_DAYS_DEFAULT, passwordAge, type PasswordAge } from './password-rules'
+import { PASSWORD_GRACE_DEFAULT, PASSWORD_MAX_DAYS_DEFAULT, passwordAge, passwordLocked, type PasswordAge } from './password-rules'
 import { commit, db, newId, replaceDatabase, StorageWriteError } from '@/mock/db'
 import { now, today } from '@/utils/date'
 
@@ -243,6 +243,21 @@ export function passwordAgeOf(u: Pick<User, 'passwordSetOn'>): PasswordAge | nul
   return passwordAge(u.passwordSetOn, today(), db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT)
 }
 
+/** 密碼過期太久（不看管理員例外）：管理員重設過、還沒改的（mustChangePassword）不算 */
+function rawLocked(u: User): boolean {
+  return !u.mustChangePassword && passwordLocked(passwordAgeOf(u), db.securitySettings?.passwordGraceDays ?? PASSWORD_GRACE_DEFAULT)
+}
+
+/**
+ * 帳號因密碼過期太久而鎖定：回傳過期幾天；沒鎖回傳 null。
+ * 例外：沒有其他「啟用、沒被鎖」的管理員時，管理員自己不鎖（只強制改密碼）——不然全院沒人能解鎖
+ */
+export function passwordLockOf(u: User): number | null {
+  if (!rawLocked(u)) return null
+  if (u.roles.includes('admin') && !db.users.some((x) => x.id !== u.id && x.active && x.roles.includes('admin') && !rawLocked(x))) return null
+  return -passwordAgeOf(u)!.daysLeft
+}
+
 /** 目前登入者：帳號停用、或密碼在這個分頁登入之後被改過，都視為沒登入 */
 export function sessionUser(): User | null {
   const u = db.users.find((x) => x.id === sessionUserId && x.active)
@@ -294,7 +309,9 @@ export function requireUser(...roles: Role[]): Actor {
   if (sessionLockState) fail('畫面已鎖定，請先解鎖', 'LOCKED')
   // 管理員給的密碼還沒改：除了改密碼、登出，什麼都不能做（直接呼叫 API 也一樣）
   if (u!.mustChangePassword) fail('請先變更密碼', 'PASSWORD_CHANGE')
-  // 密碼過期：同樣只能改密碼、登出（不鎖帳號）
+  // 過期太久：帳號鎖定（已登入的分頁也一樣，直接呼叫 API 也擋），要管理員重設密碼
+  if (passwordLockOf(raw!) !== null) fail('帳號已鎖定（密碼過期太久），請洽系統管理員重設密碼', 'UNAUTHORIZED')
+  // 密碼過期（還在寬限內）：只能改密碼、登出
   if (passwordAgeOf(u!)?.expired) fail('密碼已過期，請先變更密碼', 'PASSWORD_CHANGE')
   if (roles.length && !roles.includes(u.role)) {
     const need = roles.map((r) => roleName[r]).join('、')

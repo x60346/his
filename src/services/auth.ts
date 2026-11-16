@@ -2,8 +2,8 @@
 import type { Role, User } from '@/types'
 import type { PermKey } from './permission-rules'
 import { db } from '@/mock/db'
-import { fail, failField, failFields, fieldErrors, mutate, passwordAgeOf, permissionsOf, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
-import { checkPasswordPolicy, PASSWORD_HISTORY_DEFAULT, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_DEFAULT, passwordProblem, reusedPassword } from './password-rules'
+import { fail, failField, failFields, fieldErrors, mutate, passwordAgeOf, passwordLockOf, permissionsOf, query, requireUser, sessionLock, sessionRole, sessionRoleFellBack, sessionUser, setSessionLock, setSessionRole, setSessionUser, audit } from './http'
+import { checkPasswordPolicy, PASSWORD_HISTORY_DEFAULT, PASSWORD_HISTORY_MAX, PASSWORD_GRACE_DEFAULT, PASSWORD_MAX_DAYS_DEFAULT, passwordProblem, reusedPassword } from './password-rules'
 import { checkIdleMinutes, IDLE_LOCK_DEFAULT_MIN, UNLOCK_MAX_FAILS } from './idle-rules'
 import { now, today } from '@/utils/date'
 
@@ -40,6 +40,9 @@ export function login(username: string, password: string, role?: Role): Promise<
     const u = db.users.find((x) => x.username === name)
     if (!u || u.password !== password) fail('帳號或密碼錯誤', 'UNAUTHORIZED')
     if (!u.active) fail('此帳號已停用', 'FORBIDDEN')
+    // 密碼過期太久：鎖定，要管理員重設（密碼對了才說，避免被拿來試帳號）
+    const lockDays = passwordLockOf(u!)
+    if (lockDays !== null) fail(`密碼已過期 ${lockDays} 天，帳號已鎖定，請洽系統管理員重設密碼`, 'FORBIDDEN')
     if (!u.roles.length) fail('此帳號沒有任何角色，請洽系統管理員', 'FORBIDDEN')
     if (role && !u.roles.includes(role)) fail(`此帳號沒有「${roleText[role]}」角色`, 'FORBIDDEN')
     if (!role && u.roles.length > 1) return { chooseRole: [...u.roles] }
@@ -179,23 +182,26 @@ export function unlockSession(password: string): Promise<UnlockResult> {
 }
 
 /** 密碼原則：期限（天，0＝不限）、不可重複最近幾次。登入後的版面與管理頁都會讀 */
-export function passwordPolicy(): Promise<{ maxDays: number; history: number }> {
-  return query(() => ({ maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT }))
+export function passwordPolicy(): Promise<{ maxDays: number; history: number; graceDays: number }> {
+  return query(() => ({ maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT, graceDays: db.securitySettings?.passwordGraceDays ?? PASSWORD_GRACE_DEFAULT }))
 }
 
 /**
  * 修改密碼原則（管理員）。縮短期限會讓一些帳號立刻過期——回傳受影響的帳號數，管理頁提示；
  * 不會因此鎖帳號，那些人下次操作時先改密碼
  */
-export function savePasswordPolicy(input: { maxDays: number; history: number }): Promise<{ maxDays: number; history: number; expiredUsers: number }> {
+export function savePasswordPolicy(input: { maxDays: number; history: number; graceDays?: number }): Promise<{ maxDays: number; history: number; graceDays: number; expiredUsers: number; lockedUsers: number }> {
   return mutate(() => {
     requireUser('admin')
     failFields(checkPasswordPolicy(input))
-    const old = { maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT }
-    db.securitySettings = { ...db.securitySettings, passwordMaxDays: input.maxDays, passwordHistory: input.history } // 合併：不蓋掉其他設定
-    const expiredUsers = db.users.filter((u) => u.active && !u.mustChangePassword && passwordAgeOf(u)?.expired).length
-    audit('修改安全設定', `密碼期限 ${old.maxDays}→${input.maxDays} 天、不可重複最近 ${old.history}→${input.history} 次`)
-    return { ...input, expiredUsers }
+    const old = { maxDays: db.securitySettings?.passwordMaxDays ?? PASSWORD_MAX_DAYS_DEFAULT, history: db.securitySettings?.passwordHistory ?? PASSWORD_HISTORY_DEFAULT, graceDays: db.securitySettings?.passwordGraceDays ?? PASSWORD_GRACE_DEFAULT }
+    const graceDays = input.graceDays ?? old.graceDays // 沒送寬限天數＝不改
+    db.securitySettings = { ...db.securitySettings, passwordMaxDays: input.maxDays, passwordHistory: input.history, passwordGraceDays: graceDays } // 合併：不蓋掉其他設定
+    const active = db.users.filter((u) => u.active && !u.mustChangePassword)
+    const lockedUsers = active.filter((u) => passwordLockOf(u) !== null).length
+    const expiredUsers = active.filter((u) => passwordAgeOf(u)?.expired).length - lockedUsers
+    audit('修改安全設定', `密碼期限 ${old.maxDays}→${input.maxDays} 天、不可重複最近 ${old.history}→${input.history} 次、過期後寬限 ${old.graceDays}→${graceDays} 天`)
+    return { maxDays: input.maxDays, history: input.history, graceDays, expiredUsers, lockedUsers }
   })
 }
 

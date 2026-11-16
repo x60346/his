@@ -645,3 +645,62 @@ export function resolveUdIssue(dispenseId: string, admissionId: string, input: {
     return { no: disp.no, resupplied: plan.reduce((n, p) => n + p.qty, 0) }
   })
 }
+
+// ---------- 藥車簽收單 ----------
+
+export interface UdCartSheet {
+  no: string
+  kind: UdDispense['kind']
+  dispensedAt: string
+  dispensedByName: string
+  /** 每個病房一張（一台藥車）：依床號 */
+  wards: {
+    ward: string
+    boxes: {
+      bedNo: string
+      patientName: string
+      chartNo: string
+      verifiedByName: string
+      verifiedAt: string
+      /** 已點收：系統記錄的點收人與時間（重印時印出） */
+      receivedByName?: string
+      receivedAt?: string
+      lines: { drugName: string; spec: string; qty: number; unit: string; doses: number }[]
+    }[]
+  }[]
+}
+
+/**
+ * 藥車簽收單（住院藥局列印，隨藥車送到病房）：這張調劑單已核對送出的藥盒，依病房分張、依床號排；
+ * 下方留送藥人、病房點收人簽名欄。病房已在系統點收的，印出系統記錄的點收人與時間。
+ * qty 0（床邊已有、這次不發）的不印
+ */
+export function udCartSheet(dispenseId: string): Promise<UdCartSheet> {
+  return query(() => {
+    requireUser('pharmacist', 'admin')
+    const d = must(db.udDispenses.find((x) => x.id === dispenseId), '調劑單')
+    const byWard = new Map<string, UdCartSheet['wards'][number]['boxes']>()
+    for (const b of d.boxes.filter((x) => x.status === 'verified')) {
+      const ward = udBoxWard(b) ?? '（未定病房）'
+      const p = find.patient(find.admission(b.admissionId)?.patientId ?? '')
+      const lines = d.lines.filter((l) => l.admissionId === b.admissionId && l.qty > 0).map((l) => {
+        const dr = find.drug(l.drugId)
+        return { drugName: dr?.name ?? l.drugId, spec: dr?.spec ?? '', qty: l.qty, unit: dr?.unit ?? '', doses: l.marIds.length }
+      })
+      if (!lines.length) continue
+      const list = byWard.get(ward) ?? []
+      list.push({
+        bedNo: bedNoOf(b.admissionId), patientName: p?.name ?? '', chartNo: p?.chartNo ?? '',
+        verifiedByName: nameOf.user(b.verifiedBy), verifiedAt: b.verifiedAt ?? '',
+        ...(b.receivedAt ? { receivedByName: nameOf.user(b.receivedBy), receivedAt: b.receivedAt } : {}),
+        lines,
+      })
+      byWard.set(ward, list)
+    }
+    if (!byWard.size) fail('這張調劑單還沒有核對送出的藥盒', 'CONFLICT')
+    return {
+      no: d.no, kind: d.kind, dispensedAt: d.dispensedAt, dispensedByName: nameOf.user(d.dispensedBy),
+      wards: [...byWard.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([ward, boxes]) => ({ ward, boxes: boxes.sort((x, y) => x.bedNo.localeCompare(y.bedNo)) })),
+    }
+  })
+}

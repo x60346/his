@@ -7,11 +7,12 @@
 //   - 病房回報：藥車點收時發現不符（短少、破損、不是這位病人的），藥師處理後寫說明（補發走上面的調劑流程）
 // 每劑幾個、哪些要退都由服務層算（ud-rules、ud-work）；頁面送出的是畫面上看得到的那幾劑。
 import { computed, reactive, ref, watch } from 'vue'
-import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Undo2 } from 'lucide-vue-next'
+import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Printer, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/components/ui'
 import { udApi, type UdIssueRow, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WardRefillCard from './components/WardRefillCard.vue'
+import UdCartSheetDialog from './components/UdCartSheetDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 
@@ -82,6 +83,14 @@ const short = computed(() => (returning.value && form.qty !== undefined ? return
 const receive = useAction(udApi.receiveUdReturn, { success: (r) => `已點收退藥 ${r.qty}${r.qty < r.expected ? `（短少 ${r.expected - r.qty}）` : ''}` })
 async function confirmReturn() {
   if (returning.value && (await receive.run(returning.value.lineId, { qty: form.qty as number, reason: form.reason }))) returning.value = null
+}
+
+// ---------- 藥車簽收單 ----------
+const sheetOpen = ref(false)
+const sheetId = ref<string>()
+function openSheet(id: string) {
+  sheetId.value = id
+  sheetOpen.value = true
 }
 </script>
 
@@ -245,6 +254,7 @@ async function confirmReturn() {
                 <th class="px-3 py-2 text-left">藥師</th>
                 <th class="px-3 py-2 text-right">已核對／病人／項目</th>
                 <th class="px-3 py-2 text-right">已退回</th>
+                <th class="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -255,6 +265,8 @@ async function confirmReturn() {
                 <td class="px-3 py-2 text-slate-600">{{ u.dispensedByName }}</td>
                 <td class="px-3 py-2 text-right">{{ u.verified }}／{{ u.patients }}／{{ u.lines }}</td>
                 <td class="px-3 py-2 text-right text-slate-500">{{ u.returned || '—' }}</td>
+                <!-- 藥車簽收單：核對送出後印，隨藥車送到病房 -->
+                <td class="px-3 py-2 text-right"><UButton v-if="u.verified" size="sm" variant="ghost" :icon="Printer" class="whitespace-nowrap" @click="openSheet(u.id)">簽收單</UButton></td>
               </tr>
             </tbody>
           </table>
@@ -262,6 +274,7 @@ async function confirmReturn() {
       </template>
     </UQueryState>
 
+    <UdCartSheetDialog v-model="sheetOpen" :dispense-id="sheetId" />
     <ReasonDialog
       v-model="rejectOpen"
       title="退回重調"

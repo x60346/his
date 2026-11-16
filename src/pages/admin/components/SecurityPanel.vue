@@ -2,7 +2,7 @@
 // 安全設定：閒置多久鎖定畫面（規則與服務層同一個 checkIdleMinutes）；密碼期限與歷史（checkPasswordPolicy）；調劑雙人核對（U24）。
 import { computed, ref, watch } from 'vue'
 import { UButton, UCard, UCheckbox, UInput } from '@/components/ui'
-import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, UNLOCK_MAX_FAILS } from '@/services'
+import { authApi, checkIdleMinutes, checkPasswordPolicy, IDLE_LOCK_RANGE, IDLE_WARN_SEC, PASSWORD_GRACE_MAX, PASSWORD_HISTORY_MAX, PASSWORD_MAX_DAYS_RANGE, PASSWORD_WARN_DAYS, pharmacyApi, UNLOCK_MAX_FAILS } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: current } = useQuery(() => authApi.idleLockMinutes())
@@ -16,14 +16,14 @@ const save = useAction(authApi.saveIdleLockMinutes, { success: (m) => `已設定
 
 // 密碼原則：期限（0＝不限）與不可重複最近幾次
 const { data: pwPolicy } = useQuery(() => authApi.passwordPolicy())
-const pw = ref<{ maxDays?: number; history?: number }>({})
+const pw = ref<{ maxDays?: number; history?: number; graceDays?: number }>({})
 watch(pwPolicy, (v) => {
   if (v && pw.value.maxDays === undefined) pw.value = { ...v }
 })
 const pwProblems = computed(() => checkPasswordPolicy(pw.value))
-const pwDirty = computed(() => !!pwPolicy.value && (pw.value.maxDays !== pwPolicy.value.maxDays || pw.value.history !== pwPolicy.value.history))
+const pwDirty = computed(() => !!pwPolicy.value && (pw.value.maxDays !== pwPolicy.value.maxDays || pw.value.history !== pwPolicy.value.history || pw.value.graceDays !== pwPolicy.value.graceDays))
 const savePw = useAction(authApi.savePasswordPolicy, {
-  success: (r) => `已設定：${r.maxDays ? `密碼 ${r.maxDays} 天到期` : '密碼不限期'}、不可重複最近 ${Math.max(1, r.history)} 次${r.expiredUsers ? `；${r.expiredUsers} 個帳號已過期，登入後須先變更` : ''}`,
+  success: (r) => `已設定：${r.maxDays ? `密碼 ${r.maxDays} 天到期` : '密碼不限期'}、不可重複最近 ${Math.max(1, r.history)} 次、${r.graceDays ? `過期 ${r.graceDays} 天後鎖帳號` : '過期不鎖帳號'}${r.expiredUsers ? `；${r.expiredUsers} 個帳號已過期，登入後須先變更` : ''}${r.lockedUsers ? `；${r.lockedUsers} 個帳號已鎖定，要重設密碼` : ''}`,
 })
 
 // 調劑雙人核對：勾了立即儲存（只有一個開關，不需要另外按儲存）
@@ -51,7 +51,7 @@ const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (
   <UCard title="密碼期限" subtitle="定期更換、不可重複使用">
     <div class="max-w-xl space-y-3 text-sm">
       <p class="text-slate-600">
-        密碼從本人設定那天起算，到期前 {{ PASSWORD_WARN_DAYS }} 天在右上角提醒；過期<b>不鎖帳號</b>，登入後先設定新密碼才能做其他事。
+        密碼從本人設定那天起算，到期前 {{ PASSWORD_WARN_DAYS }} 天在右上角提醒；過期後登入要先設定新密碼才能做其他事；過期超過「寬限天數」就<b>鎖帳號</b>，要管理員重設密碼。
         改密碼時不可與最近幾次用過的相同（含目前這組；管理員重設前的舊密碼也算）。
       </p>
       <div class="flex flex-wrap items-end gap-2">
@@ -61,9 +61,13 @@ const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (
         <div class="w-40">
           <UInput v-model="pw.history" type="number" min="0" :max="PASSWORD_HISTORY_MAX" label="不可重複最近幾次" :hint="`0–${PASSWORD_HISTORY_MAX}（0、1＝只擋和目前相同）`" :error="pwProblems.history ?? savePw.fieldErrors.value.history" />
         </div>
-        <UButton :disabled="!pwDirty || !!pwProblems.maxDays || !!pwProblems.history" :loading="savePw.pending.value" @click="savePw.run({ maxDays: pw.maxDays!, history: pw.history! })">儲存</UButton>
+        <div class="w-40">
+          <UInput v-model="pw.graceDays" type="number" min="0" :max="PASSWORD_GRACE_MAX" label="過期幾天後鎖帳號" :hint="`0＝不鎖；最多 ${PASSWORD_GRACE_MAX} 天`" :error="pwProblems.graceDays ?? savePw.fieldErrors.value.graceDays" />
+        </div>
+        <UButton :disabled="!pwDirty || !!pwProblems.maxDays || !!pwProblems.history || !!pwProblems.graceDays" :loading="savePw.pending.value" @click="savePw.run({ maxDays: pw.maxDays!, history: pw.history!, graceDays: pw.graceDays! })">儲存</UButton>
       </div>
-      <p class="text-xs text-slate-500">展示：nurse02 的密碼是 80 天前設定的（還剩 10 天，右上角會提醒）；把期限改成 60 天，nurse02 登入就要先改密碼。</p>
+      <p class="text-xs text-slate-500">鎖定的帳號在「帳號」分頁標「已鎖定」，按「重設密碼」就解鎖（本人登入後要先改）。沒有其他可用的管理員時，管理員自己不鎖、只要求改密碼。</p>
+      <p class="text-xs text-slate-500">展示：nurse02 的密碼是 80 天前設定的（還剩 10 天，右上角會提醒）；把期限改成 60 天，nurse02 登入就要先改密碼。clerk03 的密碼 130 天前設定（過期 40 天），已鎖定。</p>
     </div>
   </UCard>
   <UCard title="調劑雙人核對" subtitle="門診藥局的核對與發藥是否須由兩位藥師">

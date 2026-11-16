@@ -36,6 +36,7 @@ const presets = computed(() => {
     { label: '今天', from: todayStr.value, to: todayStr.value },
     { label: '本月', from: firstOfMonth(todayStr.value), to: todayStr.value },
     { label: '上月', from: firstOfMonth(lastMonthEnd), to: lastMonthEnd },
+    { label: '今年', from: `${todayStr.value.slice(0, 4)}-01-01`, to: todayStr.value },
   ]
 })
 function usePreset(p: { from: string; to: string }) {
@@ -177,15 +178,15 @@ const print = async () => {
       </UCard>
       <p v-else class="text-sm text-emerald-700">{{ isRange ? '期間內' : '當日' }}看完診的病人都已批價。</p>
 
-      <!-- 區間報表：每天一列（沒收費的日子也列出 0，看得出哪天沒開或漏結）；加總 = 上面的合計 -->
-      <UCard v-if="isRange" title="依日期" :padded="false">
+      <!-- 區間報表：每天一列（沒收費的日子也列出 0，看得出哪天沒開或漏結）；超過兩個月改依月份（服務層給 byMonth）；加總 = 上面的合計 -->
+      <UCard v-if="isRange" :title="r.byMonth ? '依月份（每日小計在匯出的 Excel）' : '依日期'" :padded="false">
         <table class="tabular w-full text-sm">
           <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
-            <tr><th class="px-4 py-2 text-left">日期</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">預收−扣抵</th><th class="px-4 py-2 text-right">退款</th><th class="px-4 py-2 text-right">實收</th></tr>
+            <tr><th class="px-4 py-2 text-left">{{ r.byMonth ? '月份' : '日期' }}</th><th class="px-4 py-2 text-right">收據</th><th class="px-4 py-2 text-right">應收</th><th class="px-4 py-2 text-right">新欠</th><th class="px-4 py-2 text-right">收回</th><th class="px-4 py-2 text-right">預收−扣抵</th><th class="px-4 py-2 text-right">退款</th><th class="px-4 py-2 text-right">實收</th></tr>
           </thead>
           <tbody>
-            <tr v-for="d in r.byDay" :key="d.date" :class="['border-t border-slate-100', !d.count && !d.repaid && !d.refunded && !d.prepaidIn && 'text-slate-400']">
-              <td class="px-4 py-1.5">{{ d.date.slice(5).replace('-', '/') }}</td>
+            <tr v-for="d in r.byMonth ?? r.byDay" :key="d.date" :class="['border-t border-slate-100', !d.count && !d.repaid && !d.refunded && !d.prepaidIn && 'text-slate-400']">
+              <td class="px-4 py-1.5">{{ r.byMonth ? d.date.replace('-', '/') : d.date.slice(5).replace('-', '/') }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.count }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.patientTotal.toLocaleString() }}</td>
               <td class="px-4 py-1.5 text-right">{{ d.newDebt ? d.newDebt.toLocaleString() : '' }}</td>
