@@ -228,6 +228,16 @@ export type VisitStatus =
   | 'cancelled' // 退掛
 
 /** 掛號紀錄（一次門診就醫） */
+export type NoShowResult = 'rebooked' | 'declined' | 'unreachable'
+export interface NoShowContact {
+  at: string
+  by: string
+  result: NoShowResult
+  note?: string
+  /** 已改約：新的那筆掛號 */
+  rebookedVisitId?: string
+}
+
 export interface Visit {
   id: string
   date: string
@@ -249,6 +259,15 @@ export interface Visit {
   preventItems: string[]
   /** 醫師在看診時預約的回診：哪一次看診、哪位醫師、何時（櫃台掛號清單標「醫師預約」） */
   followUpOf?: { visitId: string; doctorId: string; at: string }
+  /** 出院後回診：醫師在住院中（寫出院病摘時）預約的門診；出院後 30 天內第一次實際就醫的那筆，基本部分負擔比照經轉診 */
+  afterDischarge?: { admissionId: string; doctorId: string; at: string }
+  /**
+   * 預約未到的追蹤（櫃台電話聯絡）：就醫日已過、還是已掛號就是「未到」（不改狀態，由 followup-rules.isNoShow 判斷）；
+   * 這裡只記聯絡紀錄（只增不改）。最後一筆是「已改約」或「不需要」就結案；「聯絡不到」可以再聯絡
+   */
+  noShow?: { contacts: NoShowContact[] }
+  /** 未到改約：這筆是從哪一筆未到的預約改約來的 */
+  rebookedFrom?: string
   createdAt: string
   /**
    * 報到時間：病人人到了。現場掛號同時報到；事先預約的到院後由櫃台按「報到」。

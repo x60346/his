@@ -124,7 +124,7 @@ export type { TransferView, TransferLineView, TransferCandidate, ReturnCandidate
 export type { DispenseView, DispenseItem, ReturnInput } from './pharmacy'
 export type { PendingRefund } from './charge'
 export type { UdWork, UdWorkGroup, UdWorkLine, UdReturnRow, UdDispenseView, UdDispenseInput, UdVerifyBox, UdCart, UdCartSheet, UdIssueRow } from './ud'
-export type { RefillView } from './booking'
+export type { RefillView, NoShowItem, AfterDischargeOptions } from './booking'
 export type { MarView, OrderView } from './ipd'
 export type { WardPatient, MarBoard, PrnView, HandoverView, HandoverGroup, WardTask } from './nursing'
 export type { RoomRow } from './schedule'

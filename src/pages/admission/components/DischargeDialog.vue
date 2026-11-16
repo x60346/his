@@ -6,6 +6,7 @@
 import { computed, ref, watch } from 'vue'
 import { UButton, UCheckbox, UDialog, UQueryState } from '@/components/ui'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
+import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
 import { admissionApi, type AdmissionView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
@@ -49,6 +50,8 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
           <h3 class="mb-2 font-semibold text-slate-700">出院病摘（醫師簽署）</h3>
           <DischargeSummaryView v-if="admission?.dischargeSummary" :summary="admission.dischargeSummary" :doctor-name="admission.summaryDoctorName" :med-texts="admission.dischargeMedTexts" :rx-status="admission.dischargeRxStatus" />
         </section>
+        <!-- 醫師約好的出院後回診：辦出院時提醒病人、印預約單 -->
+        <AfterDischargePanel v-if="admission" :admission-id="admission.id" />
 
         <UQueryState :loading="loading && !check" :ready="!!check">
           <template v-if="check">

@@ -1,15 +1,16 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { ChargeLine, ClinicSession, Encounter, Visit, VisitStatus, PayMethod } from '@/types'
+import type { Admission, ChargeLine, ClinicSession, Encounter, NoShowContact, NoShowResult, Visit, VisitStatus, PayMethod } from '@/types'
 import { prepayAvailable, refundPrepay, takePrepay } from './money'
 import { commitIfPossible, db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission, sessionUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
-import { FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, refillFollowUpDays } from './followup-rules'
+import { FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, isImportantNoShow, isNoShow, NO_SHOW_KIND_LABEL, NO_SHOW_RESULT_LABEL, NO_SHOW_TRACK_DAYS, noShowClosed, noShowKind, refillFollowUpDays, type NoShowKind } from './followup-rules'
+import { requireCare } from './care-team'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
-import { fixedCharges } from './billing'
+import { fixedCharges, type CopayReferred } from './billing'
 import { checkInProblem } from './queue-rules'
 import { referralInProblem, type ReferralInInput } from './referral-rules'
 import { buildReferralIn } from './referral-work'
@@ -195,7 +196,7 @@ export interface FeeEstimate {
  */
 /** date：看診日（掛號頁選的診次日期；空白＝今天）——掛號費、部分負擔有排定調整時，看診那天的價格才對 */
 /** referred：持外院轉診單（基本部分負擔收經轉診的金額） */
-export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false, date?: string, referred = false): Promise<FeeEstimate> {
+export function estimateFee(identityCode: string, inputCaseType: string, withPrevent = false, date?: string, referred: CopayReferred = false): Promise<FeeEstimate> {
   return query(() => {
     const caseType = effectiveCaseType(inputCaseType, withPrevent)
     const lk = billingLookup(identityCode)
@@ -466,5 +467,202 @@ export function bookFollowUp(visitId: string, input: { sessionId: string; confir
     }
     audit('預約回診', `${nameOf.patient(v.patientId)} → ${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}（${nameOf.doctor(u.doctorId)} 看診時預約）`)
     return visitView(nv)
+  })
+}
+
+// ---------- 預約未到追蹤（櫃台） ----------
+
+export interface NoShowItem extends VisitView {
+  kind: NoShowKind
+  kindLabel: string
+  /** 聯絡電話 */
+  phone: string
+  /** 臨床上要追的（出院後回診、醫師約的回診、慢性病）：首頁待辦只算這些 */
+  important: boolean
+  /** 已結案（改約或病人不需要） */
+  closed: boolean
+  contacts: (NoShowContact & { byName: string; resultLabel: string; rebooked?: { date: string; period: ClinicSession['period']; doctorName: string; seqNo: number } })[]
+  /** 病人之後在這一科已經有掛號（可能自己掛了）：櫃台聯絡前先看 */
+  laterVisit?: { date: string; doctorName: string; status: VisitStatus }
+}
+
+function noShowItem(v: Visit): NoShowItem {
+  const t = today()
+  const kind = noShowKind(v)
+  const later = db.visits
+    .filter((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.id !== v.id && x.date > v.date && x.status !== 'cancelled' && !isNoShow(x, t))
+    .sort((a, b) => a.date.localeCompare(b.date))[0]
+  return {
+    ...visitView(v), kind, kindLabel: NO_SHOW_KIND_LABEL[kind], phone: find.patient(v.patientId)?.phone ?? '', important: isImportantNoShow(v), closed: noShowClosed(v),
+    contacts: (v.noShow?.contacts ?? []).map((c) => {
+      const nv = c.rebookedVisitId ? find.visit(c.rebookedVisitId) : undefined
+      return { ...c, byName: nameOf.user(c.by), resultLabel: NO_SHOW_RESULT_LABEL[c.result], ...(nv ? { rebooked: { date: nv.date, period: find.session(nv.sessionId)?.period ?? 'AM', doctorName: nameOf.doctor(nv.doctorId), seqNo: nv.seqNo } } : {}) }
+    }),
+    ...(later ? { laterVisit: { date: later.date, doctorName: nameOf.doctor(later.doctorId), status: later.status } } : {}),
+  }
+}
+
+const KIND_ORDER: Record<NoShowKind, number> = { afterDischarge: 0, followUp: 1, chronic: 2, normal: 3 }
+
+/** 預約未到：最近 14 天（就醫日）已過、還沒報到的預約。沒結案的在前，再依重要性、日期新的在前 */
+export function listNoShows(q: { includeClosed?: boolean } = {}): Promise<NoShowItem[]> {
+  return query(() => {
+    requirePermission('visit.register')
+    const t = today()
+    const from = addDays(t, -NO_SHOW_TRACK_DAYS)
+    return db.visits
+      .filter((v) => isNoShow(v, t) && v.date >= from && (q.includeClosed || !noShowClosed(v)))
+      .map(noShowItem)
+      .sort((a, b) => Number(a.closed) - Number(b.closed) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || b.date.localeCompare(a.date) || a.seqNo - b.seqNo)
+  })
+}
+
+function noShowSource(visitId: string) {
+  const u = requirePermission('visit.register')
+  const v = must(find.visit(visitId), '掛號紀錄')
+  if (!isNoShow(v, today())) fail(v.status === 'registered' ? '還沒過就醫日，不算未到' : '這筆掛號不是未到（已看診或已退掛）', 'CONFLICT')
+  if (noShowClosed(v)) fail('這筆未到已經結案', 'CONFLICT')
+  return { u, v }
+}
+
+/** 記錄聯絡結果：病人不需要（要寫原因，例：已在他院追蹤）→ 結案；聯絡不到 → 還在清單上，可以再聯絡 */
+export function recordNoShowContact(visitId: string, input: { result: Exclude<NoShowResult, 'rebooked'>; note?: string }): Promise<NoShowItem> {
+  return mutate(() => {
+    const { u, v } = noShowSource(visitId)
+    if (input.result !== 'declined' && input.result !== 'unreachable') failField('result', '請選擇聯絡結果（改約請用「改約」）')
+    const note = input.note?.trim()
+    if (input.result === 'declined' && !note) failField('note', '請寫病人為什麼不需要（例：已在他院追蹤、症狀已好）')
+    ;(v.noShow ??= { contacts: [] }).contacts.push({ at: now(), by: u.id, result: input.result, ...(note ? { note } : {}) })
+    audit('未到追蹤', `${nameOf.patient(v.patientId)} ${v.date} ${nameOf.doctor(v.doctorId)} #${v.seqNo}：${NO_SHOW_RESULT_LABEL[input.result]}${note ? `（${note}）` : ''}`)
+    return noShowItem(v)
+  })
+}
+
+/**
+ * 未到改約：幫病人掛新的診次（和掛號同一套檢查），原本那筆留著（查得到他沒來）、記「已改約」結案。
+ * 醫師約的回診、出院後回診的身分沿用到新的那筆（仍然要追）；外院轉診單在有效期內才沿用（同改期）
+ */
+export function rebookNoShow(visitId: string, input: { sessionId: string; note?: string }): Promise<VisitView> {
+  return mutate(() => {
+    const { u, v } = noShowSource(visitId)
+    const s = must(find.session(input.sessionId), '診次')
+    if (s.deptId !== v.deptId) fail('改約只能掛同一科（要看別科請另外掛號）')
+    const nv = createVisit({ patientId: v.patientId, sessionId: s.id, identityCode: v.identityCode, caseType: v.caseType })
+    nv.rebookedFrom = v.id
+    if (v.followUpOf) nv.followUpOf = { ...v.followUpOf }
+    if (v.afterDischarge) nv.afterDischarge = { ...v.afterDischarge }
+    const ref = v.referralIn
+    if (ref && (ref.inheritedFrom || !referralInProblem(ref.issuedOn, nv.date))) {
+      const { reply: _r, ...r } = ref
+      nv.referralIn = { ...r }
+    }
+    const note = input.note?.trim()
+    ;(v.noShow ??= { contacts: [] }).contacts.push({ at: now(), by: u.id, result: 'rebooked', rebookedVisitId: nv.id, ...(note ? { note } : {}) })
+    audit('未到改約', `${nameOf.patient(v.patientId)} ${v.date} #${v.seqNo} 未到 → ${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}${ref && !nv.referralIn ? '（轉診單已過期，不沿用）' : ''}`)
+    return visitView(nv)
+  })
+}
+
+// ---------- 出院後回診（醫師在住院中預約） ----------
+
+export interface AfterDischargeOptions {
+  admissionId: string
+  patientName: string
+  /** 預設科別：住院科別 */
+  deptId: string
+  deptName: string
+  /** 快速選項（主治醫師的門診）：1／2／4 週後 */
+  suggestions: { label: string; date: string; session?: FollowUpSession }[]
+  /** 已約好的出院後回診 */
+  booked: VisitView[]
+}
+
+/** 住院中、照護這位病人的醫師（主治、值班代理；會診醫師不行）才能約出院後回診 */
+function afterDischargeSource(admissionId: string) {
+  const u = requireUser('doctor')
+  const a = must(find.admission(admissionId), '住院紀錄')
+  if (a.status !== 'admitted') fail('只有住院中的病人可以預約出院後回診（出院後請由門診或櫃台掛號）', 'CONFLICT')
+  requireCare(u.doctorId, a, '預約出院後回診', { consult: false })
+  return { u, a }
+}
+
+const afterDischargeVisits = (a: Admission) =>
+  db.visits.filter((v) => v.afterDischarge?.admissionId === a.id && v.status !== 'cancelled').sort((x, y) => x.date.localeCompare(y.date) || x.seqNo - y.seqNo)
+
+export function afterDischargeOptions(admissionId: string): Promise<AfterDischargeOptions> {
+  return query(() => {
+    const { a } = afterDischargeSource(admissionId)
+    const t = today()
+    let created = false
+    const suggestions = FOLLOW_UP_PICKS.map((p) => {
+      const date = addDays(t, p.days)
+      for (let k = 0; k <= FOLLOW_UP_SEARCH_DAYS; k++) {
+        const d = addDays(date, k)
+        created = ensureSessions(d) || created
+        const s = db.sessions.filter((x) => x.date === d && x.doctorId === a.doctorId).map((x) => followUpSession(x, a.doctorId)).find((x) => !x.blocked)
+        if (s) return { label: p.label, date, session: s }
+      }
+      return { label: p.label, date }
+    })
+    if (created) commitIfPossible()
+    return { admissionId: a.id, patientName: nameOf.patient(a.patientId), deptId: a.deptId, deptName: nameOf.dept(a.deptId), suggestions, booked: afterDischargeVisits(a).map(visitView) }
+  })
+}
+
+/** 某天某一科的診次（主治醫師的在前）：可以約別科（例：外科住院、內科追蹤血糖） */
+export function afterDischargeSessions(admissionId: string, date: string, deptId: string): Promise<FollowUpSession[]> {
+  return query(() => {
+    const { a } = afterDischargeSource(admissionId)
+    if (date <= today()) fail('出院後回診要約在明天以後')
+    must(find.dept(deptId), '科別')
+    if (ensureSessions(date)) commitIfPossible()
+    return db.sessions
+      .filter((s) => s.date === date && s.deptId === deptId)
+      .map((s) => followUpSession(s, a.doctorId))
+      .sort((x, y) => Number(y.mine) - Number(x.mine) || PERIOD_ORDER[x.period] - PERIOD_ORDER[y.period])
+  })
+}
+
+/**
+ * 預約出院後回診：掛進門診（病人的預設身分；出院帶藥是慢性病處方的用 04，其他 01），標 afterDischarge。
+ * 出院後 30 天內第一次實際就醫的那筆，基本部分負擔比照經轉診（views.copayReferredOf）。
+ * 那一科已有未來掛號：要確認（confirmDuplicate）
+ */
+export function bookAfterDischarge(admissionId: string, input: { sessionId: string; confirmDuplicate?: boolean }): Promise<VisitView> {
+  return mutate(() => {
+    const { u, a } = afterDischargeSource(admissionId)
+    const date = (input.sessionId ?? '').slice(1, 9).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+    if (date <= today()) fail('出院後回診要約在明天以後')
+    ensureSessions(date)
+    const s = must(find.session(input.sessionId), '診次')
+    const dup = db.visits.filter((x) => x.patientId === a.patientId && x.deptId === s.deptId && x.date > today() && x.status === 'registered')
+    if (dup.length && !input.confirmDuplicate) fail(`${nameOf.dept(s.deptId)}已經有 ${dup.map((x) => `${x.date.slice(5).replace('-', '/')} ${nameOf.doctor(x.doctorId)}`).join('、')} 的掛號，確定要再約一次？`, 'CONFLICT', 'confirmDuplicate')
+    const p = must(find.patient(a.patientId), '病患')
+    const nv = createVisit({ patientId: a.patientId, sessionId: s.id, identityCode: p.defaultIdentity, caseType: a.dischargeSummary?.chronicRx ? '04' : '01' })
+    nv.afterDischarge = { admissionId: a.id, doctorId: u.doctorId!, at: now() }
+    audit('預約出院後回診', `${a.admitNo} ${p.name} → ${s.date} ${periodLabel[s.period]} ${nameOf.dept(s.deptId)} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}（${nameOf.doctor(u.doctorId)} 預約）`)
+    return visitView(nv)
+  })
+}
+
+/** 這次住院約好的出院後回診（病摘、辦出院、護理站顯示用；誰都可以看） */
+export function listAfterDischarge(admissionId: string): Promise<VisitView[]> {
+  return query(() => {
+    requireUser()
+    return afterDischargeVisits(must(find.admission(admissionId), '住院紀錄')).map(visitView)
+  })
+}
+
+/** 取消出院後回診（約錯）：住院中、照護醫師、還沒到的那筆；出院後要改請病人或櫃台改期、退掛 */
+export function cancelAfterDischarge(visitId: string): Promise<VisitView> {
+  return mutate(() => {
+    const v = must(find.visit(visitId), '掛號紀錄')
+    if (!v.afterDischarge) fail('這筆不是出院後回診', 'CONFLICT')
+    const { a } = afterDischargeSource(v.afterDischarge!.admissionId)
+    if (v.status !== 'registered') fail('只有還沒看診的掛號可以取消', 'CONFLICT')
+    v.status = 'cancelled'
+    v.cancelReason = '醫師取消出院後回診'
+    audit('取消出院後回診', `${a.admitNo} ${nameOf.patient(v.patientId)} ${v.date} ${nameOf.doctor(v.doctorId)} #${v.seqNo}`)
+    return visitView(v)
   })
 }

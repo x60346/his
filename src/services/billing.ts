@@ -46,6 +46,8 @@ export interface BillingLookup {
   settings: BillingSettings
   drug: (id: string) => Drug | undefined
   procedure: (id: string) => Procedure | undefined
+  /** 這次就醫的基本部分負擔要不要比照經轉診（服務層依住院紀錄判斷出院後回診）；沒給就只看 visit.referralIn */
+  referredOf?: (v: Visit) => CopayReferred
 }
 
 const round = (n: number) => Math.round(n * 10) / 10
@@ -67,15 +69,18 @@ function consultLine(identity: Identity, consult: Procedure | undefined, date: s
     : { kind: 'consult', name: consult.name, qty: 1, unitPrice: price.points, amount: price.points, patientPay: false }
 }
 
-/** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收；經轉診（referred）收經轉診的金額 */
-function basicCopayLine(identity: Identity, caseType: string, s: CopayValues, referred = false): ChargeLine | undefined {
+/** 比照經轉診的原因：持外院轉診單（含同一療程回診）、出院後回診；true 視同「經轉診」 */
+export type CopayReferred = boolean | '經轉診' | '出院後回診' | undefined
+
+/** 基本部分負擔：自費身分、免部分負擔身分、預防保健（A3）案件不收；經轉診（referred）收經轉診的金額，名稱標出原因 */
+function basicCopayLine(identity: Identity, caseType: string, s: CopayValues, referred: CopayReferred = false): ChargeLine | undefined {
   if (identity.selfPay || identity.copayExempt || caseType === 'A3') return undefined
   const amount = referred ? s.basicCopayReferred : s.basicCopay
-  return { kind: 'copay-basic', name: referred ? '門診基本部分負擔（經轉診）' : '門診基本部分負擔', qty: 1, unitPrice: amount, amount, patientPay: true }
+  return { kind: 'copay-basic', name: referred ? `門診基本部分負擔（${referred === true ? '經轉診' : referred}）` : '門診基本部分負擔', qty: 1, unitPrice: amount, amount, patientPay: true }
 }
 
 /** 掛號時就確定的收費項目（掛號頁預估用，date＝看診日）；批價時這幾行與它完全相同，再加上看診內容的項目 */
-export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>, date: string, referred = false): ChargeLine[] {
+export function fixedCharges(identity: Identity, caseType: string, lk: Pick<BillingLookup, 'settings' | 'procedure'>, date: string, referred: CopayReferred = false): ChargeLine[] {
   return [regLine(identity, date), consultLine(identity, lk.procedure(CONSULT_PROC_ID), date), basicCopayLine(identity, caseType, copayOn(lk.settings, date), referred)].filter((l): l is ChargeLine => !!l)
 }
 
@@ -120,7 +125,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     }
   }
 
-  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay, !!visit.referralIn)
+  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay, lk.referredOf ? lk.referredOf(visit) : visit.referralIn ? '經轉診' : false)
   if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
     const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, copay)

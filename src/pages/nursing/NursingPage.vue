@@ -10,6 +10,7 @@ import { AlertTriangle, ListChecks } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
+import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -153,6 +154,8 @@ const wardTotals = computed(() => ({
           </PatientBanner>
           <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
           <IpdFeeStrip :admission-id="adm.id" />
+          <!-- 醫師約好的出院後回診（有約才顯示）：出院衛教時提醒病人 -->
+          <AfterDischargePanel :admission-id="adm.id" class="bg-white" />
         </template>
 
         <UCard :padded="false">

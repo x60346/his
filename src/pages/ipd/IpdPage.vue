@@ -12,6 +12,7 @@ import MedicationEditor, { type MedRow } from '@/pages/opd/components/Medication
 import LabReportList from '@/components/LabReportList.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
+import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
 import OrderDialog from './components/OrderDialog.vue'
 import ReviseOrderDialog from './components/ReviseOrderDialog.vue'
 import ReasonDialog from '@/components/ReasonDialog.vue'
@@ -381,6 +382,8 @@ async function submitNote() {
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
           <div class="rounded-md border border-slate-200 px-3 py-2"><CertificatePanel :admission-id="adm.id" /></div>
+          <!-- 出院後回診：寫病摘時直接掛進門診（簽准出院前後都可以，出院後就由門診或櫃台處理）；會診醫師按了服務層會擋 -->
+          <AfterDischargePanel :admission-id="adm.id" :editable="!isAdmin && adm.status === 'admitted'" />
           <template v-if="ds?.signedAt">
             <div class="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <LogOut class="h-4 w-4" />已准予出院，等住院中心辦理手續。

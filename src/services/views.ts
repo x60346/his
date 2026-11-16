@@ -10,6 +10,7 @@ import { openQuery } from './nursing-rules'
 import { checkInProblem } from './queue-rules'
 import { normalizeRxTiming } from './drug-rules'
 import { prepayAvailable } from './money'
+import { afterDischargeCopayEligible } from './followup-rules'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -146,7 +147,22 @@ export function billingLookup(identityCode: string): BillingLookup {
     settings: db.billingSettings,
     drug: find.drug,
     procedure: find.procedure,
+    referredOf: copayReferredOf,
   }
+}
+
+const SEEN: Visit['status'][] = ['in-consult', 'consulted', 'charged', 'dispensed']
+/**
+ * 基本部分負擔比照經轉診的原因：持外院轉診單 → 經轉診；醫師出院時約的回診、出院後 30 天內、這次住院第一次實際就醫 → 出院後回診。
+ * 還在住院中（預約、印掛號單時）以今天出院估
+ */
+export function copayReferredOf(v: Visit): '經轉診' | '出院後回診' | undefined {
+  if (v.referralIn) return '經轉診'
+  if (!v.afterDischarge) return undefined
+  const a = find.admission(v.afterDischarge.admissionId)
+  const dischargedOn = a?.status === 'discharged' ? a.dischargedAt?.slice(0, 10) : a?.status === 'admitted' ? today() : undefined
+  const earlierSeen = db.visits.some((x) => x.id !== v.id && x.afterDischarge?.admissionId === a?.id && SEEN.includes(x.status) && (x.date < v.date || (x.date === v.date && x.seqNo < v.seqNo)))
+  return afterDischargeCopayEligible(v, dischargedOn, earlierSeen) ? '出院後回診' : undefined
 }
 
 /** 列表中顯示病患的精簡資訊 */
@@ -202,6 +218,11 @@ export interface VisitView extends Visit, PatientBrief {
   canCheckIn: boolean
   /** 醫師預約的回診：預約的醫師 */
   followUpByName?: string
+  /** 出院後回診：預約的醫師、住院號 */
+  afterDischargeByName?: string
+  afterDischargeAdmitNo?: string
+  /** 基本部分負擔比照經轉診的原因（掛號單預估、櫃台標示） */
+  copayReferred?: '經轉診' | '出院後回診'
 }
 
 export function visitView(v: Visit): VisitView {
@@ -209,6 +230,11 @@ export function visitView(v: Visit): VisitView {
   return {
     ...v,
     ...(v.followUpOf ? { followUpByName: nameOf.doctor(v.followUpOf.doctorId) } : {}),
+    ...(v.afterDischarge ? { afterDischargeByName: nameOf.doctor(v.afterDischarge.doctorId), afterDischargeAdmitNo: find.admission(v.afterDischarge.admissionId)?.admitNo ?? '' } : {}),
+    ...(() => {
+      const r = copayReferredOf(v)
+      return r ? { copayReferred: r } : {}
+    })(),
     ...patientBrief(v.patientId),
     doctorName: nameOf.doctor(v.doctorId),
     deptName: nameOf.dept(v.deptId),

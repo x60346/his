@@ -5794,6 +5794,148 @@ try {
     ok(db().visits.find((x) => x.id === vb.id).caseType === '04', '慢性病回診沿用 04 案件')
   }
 
+  // 預約未到追蹤（就醫日已過還沒報到、聯絡結果、改約）與出院後回診（醫師住院中預約、30 天內第一次回診比照經轉診）
+  console.log('\n[預約未到與出院後回診]')
+  {
+    dbm.resetDatabase('small')
+    const db = () => dbm.db
+    const BK = api.bookingApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const asDoctor = (doctorId) => as(db().users.find((u) => u.doctorId === doctorId).username)
+    const V = (id) => db().visits.find((v) => v.id === id)
+    // 規則
+    ok(api.isNoShow({ status: 'registered', date: addDaysT(-1) }, T) && !api.isNoShow({ status: 'registered', date: T }, T) && !api.isNoShow({ status: 'dispensed', date: addDaysT(-1) }, T) && !api.isNoShow({ status: 'registered', date: addDaysT(-1), refillOf: 'E1' }, T), '未到：就醫日已過、還是已掛號；今天的、看過診的、慢箋領藥不算')
+    ok(api.noShowKind({ afterDischarge: {}, followUpOf: {}, caseType: '04' }) === 'afterDischarge' && api.noShowKind({ followUpOf: {}, caseType: '04' }) === 'followUp' && api.noShowKind({ caseType: '04' }) === 'chronic' && !api.isImportantNoShow({ caseType: '01' }), '類別：出院後回診 > 醫師約的回診 > 慢性病 > 一般（一般的不催）')
+    ok(!api.noShowClosed({}) && !api.noShowClosed({ noShow: { contacts: [{ result: 'unreachable' }] } }) && api.noShowClosed({ noShow: { contacts: [{ result: 'unreachable' }, { result: 'declined' }] } }), '結案：最後一筆是改約或不需要；聯絡不到還沒結案')
+    const ad = { afterDischarge: { admissionId: 'A' } }
+    ok(api.afterDischargeCopayEligible({ ...ad, date: '2026-11-30' }, '2026-11-01', false) && !api.afterDischargeCopayEligible({ ...ad, date: '2026-12-02' }, '2026-11-01', false) && !api.afterDischargeCopayEligible({ ...ad, date: '2026-10-31' }, '2026-11-01', false), '出院後回診比照經轉診：出院後 30 天內（第 31 天起不算、出院前不算）')
+    ok(!api.afterDischargeCopayEligible({ ...ad, date: '2026-11-10' }, '2026-11-01', true) && !api.afterDischargeCopayEligible({ ...ad, date: '2026-11-10' }, undefined, false) && !api.afterDischargeCopayEligible({ date: '2026-11-10' }, '2026-11-01', false), '更早的出院回診已看過診、沒有出院日、不是出院時約的 → 不算')
+    const B = await load('/src/services/billing.ts')
+    const Vw = await load('/src/services/views.ts')
+    const lk = { ...Vw.billingLookup('01'), referredOf: () => '出院後回診' }
+    const line = B.calcChargeLines({ id: 'x', date: T, caseType: '01', identityCode: '01' }, { medications: [], procedures: [] }, lk).find((l) => l.kind === 'copay-basic')
+    ok(line?.name === '門診基本部分負擔（出院後回診）' && line.amount === db().billingSettings.basicCopayReferred, `批價明細：「${line?.name}」收經轉診的金額`)
+
+    // 種子：四種未到
+    await as('ph01')
+    await expectError(() => BK.listNoShows(), '藥師看未到追蹤')
+    await as('clerk01')
+    const l0 = await BK.listNoShows()
+    ok(l0.length >= 4 && l0.every((x) => x.date < T && x.date >= addDaysT(-14) && x.status === 'registered' && !x.closed), `未到清單：最近 14 天、就醫日已過的 ${l0.length} 筆`)
+    ok(l0[0].kind === 'afterDischarge' && l0[0].afterDischargeAdmitNo && l0[0].copayReferred === '出院後回診' && l0[0].phone, `出院後回診沒來排第一（住院 ${l0[0].afterDischargeAdmitNo}，有電話）`)
+    const fu = l0.find((x) => x.kind === 'followUp')
+    ok(fu && fu.followUpByName && fu.contacts.length === 1 && fu.contacts[0].result === 'unreachable' && fu.contacts[0].byName && !fu.closed, '醫師約的回診沒來：昨天打過電話聯絡不到，還沒結案')
+    const ch = l0.find((x) => x.kind === 'chronic')
+    const nm = l0.find((x) => x.kind === 'normal')
+    ok(!!ch && !!nm && !nm.important && ch.important, '慢性病（要追）與一般預約（列著不催）')
+    ok(!l0.some((x) => x.date === T) && !(await BK.listNoShows()).some((x) => x.date > T), '今天、未來的預約不在清單')
+    const dash = await api.dashboardApi.getDashboard()
+    ok(dash.noShowsToFollow === l0.filter((x) => x.important).length, `櫃台首頁「預約未到待追蹤」${dash.noShowsToFollow}＝清單上要追的`)
+    // 聯絡結果
+    let f = await fieldsOf(() => BK.recordNoShowContact(ch.id, { result: 'declined', note: ' ' }))
+    ok(!!f.note, '病人不需要：要寫原因')
+    f = await fieldsOf(() => BK.recordNoShowContact(ch.id, { result: 'rebooked' }))
+    ok(!!f.result, '「已改約」不能用記錄的（要用改約）')
+    const r1 = await BK.recordNoShowContact(ch.id, { result: 'unreachable' })
+    ok(!r1.closed && r1.contacts.length === 1 && db().auditLogs[0].action === '未到追蹤', '聯絡不到：還在清單、寫稽核')
+    const r2 = await BK.recordNoShowContact(ch.id, { result: 'declined', note: '已在他院追蹤' })
+    ok(r2.closed && r2.contacts.length === 2 && !(await BK.listNoShows()).some((x) => x.id === ch.id) && (await BK.listNoShows({ includeClosed: true })).some((x) => x.id === ch.id && x.closed), '病人不需要：結案，預設清單不列、含已結案才列')
+    let msg = await errOf(() => BK.recordNoShowContact(ch.id, { result: 'unreachable' }))
+    ok(msg.includes('已經結案'), `結案後再記錄 → 「${msg}」`)
+    ok((await api.dashboardApi.getDashboard()).noShowsToFollow === dash.noShowsToFollow - 1, '結案後首頁待辦少 1')
+    const todayReg = db().visits.find((v) => v.date === T && v.status === 'registered' && !v.refillOf)
+    msg = await errOf(() => BK.recordNoShowContact(todayReg.id, { result: 'unreachable' }))
+    ok(msg.includes('還沒過就醫日'), `今天的掛號記未到 → 「${msg}」`)
+    // 改約：醫師約的回診 → 掛同科新的診次，原本那筆留著
+    {
+      const otherDept = (await api.scheduleApi.listSessions({ date: addDaysT(3) })).find((s) => s.deptId !== fu.deptId && s.bookable)
+      msg = await errOf(() => BK.rebookNoShow(fu.id, { sessionId: otherDept.id }))
+      ok(msg.includes('同一科'), `改約到別科 → 「${msg}」`)
+    }
+    let target
+    for (let k = 1; k <= 7 && !target; k++) target = (await api.scheduleApi.listSessions({ date: addDaysT(k), deptId: fu.deptId })).find((s) => s.bookable)
+    const nv = await BK.rebookNoShow(fu.id, { sessionId: target.id, note: '病人說忘記了' })
+    const old = V(fu.id)
+    ok(nv.rebookedFrom === fu.id && nv.followUpOf?.visitId === old.followUpOf.visitId && nv.date === target.date, `改約 → ${nv.date} ${nv.doctorName} #${nv.seqNo}：仍標醫師約的回診、記從哪筆改約`)
+    ok(old.status === 'registered' && old.noShow.contacts.at(-1).result === 'rebooked' && old.noShow.contacts.at(-1).rebookedVisitId === nv.id && db().auditLogs[0].action === '未到改約', '原本那筆留著（查得到沒來）、記「已改約」結案、寫稽核')
+    const fu2 = (await BK.listNoShows({ includeClosed: true })).find((x) => x.id === fu.id)
+    ok(fu2.closed && fu2.contacts.at(-1).rebooked?.seqNo === nv.seqNo, '清單上顯示改約到哪一診')
+    msg = await errOf(() => BK.rebookNoShow(fu.id, { sessionId: target.id }))
+    ok(msg.includes('已經結案'), '已改約的不能再改約')
+    ok(fu2.laterVisit?.date === nv.date, '病人之後已有同科掛號：清單標出來（聯絡前先確認）')
+
+    // 出院後回診：種子的准出院病人已約好
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    await as('nurse01')
+    const al = await BK.listAfterDischarge(ready.id)
+    ok(al.length === 1 && al[0].afterDischarge && al[0].date > T && al[0].copayReferred === '出院後回診' && al[0].afterDischargeByName, `種子：准出院的病人已約 ${al[0]?.date} ${al[0]?.doctorName}（護理站看得到；還在住院，以今天出院估比照經轉診）`)
+    await expectError(() => BK.afterDischargeOptions(ready.id), '護理師預約出院後回診')
+    const other = db().doctors.find((d) => d.deptId !== ready.deptId && d.active)
+    await asDoctor(other.id)
+    msg = await errOf(() => BK.afterDischargeOptions(ready.id))
+    ok(msg.includes('醫師'), `別科醫師預約出院後回診 → 「${msg}」`)
+    await asDoctor(ready.doctorId)
+    const op = await BK.afterDischargeOptions(ready.id)
+    ok(op.deptId === ready.deptId && op.suggestions.length === 3 && op.suggestions.every((s) => !s.session || (s.session.doctorId === ready.doctorId && s.session.date >= s.date)) && op.booked.length === 1, '預約選項：1／2／4 週後主治醫師的門診；列出已約的')
+    msg = await errOf(() => BK.afterDischargeSessions(ready.id, T, ready.deptId))
+    ok(msg.includes('明天以後'), '出院後回診不能約今天')
+    const s14 = op.suggestions[1].session
+    msg = await errOf(() => BK.bookAfterDischarge(ready.id, { sessionId: s14.id }))
+    ok(msg.includes('確定要再約'), `同科已有未來掛號 → 「${msg}」`)
+    const b2 = await BK.bookAfterDischarge(ready.id, { sessionId: s14.id, confirmDuplicate: true })
+    const pt = db().patients.find((p) => p.id === ready.patientId)
+    ok(b2.afterDischarge.admissionId === ready.id && b2.identityCode === pt.defaultIdentity && b2.caseType === '01' && db().auditLogs[0].action === '預約出院後回診', '確認後約好：病人的預設身分、01 案件、寫稽核')
+    // 別科（例：住內科、約家醫科）
+    const od = db().departments.find((d) => d.id !== ready.deptId && d.active && d.id !== 'D04' && d.id !== 'D05')
+    let os
+    for (let k = 7; k <= 14 && !os; k++) os = (await BK.afterDischargeSessions(ready.id, addDaysT(k), od.id)).find((s) => !s.blocked)
+    const b3 = await BK.bookAfterDischarge(ready.id, { sessionId: os.id })
+    ok(b3.deptId === od.id && b3.afterDischarge, `可以約別科（${od.name}）`)
+    // 第一次實際就醫才比照經轉診
+    const first = al[0]
+    V(first.id).status = 'dispensed'
+    const later = (await BK.listAfterDischarge(ready.id)).filter((v) => v.id !== first.id && v.date > first.date)
+    ok(later.length && later.every((v) => !v.copayReferred), '最早那筆看過診後，之後的出院回診不再比照經轉診')
+    V(first.id).status = 'registered'
+    // 取消
+    await as('clerk01')
+    await expectError(() => BK.cancelAfterDischarge(b3.id), '櫃台用「取消出院後回診」')
+    await asDoctor(ready.doctorId)
+    await BK.cancelAfterDischarge(b3.id)
+    ok(V(b3.id).status === 'cancelled' && !(await BK.listAfterDischarge(ready.id)).some((v) => v.id === b3.id) && db().auditLogs[0].action === '取消出院後回診', '醫師取消：退掛、不再列出、寫稽核')
+    // 已出院的不能再約；種子出院 9 天、2 天前沒來的那筆比照經轉診
+    const dis = db().admissions.find((a) => a.id === db().visits.find((v) => v.id === l0[0].id).afterDischarge.admissionId)
+    await asDoctor(dis.doctorId)
+    msg = await errOf(() => BK.afterDischargeOptions(dis.id))
+    ok(dis.status === 'discharged' && msg.includes('只有住院中'), `出院後再預約 → 「${msg}」`)
+    const nvAd = { ...V(l0[0].id), identityCode: '01' }
+    const adLine = B.calcChargeLines(nvAd, { medications: [], procedures: [] }, Vw.billingLookup('01')).find((l) => l.kind === 'copay-basic')
+    ok(adLine?.name.includes('出院後回診'), '出院 9 天後的回診（第一次就醫）：批價收比照經轉診')
+    const far = { ...nvAd, id: 'tmp', date: addDaysT(25) }
+    ok(!B.calcChargeLines(far, { medications: [], procedures: [] }, Vw.billingLookup('01')).find((l) => l.kind === 'copay-basic')?.name.includes('（'), '出院第 34 天：收一般的基本部分負擔')
+    // 未到改約沿用出院後回診
+    await as('clerk01')
+    let t2
+    for (let k = 1; k <= 7 && !t2; k++) t2 = (await api.scheduleApi.listSessions({ date: addDaysT(k), deptId: l0[0].deptId })).find((s) => s.bookable && !db().visits.some((v) => v.sessionId === s.id && v.patientId === l0[0].patientId))
+    const nv2 = await BK.rebookNoShow(l0[0].id, { sessionId: t2.id })
+    ok(nv2.afterDischarge?.admissionId === dis.id && nv2.copayReferred === '出院後回診', '出院回診沒來、改約：新的那筆仍是出院後回診（30 天內、還沒看過診，比照經轉診）')
+  }
+
   // 住院中費用查詢與期中繳款：試算 − 已繳、提醒、收款與作廢、日結、出院結帳扣抵與退還多繳、費用明細表
   console.log('\n[期中繳款]')
   {

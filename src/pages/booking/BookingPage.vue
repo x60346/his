@@ -12,6 +12,8 @@ import IdentityCorrectDialog from '@/components/IdentityCorrectDialog.vue'
 import ReferralInForm from '@/components/ReferralInForm.vue'
 import ReferralInDialog from '@/components/ReferralInDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
+import NoShowList from '@/components/NoShowList.vue'
+import { useRoute } from 'vue-router'
 import DailyAdjust from '@/components/DailyAdjust.vue'
 import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type ReferralInInput, type VisitView } from '@/services'
 import type { PatientInput } from '@/services/patient'
@@ -34,6 +36,10 @@ const can = useCan()
 const { data: notices } = useQuery(async () => (canNotify.value ? scheduleApi.listSuspendNotices() : []), [canNotify])
 const pendingNotices = computed(() => (notices.value ?? []).filter((n) => !n.notifiedAt))
 const noticesOpen = ref(false)
+// ---------- 預約未到追蹤（櫃台）：要追的（出院後回診、醫師約的回診、慢性病）還沒結案才出現橫幅；首頁待辦帶 ?tab=noshow 直接打開 ----------
+const { data: noShows } = useQuery(async () => (canNotify.value ? bookingApi.listNoShows() : []), [canNotify])
+const noShowsToFollow = computed(() => (noShows.value ?? []).filter((x) => x.important))
+const noShowOpen = ref(canNotify.value && useRoute().query.tab === 'noshow')
 // 停診、代診（權限 schedule.suspend：預設管理員，可指定給櫃台組長）：和系統管理 → 排班共用同一個元件
 const adjustOpen = ref(false)
 /** 哪幾診停診（同一診只列一次）：例「11/14 下午診 黃柏翰」 */
@@ -314,6 +320,19 @@ function openIdentity(v: VisitView) {
       <UButton size="sm" variant="secondary" @click="noticesOpen = true">開啟名單</UButton>
     </div>
     <UDialog v-model="noticesOpen" title="停診通知" size="lg"><SuspendNotices /></UDialog>
+    <!-- 預約未到：要追的還沒結案時出現 -->
+    <div v-if="noShowsToFollow.length" class="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+      <PhoneCall class="h-4 w-4 shrink-0" />
+      <span class="min-w-0 flex-1">
+        預約未到待追蹤 <b class="tabular">{{ noShowsToFollow.length }}</b> 位
+        <span class="text-xs text-amber-800">（{{ [...new Set(noShowsToFollow.map((x) => x.kindLabel))].join('、') }}）</span>
+      </span>
+      <UButton size="sm" variant="secondary" @click="noShowOpen = true">開啟名單</UButton>
+    </div>
+    <div v-else-if="canNotify && noShows?.length" class="flex justify-end">
+      <UButton size="sm" variant="ghost" :icon="PhoneCall" @click="noShowOpen = true">預約未到（{{ noShows.length }}）</UButton>
+    </div>
+    <UDialog v-model="noShowOpen" title="預約未到追蹤" size="xl"><NoShowList /></UDialog>
     <div v-if="can('schedule.suspend')" class="flex justify-end">
       <UButton size="sm" variant="secondary" :icon="CalendarX" @click="adjustOpen = true">停診／代診</UButton>
     </div>
@@ -544,7 +563,9 @@ function openIdentity(v: VisitView) {
           <div>{{ row.patientName }}</div>
           <div class="tabular text-xs text-slate-500">{{ row.chartNo }}</div>
           <!-- 醫師看診時預約的回診 -->
-          <UBadge v-if="row.followUpByName" tone="blue" :title="`${row.followUpByName} 醫師看診時預約`">醫師預約</UBadge>
+          <UBadge v-if="row.afterDischarge" tone="blue" :title="`住院 ${row.afterDischargeAdmitNo}，${row.afterDischargeByName} 醫師出院前預約${row.copayReferred === '出院後回診' ? '；部分負擔比照經轉診' : ''}`">出院回診</UBadge>
+          <UBadge v-else-if="row.followUpByName" tone="blue" :title="`${row.followUpByName} 醫師看診時預約`">醫師預約</UBadge>
+          <UBadge v-if="row.rebookedFrom" tone="gray" title="預約未到後改約的">未到改約</UBadge>
           <UBadge v-if="row.referralIn" tone="cyan" :title="`${row.referralIn.fromHospital} ${row.referralIn.issuedOn} 開單${row.referralIn.inheritedFrom ? '（同一療程回診沿用）' : ''}`">外院轉診</UBadge>
         </template>
         <template #cell-status="{ row }">

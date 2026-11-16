@@ -17,7 +17,7 @@ const props = defineProps<{ visit?: VisitView }>()
 const auth = useAuth()
 
 // 預估應收：與掛號頁同一個 estimateFee（實際掛進去的身分、案件分類）
-const { data: estimate } = useQuery(async () => (open.value && props.visit ? bookingApi.estimateFee(props.visit.identityCode, props.visit.caseType, false, props.visit.date) : undefined), [open, () => props.visit?.id])
+const { data: estimate } = useQuery(async () => (open.value && props.visit ? bookingApi.estimateFee(props.visit.identityCode, props.visit.caseType, false, props.visit.date, props.visit.copayReferred) : undefined), [open, () => props.visit?.id])
 const { data: items } = useQuery(async () => (open.value && props.visit?.preventItems.length ? preventApi.listPreventItems() : []), [open, () => props.visit?.id])
 const preventNames = computed(() => (props.visit?.preventItems ?? []).map((c) => items.value?.find((i) => i.code === c)?.name ?? c))
 
@@ -30,11 +30,11 @@ async function print() {
 </script>
 
 <template>
-  <UDialog v-model="open" :title="visit?.followUpOf ? '預約回診單' : '掛號單'" size="sm">
+  <UDialog v-model="open" :title="visit?.followUpOf || visit?.afterDischarge ? '預約回診單' : '掛號單'" size="sm">
     <div v-if="visit" class="print-area mx-auto w-[80mm] max-w-full bg-white p-3 font-sans text-[13px] leading-snug text-black">
       <header class="border-b border-dashed border-black pb-1.5 text-center">
         <div class="text-base font-bold">{{ HOSPITAL.name }}</div>
-        <div class="text-xs">{{ visit?.followUpOf ? `門診預約回診單（${visit.followUpByName} 醫師預約・展示用）` : '門診掛號單（展示用）' }}</div>
+        <div class="text-xs">{{ visit?.afterDischarge ? `出院後回診預約單（${visit.afterDischargeByName} 醫師預約・展示用）` : visit?.followUpOf ? `門診預約回診單（${visit.followUpByName} 醫師預約・展示用）` : '門診掛號單（展示用）' }}</div>
       </header>
 
       <div class="mt-2 text-center">
@@ -51,7 +51,7 @@ async function print() {
         <dt>身分</dt><dd>{{ visit.identityName }}・案件 {{ visit.caseType }}</dd>
         <dt>就醫序號</dt><dd class="tabular">{{ visit.cardSeq }}</dd>
         <template v-if="preventNames.length"><dt>預防保健</dt><dd>{{ preventNames.join('、') }}</dd></template>
-        <template v-if="estimate"><dt>預估應收</dt><dd><b class="tabular">{{ estimate.total }}</b> 元起<span class="text-[11px]">（藥費看診後才確定）</span></dd></template>
+        <template v-if="estimate"><dt>預估應收</dt><dd><b class="tabular">{{ estimate.total }}</b> 元起<span class="text-[11px]">（藥費看診後才確定<template v-if="visit.copayReferred">；部分負擔比照經轉診：{{ visit.copayReferred }}</template>）</span></dd></template>
       </dl>
 
       <div class="mt-2 flex justify-center"><Barcode39 :value="visit.chartNo" :height="36" /></div>

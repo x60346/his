@@ -902,6 +902,58 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })
   }
 
+  // 預約未到與出院後回診（示範，不抽亂數）：
+  //   - 9 天前出院的肺炎病人，主治出院前約了 2 天前的內科回診，沒來（未到追蹤最優先）
+  //   - 醫師看診時約的回診沒來（櫃台已打過一次電話、聯絡不到）、慢性病回診沒來、自己掛的沒來
+  //   - 准出院的泌尿道感染病人：主治已約好一週後的出院回診（辦出院、護理站看得到）
+  {
+    /** 從 T+start 往 step 方向找 4 天內這一科（指定醫師優先）的日間診次，病人沒掛過那一診 */
+    const near = (pt: Patient, start: number, step: 1 | -1, deptId: string, doctorId?: string) => {
+      for (let k = 0; k < 4; k++) {
+        const list = sessionsOn(addDays(T, start + k * step)).filter((s) => s.deptId === deptId && deptFits(pt, deptId, s.date) && s.period !== 'NIGHT' && !visits.some((v) => v.sessionId === s.id && v.patientId === pt.id))
+        const s = list.find((x) => x.doctorId === doctorId) ?? list[0]
+        if (s) return s
+      }
+      return undefined
+    }
+    // 出院回診沒來的那位：出院後都沒再來看過內科（不然就不像「沒來」）
+    const pAd = [15, 19, 21, 23, 10, 0].map((i) => patients[i]).find((p) => ageAt(p, T) >= 18 && !visits.some((v) => v.patientId === p.id && v.deptId === 'D02' && v.date >= addDays(T, -9))) ?? patients[15]
+    const disOn = addDays(T, -9)
+    const ad: Admission = {
+      id: id('A'), admitNo: `I${addDays(disOn, -5).replace(/-/g, '').slice(2)}${String(next('admitNo')).padStart(3, '0')}`,
+      patientId: pAd.id, deptId: 'D02', doctorId: 'DR02', preferBedClass: '健保床', reason: '發燒咳嗽', diagnosis: 'J18.9 肺炎',
+      status: 'discharged', reservedAt: `${addDays(disOn, -5)} 09:00`, expectedDate: addDays(disOn, -5), admittedAt: `${addDays(disOn, -5)} 14:00`,
+      dischargedAt: `${disOn} 11:00`, dischargeType: '治癒出院',
+      dischargeSummary: {
+        diagnosis: 'J18.9 肺炎', dischargeType: '治癒出院', doctorId: 'DR02', writtenAt: `${disOn} 09:00`, signedAt: `${disOn} 09:00`,
+        course: '住院期間給予靜脈抗生素治療，第二天起退燒。', condition: '生命徵象穩定，咳嗽減輕。', followUp: '一週後內科門診追蹤（已預約），複查胸部 X 光。',
+      },
+    }
+    admissions.push(ad)
+    const sAd = near(pAd, -2, -1, 'D02', 'DR02')
+    if (sAd) makeVisit(pAd, sAd, 'registered', `${disOn} 09:10`).afterDischarge = { admissionId: ad.id, doctorId: 'DR02', at: `${disOn} 09:10` }
+    // 醫師約的回診沒來：原本那次看診的醫師約的；櫃台昨天打過電話，沒人接
+    const pFu = patients[2]
+    const src = visits.filter((v) => v.patientId === pFu.id && v.status === 'dispensed' && v.date < addDays(T, -10)).sort((a, b) => b.date.localeCompare(a.date))[0]
+    const sFu = src && near(pFu, -3, -1, src.deptId, src.doctorId)
+    if (src && sFu) {
+      const v = makeVisit(pFu, sFu, 'registered', `${src.date} 10:30`, src.caseType)
+      v.followUpOf = { visitId: src.id, doctorId: src.doctorId, at: `${src.date} 10:30` }
+      v.noShow = { contacts: [{ at: notFuture(`${addDays(T, -1)} 15:20`, 5), by: 'U401', result: 'unreachable', note: '電話沒人接' }] }
+    }
+    const pCh = patients[3]
+    const sCh = near(pCh, -5, -1, 'D02')
+    if (sCh) makeVisit(pCh, sCh, 'registered', `${addDays(T, -20)} 11:00`, '04')
+    const pNo = patients[13]
+    const sNo = near(pNo, -1, -1, 'D01')
+    if (sNo) makeVisit(pNo, sNo, 'registered', `${addDays(T, -4)} 16:00`)
+    // 准出院的病人：主治簽准出院時一併約好一週後的門診
+    const ready = admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    const pR = ready && patients.find((p) => p.id === ready.patientId)
+    const sR = ready && pR && near(pR, 7, 1, ready.deptId, ready.doctorId)
+    if (ready && pR && sR) makeVisit(pR, sR, 'registered', ready.dischargeSummary!.signedAt!).afterDischarge = { admissionId: ready.id, doctorId: ready.doctorId, at: ready.dischargeSummary!.signedAt! }
+  }
+
   // 外院轉診（示範，不抽亂數）：家醫科 dr01 今天還沒看的第一位掛號，持康健診所 3 天前開的轉診單（櫃台掛號時登錄）
   const refVisit = visits.filter((v) => v.date === T && v.doctorId === 'DR01' && v.status === 'registered' && !v.refillOf).sort((a, b) => a.sessionId.localeCompare(b.sessionId) || a.seqNo - b.seqNo)[0]
   if (refVisit) refVisit.referralIn = { fromHospital: '康健診所', issuedOn: addDays(T, -3), diagnosis: 'J20.9 急性支氣管炎（反覆發作）', purpose: '進一步檢查', recordedBy: 'U401', recordedAt: refVisit.createdAt }
