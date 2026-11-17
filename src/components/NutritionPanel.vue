@@ -4,11 +4,11 @@
 import { computed, reactive, ref } from 'vue'
 import { ClipboardCheck } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
-import { bmiOf, NUTRITION_IMPAIRED, NUTRITION_RISK_FROM, NUTRITION_SEVERITY, nutritionApi, nutritionScore } from '@/services'
+import { bmiOf, ipdApi, NUTRITION_IMPAIRED, NUTRITION_RISK_FROM, NUTRITION_SEVERITY, nutritionApi, nutritionScore } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const props = defineProps<{ admissionId: string }>()
-const { data, loading } = useQuery(() => nutritionApi.patientNutrition(props.admissionId), [() => props.admissionId])
+const { data, loading, reload } = useQuery(() => nutritionApi.patientNutrition(props.admissionId), [() => props.admissionId])
 const v = computed(() => (data.value?.admissionId === props.admissionId ? data.value : undefined))
 const dueText: Record<string, string> = { todo: '待篩檢', due: '快到期', overdue: '逾時' }
 
@@ -27,6 +27,11 @@ async function submit() {
   if (await save.run(props.admissionId, { impaired: form.impaired as 0, severity: form.severity as 0, heightCm: form.heightCm, weightKg: form.weightKg })) open.value = false
 }
 const ack = useAction(nutritionApi.ackNutritionAssessment, { success: '已閱營養評估' })
+// 營養師的管灌建議：主治一鍵帶入成管灌醫囑（開的人仍是醫師；沒有鼻胃管或胃造口會被擋）
+const apply = useAction(ipdApi.orderTubeFromAssessment, { success: (o) => `已開立：${o.content}` })
+async function applyTube(id: string) {
+  if (await apply.run(id)) reload()
+}
 </script>
 
 <template>
@@ -68,6 +73,11 @@ const ack = useAction(nutritionApi.ackNutritionAssessment, { success: '已閱營
               </div>
               <p class="text-slate-700"><span class="text-xs text-slate-500">評估：</span>{{ x.assessment }}</p>
               <p class="text-slate-800"><span class="text-xs text-slate-500">建議：</span>{{ x.recommendation }}</p>
+              <p v-if="x.tubeText" class="flex flex-wrap items-center gap-2 text-slate-800">
+                <span class="text-xs text-slate-500">管灌建議：</span>{{ x.tubeText }}
+                <UBadge v-if="x.tubeOrderId" tone="green">已開立醫囑</UBadge>
+                <UButton v-else-if="v.canAck" size="sm" variant="secondary" :loading="apply.pending.value" @click="applyTube(x.id)">依建議開管灌醫囑</UButton>
+              </p>
             </li>
           </ul>
           <p class="mt-1 text-xs text-slate-500">營養師只寫建議、不開醫囑；要改飲食或加管灌請主治開飲食醫囑。</p>

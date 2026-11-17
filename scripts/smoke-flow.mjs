@@ -3126,7 +3126,7 @@ try {
     ok(ng.find((o) => o.id === o2.id)?.needsAck && ng.find((o) => o.id === o1.id)?.lastReply?.resolution === 'modified', '護理站：新醫囑待核對、舊醫囑看得到醫師的修改回覆')
     const { readFileSync } = await import('node:fs')
     const src = readFileSync('src/services/ipd.ts', 'utf8')
-    ok((src.match(/doseLevel\(drug,/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 2, '開立與修改共用 createOrder：劑量、重複、服用時機的檢查只有一份')
+    ok((src.match(/doseLevel\(drug,/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 3, '開立、修改、依營養師建議開管灌共用 createOrder：劑量、重複、服用時機、管灌的檢查只有一份')
   }
 
   // 門診退藥：已發出的藥整張收回，退回發出時的批號；之後櫃台才能作廢或退費
@@ -7570,6 +7570,113 @@ try {
     ok((await NA.mealList(w0, tomorrow, 'breakfast')).rows.length >= 1, '明天早餐也能先列')
     await as('clerk01')
     await expectError(() => NA.mealList(w0, T, 'lunch'), '櫃台看送餐清單')
+  }
+
+  // 管灌：配方主檔、管灌醫囑（要有鼻胃管或胃造口、分次或連續）、營養師建議一鍵帶入、伙食費、每餐記灌入與反抽量（>200 提醒）、
+  // 本班待辦、今日輸入量、送餐清單
+  console.log('\n[管灌]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const T2 = api.tubeApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    let e = api.checkTubePlan({ formulaId: 'TF01', totalMl: 1500, mode: 'bolus', feeds: 2 })
+    ok(e.feeds?.includes('500'), '每餐超過 500 ml 擋')
+    e = api.checkTubePlan({ formulaId: '', totalMl: 50, mode: 'continuous', rateMlH: 500 })
+    ok(e.formulaId && e.totalMl && e.rateMlH, '配方、總量、速度範圍')
+    const sl = api.feedSlots({ formulaId: 'TF01', totalMl: 1500, mode: 'bolus', feeds: 6 }, '2026-11-17')
+    ok(sl.map((x) => x.slot.slice(11)).join(',') === '06:00,09:00,12:00,15:00,18:00,21:00' && sl[0].ml === 250, '分 6 餐：06–21 每 3 小時、每餐 250 ml')
+    ok(api.feedSlots({ formulaId: 'TF01', totalMl: 1440, mode: 'continuous', rateMlH: 60 }, '2026-11-17').every((x) => x.ml === 480), '連續 60 ml/h：每班 480 ml')
+    ok(api.slotState({ mode: 'bolus' }, '2026-11-17 09:00', false, '2026-11-17 08:10') === 'due' && api.slotState({ mode: 'bolus' }, '2026-11-17 09:00', false, '2026-11-17 10:01') === 'overdue' && api.slotState({ mode: 'bolus' }, '2026-11-17 09:00', false, '2026-11-17 07:59') === 'upcoming', '分次前後 1 小時「現在」、超過逾時')
+    ok(api.tubeNutrients({ totalMl: 1500 }, { kcalPerMl: 1.2, proteinPerMl: 0.063 }).kcal === 1800, '熱量依配方')
+
+    // 營養師建議 → 主治一鍵帶入（種子：腦梗塞昨天的建議，有鼻胃管）
+    const stroke = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const na = db().nutritionAssessments.find((x) => x.id === 'NA-SEED-2')
+    if (stroke && na) {
+      await as(db().users.find((u) => u.doctorId === stroke.doctorId).username)
+      const pn = await api.nutritionApi.patientNutrition(stroke.id)
+      ok(pn.assessments.find((x) => x.id === na.id)?.tubeText?.includes('分 6 餐'), '種子：營養師的管灌建議（均衡配方 1500 ml，分 6 餐）')
+      const o = await api.ipdApi.orderTubeFromAssessment(na.id)
+      ok(o.diet.kind === 'tube' && o.content.startsWith('管灌飲食・均衡配方') && db().nutritionAssessments.find((x) => x.id === na.id).tubeOrderId === o.id && db().nutritionAssessments.find((x) => x.id === na.id).seenAt, `依建議開管灌醫囑「${o.content}」，建議記為已帶入、已閱；開的人是醫師`)
+      ok(db().ipdOrders.filter((x) => x.admissionId === stroke.id && x.category === 'diet' && x.status === 'active').length === 1, '取代原本的軟質飲食')
+      const msg = await errOf(() => api.ipdApi.orderTubeFromAssessment(na.id))
+      ok(msg.includes('帶入過'), '同一份建議只能帶一次')
+      await as('nurse01')
+      await expectError(() => api.ipdApi.orderTubeFromAssessment(na.id), '護理師帶入管灌建議')
+    }
+
+    // 沒有管路不能開
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().lines.some((l) => l.admissionId === x.id && ['ngt', 'peg'].includes(l.kind) && !l.removedAt))
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(doc)
+    const plan = { formulaId: 'TF03', totalMl: 1200, mode: 'bolus', feeds: 6 }
+    let f = await fieldsOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'tube', tube: plan } }))
+    ok(f.diet?.includes('鼻胃管'), `沒有鼻胃管或胃造口不能開管灌 → 「${f.diet}」`)
+    f = await fieldsOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'tube', tube: { ...plan, formulaId: '' } } }))
+    ok(f.formulaId, '要選配方')
+    await as('nurse01')
+    await api.lineApi.addLine({ admissionId: a.id, kind: 'peg', site: '左上腹', size: '20Fr', insertedAt: dateUtil.addMinutes(nowStr(), -24 * 60), placedBy: '外科醫師' })
+    await as(doc)
+    const o = await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'tube', tube: plan } })
+    ok(o.diet.tube.feeds === 6 && o.content.includes('高蛋白配方') && o.content.includes('每餐 200 ml'), `胃造口也可以：「${o.content}」`)
+    // 開立時間往前到昨天（住院帳單和病房費一樣算到昨天；今天的排程也都算）
+    db().ipdOrders.find((x) => x.id === o.id).startAt = `${dateUtil.addDays(T, -1)} 00:00`
+
+    // 伙食費：管灌那天收管灌伙食費
+    await as('clerk01')
+    const bill = (await api.ipdChargeApi.getIpdBill(a.id)).bill
+    ok(bill.lines.some((l) => l.name.startsWith('伙食費（管灌飲食')), '住院帳單：管灌那天收管灌伙食費（和病房費一樣算到昨天）')
+
+    // 護理站記錄
+    await as('nurse01')
+    let v = await T2.getTubeFeeding(a.id)
+    ok(v.plan?.kcal === 1440 && v.slots.length === 6 && v.canRecord, `管灌分頁：6 餐、約 ${v.plan?.kcal} kcal`)
+    const now0 = nowStr()
+    const due = v.slots.find((s) => s.state === 'due' || s.state === 'overdue')
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    if (due) {
+      ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'tube' && t.admissionId === a.id), '本班待辦：該灌的管灌')
+      f = await fieldsOf(() => T2.recordTubeFeed(a.id, { slot: due.slot, givenMl: 0 }))
+      ok(f.givenMl, '灌 0 ml 要寫沒灌的原因')
+      const r = await T2.recordTubeFeed(a.id, { slot: due.slot, givenMl: 200, residualMl: 250 })
+      ok(r.warning?.includes('通知醫師') && r.record.givenMl === 200, `反抽 250 ml：提醒「${r.warning}」，照樣記錄`)
+      const wp = (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === a.id)
+      ok(wp.tube?.highResidual, '護理站清單標「反抽過多」')
+      const msg = await errOf(() => T2.recordTubeFeed(a.id, { slot: due.slot, givenMl: 200 }))
+      ok(msg.includes('記過'), '同一餐不能記兩次')
+      const io = await api.nursingApi.ioToday(a.id)
+      ok(io.tubeMl >= 200 && io.intake >= io.tubeMl, `今日輸入量含管灌 ${io.tubeMl} ml`)
+    }
+    const up = v.slots.find((s) => s.state === 'upcoming')
+    if (up) {
+      const msg = await errOf(() => T2.recordTubeFeed(a.id, { slot: up.slot, givenMl: 200 }))
+      ok(msg.includes('還沒到時間'), '還沒到時間不能記')
+    }
+    await as('dr01')
+    await expectError(() => T2.recordTubeFeed(a.id, { slot: v.slots[0].slot, givenMl: 200 }), '醫師記管灌')
+
+    // 送餐清單：管灌送配方
+    await as('nurse01')
+    const ml = await api.nutritionApi.mealList(ward, T, 'dinner')
+    ok(ml.rows.find((r) => r.bedNo === db().beds.find((b) => b.id === a.bedId).bedNo)?.tube && ml.counts['管灌飲食'] >= 1, '送餐清單：管灌標出（送配方）')
+    void now0
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

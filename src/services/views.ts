@@ -28,6 +28,7 @@ export const find = {
   visit: (id: string) => db.visits.find((v) => v.id === id),
   encounterOfVisit: (visitId: string) => db.encounters.find((e) => e.visitId === visitId),
   bed: (id: string) => db.beds.find((b) => b.id === id),
+  tubeFormula: (id: string) => db.tubeFormulas.find((x) => x.id === id),
   admission: (id: string) => db.admissions.find((a) => a.id === id),
   user: (id: string) => db.users.find((u) => u.id === id),
 }

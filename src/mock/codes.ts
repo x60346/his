@@ -454,6 +454,7 @@ const procedureBase: Procedure[] = [
   { id: 'P046', code: 'MEAL01', name: '伙食費（普通飲食，每日）', category: '處置', points: 0, selfPrice: 210, meal: ['regular'], active: true },
   { id: 'P047', code: 'MEAL02', name: '伙食費（軟質、流質，每日）', category: '處置', points: 0, selfPrice: 240, meal: ['soft', 'liquid'], active: true },
   { id: 'P048', code: 'MEAL03', name: '伙食費（治療飲食，每日）', category: '處置', points: 0, selfPrice: 270, meal: ['diabetic', 'low-salt'], active: true },
+  { id: 'P049', code: 'MEAL04', name: '伙食費（管灌飲食，每日）', category: '處置', points: 0, selfPrice: 320, meal: ['tube'], active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */
@@ -489,3 +490,11 @@ export const dischargeTypes = ['治癒出院', '改善出院', '轉院', '自動
 export const familyHistoryOptions = ['高血壓', '糖尿病', '心臟病', '中風', '乳癌', '大腸癌', '肺癌', '肝癌', '腎臟病']
 
 export const allergyOptions = ['Penicillin', 'Aspirin', 'NSAIDs', 'Sulfa', 'Cephalosporin', '顯影劑', '海鮮']
+
+/** 管灌配方（主檔）：熱量密度、蛋白質 */
+export const tubeFormulas: import('@/types').TubeFormula[] = [
+  { id: 'TF01', name: '均衡配方（1 kcal/ml）', kind: '均衡', kcalPerMl: 1, proteinPerMl: 0.04, active: true },
+  { id: 'TF02', name: '糖尿病配方（1 kcal/ml）', kind: '糖尿病', kcalPerMl: 1, proteinPerMl: 0.045, active: true },
+  { id: 'TF03', name: '高蛋白配方（1.2 kcal/ml）', kind: '高蛋白', kcalPerMl: 1.2, proteinPerMl: 0.063, active: true },
+  { id: 'TF04', name: '元素型配方（1 kcal/ml）', kind: '元素型', kcalPerMl: 1, proteinPerMl: 0.038, active: true },
+]

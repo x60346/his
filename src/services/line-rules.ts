@@ -44,6 +44,7 @@ export const LINE_KINDS: { kind: LineKind; label: string; short: string; dailyNe
   { kind: 'cvc', label: '中心靜脈導管', short: 'CVC', dailyNeed: true, sites: ['右內頸靜脈', '左內頸靜脈', '右鎖骨下靜脈', '股靜脈'], sizes: ['7Fr 三腔', '7Fr 雙腔'] },
   { kind: 'pivc', label: '周邊靜脈留置針', short: 'IV', dailyNeed: false, sites: ['右手背', '左手背', '右前臂', '左前臂', '右肘前', '左肘前'], sizes: ['18G', '20G', '22G', '24G'] },
   { kind: 'ngt', label: '鼻胃管', short: 'NG', dailyNeed: false, sites: ['右鼻孔', '左鼻孔'], sizes: ['14Fr', '16Fr', '18Fr'] },
+  { kind: 'peg', label: '胃造口', short: 'PEG', dailyNeed: false, sites: ['左上腹'], sizes: ['20Fr', '24Fr'] },
 ]
 export const lineKind = (k: LineKind) => LINE_KINDS.find((x) => x.kind === k)!
 /** 導尿管、CVC 放滿幾天提醒主治（感染風險：每天評估還需不需要） */

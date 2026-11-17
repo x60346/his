@@ -7,7 +7,7 @@
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { DIET_KINDS, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { DIET_KINDS, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -27,6 +27,11 @@ const categories: { key: IpdOrderCategory; label: string }[] = [
 ]
 // 飲食選種類（伙食費、送餐清單、術前禁食都看種類），細節寫在備註（例：糖尿病 1800 kcal）
 const dietKind = ref<DietKind | ''>('')
+// 管灌：配方、每天總量、分次（幾餐）或連續（每小時 ml）；熱量蛋白質即時算（和服務層同一份 tubeNutrients）
+const tube = reactive({ formulaId: '' as string | number | undefined, totalMl: 1500 as number | undefined, mode: 'bolus' as 'bolus' | 'continuous', feeds: 6 as number | undefined, rateMlH: 60 as number | undefined })
+const { data: formulas } = useQuery(() => tubeApi.listTubeFormulas())
+const tubeFormula = computed(() => formulas.value?.find((x) => x.id === tube.formulaId))
+const tubePlan = computed(() => ({ formulaId: String(tube.formulaId ?? ''), totalMl: Number(tube.totalMl), mode: tube.mode, ...(tube.mode === 'bolus' ? { feeds: Number(tube.feeds) } : { rateMlH: Number(tube.rateMlH) }) }))
 
 const form = reactive({
   type: 'long' as 'long' | 'stat',
@@ -48,6 +53,7 @@ watch(open, (v) => {
     Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
     Object.assign(abx, { reason: '', site: '', organism: '', note: '' })
     dietKind.value = ''
+    Object.assign(tube, { formulaId: '', totalMl: 1500, mode: 'bolus', feeds: 6, rateMlH: 60 })
     save.fieldErrors.value = {}
   }
 })
@@ -106,7 +112,7 @@ function buildInput(): OrderInput | string {
       return { ...base, content: '', procId: form.proc.id }
     case 'diet':
       if (!dietKind.value) return '請選飲食種類'
-      return { ...base, content: '', diet: { kind: dietKind.value, note: form.content.trim() } }
+      return { ...base, content: '', diet: { kind: dietKind.value, note: form.content.trim(), ...(dietKind.value === 'tube' ? { tube: tubePlan.value } : {}) } }
     default:
       if (!base.content) return '請輸入醫囑內容'
       return base
@@ -275,6 +281,20 @@ ${doseNote(drug, input.dose ?? 0)}。
             <input v-model="dietKind" type="radio" :value="k.kind" class="sr-only" />{{ k.label }}
             <span class="block text-xs text-slate-500">{{ k.hint }}</span>
           </label>
+        </div>
+        <div v-if="form.category === 'diet' && dietKind === 'tube'" class="space-y-2 rounded-md border border-slate-200 p-3">
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <USelect v-model="tube.formulaId" label="配方" required placeholder="選擇配方" :options="(formulas ?? []).map((x) => ({ label: x.name, value: x.id }))" :error="save.fieldErrors.value.formulaId" />
+            <UInput v-model="tube.totalMl" type="number" label="每天總量 ml" required :error="save.fieldErrors.value.totalMl" />
+          </div>
+          <fieldset class="flex flex-wrap items-center gap-4 text-sm">
+            <label class="flex items-center gap-1.5"><input v-model="tube.mode" type="radio" value="bolus" class="h-4 w-4" />分次</label>
+            <label class="flex items-center gap-1.5"><input v-model="tube.mode" type="radio" value="continuous" class="h-4 w-4" />連續（灌食機）</label>
+          </fieldset>
+          <UInput v-if="tube.mode === 'bolus'" v-model="tube.feeds" type="number" label="一天幾餐（06:00–21:00 平均分）" :error="save.fieldErrors.value.feeds" />
+          <UInput v-else v-model="tube.rateMlH" type="number" label="每小時 ml" :error="save.fieldErrors.value.rateMlH" />
+          <p v-if="tubeFormula && tube.totalMl" class="text-xs text-slate-600">{{ tubePlanText(tubePlan, tubeFormula) }}・約 {{ tubeNutrients(tubePlan, tubeFormula).kcal }} kcal、蛋白質 {{ tubeNutrients(tubePlan, tubeFormula).protein }} g／日</p>
+          <p v-if="save.fieldErrors.value.diet" class="text-xs text-red-600">{{ save.fieldErrors.value.diet }}</p>
         </div>
         <UTextarea v-model="form.content" :label="form.category === 'diet' ? '備註（選填：熱量、質地、限水…）' : '護理醫囑'" :rows="form.category === 'diet' ? 2 : 3" :placeholder="form.category === 'nursing' ? '例：Vital signs Q4H、翻身 Q2H、記錄輸入輸出量' : form.category === 'diet' ? '例：1800 kcal、限水 1000 ml' : ''" />
         <p v-if="form.category === 'diet' && form.type === 'long'" class="text-xs text-slate-500">同一時間只能有一種飲食，開立後原本的飲食醫囑會自動停止。</p>

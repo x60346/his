@@ -35,8 +35,11 @@ watch(() => props.admission.id, () => {
 })
 
 const save = useAction(nursingApi.addVitals, { success: '已記錄生命徵象' })
+// 今日輸入輸出：生命徵象記的輸入量＋管灌灌入量
+const { data: io, reload: reloadIo } = useQuery(async () => ({ id: props.admission.id, v: await nursingApi.ioToday(props.admission.id) }), [() => props.admission.id])
 async function submit() {
   if (await save.run({ admissionId: props.admission.id, ...form, ...(needAction.value ? { painAction: painAction.value } : {}) })) {
+    reloadIo()
     Object.assign(form, blank())
     painAction.value = ''
   }
@@ -74,7 +77,10 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
 <template>
   <div class="space-y-5 p-4">
     <form class="rounded-md border border-slate-200 bg-slate-50 p-3" @submit.prevent="submit">
-      <div class="mb-2 text-sm font-semibold text-slate-700">記錄生命徵象</div>
+      <div class="mb-2 flex flex-wrap items-baseline gap-x-3 text-sm">
+        <span class="font-semibold text-slate-700">記錄生命徵象</span>
+        <span v-if="io?.id === admission.id" class="tabular text-xs text-slate-500">今日輸入 {{ io.v.intake }} ml<template v-if="io.v.tubeMl">（含管灌 {{ io.v.tubeMl }}）</template>・輸出 {{ io.v.output }} ml</span>
+      </div>
       <!-- 欄數依「這個區塊實際的寬度」決定（auto-fill），不看視窗寬：護理站右側在病人清單旁邊，視窗寬不代表這裡寬 -->
       <div class="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-x-3 gap-y-2">
         <!-- 異常標紅：UInput 把 class 直接給 <input>（inheritAttrs: false），所以寫 !border-red-400 本身；

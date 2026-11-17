@@ -1,6 +1,6 @@
 // 飲食與營養（純函式）：飲食種類、從舊的飲食醫囑文字推斷種類、某天吃哪一種（伙食費、送餐清單共用）、
 // 營養篩檢（簡化 NRS-2002）算分與期限。畫面即時算、服務層把關、帳單、測試都用這一份
-import type { DietKind, IpdOrder } from '@/types'
+import type { DietKind, IpdOrder, TubeFeedPlan, TubeFormula } from '@/types'
 import { addMinutes } from '@/utils/date'
 
 export const DIET_KINDS: { kind: DietKind; label: string; hint: string }[] = [
@@ -10,13 +10,56 @@ export const DIET_KINDS: { kind: DietKind; label: string; hint: string }[] = [
   { kind: 'diabetic', label: '糖尿病飲食', hint: '控制醣類，備註寫熱量（例：1800 kcal）' },
   { kind: 'low-salt', label: '低鹽飲食', hint: '鈉 2–3 g／日（心衰竭、高血壓、腎臟病）' },
   { kind: 'npo', label: '禁食', hint: '術前、檢查前、腸胃道需要休息；不送餐、不收伙食費' },
+  { kind: 'tube', label: '管灌飲食', hint: '經鼻胃管或胃造口：選配方、每天總量與灌法（要有在身上的管路）' },
 ]
 export const dietLabel = (k: DietKind) => DIET_KINDS.find((x) => x.kind === k)?.label ?? k
-export const dietText = (d: { kind: DietKind; note?: string }) => `${dietLabel(d.kind)}${d.note?.trim() ? `・${d.note.trim()}` : ''}`
+export const dietText = (d: { kind: DietKind; note?: string; tube?: TubeFeedPlan }, formula?: Pick<TubeFormula, 'name'>) =>
+  `${dietLabel(d.kind)}${d.tube ? `・${tubePlanText(d.tube, formula)}` : ''}${d.note?.trim() ? `・${d.note.trim()}` : ''}`
+
+// ---------- 管灌 ----------
+/** 反抽量超過幾 ml 提醒暫停並通知醫師 */
+export const TUBE_RESIDUAL_HOLD = 200
+/** 分次灌食從幾點開始、幾點結束（第一餐、最後一餐） */
+const BOLUS_FIRST = 6 * 60
+const BOLUS_LAST = 21 * 60
+export const tubePlanText = (p: TubeFeedPlan, formula?: Pick<TubeFormula, 'name'>) =>
+  `${formula?.name ?? '配方'} ${p.totalMl} ml／日，${p.mode === 'bolus' ? `分 ${p.feeds} 餐（每餐 ${Math.round(p.totalMl / (p.feeds || 1))} ml）` : `連續 ${p.rateMlH} ml／小時`}`
+/** 一天的熱量、蛋白質（依配方） */
+export const tubeNutrients = (p: Pick<TubeFeedPlan, 'totalMl'>, f: Pick<TubeFormula, 'kcalPerMl' | 'proteinPerMl'>) => ({ kcal: Math.round(p.totalMl * f.kcalPerMl), protein: Math.round(p.totalMl * f.proteinPerMl) })
+
+export function checkTubePlan(p: Partial<TubeFeedPlan> | undefined): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!p?.formulaId) e.formulaId = '請選配方'
+  if (!(Number.isInteger(p?.totalMl) && p!.totalMl! >= 200 && p!.totalMl! <= 3000)) e.totalMl = '每天總量 200–3000 ml'
+  if (p?.mode === 'bolus') {
+    if (!(Number.isInteger(p.feeds) && p.feeds! >= 1 && p.feeds! <= 8)) e.feeds = '一天 1–8 餐'
+    else if (p.totalMl && p.totalMl / p.feeds! > 500) e.feeds = '每餐超過 500 ml：請多分幾餐'
+  } else if (p?.mode === 'continuous') {
+    if (!(Number.isInteger(p.rateMlH) && p.rateMlH! >= 10 && p.rateMlH! <= 150)) e.rateMlH = '每小時 10–150 ml'
+  } else e.mode = '請選分次或連續'
+  return e
+}
+
+/** 某天的管灌時段：分次＝06:00 到 21:00 平均分（6 餐＝每 3 小時）；連續＝每一班開始（00、08、16）。每段該灌多少 */
+export function feedSlots(p: TubeFeedPlan, date: string): { slot: string; ml: number }[] {
+  const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  if (p.mode === 'continuous') return ['00:00', '08:00', '16:00'].map((h) => ({ slot: `${date} ${h}`, ml: (p.rateMlH ?? 0) * 8 }))
+  const n = p.feeds || 1
+  const step = n > 1 ? Math.floor((BOLUS_LAST - BOLUS_FIRST) / (n - 1)) : 0
+  return Array.from({ length: n }, (_, i) => ({ slot: `${date} ${hm(BOLUS_FIRST + step * i)}`, ml: Math.round(p.totalMl / n) }))
+}
+
+/** 一個時段的狀態：分次前後 1 小時內「現在」、超過 1 小時沒記「逾時」；連續在這一班結束前 2 小時起「現在」、班結束後「逾時」 */
+export function slotState(p: Pick<TubeFeedPlan, 'mode'>, slot: string, done: boolean, now: string): 'done' | 'upcoming' | 'due' | 'overdue' {
+  if (done) return 'done'
+  const [from, to] = p.mode === 'continuous' ? [addMinutes(slot, 6 * 60), addMinutes(slot, 8 * 60)] : [addMinutes(slot, -60), addMinutes(slot, 60)]
+  return now < from ? 'upcoming' : now <= to ? 'due' : 'overdue'
+}
 
 /** 舊的飲食醫囑只有文字：依關鍵字推斷種類（看不出來的當普通飲食） */
 export function dietKindOfText(content: string): DietKind {
   if (/禁食|NPO/i.test(content)) return 'npo'
+  if (/管灌|鼻胃管灌/.test(content)) return 'tube'
   if (/糖尿病/.test(content)) return 'diabetic'
   if (/低鹽|低鈉/.test(content)) return 'low-salt'
   if (/流質/.test(content)) return 'liquid'

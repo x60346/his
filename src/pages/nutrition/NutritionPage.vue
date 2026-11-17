@@ -6,7 +6,7 @@ import { computed, reactive, ref } from 'vue'
 import { Printer } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import NutritionPanel from '@/components/NutritionPanel.vue'
-import { masterApi, MEALS, nutritionApi, type MealKey, type NutritionWorkItem } from '@/services'
+import { masterApi, MEALS, nutritionApi, tubeApi, tubeNutrients, tubePlanText, type MealKey, type NutritionWorkItem } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { now, today } from '@/utils/date'
@@ -21,14 +21,22 @@ const { data: work, loading } = useQuery(async () => (isDiet.value ? nutritionAp
 const target = ref<NutritionWorkItem>()
 const open = computed({ get: () => !!target.value, set: (x) => !x && (target.value = undefined) })
 const form = reactive({ kcal: undefined as number | undefined, protein: undefined as number | undefined, assessment: '', recommendation: '' })
+// 管灌建議（選填）：主治在「營養」分頁一鍵帶入成醫囑
+const withTube = ref(false)
+const tube = reactive({ formulaId: '' as string | number | undefined, totalMl: 1500 as number | undefined, mode: 'bolus' as 'bolus' | 'continuous', feeds: 6 as number | undefined, rateMlH: 60 as number | undefined })
+const { data: formulas } = useQuery(() => tubeApi.listTubeFormulas())
+const tubePlan = computed(() => ({ formulaId: String(tube.formulaId ?? ''), totalMl: Number(tube.totalMl), mode: tube.mode, ...(tube.mode === 'bolus' ? { feeds: Number(tube.feeds) } : { rateMlH: Number(tube.rateMlH) }) }))
+const tubeFormula = computed(() => formulas.value?.find((x) => x.id === tube.formulaId))
 function openAssess(i: NutritionWorkItem) {
   Object.assign(form, { kcal: undefined, protein: undefined, assessment: '', recommendation: '' })
+  withTube.value = false
+  Object.assign(tube, { formulaId: '', totalMl: 1500, mode: 'bolus', feeds: 6, rateMlH: 60 })
   save.fieldErrors.value = {}
   target.value = i
 }
 const save = useAction(nutritionApi.saveNutritionAssessment, { success: '已寫營養評估（主治首頁會看到待已閱）' })
 async function submit() {
-  if (target.value && (await save.run(target.value.admissionId, { ...form }))) target.value = undefined
+  if (target.value && (await save.run(target.value.admissionId, { ...form, ...(withTube.value ? { tube: tubePlan.value } : {}) }))) target.value = undefined
 }
 
 // ---------- 送餐清單 ----------
@@ -90,7 +98,7 @@ const print = () => window.print()
               <tr v-for="r in meal.rows" :key="r.bedNo" :class="r.npo && 'text-slate-400'">
                 <td class="tabular py-1 pr-3">{{ r.bedNo }}</td>
                 <td class="py-1 pr-3">{{ r.patientName }} <span class="text-xs text-slate-400">{{ r.chartNo }}</span></td>
-                <td class="py-1 pr-3"><b v-if="r.npo" class="text-red-700">禁食（不送）</b><template v-else>{{ r.dietText }}</template></td>
+                <td class="py-1 pr-3"><b v-if="r.npo" class="text-red-700">禁食（不送）</b><template v-else><b v-if="r.tube" class="text-violet-700">送配方：</b>{{ r.dietText }}</template></td>
                 <td class="py-1 text-red-700">{{ r.allergies.join('、') }}</td>
               </tr>
             </tbody>
@@ -107,6 +115,20 @@ const print = () => window.print()
           <UInput v-model="form.protein" type="number" label="建議蛋白質 g／日（選填）" :error="save.fieldErrors.value.protein" />
         </div>
         <UTextarea v-model="form.assessment" label="評估" :rows="3" required placeholder="飲食攝取、體重變化、咀嚼吞嚥、生化值" :error="save.fieldErrors.value.assessment" />
+        <label class="flex items-center gap-2"><input v-model="withTube" type="checkbox" class="h-4 w-4" />建議管灌（主治可一鍵帶入成醫囑）</label>
+        <div v-if="withTube" class="space-y-2 rounded-md border border-slate-200 p-3">
+          <div class="grid grid-cols-2 gap-2">
+            <USelect v-model="tube.formulaId" label="配方" required placeholder="選擇配方" :options="(formulas ?? []).map((x) => ({ label: x.name, value: x.id }))" :error="save.fieldErrors.value.formulaId" />
+            <UInput v-model="tube.totalMl" type="number" label="每天總量 ml" :error="save.fieldErrors.value.totalMl" />
+          </div>
+          <fieldset class="flex gap-4">
+            <label class="flex items-center gap-1.5"><input v-model="tube.mode" type="radio" value="bolus" class="h-4 w-4" />分次</label>
+            <label class="flex items-center gap-1.5"><input v-model="tube.mode" type="radio" value="continuous" class="h-4 w-4" />連續</label>
+          </fieldset>
+          <UInput v-if="tube.mode === 'bolus'" v-model="tube.feeds" type="number" label="一天幾餐" :error="save.fieldErrors.value.feeds" />
+          <UInput v-else v-model="tube.rateMlH" type="number" label="每小時 ml" :error="save.fieldErrors.value.rateMlH" />
+          <p v-if="tubeFormula" class="text-xs text-slate-600">{{ tubePlanText(tubePlan, tubeFormula) }}・約 {{ tubeNutrients(tubePlan, tubeFormula).kcal }} kcal、蛋白質 {{ tubeNutrients(tubePlan, tubeFormula).protein }} g</p>
+        </div>
         <UTextarea v-model="form.recommendation" label="建議" :rows="3" required placeholder="飲食種類、熱量、蛋白質、補充品、管灌（由主治開醫囑）" :error="save.fieldErrors.value.recommendation" />
       </div>
       <template #footer>

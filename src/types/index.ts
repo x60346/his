@@ -1087,7 +1087,42 @@ export interface DischargeSummary {
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'
 
 /** 飲食種類：普通、軟質、流質、糖尿病、低鹽、禁食 */
-export type DietKind = 'regular' | 'soft' | 'liquid' | 'diabetic' | 'low-salt' | 'npo'
+export type DietKind = 'regular' | 'soft' | 'liquid' | 'diabetic' | 'low-salt' | 'npo' | 'tube'
+
+/** 管灌配方（主檔）：每 ml 熱量、每 ml 蛋白質 g */
+export interface TubeFormula {
+  id: string
+  name: string
+  kind: '均衡' | '糖尿病' | '高蛋白' | '元素型'
+  kcalPerMl: number
+  proteinPerMl: number
+  active: boolean
+}
+
+/** 管灌內容：配方、每天總量；分次（bolus，一天幾餐）或連續（continuous，每小時 ml） */
+export interface TubeFeedPlan {
+  formulaId: string
+  totalMl: number
+  mode: 'bolus' | 'continuous'
+  feeds?: number
+  rateMlH?: number
+}
+
+/** 管灌紀錄（護理師）：灌入量、反抽量（殘餘量）；反抽 >200 ml 標「反抽過多」（提醒暫停並通知醫師，不擋） */
+export interface TubeFeedRecord {
+  id: string
+  admissionId: string
+  orderId: string
+  /** 分次：這一餐預定時間；連續：這一班開始時間 */
+  slot: string
+  at: string
+  by: string
+  givenMl: number
+  residualMl?: number
+  /** 沒灌（反抽過多暫停、病人外出檢查…）：原因 */
+  heldReason?: string
+  note?: string
+}
 
 /**
  * 營養篩檢（護理師，入院 48 小時內；簡化 NRS-2002）：營養狀態受損 0–3、疾病嚴重度 0–3、70 歲以上加 1。
@@ -1118,6 +1153,10 @@ export interface NutritionAssessment {
   protein?: number
   assessment: string
   recommendation: string
+  /** 管灌建議（營養師）：主治可以一鍵帶入成管灌醫囑（仍由醫師開） */
+  tube?: TubeFeedPlan
+  /** 帶入後的醫囑 */
+  tubeOrderId?: string
   seenBy?: string
   seenAt?: string
 }
@@ -1127,7 +1166,7 @@ export interface IpdOrder {
   id: string
   admissionId: string
   /** 飲食醫囑：種類＋備註（content 是給人看的「糖尿病飲食・1800 kcal」）；舊資料沒有，依 content 推斷 */
-  diet?: { kind: DietKind; note?: string }
+  diet?: { kind: DietKind; note?: string; tube?: TubeFeedPlan }
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory
@@ -1389,7 +1428,7 @@ export interface VitalRecord {
 }
 
 /** 管路：導尿管、中心靜脈導管、周邊靜脈留置針、鼻胃管 */
-export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt'
+export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg'
 
 /**
  * 管路（護理師或醫師登錄）：放置時間、部位、尺寸、放置者；導尿管與 CVC 每天評估「還需要嗎」；

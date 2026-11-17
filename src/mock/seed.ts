@@ -2022,7 +2022,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         nutritionAssessments.push({ id: 'NA-SEED-1', admissionId: a.id, at: d1, by: 'U701', kcal: 1500, protein: 60, assessment: '中風後吞嚥困難，進食量約平常一半，BMI 20.3。', recommendation: '改軟質飲食，三餐間加一份營養補充品；每週量體重。', seenBy: users.find((u) => u.doctorId === a.doctorId)?.id, seenAt: addMinutes(d1, 180) })
         const d2a = addMinutes(nowStr, -20 * 60)
         const d2 = d2a > addMinutes(d1, 60) ? d2a : addMinutes(d1, 60)
-        nutritionAssessments.push({ id: 'NA-SEED-2', admissionId: a.id, at: d2, by: 'U701', kcal: 1500, protein: 65, assessment: '吞嚥評估仍有嗆咳，近一週體重少 1.5 公斤。', recommendation: '建議經鼻胃管灌食（均衡配方 1500 kcal/日，分 6 餐），請主治評估是否開立。' })
+        nutritionAssessments.push({ id: 'NA-SEED-2', admissionId: a.id, at: d2, by: 'U701', kcal: 1500, protein: 65, assessment: '吞嚥評估仍有嗆咳，近一週體重少 1.5 公斤。', recommendation: '建議經鼻胃管灌食（均衡配方 1500 kcal/日，分 6 餐），請主治評估是否開立。', tube: { formulaId: 'TF01', totalMl: 1500, mode: 'bolus', feeds: 6 } })
       }
     }
   }
@@ -2110,6 +2110,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     lines,
     nutritionScreens,
     nutritionAssessments,
+    tubeFormulas: structuredClone(codes.tubeFormulas),
+    tubeFeeds: [],
     vitals,
     nursingNotes,
     progressNotes,

@@ -20,8 +20,9 @@ import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift,
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, lineTodosOf, painStateOf } from './line-work'
-import { painActionProblem } from './line-rules'
+import { lineKind, painActionProblem } from './line-rules'
 import { screenable, screenStateOf } from './nutrition-work'
+import { highResidual, tubeSlotsOf } from './tube-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -56,6 +57,8 @@ export interface WardPatient extends AdmissionView {
   /** 營養篩檢（入院 48 小時內）：還沒篩的狀態（todo 還早、due 快到期、overdue 逾時）；篩過的有營養風險標 nutritionRisk */
   nutritionDue?: 'todo' | 'due' | 'overdue'
   nutritionRisk: boolean
+  /** 管灌：有管灌醫囑；今天該灌沒記的（現在、逾時）；最近一次反抽過多 */
+  tube?: { due: number; overdue: number; highResidual: boolean }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -102,8 +105,12 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             const ps = painStateOf(a.id, t)
             return { ...(ps.last ? { painScore: ps.last.score } : {}), ...(ps.reassess ? { painReassess: ps.reassess.status } : {}), painThisShift: ps.thisShift }
           })(),
-          lines: activeLines(a.id).map((l) => ({ foley: 'Foley', cvc: 'CVC', pivc: 'IV', ngt: 'NG' })[l.kind]),
+          lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
+          ...(() => {
+            const tf = tubeSlotsOf(a.id, t)
+            return tf.order ? { tube: { due: tf.slots.filter((x) => x.state === 'due').length, overdue: tf.slots.filter((x) => x.state === 'overdue').length, highResidual: !!highResidual(a.id) } } : {}
+          })(),
           ...(() => {
             if (!screenable(a)) return { nutritionRisk: false }
             const ns = screenStateOf(a, t)
@@ -123,7 +130,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -189,6 +196,9 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       else if (measured && !ps.thisShift) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: 'todo', text: '本班尚未評估疼痛' })
       // 管路：今天還沒評估還需要嗎、評估可以移除、留置針滿 96 小時（滿 7 天提醒主治，在醫師首頁）
       for (const x of lineTodosOf(a.id, t).filter((y) => y.kind !== 'attending')) tasks.push({ ...base, id: x.id, kind: 'line', urgency: x.kind === 'need' ? 'todo' : 'due', text: x.text })
+      // 管灌：該灌沒記的（前後 1 小時「現在」、超過「逾時」；連續灌食每班記一次）
+      const tf = tubeSlotsOf(a.id, t)
+      for (const x of tf.slots.filter((y) => y.state === 'due' || y.state === 'overdue')) tasks.push({ ...base, id: `tube-${a.id}-${x.slot}`, kind: 'tube', urgency: x.state as 'due' | 'overdue', at: x.slot, text: `管灌 ${x.ml} ml${tf.order!.diet.tube.mode === 'continuous' ? '（本班連續灌食量）' : ''}` })
       // 營養篩檢：入院 48 小時內（還早的列「待處理」、最後 6 小時「現在」、過了「逾時」）
       if (screenable(a)) {
         const nd = screenStateOf(a, t).due
@@ -561,5 +571,16 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
     db.handovers.push(h)
     audit('交班', `${input.ward} ${input.shift}`)
     return h
+  })
+}
+
+// ---------- 今日輸入輸出（生命徵象的輸入量＋管灌灌入量；輸出量） ----------
+export function ioToday(admissionId: string): Promise<{ date: string; intake: number; tubeMl: number; output: number }> {
+  return query(() => {
+    requireUser('nurse', 'doctor')
+    const d = today()
+    const vs = db.vitals.filter((v) => v.admissionId === admissionId && v.at.startsWith(d))
+    const tubeMl = db.tubeFeeds.filter((r) => r.admissionId === admissionId && r.at.startsWith(d)).reduce((n, r) => n + r.givenMl, 0)
+    return { date: d, intake: vs.reduce((n, v) => n + (v.intake ?? 0), 0) + tubeMl, tubeMl, output: vs.reduce((n, v) => n + (v.output ?? 0), 0) }
   })
 }

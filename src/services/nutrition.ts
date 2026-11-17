@@ -1,12 +1,12 @@
 // 飲食與營養：護理師入院 48 小時內營養篩檢（簡化 NRS-2002）→ ≥3 分列營養師待評估 → 營養師寫評估與建議（不開醫囑）→ 主治已閱；
 // 每餐依病房的送餐清單（以那一餐時間有效的飲食醫囑為準，可列印）。規則在 nutrition-rules
-import type { DietKind, NutritionAssessment, NutritionScreen } from '@/types'
+import type { DietKind, NutritionAssessment, NutritionScreen, TubeFeedPlan } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, ageOf, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
 import { careRoleOf } from './care-team'
-import { bmiOf, checkNutritionScreen, dietAt, dietLabel, MEALS, NUTRITION_RISK_FROM, nutritionScore, type MealKey } from './nutrition-rules'
+import { bmiOf, checkNutritionScreen, checkTubePlan, tubePlanText, dietAt, dietLabel, MEALS, NUTRITION_RISK_FROM, nutritionScore, type MealKey } from './nutrition-rules'
 import { currentDiet, latestScreen, needsDietitian, screenable, screenStateOf } from './nutrition-work'
 
 export interface NutritionScreenView extends NutritionScreen {
@@ -16,11 +16,12 @@ export interface NutritionScreenView extends NutritionScreen {
 }
 export interface NutritionAssessmentView extends NutritionAssessment {
   byName: string
+  tubeText?: string
   seenByName?: string
 }
 
 const screenView = (s: NutritionScreen): NutritionScreenView => ({ ...s, byName: nameOf.user(s.by), ...(bmiOf(s.heightCm, s.weightKg) ? { bmi: bmiOf(s.heightCm, s.weightKg) } : {}), risk: s.score >= NUTRITION_RISK_FROM })
-const assessView = (x: NutritionAssessment): NutritionAssessmentView => ({ ...x, byName: nameOf.user(x.by), ...(x.seenBy ? { seenByName: nameOf.user(x.seenBy) } : {}) })
+const assessView = (x: NutritionAssessment): NutritionAssessmentView => ({ ...x, byName: nameOf.user(x.by), ...(x.tube ? { tubeText: tubePlanText(x.tube, find.tubeFormula(x.tube.formulaId)) } : {}), ...(x.seenBy ? { seenByName: nameOf.user(x.seenBy) } : {}) })
 
 export interface PatientNutrition {
   admissionId: string
@@ -127,6 +128,8 @@ export function listNutritionWork(): Promise<{ toAssess: NutritionWorkItem[]; re
 export interface AssessmentInput {
   kcal?: number
   protein?: number
+  /** 管灌建議（選填）：主治可以一鍵帶入成醫囑 */
+  tube?: TubeFeedPlan
   assessment: string
   recommendation: string
 }
@@ -143,8 +146,14 @@ export function saveNutritionAssessment(admissionId: string, input: AssessmentIn
     const num = (x?: number) => (x === undefined || x === null || Number.isNaN(x) || (x as unknown) === '' ? undefined : Number(x))
     if (num(input.kcal) !== undefined && !(num(input.kcal)! >= 500 && num(input.kcal)! <= 4000)) f.kcal = '熱量 500–4000 kcal'
     if (num(input.protein) !== undefined && !(num(input.protein)! >= 10 && num(input.protein)! <= 250)) f.protein = '蛋白質 10–250 g'
+    if (input.tube) {
+      Object.assign(f, checkTubePlan(input.tube))
+      if (input.tube.formulaId && !db.tubeFormulas.some((y) => y.id === input.tube!.formulaId && y.active)) f.formulaId = '找不到這個配方'
+    }
     failFields(f)
+    const tp = input.tube
     const x: NutritionAssessment = {
+      ...(tp ? { tube: { formulaId: tp.formulaId, totalMl: tp.totalMl, mode: tp.mode, ...(tp.mode === 'bolus' ? { feeds: tp.feeds } : { rateMlH: tp.rateMlH }) } } : {}),
       id: newId('NA'), admissionId: a.id, at: now(), by: u.id, assessment: input.assessment.trim(), recommendation: input.recommendation.trim(),
       ...(num(input.kcal) !== undefined ? { kcal: num(input.kcal) } : {}), ...(num(input.protein) !== undefined ? { protein: num(input.protein) } : {}),
     }
@@ -177,6 +186,8 @@ export interface MealRow {
   /** 飲食醫囑文字（含備註）；沒有飲食醫囑的寫「沒有飲食醫囑」 */
   dietText: string
   npo: boolean
+  /** 管灌：不送餐盤，送配方 */
+  tube: boolean
   allergies: string[]
 }
 
@@ -197,7 +208,7 @@ export function mealList(ward: string, date: string, meal: MealKey): Promise<{ w
         const p = find.patient(a.patientId)
         return {
           bedNo: find.bed(a.bedId!)?.bedNo ?? '', patientName: p?.name ?? '', chartNo: p?.chartNo ?? '',
-          ...(d ? { kind: d.kind } : {}), dietText: o ? o.content : '沒有飲食醫囑', npo: d?.kind === 'npo', allergies: p?.allergies ?? [],
+          ...(d ? { kind: d.kind } : {}), dietText: o ? o.content : '沒有飲食醫囑', npo: d?.kind === 'npo', tube: d?.kind === 'tube', allergies: p?.allergies ?? [],
         }
       })
       .sort((x, y) => x.bedNo.localeCompare(y.bedNo))

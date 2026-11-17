@@ -1,6 +1,6 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
-import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote, MedicationOrder } from '@/types'
+import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote, MedicationOrder, TubeFormula } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
@@ -17,7 +17,8 @@ import { udDelivery, udStage } from './ud-work'
 import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
 import { ABX_DEFAULT_DAYS, ABX_REASON_LABEL, abxText, checkAbxInput } from './abx-rules'
-import { DIET_KINDS, dietKindOfText, dietText } from './nutrition-rules'
+import { checkTubePlan, DIET_KINDS, dietKindOfText, dietText } from './nutrition-rules'
+import { activeLines } from './line-work'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 
 function activeAdmission(admissionId: string) {
@@ -194,8 +195,20 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       // 飲食醫囑選種類（伙食費、送餐清單、術前禁食都看種類）；只寫文字的（舊的呼叫方式）依關鍵字推斷
       if (input.diet) {
         if (!DIET_KINDS.some((k) => k.kind === input.diet!.kind)) failField('diet', '請選飲食種類')
-        dietValue = { kind: input.diet.kind, ...(input.diet.note?.trim() ? { note: input.diet.note.trim() } : {}) }
-        content = dietText(dietValue)
+        // 管灌：配方、總量、灌法；身上要有鼻胃管或胃造口（沒有管路不能灌）
+        let formula: TubeFormula | undefined
+        if (input.diet.kind === 'tube') {
+          failFields(checkTubePlan(input.diet.tube))
+          formula = db.tubeFormulas.find((x) => x.id === input.diet!.tube!.formulaId && x.active)
+          if (!formula) failField('formulaId', '找不到這個配方（或已停用）')
+          if (!activeLines(a.id).some((l) => l.kind === 'ngt' || l.kind === 'peg')) failField('diet', '病人沒有鼻胃管或胃造口：請先放置並在護理站「管路」登錄，才能開管灌')
+        }
+        const tp = input.diet.tube
+        dietValue = {
+          kind: input.diet.kind, ...(input.diet.note?.trim() ? { note: input.diet.note.trim() } : {}),
+          ...(input.diet.kind === 'tube' && tp ? { tube: { formulaId: tp.formulaId, totalMl: tp.totalMl, mode: tp.mode, ...(tp.mode === 'bolus' ? { feeds: tp.feeds } : { rateMlH: tp.rateMlH }) } } : {}),
+        }
+        content = dietText(dietValue, formula)
       } else if (!content) fail('請選飲食種類')
       else dietValue = { kind: dietKindOfText(content) }
     } else if (!content) {
@@ -247,6 +260,26 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     const o = createOrder(user, a, input, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
     const severe = (o.rxAlerts ?? []).filter((x) => x.level === 'severe')
     audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((x) => `${x.title}（${x.reason}）`).join('、')}` : ''}`)
+    return orderView(o)
+  })
+}
+
+/**
+ * 依營養師的管灌建議開管灌醫囑（主治一鍵帶入，開的人仍是醫師）：同一筆建議只能帶一次；
+ * 一併記為已閱（醫師看過才帶入）
+ */
+export function orderTubeFromAssessment(assessmentId: string, note = ''): Promise<OrderView> {
+  return mutate(() => {
+    const user = requirePermission('order.write')
+    const x = must(db.nutritionAssessments.find((y) => y.id === assessmentId), '營養評估')
+    if (!x.tube) fail('這份營養評估沒有管灌建議')
+    if (x.tubeOrderId) fail('這份建議已經帶入過了', 'CONFLICT')
+    const a = activeAdmission(x.admissionId)
+    const role = requireCare(user.doctorId, a, '開管灌醫囑', { consult: false })
+    const t = now()
+    const o = createOrder(user, a, { admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'tube', tube: x.tube, note } }, t, role.kind === 'consult' ? { consultId: role.consult.id } : {})
+    Object.assign(x, { tubeOrderId: o.id, ...(x.seenAt ? {} : { seenBy: user.id, seenAt: t }) })
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}（依營養師建議）`)
     return orderView(o)
   })
 }
