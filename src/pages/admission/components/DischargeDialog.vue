@@ -37,6 +37,7 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
   <UDialog v-model="open" :title="`辦理出院：${admission?.patientName ?? ''}`" size="md">
     <div class="space-y-3 text-sm">
       <p class="text-slate-600">住院號 {{ admission?.admitNo }}・住院第 {{ admission?.days }} 天・{{ admission?.diagnosis }}</p>
+      <p v-if="admission?.planUnreferred" class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">出院準備已收案、有需求，還沒送出轉介（長照、居家護理等）：請和出院準備個管師確認；不擋出院。</p>
 
       <!-- 醫師還沒准予出院：說明要等誰、做什麼，不給按 -->
       <div v-if="!ready" class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">

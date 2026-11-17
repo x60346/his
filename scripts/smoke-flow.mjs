@@ -7891,6 +7891,112 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // 出院準備：篩選（系統自動勾、兩項收案、72 小時）→ 需求評估 → 轉介（送出、回覆）→ 出院後 7 天追蹤；權限；簽准出院提醒不擋
+  console.log('\n[出院準備]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.dischargePlanApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.planScreenDue('2026-11-14 08:00', false, '2026-11-17 08:01').status === 'overdue' && api.planScreenDue('2026-11-14 08:00', false, '2026-11-16 21:00').status === 'due' && api.planScreenDue('2026-11-14 08:00', false, '2026-11-15 08:00').status === 'todo', '篩選 72 小時：最後 12 小時快到期、過了逾時')
+    ok(api.followUpDue('2026-11-10 10:00', false, '2026-11-17 10:01').status === 'overdue' && api.followUpDue('2026-11-10 10:00', false, '2026-11-16 10:00').status === 'due', '出院後 7 天追蹤')
+    ok(api.planUnreferred({ enrolled: true, needs: ['ltc'], referrals: [] }) && !api.planUnreferred({ enrolled: true, needs: ['teach'], referrals: [] }) && !api.planUnreferred({ enrolled: true, needs: ['ltc'], referrals: [{ sentAt: 'x' }] }), '收案有需求沒送轉介才提醒（只有照顧技巧指導不用轉介）')
+
+    // 種子
+    const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
+    await as('nurse03')
+    let work = await P.listPlanWork()
+    if (ready && db().dischargePlans.some((p) => p.admissionId === ready.id)) {
+      ok(work.some((x) => x.admissionId === ready.id && x.stage === 'refer' && x.dischargeReady && x.overdue), '種子：准出院的病人收案未轉介（排最前、標逾時）')
+      ok((await api.admissionApi.getAdmission(ready.id)).planUnreferred, '住院資訊標「未轉介」（醫師、住院中心看得到）')
+    }
+    ok(work.some((x) => x.stage === 'screen'), '種子：最近入院的病人待篩選')
+    const followSeed = db().dischargePlans.find((p) => p.referrals.some((r) => r.id === 'DRF-SEED-3'))
+    if (followSeed) ok(work.some((x) => x.admissionId === followSeed.admissionId && x.stage === 'follow') && (await api.dashboardApi.getDashboard()).planFollowUp >= 1, '種子：出院後待電話追蹤（逾時，首頁）')
+
+    // 權限：預設所有護理師；醫師只看
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().dischargePlans.some((p) => p.admissionId === x.id))
+    const docU = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(docU)
+    ok(!(await P.patientPlan(a.id)).canEdit, '醫師只看')
+    await expectError(() => P.screenPlan(a.id, ['alone']), '醫師篩選')
+    await as('nurse01')
+    const pp = await P.patientPlan(a.id)
+    ok(pp.canEdit && pp.plannable && pp.screen.status !== 'done', '護理師（預設有權限）可以篩選')
+
+    // 篩選：一項不收、兩項收（系統自動勾的一定算）
+    let v = await P.screenPlan(a.id, [])
+    ok(v.enrolled === (pp.auto.length >= 2) && v.criteria.every((c) => pp.auto.includes(c)), `只有系統判斷的 ${pp.auto.length} 項：${v.enrolled ? '收案' : '不收案'}`)
+    v = await P.screenPlan(a.id, ['alone', 'adl', 'age65'])
+    ok(v.enrolled && v.criteria.includes('alone') && v.criteria.includes('adl') && (v.criteria.includes('age65') === pp.auto.includes('age65')), '重篩：獨居＋日常生活需協助 → 收案；系統判斷的條件不能手動勾')
+    let msg = await errOf(() => P.addPlanReferral(a.id, { kind: 'ltc', agency: '市長期照顧管理中心' }))
+    ok(msg.includes('需求評估'), '先評估需求才能轉介')
+    let f = await fieldsOf(() => P.saveNeeds(a.id, { needs: [], assessment: '' }))
+    ok(f.needs, '需求至少一項')
+    v = await P.saveNeeds(a.id, { needs: ['ltc', 'aids'], assessment: '獨居，行動需助行器' })
+    ok(v.needsText.length === 2 && v.unreferred, '需求評估：長照、輔具 → 還沒轉介（提醒）')
+    ok((await api.admissionApi.getAdmission(a.id)).planUnreferred, '醫師簽准出院時看得到提醒')
+    f = await fieldsOf(() => P.addPlanReferral(a.id, { kind: 'ltc', agency: '' }))
+    ok(f.agency, '轉介單位必填')
+    v = await P.addPlanReferral(a.id, { kind: 'ltc', agency: '市長期照顧管理中心' })
+    const rid = v.referrals[0].id
+    msg = await errOf(() => P.addPlanReferral(a.id, { kind: 'ltc', agency: 'x' }))
+    ok(msg.includes('還沒回覆'), '同一種轉介同時一張')
+    msg = await errOf(() => P.replyPlanReferral(a.id, rid, { status: 'approved' }))
+    ok(msg.includes('還沒送出'), '還沒送出不能記回覆')
+    v = await P.sendPlanReferral(a.id, rid)
+    const sentAt = v.referrals[0].sentAt
+    ok(sentAt && !v.unreferred, '列印送出：記送出時間，不再提醒')
+    v = await P.sendPlanReferral(a.id, rid)
+    ok(v.referrals[0].sentAt === sentAt, '重印不改送出時間')
+    f = await fieldsOf(() => P.replyPlanReferral(a.id, rid, { status: 'denied' }))
+    ok(f.note, '未核定要寫原因')
+    v = await P.replyPlanReferral(a.id, rid, { status: 'approved', note: '居家服務每週 8 小時' })
+    ok(v.referralViews[0].reply.status === 'approved', '記核定')
+    msg = await errOf(() => P.screenPlan(a.id, []))
+    ok(msg.includes('已經有轉介單'), '有轉介不能改成不收案')
+    msg = await errOf(() => P.recordFollowUp(a.id, { reached: true, result: 'x' }))
+    ok(msg.includes('還沒出院'), '還沒出院不能追蹤')
+
+    // 出院後追蹤
+    db().admissions.find((x) => x.id === a.id).status = 'discharged'
+    db().admissions.find((x) => x.id === a.id).dischargedAt = dateUtil.addMinutes(nowStr(), -24 * 60)
+    work = await P.listPlanWork()
+    ok(work.some((x) => x.admissionId === a.id && x.stage === 'follow' && !x.overdue), '出院後：待電話追蹤')
+    f = await fieldsOf(() => P.recordFollowUp(a.id, { reached: false, result: '' }))
+    ok(f.result?.includes('聯絡不到'), '聯絡不到也要寫情形')
+    v = await P.recordFollowUp(a.id, { reached: true, result: '居服員已到府，案女照顧中' })
+    ok(v.followUp.reached && !(await P.listPlanWork()).some((x) => x.admissionId === a.id), '追蹤完成：不在清單')
+
+    // 只交給個管師：取消護理師角色後，只有 nurse03
+    await as('admin')
+    await api.permissionApi.savePermissionRoles('discharge.plan', { roles: [], reason: '交給出院準備個管師', confirm: true })
+    await as('nurse01')
+    const b = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.id !== a.id && !db().dischargePlans.find((p) => p.admissionId === x.id)?.referrals.length)
+    db().dischargePlans = db().dischargePlans.filter((p) => p.admissionId !== b?.id)
+    if (b) {
+      await expectError(() => P.screenPlan(b.id, ['alone']), '角色取消後一般護理師篩選')
+      await as('nurse03')
+      ok((await P.screenPlan(b.id, ['alone'])).screenedByName === '林佳穎', '被指定的個管師（nurse03）照樣可以')
+    }
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

@@ -62,6 +62,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: '疼痛 ≥4 處置後 1 小時還沒重評（全院；護理站生命徵象記疼痛分數就算重評）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: '導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（全院，護理站「管路」分頁）', route: 'nursing', icon: Droplet },
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['nurse', 'admin'], label: '出院準備待篩選', count: s.value.planScreenDue ?? 0, hint: '入院 72 小時內要做出院準備篩選：快到期或已逾時的（全院）', route: 'discharge-plan', icon: Droplet },
+    { roles: ['nurse', 'admin'], label: '出院後待電話追蹤', count: s.value.planFollowUp ?? 0, hint: '出院準備收案的病人出院後 7 天內電話追蹤', route: 'discharge-plan', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '約束查核逾時', count: s.value.restraintCheckOverdue, hint: '約束中每 2 小時查末梢循環、皮膚、是否還需要（全院，護理站「譫妄與約束」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '譫妄陽性待確認', count: s.value.deliriumPositive ?? 0, hint: '護理師 CAM 評估陽性：請查找原因（感染、藥物、電解質）並確認（住院醫囑「譫妄與約束」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '約束醫囑待補或到期', count: s.value.restraintOrder ?? 0, hint: '緊急約束 1 小時內要補醫囑；約束醫囑每次最長 24 小時，到期請續開或解除', route: 'ipd', icon: Droplet, urgent: true },

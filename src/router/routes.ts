@@ -6,6 +6,7 @@ import {
   UserPlus, Users,
   Utensils,
   CalendarDays,
+  HousePlus,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
 import type { PermKey } from '@/services/permission-rules'
@@ -46,6 +47,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'nursing', name: 'nursing', component: () => import('@/pages/nursing/NursingPage.vue'), meta: { title: '護理站', icon: HeartPulse, group: '住院', roles: ['nurse'] } },
 
   { path: 'nurse-schedule', name: 'nurse-schedule', component: () => import('@/pages/nursing/NurseSchedulePage.vue'), meta: { title: '護理排班', icon: CalendarDays, group: '住院', roles: ['nurse', 'admin'] } },
+  { path: 'discharge-plan', name: 'discharge-plan', component: () => import('@/pages/nursing/DischargePlanPage.vue'), meta: { title: '出院準備', icon: HousePlus, group: '住院', roles: ['nurse', 'admin'], permission: 'discharge.plan' } },
   { path: 'nutrition', name: 'nutrition', component: () => import('@/pages/nutrition/NutritionPage.vue'), meta: { title: '營養', icon: Utensils, group: '住院', roles: ['diet', 'nurse'] } },
 
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },

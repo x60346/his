@@ -25,6 +25,7 @@ import * as nutrition from './nutrition'
 import * as tube from './tube'
 import * as delirium from './delirium'
 import * as staffing from './staffing'
+import * as dischargePlan from './discharge-plan'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -72,6 +73,7 @@ export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)
 export const deliriumApi = overNetwork(delirium)
 export const staffingApi = overNetwork(staffing)
+export const dischargePlanApi = overNetwork(dischargePlan)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -143,6 +145,7 @@ export * from './line-rules'
 export * from './nutrition-rules'
 export * from './delirium-rules'
 export * from './staffing-rules'
+export * from './discharge-plan-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -183,6 +186,7 @@ export type { SurgeryView } from './surgery-work'
 export type { LineView, LineInput, WardLineStats } from './line'
 export type { TubeFeedingView, FeedInput } from './tube'
 export type { MonthSchedule, ScheduleCell, WardAssignments } from './staffing'
+export type { PatientPlan, PlanView, PlanWorkItem } from './discharge-plan'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

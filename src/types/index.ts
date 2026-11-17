@@ -1802,6 +1802,41 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/** 出院準備的轉介：長照 2.0、居家護理、呼吸照護、輔具、喘息服務 */
+export type DischargeReferralKind = 'ltc' | 'homecare' | 'respiratory' | 'aids' | 'respite'
+
+export interface DischargeReferral {
+  id: string
+  kind: DischargeReferralKind
+  agency: string
+  note?: string
+  createdAt: string
+  createdBy: string
+  /** 送出（列印、傳真給對方）的日期 */
+  sentAt?: string
+  sentBy?: string
+  /** 對方回覆：核定、未核定 */
+  reply?: { status: 'approved' | 'denied'; note?: string; at: string; by: string }
+}
+
+/**
+ * 出院準備（一次住院一份）：入院 72 小時內篩選（符合兩項以上收案）→ 需求評估 → 轉介（列印送出、記回覆）→
+ * 出院後 7 天內電話追蹤。auto 是系統依資料自動勾的條件（年齡、管路、30 天內再住院）
+ */
+export interface DischargePlan {
+  id: string
+  admissionId: string
+  screenedAt: string
+  screenedBy: string
+  criteria: string[]
+  auto: string[]
+  enrolled: boolean
+  needs: string[]
+  assessment?: string
+  referrals: DischargeReferral[]
+  followUp?: { at: string; by: string; reached: boolean; result: string }
+}
+
 /** 護理排班：某病房某天某一班排了哪位護理師（一人一筆） */
 export interface NurseShift {
   id: string

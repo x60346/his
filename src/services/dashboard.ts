@@ -23,6 +23,7 @@ import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
 import { nutritionCounts, screenable, screenStateOf } from './nutrition-work'
 import { myScope } from './staffing-work'
+import { planCounts } from './discharge-plan-work'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { isObsBed, obsOpen } from './bed-work'
 
@@ -95,6 +96,9 @@ export interface DashboardStats {
   restraintCheckOverdue: number
   deliriumPositive?: number
   restraintOrder?: number
+  /** 出院準備（有「出院準備」權限的人）：待篩選快到期或逾時、出院後待電話追蹤 */
+  planScreenDue?: number
+  planFollowUp?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -242,6 +246,7 @@ export function getDashboard(): Promise<DashboardStats> {
           lineTodo: inpt.reduce((n, a) => n + lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t), nutritionUnseen: nutritionCounts(t, me.doctorId).unseen } : {}),
           nutritionScreenDue: scope ? inpt.filter((a) => screenable(a) && ['due', 'overdue'].includes(screenStateOf(a, t).due.status)).length : nutritionCounts(t).screenDue,
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('discharge.plan') ? (({ screenDue, followUp }) => ({ planScreenDue: screenDue, planFollowUp: followUp }))(planCounts(t)) : {}),
           restraintCheckOverdue: inpt.reduce((n, a) => n + restraintTodosOf(a.id, t).filter((x) => x.kind === 'check' && x.urgency === 'overdue').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? (({ positive, restraintOrder }) => ({ deliriumPositive: positive, restraintOrder }))(deliriumDoctorCounts(me.doctorId, t)) : {}),
           ...(['diet', 'admin'].includes(sessionRole() ?? '') ? { nutritionToAssess: nutritionCounts(t).toAssess } : {}),

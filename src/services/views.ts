@@ -2,6 +2,7 @@
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
 import type { Admission, DeptTransfer, RiskLevel, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
 import { obsWard } from '@/mock/codes'
+import { planUnreferred } from './discharge-plan-rules'
 import { db } from '@/mock/db'
 import { doseUnitOf } from './billing'
 import { ageOf, diffDays, today } from '@/utils/date'
@@ -265,6 +266,8 @@ export interface AdmissionView extends Admission, PatientBrief {
   fromEr: boolean
   /** 急診留觀：open 留觀中（急診看板結束留觀）、waiting-bed 留觀後收住院、還在留觀床上（住院中心要轉床） */
   obsStage?: 'open' | 'waiting-bed'
+  /** 出院準備：收案、有需求，還沒有送出的轉介（醫師簽准出院時提醒，不擋） */
+  planUnreferred?: boolean
   /** 出院帶藥（給人看的一行一項：藥名、劑量、頻率、途徑、天數、總量）；dischargeRxStatus：pending 待藥局調劑、dispensed 已調劑 */
   dischargeMedTexts?: string[]
   dischargeRxStatus?: 'pending' | 'dispensed'
@@ -321,6 +324,7 @@ export function admissionView(a: Admission): AdmissionView {
     dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
     fromEr: !!(a.fromVisitId && find.visit(a.fromVisitId)?.er),
     ...(a.obs && !a.obs.endAt ? { obsStage: 'open' as const } : a.obs?.outcome === 'admit' && a.status === 'admitted' && find.bed(a.bedId ?? '')?.ward === obsWard ? { obsStage: 'waiting-bed' as const } : {}),
+    ...(planUnreferred(db.dischargePlans.find((p) => p.admissionId === a.id)) ? { planUnreferred: true } : {}),
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
     ...(a.dischargeSummary?.meds?.length
       ? {

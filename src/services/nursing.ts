@@ -26,6 +26,7 @@ import { highResidual, tubeSlotsOf } from './tube-work'
 import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
 import { restraintState } from './delirium-rules'
 import { assignedNurse, nextShift, onDuty, shiftNow } from './staffing-work'
+import { planOf, plannable, planScreenStateOf } from './discharge-plan-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -70,6 +71,9 @@ export interface WardPatient extends AdmissionView {
   /** 這一班的責任護理師（沒分＝未分床） */
   nurseId?: string
   nurseName?: string
+  /** 出院準備：還沒篩（todo、快到期 due、逾時 overdue）；收案中 */
+  planDue?: 'todo' | 'due' | 'overdue'
+  planEnrolled: boolean
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -119,6 +123,11 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
           ...(() => {
+            const p = planOf(a.id)
+            const ps = plannable(a) && !p ? planScreenStateOf(a, t).status : undefined
+            return { ...(ps && ps !== 'done' ? { planDue: ps } : {}), planEnrolled: !!p?.enrolled }
+          })(),
+          ...(() => {
             const nid = assignedNurse(a.id, shiftNow(t))
             return nid ? { nurseId: nid, nurseName: nameOf.user(nid) } : {}
           })(),
@@ -151,7 +160,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -225,6 +234,11 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       // 譫妄：65 歲以上、術後 72 小時內每班評一次 CAM
       const ds = deliriumStateOf(a, t)
       if (ds.target && !ds.thisShift) tasks.push({ ...base, id: `dl-${a.id}`, kind: 'delirium', urgency: 'todo', text: `譫妄評估 CAM（${ds.target}，每班）` })
+      // 出院準備：入院 72 小時內篩選（最後 12 小時「現在」、過了「逾時」）
+      if (plannable(a) && !planOf(a.id)) {
+        const pd = planScreenStateOf(a, t)
+        if (pd.status !== 'todo') tasks.push({ ...base, id: `plan-${a.id}`, kind: 'plan', urgency: pd.status === 'overdue' ? 'overdue' : 'due', at: pd.dueAt, text: '出院準備篩選（入院 72 小時內）' })
+      }
       // 營養篩檢：入院 48 小時內（還早的列「待處理」、最後 6 小時「現在」、過了「逾時」）
       if (screenable(a)) {
         const nd = screenStateOf(a, t).due

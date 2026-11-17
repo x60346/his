@@ -25,6 +25,7 @@ import LinePanel from '@/components/LinePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import TubeFeedPanel from '@/components/TubeFeedPanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
+import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -122,6 +123,7 @@ const tabs = computed(() =>
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
         ...(adm.value.tube ? [{ key: 'tube', label: '管灌', count: adm.value.tube.due + adm.value.tube.overdue || undefined }] : []),
+        { key: 'plan', label: '出院準備', count: adm.value.planDue && adm.value.planDue !== 'todo' ? 1 : undefined },
         { key: 'nutrition', label: '營養', count: adm.value.nutritionDue && adm.value.nutritionDue !== 'todo' ? 1 : undefined },
         { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
         { key: 'surgery', label: '手術' },
@@ -274,6 +276,7 @@ const wardTotals = computed(() => ({
           <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
           <TubeFeedPanel v-else-if="tab === 'tube'" :admission-id="adm.id" />
           <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
+          <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

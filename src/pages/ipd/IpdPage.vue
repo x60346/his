@@ -12,6 +12,7 @@ import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
+import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -172,6 +173,7 @@ const tabs = computed(() => [
   { key: 'flags', label: '隔離與 DNR' },
   { key: 'lines', label: '管路' },
   { key: 'safety', label: '譫妄與約束' },
+  { key: 'plan', label: '出院準備' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -290,6 +292,7 @@ async function submitNote() {
                 <UBadge v-if="a.consultOrdersUnseen" tone="purple" :title="`會診醫師新開了 ${a.consultOrdersUnseen} 筆醫囑，待已閱`">會診醫囑 {{ a.consultOrdersUnseen }}</UBadge>
                 <UBadge v-if="a.openQueries" tone="yellow" :title="`護理師有 ${a.openQueries} 筆醫囑疑問待回覆`">疑問 {{ a.openQueries }}</UBadge>
                 <UBadge v-if="a.dischargeReady" tone="green">准出院</UBadge>
+                <UBadge v-if="a.planUnreferred" tone="yellow" title="出院準備已收案、有需求，還沒送出轉介">未轉介</UBadge>
                 <span class="text-xs text-slate-500">第 {{ a.days }} 天</span>
               </div>
               <div class="mt-0.5 truncate text-xs text-slate-500">{{ a.diagnosis }}<template v-if="isAdmin">・{{ a.doctorName }}</template></div>
@@ -430,8 +433,11 @@ async function submitNote() {
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
         <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
+        <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
+          <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->
+          <p v-if="adm.planUnreferred" class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">出院準備：已收案、評估有需求（長照、居家護理等），還沒有送出轉介。准予出院前請和出院準備個管師確認（「出院準備」分頁）；不擋出院。</p>
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
           <div class="rounded-md border border-slate-200 px-3 py-2"><CertificatePanel :admission-id="adm.id" /></div>
           <!-- 出院後回診：寫病摘時直接掛進門診（簽准出院前後都可以，出院後就由門診或櫃台處理）；會診醫師按了服務層會擋 -->
