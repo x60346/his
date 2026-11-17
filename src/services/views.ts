@@ -52,6 +52,7 @@ export const usable = {
     if (p.er) fail(`${p.name}是急診計費項目，急診就醫依紀錄自動帶入`)
     if (p.surgery || p.anesthesiaFee) fail(`${p.name}是手術或麻醉計費項目：請在住院醫囑「手術」分頁申請手術，做完依手術室紀錄自動列入帳單`)
     if (p.recordCopy) fail(`${p.name}是病歷影本計費項目，申請病歷影本時自動帶入`)
+    if (p.meal) fail(`${p.name}是伙食費，住院帳單依每天的飲食醫囑自動帶入`)
     if (p.blood) fail(`${p.name}是輸血計費項目，請開備血單（住院醫囑「輸血」分頁），帳單依血庫紀錄自動帶入`)
     return p
   },

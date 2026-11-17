@@ -4,6 +4,7 @@ import type { RouteRecordRaw } from 'vue-router'
 import {
   Activity, BarChart3, BedDouble, Bug, Droplet, Scissors, Siren, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
   UserPlus, Users,
+  Utensils,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
 import type { PermKey } from '@/services/permission-rules'
@@ -42,6 +43,8 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'ud', name: 'ud', component: () => import('@/pages/ud/UdPage.vue'), meta: { title: '住院藥局', icon: PillBottle, group: '住院', roles: ['pharmacist'] } },
   { path: 'or', name: 'or', component: () => import('@/pages/or/OrPage.vue'), meta: { title: '手術室', icon: Scissors, group: '住院', roles: ['nurse', 'doctor'] } },
   { path: 'nursing', name: 'nursing', component: () => import('@/pages/nursing/NursingPage.vue'), meta: { title: '護理站', icon: HeartPulse, group: '住院', roles: ['nurse'] } },
+
+  { path: 'nutrition', name: 'nutrition', component: () => import('@/pages/nutrition/NutritionPage.vue'), meta: { title: '營養', icon: Utensils, group: '住院', roles: ['diet', 'nurse'] } },
 
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
   { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },

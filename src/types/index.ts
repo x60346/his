@@ -12,7 +12,7 @@ export interface DatedChange {
 export type Gender = 'M' | 'F'
 /** ER＝急診（24 小時，不排門診表；每天一個急診診次） */
 export type Period = 'AM' | 'PM' | 'NIGHT' | 'ER'
-export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab'
+export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab' | 'diet'
 
 /** 系統使用者（展示用帳號，密碼明文存於 mock） */
 export interface User {
@@ -811,6 +811,8 @@ export interface Procedure {
   surgery?: { minutes: number }
   /** 急診計費：診察費（取代門診診察費）、觀察床費（每 6 小時）；急診就醫依紀錄自動帶入，門診與醫囑都不能開 */
   er?: 'consult' | 'obs'
+  /** 伙食費（每日，自費）：哪幾種飲食用這個價格；住院帳單依每天的飲食醫囑自動帶入（禁食不收），門診與醫囑都不能開 */
+  meal?: DietKind[]
   /** 麻醉費：哪一種麻醉（手術做完依麻醉方式帶入；局部麻醉不另收） */
   anesthesiaFee?: AnesthesiaType
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
@@ -1084,10 +1086,48 @@ export interface DischargeSummary {
 
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'
 
+/** 飲食種類：普通、軟質、流質、糖尿病、低鹽、禁食 */
+export type DietKind = 'regular' | 'soft' | 'liquid' | 'diabetic' | 'low-salt' | 'npo'
+
+/**
+ * 營養篩檢（護理師，入院 48 小時內；簡化 NRS-2002）：營養狀態受損 0–3、疾病嚴重度 0–3、70 歲以上加 1。
+ * ≥3 分有營養風險 → 營養師待評估
+ */
+export interface NutritionScreen {
+  id: string
+  admissionId: string
+  at: string
+  by: string
+  impaired: 0 | 1 | 2 | 3
+  severity: 0 | 1 | 2 | 3
+  age70: boolean
+  score: number
+  /** 身高體重（選填，算 BMI） */
+  heightCm?: number
+  weightKg?: number
+}
+
+/** 營養評估（營養師）：評估與建議（不開醫囑，由主治決定）；主治按已閱 */
+export interface NutritionAssessment {
+  id: string
+  admissionId: string
+  at: string
+  by: string
+  /** 每日建議熱量（kcal）與蛋白質（g） */
+  kcal?: number
+  protein?: number
+  assessment: string
+  recommendation: string
+  seenBy?: string
+  seenAt?: string
+}
+
 /** 住院醫囑 */
 export interface IpdOrder {
   id: string
   admissionId: string
+  /** 飲食醫囑：種類＋備註（content 是給人看的「糖尿病飲食・1800 kcal」）；舊資料沒有，依 content 推斷 */
+  diet?: { kind: DietKind; note?: string }
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory

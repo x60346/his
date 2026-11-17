@@ -7,13 +7,13 @@
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { DIET_KINDS, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
-import type { AbxReason, Drug, DrugTiming, IpdOrderCategory, Procedure } from '@/types'
+import type { AbxReason, Drug, DrugTiming, IpdOrderCategory, Procedure, DietKind } from '@/types'
 
 const open = defineModel<boolean>({ default: false })
 const props = defineProps<{ admission?: AdmissionView }>()
@@ -25,7 +25,8 @@ const categories: { key: IpdOrderCategory; label: string }[] = [
   { key: 'diet', label: '飲食' },
   { key: 'nursing', label: '護理' },
 ]
-const dietPresets = ['普通飲食', '軟質飲食', '流質飲食', '禁食', '糖尿病飲食 1800 kcal', '低鹽飲食', '低蛋白飲食']
+// 飲食選種類（伙食費、送餐清單、術前禁食都看種類），細節寫在備註（例：糖尿病 1800 kcal）
+const dietKind = ref<DietKind | ''>('')
 
 const form = reactive({
   type: 'long' as 'long' | 'stat',
@@ -46,6 +47,7 @@ watch(open, (v) => {
   if (v) {
     Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
     Object.assign(abx, { reason: '', site: '', organism: '', note: '' })
+    dietKind.value = ''
     save.fieldErrors.value = {}
   }
 })
@@ -102,6 +104,9 @@ function buildInput(): OrderInput | string {
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
       return { ...base, content: '', procId: form.proc.id }
+    case 'diet':
+      if (!dietKind.value) return '請選飲食種類'
+      return { ...base, content: '', diet: { kind: dietKind.value, note: form.content.trim() } }
     default:
       if (!base.content) return '請輸入醫囑內容'
       return base
@@ -265,10 +270,13 @@ ${doseNote(drug, input.dose ?? 0)}。
 
       <!-- 飲食、護理 -->
       <template v-else>
-        <div v-if="form.category === 'diet'" class="flex flex-wrap gap-1.5">
-          <UButton v-for="p in dietPresets" :key="p" size="sm" variant="secondary" @click="form.content = p">{{ p }}</UButton>
+        <div v-if="form.category === 'diet'" class="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+          <label v-for="k in DIET_KINDS" :key="k.kind" :class="['cursor-pointer rounded-md border-2 px-2 py-1 text-sm', dietKind === k.kind ? 'border-brand-500 bg-brand-50' : 'border-slate-200']" :title="k.hint">
+            <input v-model="dietKind" type="radio" :value="k.kind" class="sr-only" />{{ k.label }}
+            <span class="block text-xs text-slate-500">{{ k.hint }}</span>
+          </label>
         </div>
-        <UTextarea v-model="form.content" :label="form.category === 'diet' ? '飲食醫囑' : '護理醫囑'" :rows="3" :placeholder="form.category === 'nursing' ? '例：Vital signs Q4H、翻身 Q2H、記錄輸入輸出量' : ''" />
+        <UTextarea v-model="form.content" :label="form.category === 'diet' ? '備註（選填：熱量、質地、限水…）' : '護理醫囑'" :rows="form.category === 'diet' ? 2 : 3" :placeholder="form.category === 'nursing' ? '例：Vital signs Q4H、翻身 Q2H、記錄輸入輸出量' : form.category === 'diet' ? '例：1800 kcal、限水 1000 ml' : ''" />
         <p v-if="form.category === 'diet' && form.type === 'long'" class="text-xs text-slate-500">同一時間只能有一種飲食，開立後原本的飲食醫囑會自動停止。</p>
       </template>
     </div>

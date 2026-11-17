@@ -16,7 +16,7 @@ import { PERMISSIONS, rolesOf } from './permission-rules'
 import { toSafeUser, type SafeUser } from './auth'
 import { nameOf } from './views'
 
-const ROLES: Role[] = ['admin', 'doctor', 'nurse', 'pharmacist', 'clerk', 'lab']
+const ROLES: Role[] = ['admin', 'doctor', 'nurse', 'pharmacist', 'clerk', 'lab', 'diet']
 /** 帳號規則：檢查與說明文字放在一起，表單的提示直接用同一句（以前提示寫「英數字」、錯誤卻說「英數字、底線或點」） */
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/
 export const USERNAME_RULE = '3–20 個英數字、底線或點'

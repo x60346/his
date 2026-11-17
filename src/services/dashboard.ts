@@ -21,6 +21,7 @@ import { surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
+import { nutritionCounts } from './nutrition-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -84,6 +85,10 @@ export interface DashboardStats {
   painReassessOverdue: number
   lineTodo: number
   lineAttending?: number
+  /** 營養：篩檢快到期或逾時（護理師）、營養師待評估（營養師）、營養評估待已閱（主治） */
+  nutritionScreenDue: number
+  nutritionToAssess?: number
+  nutritionUnseen?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -227,7 +232,9 @@ export function getDashboard(): Promise<DashboardStats> {
         return {
           painReassessOverdue: inpt.filter((a) => painStateOf(a.id, t).reassess?.status === 'overdue').length,
           lineTodo: inpt.reduce((n, a) => n + lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length, 0),
-          ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t) } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t), nutritionUnseen: nutritionCounts(t, me.doctorId).unseen } : {}),
+          nutritionScreenDue: nutritionCounts(t).screenDue,
+          ...(['diet', 'admin'].includes(sessionRole() ?? '') ? { nutritionToAssess: nutritionCounts(t).toAssess } : {}),
         }
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,

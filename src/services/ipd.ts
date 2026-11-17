@@ -17,6 +17,7 @@ import { udDelivery, udStage } from './ud-work'
 import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
 import { ABX_DEFAULT_DAYS, ABX_REASON_LABEL, abxText, checkAbxInput } from './abx-rules'
+import { DIET_KINDS, dietKindOfText, dietText } from './nutrition-rules'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 
 function activeAdmission(admissionId: string) {
@@ -102,7 +103,7 @@ export function listOrders(admissionId: string): Promise<OrderView[]> {
   )
 }
 
-export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route'> & {
+export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route' | 'diet'> & {
   /** 醫師指定的服用時機（空＝照主檔）；開立時會把有效時機存在醫囑上 */
   timing?: DrugTiming | ''
   /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
@@ -139,6 +140,7 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     let timing: Pick<IpdOrder, 'timing' | 'timingSet'> = {}
     let rxAlerts: IpdOrder['rxAlerts']
     let abx: IpdOrder['abx']
+    let dietValue: IpdOrder['diet']
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
@@ -188,17 +190,26 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     } else if (input.category === 'procedure') {
       const proc = usable.procedure(input.procId ?? '')
       content = content || proc.name
+    } else if (input.category === 'diet') {
+      // 飲食醫囑選種類（伙食費、送餐清單、術前禁食都看種類）；只寫文字的（舊的呼叫方式）依關鍵字推斷
+      if (input.diet) {
+        if (!DIET_KINDS.some((k) => k.kind === input.diet!.kind)) failField('diet', '請選飲食種類')
+        dietValue = { kind: input.diet.kind, ...(input.diet.note?.trim() ? { note: input.diet.note.trim() } : {}) }
+        content = dietText(dietValue)
+      } else if (!content) fail('請選飲食種類')
+      else dietValue = { kind: dietKindOfText(content) }
     } else if (!content) {
       fail('請輸入醫囑內容')
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, diet: _diet, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
       ...(abx ? { abx } : {}),
+      ...(dietValue ? { diet: dietValue } : {}),
       content,
       id: newId('IO'),
       startAt: t,

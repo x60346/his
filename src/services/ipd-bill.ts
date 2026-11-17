@@ -2,7 +2,8 @@
 // 組出 calcIpdChargeLines 的輸入。結帳（ipd-charge）、出院前檢查（admission.discharge）共用，兩邊算的一定一樣。
 import type { Admission, Charge, ChargeLine, IpdBillMeta, IpdInterimRefund, IpdInterimSettings, PayMethod } from '@/types'
 import { db } from '@/mock/db'
-import { diffDays, now, today } from '@/utils/date'
+import { addDays, diffDays, now, today } from '@/utils/date'
+import { dietOfDay } from './nutrition-rules'
 import { nextRefundNo } from './money'
 import { calcChargeLines, calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, summarize, type IpdBillInput, type ObsItems } from './billing'
 import { billingLookup, find } from './views'
@@ -105,6 +106,23 @@ export function erLinesOf(a: Admission): ChargeLine[] {
     .map((l) => ({ ...l, name: `急診：${l.name}` }))
 }
 
+/**
+ * 伙食費（自費、每日）：住院的每一天依當天有效的飲食醫囑（以午餐時間為準）找主檔的伙食費價格（依那天的價格，有生效日），
+ * 禁食、沒有飲食醫囑的那天不收。急診留觀期間不收（從住院起算日開始）
+ */
+function mealItems(a: Admission, from: string, days: number): IpdBillInput['procedures'] {
+  const orders = db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet')
+  const out: IpdBillInput['procedures'] = []
+  for (let i = 0; i < days; i++) {
+    const date = addDays(from, i)
+    const d = dietOfDay(orders, date)
+    if (!d || d.kind === 'npo') continue
+    const proc = db.procedures.find((p) => p.active && p.meal?.includes(d.kind))
+    if (proc) out.push({ proc, qty: 1, date })
+  }
+  return out
+}
+
 export interface IpdBill {
   lines: ChargeLine[]
   meta: IpdBillMeta
@@ -119,12 +137,13 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
   const from = wardFromOf(a).slice(0, 10)
   const p = find.patient(a.patientId)
   const identity = db.identities.find((x) => x.code === p?.defaultIdentity) ?? db.identities[0]
+  const days = Math.max(1, diffDays(from, to.slice(0, 10)))
   const { lines: base, meta } = calcIpdChargeLines({
     identity, from, to,
-    beds: bedSegments(a, from, to, Math.max(1, diffDays(from, to.slice(0, 10)))),
+    beds: bedSegments(a, from, to, days),
     daily: db.procedures.filter((x) => x.dailyFee && x.active),
     drugs: drugsOf(a),
-    procedures: proceduresOf(a),
+    procedures: [...proceduresOf(a), ...mealItems(a, from, days)],
     copay: db.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
     erLines: erLinesOf(a),
   })

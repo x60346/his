@@ -72,12 +72,14 @@ function openMark(s: SurgeryView, row: SurgeryView['prepRows'][number]) {
   marking.value = { s, key: row.key as SurgeryPrepKey, label: row.label, optional: row.optional }
 }
 const needsRef = computed(() => marking.value?.key === 'blood' || marking.value?.key === 'abx')
-const refOptions = computed(() => (marking.value?.key === 'blood' ? v.value?.bloodOptions : v.value?.abxOptions)?.map((o) => ({ label: o.text, value: o.id })) ?? [])
+// 禁食可以連禁食醫囑（選填）
+const npoRef = computed(() => marking.value?.key === 'npo')
+const refOptions = computed(() => (marking.value?.key === 'blood' ? v.value?.bloodOptions : marking.value?.key === 'npo' ? v.value?.npoOptions : v.value?.abxOptions)?.map((o) => ({ label: o.text, value: o.id })) ?? [])
 const markAct = useAction(surgeryApi.markPrep, { success: '已記錄' })
 async function submitMark() {
   const m = marking.value
   if (!m) return
-  const ok = await markAct.run(m.s.id, m.key, mk.mode === 'na' ? { notNeeded: mk.notNeeded } : needsRef.value ? { refId: String(mk.refId ?? '') } : {})
+  const ok = await markAct.run(m.s.id, m.key, mk.mode === 'na' ? { notNeeded: mk.notNeeded } : needsRef.value || (npoRef.value && mk.refId) ? { refId: String(mk.refId ?? '') } : {})
   if (ok) marking.value = undefined
 }
 const unmark = useAction(surgeryApi.unmarkPrep)
@@ -168,6 +170,10 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
         <template v-if="mk.mode === 'done' && needsRef">
           <USelect v-model="mk.refId" :label="marking.key === 'blood' ? '備血單' : '抗生素醫囑'" :options="refOptions" placeholder="選擇" :error="markAct.fieldErrors.value.refId" />
           <p v-if="!refOptions.length" class="text-xs text-amber-800">這次住院沒有{{ marking.key === 'blood' ? '備血單：請醫師開備血單（輸血分頁），或選「不需要」' : '抗生素醫囑：請醫師開立，或選「不需要」' }}。</p>
+        </template>
+        <template v-if="mk.mode === 'done' && npoRef">
+          <USelect v-model="mk.refId" label="禁食醫囑（選填）" :options="[{ label: '不連醫囑', value: '' }, ...refOptions]" :error="markAct.fieldErrors.value.refId" />
+          <p v-if="!refOptions.length" class="text-xs text-slate-500">這次住院沒有有效的禁食醫囑：可以請醫師開飲食醫囑「禁食」，或只勾已完成。</p>
         </template>
         <UInput v-if="mk.mode === 'na'" v-model="mk.notNeeded" label="不需要的原因" required :error="markAct.fieldErrors.value.notNeeded" />
       </div>

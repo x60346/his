@@ -22,6 +22,7 @@ import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import WardFlagsPanel from './components/WardFlagsPanel.vue'
 import WardLinesPanel from './components/WardLinesPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
+import NutritionPanel from '@/components/NutritionPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -84,6 +85,7 @@ const tabs = computed(() =>
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
+        { key: 'nutrition', label: '營養', count: adm.value.nutritionDue && adm.value.nutritionDue !== 'todo' ? 1 : undefined },
         { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
         { key: 'surgery', label: '手術' },
         { key: 'flags', label: '隔離與 DNR', count: adm.value.isolationTodo || undefined },
@@ -160,6 +162,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.bloodTransfusing" :tone="p.bloodUrgency ? 'red' : 'purple'" :title="p.bloodUrgency ? '輸血中：該量 15 分鐘生命徵象（或已超過 4 小時）' : '輸血中'">輸血中</UBadge>
                     <UBadge v-else-if="p.bloodIssued" :tone="p.bloodUrgency === 'overdue' ? 'red' : 'yellow'" title="血庫已發血，請床邊雙人核對開始輸血">已發血</UBadge>
                     <UBadge v-if="p.painReassess === 'overdue'" tone="red" title="疼痛 ≥4 處置後 1 小時沒重評">疼痛重評逾時</UBadge>
+                    <UBadge v-if="p.nutritionDue === 'overdue'" tone="red" title="入院 48 小時內要做營養篩檢">營養篩檢逾時</UBadge>
                     <UBadge v-if="p.lineTodo" tone="cyan" title="管路：今天還沒評估還需要嗎、評估可移除、留置針滿 96 小時">管路 {{ p.lineTodo }}</UBadge>
                     <UBadge v-if="p.riskOverdue" tone="red" title="跌倒或壓傷評估過了期限">評估逾時</UBadge>
                     <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
@@ -211,6 +214,7 @@ const wardTotals = computed(() => ({
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
           <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
+          <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

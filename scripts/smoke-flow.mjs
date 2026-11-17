@@ -7417,6 +7417,161 @@ try {
     }
   }
 
+  // 飲食與營養：飲食醫囑選種類（舊文字推斷）、取代舊的；伙食費依每天飲食醫囑（禁食不收、主檔生效日）進住院帳單；術前禁食連禁食醫囑；
+  // 營養篩檢（48 小時、簡化 NRS-2002、70 歲加 1）→ ≥3 分營養師待評估 → 評估（不開醫囑）→ 主治已閱；送餐清單
+  console.log('\n[飲食與營養]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const NA = api.nutritionApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.dietKindOfText('糖尿病飲食 1800 kcal') === 'diabetic' && api.dietKindOfText('吞嚥困難軟質飲食') === 'soft' && api.dietKindOfText('禁食') === 'npo' && api.dietKindOfText('普通飲食，鼓勵多喝水') === 'regular', '舊飲食醫囑文字推斷種類')
+    const os = [
+      { category: 'diet', type: 'long', startAt: '2026-11-15 10:00', stopAt: '2026-11-16 18:00', status: 'stopped', content: '普通飲食' },
+      { category: 'diet', type: 'long', startAt: '2026-11-16 18:00', status: 'active', diet: { kind: 'npo' }, content: '禁食' },
+    ]
+    ok(api.dietOfDay(os, '2026-11-15').kind === 'regular' && api.dietOfDay(os, '2026-11-16').kind === 'regular' && api.dietOfDay(os, '2026-11-17').kind === 'npo' && !api.dietOfDay(os, '2026-11-14'), '每天的伙食以午餐時間有效的飲食醫囑為準（入院前一天沒有）')
+    ok(api.nutritionScore({ impaired: 1, severity: 1, age70: true }) === 3 && api.screenDue('2026-11-15 08:00', undefined, '2026-11-17 08:01').status === 'overdue' && api.screenDue('2026-11-15 08:00', undefined, '2026-11-17 03:00').status === 'due' && api.screenDue('2026-11-15 08:00', '2026-11-15 09:00', '2026-11-18 00:00').status === 'done', '篩檢分數（70 歲加 1）、48 小時期限（最後 6 小時快到期）')
+
+    // 種子
+    const stroke = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const sepsis = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    ok(db().ipdOrders.filter((o) => o.category === 'diet').every((o) => o.diet?.kind), '種子：飲食醫囑都有種類')
+    await as('diet01')
+    let work = await NA.listNutritionWork()
+    ok(!sepsis || work.toAssess.some((x) => x.admissionId === sepsis.id), '種子：敗血症篩檢 ≥3 分，營養師待評估')
+    ok((await api.dashboardApi.getDashboard()).nutritionToAssess === work.toAssess.length, `營養師首頁：待評估 ${work.toAssess.length}`)
+    if (stroke) {
+      await as(db().users.find((u) => u.doctorId === stroke.doctorId).username)
+      ok((await api.dashboardApi.getDashboard()).nutritionUnseen >= 1, '主治首頁：營養評估待已閱（腦梗塞昨天的建議）')
+    }
+
+    // 飲食醫囑
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.id !== stroke?.id && x.id !== sepsis?.id)
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(doc)
+    let f = await fieldsOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'xx' } }))
+    ok(f.diet, '飲食種類要選對')
+    const o1 = await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'diabetic', note: '1800 kcal' } })
+    ok(o1.content === '糖尿病飲食・1800 kcal' && o1.diet.kind === 'diabetic' && db().ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'active').length === 1, '選種類＋備註：內容「糖尿病飲食・1800 kcal」，舊的飲食醫囑自動停止')
+    const o2 = await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '流質飲食' })
+    ok(o2.diet.kind === 'liquid', '只寫文字（舊呼叫方式）依關鍵字推斷種類')
+    await as('clerk01')
+    await expectError(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'procedure', procId: 'P046', content: '' }), '櫃台開醫令')
+    await as(doc)
+    let msg = await errOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'procedure', procId: 'P046', content: '' }))
+    ok(msg.includes('伙食費'), `伙食費不能當醫令開 → 「${msg}」`)
+
+    // 伙食費：依每天的飲食醫囑、禁食不收、自費
+    await as('clerk01')
+    const mealLines = async (id) => (await api.ipdChargeApi.getIpdBill(id)).bill.lines.filter((l) => l.name.startsWith('伙食費'))
+    let ml = await mealLines(a.id)
+    ok(ml.length >= 1 && ml.every((l) => l.patientPay && l.kind === 'self'), `住院帳單有伙食費（自費）：${ml.map((l) => `${l.name}×${l.qty}`).join('、')}`)
+    const bill = (await api.ipdChargeApi.getIpdBill(a.id)).bill
+    const days = bill.meta.days
+    ok(ml.reduce((n, l) => n + l.qty, 0) <= days, `伙食天數不超過住院天數（${days}）`)
+    await as(doc)
+    await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'diet', content: '', diet: { kind: 'npo' } })
+    // 今天（午餐時間）以後禁食：今天的伙食看午餐時間的醫囑——中午前改禁食，今天不收
+    db().ipdOrders.find((o) => o.admissionId === a.id && o.diet?.kind === 'npo' && o.status === 'active').startAt = `${T} 06:00`
+    db().ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'stopped' && o.stopAt >= `${T} 00:00`).forEach((o) => (o.stopAt = `${T} 06:00`))
+    await as('clerk01')
+    const before = ml.reduce((n, l) => n + l.qty, 0)
+    ml = await mealLines(a.id)
+    ok(ml.reduce((n, l) => n + l.qty, 0) <= before, '改禁食：禁食那天不收伙食費')
+    // 主檔調價有生效日
+    await as('admin')
+    const p46 = db().procedures.find((p) => p.id === 'P046')
+    ok(p46.selfPrice === 210 && p46.meal?.includes('regular') && !(await api.masterApi.listProcedures()).some((p) => p.meal), '伙食費在主檔（醫令清單不列，不能開）')
+
+    // 術前禁食連禁食醫囑
+    const sg = db().surgeries.find((s) => ['requested', 'scheduled'].includes(s.status) && !s.prep.npo)
+    if (sg) {
+      await as(db().users.find((u) => u.doctorId === db().admissions.find((x) => x.id === sg.admissionId).doctorId).username)
+      const npo = await api.ipdApi.addOrder({ admissionId: sg.admissionId, type: 'long', category: 'diet', content: '', diet: { kind: 'npo', note: '術前 8 小時' } })
+      await as('nurse02')
+      const ps = await api.surgeryApi.patientSurgeries(sg.admissionId)
+      ok(ps.npoOptions.some((x) => x.id === npo.id), '術前準備：禁食可以選這次住院的禁食醫囑')
+      f = await fieldsOf(() => api.surgeryApi.markPrep(sg.id, 'npo', { refId: o1.id }))
+      ok(f.refId, '連的不是禁食醫囑擋')
+      await api.surgeryApi.markPrep(sg.id, 'npo', { refId: npo.id })
+      ok(db().surgeries.find((s) => s.id === sg.id).prep.npo.refId === npo.id, '禁食連到禁食醫囑')
+    }
+
+    // 營養篩檢 → 營養師 → 主治已閱
+    await as('diet01')
+    await expectError(() => NA.saveNutritionScreen(a.id, { impaired: 1, severity: 1 }), '營養師做篩檢（護理師做）')
+    await as('nurse01')
+    f = await fieldsOf(() => NA.saveNutritionScreen(a.id, { impaired: 5, severity: undefined, heightCm: 300 }))
+    ok(f.impaired && f.severity && f.heightCm, '篩檢欄位一次標出')
+    const age = (await NA.patientNutrition(a.id)).age
+    const s1 = await NA.saveNutritionScreen(a.id, { impaired: 2, severity: 1, heightCm: 160, weightKg: 45 })
+    ok(s1.score === 3 + (age >= 70 ? 1 : 0) && s1.risk && s1.bmi === 17.6, `篩檢 ${s1.score} 分（${age} 歲）、BMI ${s1.bmi}：有營養風險`)
+    await as('diet01')
+    work = await NA.listNutritionWork()
+    ok(work.toAssess.some((x) => x.admissionId === a.id), '列營養師待評估')
+    f = await fieldsOf(() => NA.saveNutritionAssessment(a.id, { assessment: '', recommendation: '', kcal: 9000 }))
+    ok(f.assessment && f.recommendation && f.kcal, '評估、建議必填；熱量範圍')
+    const x1 = await NA.saveNutritionAssessment(a.id, { kcal: 1600, protein: 70, assessment: '進食量少、體重下降', recommendation: '加一份營養補充品' })
+    ok(!(await NA.listNutritionWork()).toAssess.some((x) => x.admissionId === a.id) && db().ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'active').length === 1, '寫好評估：不在待評估；營養師不開醫囑（飲食醫囑沒變）')
+    await as('nurse01')
+    await expectError(() => NA.ackNutritionAssessment(x1.id), '護理師按已閱')
+    const other = db().users.find((u) => u.doctorId && db().doctors.find((d) => d.id === u.doctorId)?.deptId !== a.deptId && u.roles.includes('doctor'))
+    await as(other.username)
+    msg = await errOf(() => NA.ackNutritionAssessment(x1.id))
+    ok(msg.includes('醫師'), `別科醫師不能已閱 → 「${msg}」`)
+    await as(doc)
+    const nv = await NA.patientNutrition(a.id)
+    ok(nv.canAck && !nv.canScreen && !nv.canAssess && nv.assessments[0].id === x1.id, '主治看得到評估、可以已閱')
+    const ackd = await NA.ackNutritionAssessment(x1.id)
+    ok(ackd.seenAt && ackd.seenByName, '主治已閱')
+    // 重篩又 ≥3：再列待評估（評估是一小時前寫的）
+    db().nutritionAssessments.find((x) => x.id === x1.id).at = dateUtil.addMinutes(nowStr(), -60)
+    await as('nurse01')
+    await NA.saveNutritionScreen(a.id, { impaired: 3, severity: 1 })
+    await as('diet01')
+    ok((await NA.listNutritionWork()).toAssess.find((x) => x.admissionId === a.id)?.reassess, '重篩又 ≥3：再列待評估（標重評）')
+
+    // 護理站：篩檢期限、本班待辦
+    const fresh = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().nutritionScreens.some((s) => s.admissionId === x.id))
+    if (fresh) {
+      await as('nurse01')
+      const ward = db().beds.find((b) => b.id === fresh.bedId).ward
+      const wp = (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === fresh.id)
+      ok(wp.nutritionDue && (await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'nutrition' && t.admissionId === fresh.id), `還沒篩檢的病人：護理站標「${wp.nutritionDue}」、本班待辦有營養篩檢`)
+    }
+    // 留觀不篩
+    await as('nurse01')
+    msg = await errOf(() => NA.saveNutritionScreen('A-ER-OBS', { impaired: 0, severity: 0 }))
+    ok(msg.includes('留觀'), `急診留觀不篩 → 「${msg}」`)
+
+    // 送餐清單
+    const w0 = db().beds.find((b) => b.id === a.bedId).ward
+    const list = await NA.mealList(w0, T, 'dinner')
+    const row = list.rows.find((r) => r.bedNo === db().beds.find((b) => b.id === a.bedId).bedNo)
+    ok(row?.npo && row.dietText.startsWith('禁食') && list.counts['禁食'] >= 1 && list.rows.every((r, i, xs) => i === 0 || xs[i - 1].bedNo <= r.bedNo), '送餐清單：依床號、禁食標出、各種飲食份數')
+    const tomorrow = dateUtil.addDays(T, 1)
+    ok((await NA.mealList(w0, tomorrow, 'breakfast')).rows.length >= 1, '明天早餐也能先列')
+    await as('clerk01')
+    await expectError(() => NA.mealList(w0, T, 'lunch'), '櫃台看送餐清單')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

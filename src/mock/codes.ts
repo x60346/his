@@ -450,6 +450,10 @@ const procedureBase: Procedure[] = [
   // 急診（急診就醫自動帶入；門診、醫囑都不能開）。點數為展示用近似值
   { id: 'P044', code: '00201B', name: '急診診察費', category: '診察', points: 650, selfPrice: 800, er: 'consult', active: true },
   { id: 'P045', code: '03023B', name: '急診觀察床費（每 6 小時）', category: '處置', points: 400, selfPrice: 600, er: 'obs', active: true },
+  // 伙食費（自費、每日）：依每天的飲食醫囑，禁食不收；點數 0＝健保不給付
+  { id: 'P046', code: 'MEAL01', name: '伙食費（普通飲食，每日）', category: '處置', points: 0, selfPrice: 210, meal: ['regular'], active: true },
+  { id: 'P047', code: 'MEAL02', name: '伙食費（軟質、流質，每日）', category: '處置', points: 0, selfPrice: 240, meal: ['soft', 'liquid'], active: true },
+  { id: 'P048', code: 'MEAL03', name: '伙食費（治療飲食，每日）', category: '處置', points: 0, selfPrice: 270, meal: ['diabetic', 'low-salt'], active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

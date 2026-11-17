@@ -6,6 +6,7 @@ import { db, newId, nextCounter } from '@/mock/db'
 import { addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL } from './surgery-rules'
+import { dietOf } from './nutrition-rules'
 import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
@@ -31,6 +32,8 @@ export interface PatientSurgeries {
   /** 術前準備可以連的：這次住院的備血單、抗生素醫囑 */
   bloodOptions: { id: string; text: string }[]
   abxOptions: { id: string; text: string }[]
+  /** 術前禁食可以連到這次住院有效的禁食醫囑（選填） */
+  npoOptions: { id: string; text: string }[]
 }
 
 export function patientSurgeries(admissionId: string): Promise<PatientSurgeries> {
@@ -42,6 +45,7 @@ export function patientSurgeries(admissionId: string): Promise<PatientSurgeries>
       canRequest: u.role === 'doctor' && a.status === 'admitted' && careRoleOf(u.doctorId, a)?.kind === 'team',
       list: db.surgeries.filter((s) => s.admissionId === a.id).sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map(surgeryView),
       bloodOptions: db.bloodRequests.filter((r) => r.admissionId === a.id && !r.cancelled).map((r) => ({ id: r.id, text: `${r.no}（${requestStatus(r) === 'done' ? '已輸完' : '有效'}）` })),
+      npoOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'active' && dietOf(o).kind === 'npo').map((o) => ({ id: o.id, text: `${o.content}（${o.startAt.slice(5)} 起）` })),
       abxOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'medication' && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? ''))).map((o) => ({ id: o.id, text: `${o.content} ${o.dose ?? ''} ${o.freq ?? ''}`.trim() })),
     }
   })
@@ -200,6 +204,8 @@ export function markPrep(id: string, key: SurgeryPrepKey, input: { notNeeded?: s
       if (key === 'blood' && !db.bloodRequests.some((r) => r.id === input.refId && r.admissionId === s.admissionId && !r.cancelled)) failField('refId', '備血單不是這次住院的（或已取消）')
       if (key === 'abx' && !db.ipdOrders.some((o) => o.id === input.refId && o.admissionId === s.admissionId && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? '')))) failField('refId', '這不是這次住院有效的抗生素醫囑')
     }
+    // 禁食可以連禁食醫囑（選填）：連了就要是這次住院有效的禁食醫囑
+    if (!notNeeded && key === 'npo' && input.refId && !db.ipdOrders.some((o) => o.id === input.refId && o.admissionId === s.admissionId && o.category === 'diet' && o.status === 'active' && dietOf(o).kind === 'npo')) failField('refId', '這不是這次住院有效的禁食醫囑')
     s.prep[key] = { by: u.id, at: now(), ...(notNeeded ? { notNeeded } : {}), ...(!notNeeded && input.refId ? { refId: input.refId } : {}) }
     audit('術前準備', `${audText(s)}：${def!.label}${notNeeded ? `不需要（${notNeeded}）` : '完成'}`)
     return surgeryView(s)

@@ -3,17 +3,20 @@
 import type { ChargeLine } from '@/types'
 
 const isEr = (l: ChargeLine) => l.name.startsWith('急診：')
+const isMeal = (l: ChargeLine) => l.name.startsWith('伙食費')
+const special = (l: ChargeLine) => isEr(l) || isMeal(l)
 
-export const IPD_BILL_GROUPS: { label: string; kinds: ChargeLine['kind'][]; er?: boolean }[] = [
-  { label: '急診（收住院前：急診與留觀）', kinds: [], er: true },
+export const IPD_BILL_GROUPS: { label: string; kinds: ChargeLine['kind'][]; match?: (l: ChargeLine) => boolean }[] = [
+  { label: '急診（收住院前：急診與留觀）', kinds: [], match: isEr },
   { label: '病房、護理、診察（每日）', kinds: ['ward'] },
   { label: '藥費', kinds: ['drug'] },
   { label: '檢驗、處置、影像', kinds: ['procedure'] },
+  { label: '伙食費（自費，依每天的飲食醫囑）', kinds: [], match: isMeal },
   { label: '自費（差額床費、自費項目）', kinds: ['self'] },
   { label: '部分負擔', kinds: ['copay-ipd'] },
 ]
 
 export const groupIpdLines = (lines: ChargeLine[]) =>
-  IPD_BILL_GROUPS.map((g) => ({ ...g, lines: lines.filter((l) => (g.er ? isEr(l) : !isEr(l) && g.kinds.includes(l.kind))) })).filter((g) => g.lines.length)
+  IPD_BILL_GROUPS.map((g) => ({ ...g, lines: lines.filter((l) => (g.match ? g.match(l) : !special(l) && g.kinds.includes(l.kind))) })).filter((g) => g.lines.length)
 
 export const sumLines = (ls: ChargeLine[]) => Math.round(ls.reduce((n, l) => n + l.amount, 0))

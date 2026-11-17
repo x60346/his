@@ -49,6 +49,7 @@ export const roleLabel: Record<Role, string> = {
   pharmacist: '藥師',
   clerk: '掛號批價',
   lab: '醫檢師',
+  diet: '營養師',
 }
 
 export const payMethodLabel: Record<PayMethod, string> = { cash: '現金', card: '信用卡', mobile: '行動支付' }

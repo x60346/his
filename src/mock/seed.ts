@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -59,6 +59,7 @@ import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
+import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import * as codes from './codes'
 import type { Database } from './db'
@@ -243,6 +244,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U403', username: 'clerk03', password: '1234', name: '呂佳蓉', roles: ['clerk'], active: true },
     // 醫檢師：登打檢驗結果、發報告
     { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true },
+    { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
   ]
   // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
   // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
@@ -764,7 +766,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const d = drugMap.get(drugId)!
       ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'medication', drugId, content: d.name, dose, freq: 'PRN', route, startAt, status: 'active', doctorId: docUser, createdAt: startAt })
     })
-    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'diet', content: sc.diet, startAt, status: 'active', doctorId: docUser, createdAt: startAt })
+    ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'diet', diet: { kind: dietKindOfText(sc.diet) }, content: sc.diet, startAt, status: 'active', doctorId: docUser, createdAt: startAt })
     sc.nursing.forEach((n) => ipdOrders.push({ id: id('IO'), admissionId: adm.id, type: 'long', category: 'nursing', content: n, startAt, status: 'active', doctorId: docUser, createdAt: startAt }))
     // 入院時的檢查：入院後一小時內完成。完成時間記在 stopAt（與服務層一致），護理站才看得出何時完成
     const statDoneAt = notFuture(addMinutes(startAt, 60), 30)
@@ -1949,7 +1951,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           wristband: { printedAt: placed, printedBy: 'U201', reprints: [] },
         })
         for (const [k, content, category] of [[1, '禁食', 'diet'], [2, 'Vital signs Q4H', 'nursing'], [3, '每 4 小時腹部理學檢查，疼痛加劇通知醫師', 'nursing']] as const) {
-          ipdOrders.push({ id: `IO-ER-OBS-${k}`, admissionId: 'A-ER-OBS', type: 'long', category, content, startAt: placed, status: 'active', doctorId: docUser, createdAt: placed, ackAt: addMinutes(placed, 5), ackBy: 'U201' })
+          ipdOrders.push({ id: `IO-ER-OBS-${k}`, admissionId: 'A-ER-OBS', type: 'long', category, content, ...(category === 'diet' ? { diet: { kind: 'npo' as const } } : {}), startAt: placed, status: 'active', doctorId: docUser, createdAt: placed, ackAt: addMinutes(placed, 5), ackBy: 'U201' })
         }
         for (let h = 0; addMinutes(placed, h * 240) <= nowStr; h++) {
           const vt = addMinutes(placed, h * 240)
@@ -1993,6 +1995,35 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // 之後的紀錄拿掉（示範：最新一筆就是這次疼痛 6 分）
       for (let k = vitals.length - 1; k >= 0; k--) if (vitals[k].admissionId === frac.id && vitals[k].at > painAt) vitals.splice(k, 1)
       vitals.push({ id: 'VS-PAIN-SEED', admissionId: frac.id, at: painAt, temp: 36.8, pulse: 96, resp: 18, sbp: 132, dbp: 82, spo2: 98, pain: 6, painAction: '依醫囑給予止痛藥、患肢抬高冰敷', nurseId: 'U201' })
+    }
+  }
+
+  // 營養（示範，不抽亂數）：住院中（不含留觀）入院 3 小時後護理師篩檢，大多 0–2 分。
+  //   - 腦梗塞（中風 2 分＋進食差 1 分）：營養師入院隔天評估過，主治已閱；昨天又評一次（建議改管灌），主治還沒閱
+  //   - 敗血症：篩 ≥3 分，營養師待評估
+  //   - 最近入院、還沒滿 48 小時的那一位不篩（護理站待辦「營養篩檢」）
+  const nutritionScreens: NutritionScreen[] = []
+  const nutritionAssessments: NutritionAssessment[] = []
+  {
+    const inpt = admissions.filter((a) => a.status === 'admitted' && a.admittedAt && !a.obs).sort((a, b) => a.admittedAt!.localeCompare(b.admittedAt!))
+    const newest = inpt.filter((a) => !/^(I63|A41)/.test(a.diagnosis)).at(-1)
+    const ageAt = (pid: string) => { const p = patients.find((x) => x.id === pid)!; return Number(T.slice(0, 4)) - Number(p.birthDate.slice(0, 4)) }
+    for (const a of inpt) {
+      const at = addMinutes(a.admittedAt!, 180)
+      if (at > nowStr || (a === newest && a.admittedAt! > addMinutes(nowStr, -48 * 60))) continue
+      const stroke = a.diagnosis.startsWith('I63')
+      const sepsis = a.diagnosis.startsWith('A41')
+      const impaired = (stroke ? 1 : sepsis ? 2 : 0) as 0 | 1 | 2 | 3
+      const severity = (stroke ? 2 : sepsis ? 1 : a.diagnosis.startsWith('E11') ? 1 : 0) as 0 | 1 | 2 | 3
+      const age70 = ageAt(a.patientId) >= 70
+      nutritionScreens.push({ id: `NS-SEED-${a.admitNo}`, admissionId: a.id, at, by: 'U201', impaired, severity, age70, score: nutritionScore({ impaired, severity, age70 }), heightCm: 160, weightKg: stroke ? 52 : 60 })
+      if (stroke) {
+        const d1 = addMinutes(a.admittedAt!, 26 * 60)
+        nutritionAssessments.push({ id: 'NA-SEED-1', admissionId: a.id, at: d1, by: 'U701', kcal: 1500, protein: 60, assessment: '中風後吞嚥困難，進食量約平常一半，BMI 20.3。', recommendation: '改軟質飲食，三餐間加一份營養補充品；每週量體重。', seenBy: users.find((u) => u.doctorId === a.doctorId)?.id, seenAt: addMinutes(d1, 180) })
+        const d2a = addMinutes(nowStr, -20 * 60)
+        const d2 = d2a > addMinutes(d1, 60) ? d2a : addMinutes(d1, 60)
+        nutritionAssessments.push({ id: 'NA-SEED-2', admissionId: a.id, at: d2, by: 'U701', kcal: 1500, protein: 65, assessment: '吞嚥評估仍有嗆咳，近一週體重少 1.5 公斤。', recommendation: '建議經鼻胃管灌食（均衡配方 1500 kcal/日，分 6 餐），請主治評估是否開立。' })
+      }
     }
   }
 
@@ -2077,6 +2108,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     recordCopies: [],
     surgeries,
     lines,
+    nutritionScreens,
+    nutritionAssessments,
     vitals,
     nursingNotes,
     progressNotes,

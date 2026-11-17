@@ -21,6 +21,7 @@ import { admissionView, find, nameOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, lineTodosOf, painStateOf } from './line-work'
 import { painActionProblem } from './line-rules'
+import { screenable, screenStateOf } from './nutrition-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -52,6 +53,9 @@ export interface WardPatient extends AdmissionView {
   /** 管路：在身上的條數（種類簡稱）、護理站要處理的（今天還沒評估、評估可移除、留置針滿 96 小時） */
   lines: string[]
   lineTodo: number
+  /** 營養篩檢（入院 48 小時內）：還沒篩的狀態（todo 還早、due 快到期、overdue 逾時）；篩過的有營養風險標 nutritionRisk */
+  nutritionDue?: 'todo' | 'due' | 'overdue'
+  nutritionRisk: boolean
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -100,6 +104,11 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           lines: activeLines(a.id).map((l) => ({ foley: 'Foley', cvc: 'CVC', pivc: 'IV', ngt: 'NG' })[l.kind]),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
+          ...(() => {
+            if (!screenable(a)) return { nutritionRisk: false }
+            const ns = screenStateOf(a, t)
+            return { ...(ns.due.status !== 'done' ? { nutritionDue: ns.due.status as 'todo' | 'due' | 'overdue' } : {}), nutritionRisk: !!ns.latest && ns.latest.score >= 3 }
+          })(),
           isolationTodo: activeIsolations(a.patientId).filter((i) => isolationReviewDue(i, a.admittedAt, t)).length + (placementFor(a.patientId, find.bed(a.bedId!)!) ? 1 : 0),
         }
       })
@@ -114,7 +123,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -180,6 +189,11 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       else if (measured && !ps.thisShift) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: 'todo', text: '本班尚未評估疼痛' })
       // 管路：今天還沒評估還需要嗎、評估可以移除、留置針滿 96 小時（滿 7 天提醒主治，在醫師首頁）
       for (const x of lineTodosOf(a.id, t).filter((y) => y.kind !== 'attending')) tasks.push({ ...base, id: x.id, kind: 'line', urgency: x.kind === 'need' ? 'todo' : 'due', text: x.text })
+      // 營養篩檢：入院 48 小時內（還早的列「待處理」、最後 6 小時「現在」、過了「逾時」）
+      if (screenable(a)) {
+        const nd = screenStateOf(a, t).due
+        if (nd.status !== 'done') tasks.push({ ...base, id: `nut-${a.id}`, kind: 'nutrition', urgency: nd.status === 'overdue' ? 'overdue' : nd.status === 'due' ? 'due' : 'todo', at: nd.dueAt, text: '營養篩檢（入院 48 小時內）' })
+      }
     }
     if (changed) commitIfPossible()
     return tasks.sort((x, y) => URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency] || (x.at ?? '9').localeCompare(y.at ?? '9') || x.bedNo.localeCompare(y.bedNo))
