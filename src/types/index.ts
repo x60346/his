@@ -1858,6 +1858,34 @@ export interface NurseAssignment {
   at: string
 }
 
+/**
+ * 換班、請假申請：
+ *   請假 leave：護理師申請自己已排的一班（假別、原因）→ 護理長核准 → 從班表拿掉
+ *   換班 swap：我的一班（shiftId）和別人的一班（targetShiftId）互換 → 對方同意（pending-peer → pending）→ 護理長核准 → 交換
+ */
+export interface ShiftRequest {
+  id: string
+  kind: 'leave' | 'swap'
+  requesterId: string
+  /** 申請的那一班（申請當下的快照：ward、date、shift） */
+  shiftId: string
+  ward: string
+  date: string
+  shift: '白班' | '小夜' | '大夜'
+  leaveType?: string
+  reason: string
+  /** 換班：對方與對方的那一班 */
+  targetId?: string
+  targetShiftId?: string
+  target?: { ward: string; date: string; shift: '白班' | '小夜' | '大夜' }
+  status: 'pending-peer' | 'pending' | 'approved' | 'rejected' | 'declined' | 'cancelled'
+  createdAt: string
+  peer?: { at: string; accept: boolean; note?: string }
+  decidedBy?: string
+  decidedAt?: string
+  decideNote?: string
+}
+
 /** 護病比上限（一位護理師最多照顧幾位病人）：區域醫院標準 白班 7、小夜 11、大夜 15 */
 export interface StaffingSettings {
   ratio: Record<'白班' | '小夜' | '大夜', number>

@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2053,6 +2053,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 今天 5A 白班是 nurse01、nurse02。明天 6B 小夜故意沒排（班表標紅）。現在這一班 5A 的病人依床號分給上班的護理師
   const nurseShifts: NurseShift[] = []
   const nurseAssignments: NurseAssignment[] = []
+  const shiftRequests: ShiftRequest[] = []
   {
     const pool = Array.from({ length: 12 }, (_, i) => `U${201 + i}`)
     const slots: [string, NurseShift['shift']][] = [[codes.wards[0], '白班'], [codes.wards[0], '白班'], [codes.wards[0], '小夜'], [codes.wards[0], '大夜'], [codes.wards[1], '白班'], [codes.wards[1], '小夜'], [codes.wards[1], '大夜'], [codes.wards[2], '白班'], [codes.wards[2], '小夜'], [codes.wards[2], '大夜']]
@@ -2066,6 +2067,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         nurseShifts.push({ id: `NSH-SEED-${++k}`, ward, date: d, shift, nurseId: pool[(i + r) % 12] })
       })
     }
+    // 換班請假示範：nurse04 想和 nurse01 換 3 天後的班（等 nurse01 同意）；nurse05 申請 5 天後（那天休就再往後）那班特休（等護理長核准）
+    const on = (nid: string, d: string) => nurseShifts.find((x) => x.nurseId === nid && x.date === d)
+    const d3 = addDays(T, 3)
+    const s4 = on('U204', d3)
+    const s1 = on('U201', d3)
+    if (s4 && s1) shiftRequests.push({ id: 'SRQ-SEED-1', kind: 'swap', requesterId: 'U204', shiftId: s4.id, ward: s4.ward, date: d3, shift: s4.shift, reason: '那天要帶小孩回診', targetId: 'U201', targetShiftId: s1.id, target: { ward: s1.ward, date: d3, shift: s1.shift }, status: 'pending-peer', createdAt: addMinutes(nowStr, -120) })
+    const s5 = [5, 6, 7, 8].map((k) => on('U205', addDays(T, k))).find(Boolean)
+    if (s5) shiftRequests.push({ id: 'SRQ-SEED-2', kind: 'leave', requesterId: 'U205', shiftId: s5.id, ward: s5.ward, date: s5.date, shift: s5.shift, leaveType: '特休', reason: '家族旅遊', status: 'pending', createdAt: addMinutes(nowStr, -26 * 60) })
     const cur = { date: nowStr.slice(0, 10), shift: (Number(nowStr.slice(11, 13)) >= 16 ? '小夜' : Number(nowStr.slice(11, 13)) >= 8 ? '白班' : '大夜') as NurseShift['shift'] }
     const duty = nurseShifts.filter((x) => x.ward === codes.wards[0] && x.date === cur.date && x.shift === cur.shift).map((x) => x.nurseId)
     const pts = admissions.filter((a) => a.status === 'admitted' && beds.find((b) => b.id === a.bedId)?.ward === codes.wards[0]).sort((a, b) => (beds.find((x) => x.id === a.bedId)!.bedNo).localeCompare(beds.find((x) => x.id === b.bedId)!.bedNo))
@@ -2203,6 +2212,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     restraints,
     nurseShifts,
     nurseAssignments,
+    shiftRequests,
     dischargePlans,
     vitals,
     nursingNotes,

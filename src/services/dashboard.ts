@@ -2,7 +2,7 @@
 import { db } from '@/mock/db'
 import { riskStateOf } from './risk-work'
 import { isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
-import { addDays, now, today } from '@/utils/date'
+import { addDays, now, today, addMinutes } from '@/utils/date'
 import { permissionsOf, query, sessionRole, sessionUser } from './http'
 import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
 import { nameOf, openDeptTransfer, stockLoc } from './views'
@@ -99,6 +99,10 @@ export interface DashboardStats {
   /** 出院準備（有「出院準備」權限的人）：待篩選快到期或逾時、出院後待電話追蹤 */
   planScreenDue?: number
   planFollowUp?: number
+  /** 換班請假：別人請我換班（等我回覆）、我的申請最近 24 小時有結果、待核准（護理長） */
+  swapToRespond?: number
+  myRequestResults?: number
+  shiftRequestsToApprove?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -247,6 +251,11 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t), nutritionUnseen: nutritionCounts(t, me.doctorId).unseen } : {}),
           nutritionScreenDue: scope ? inpt.filter((a) => screenable(a) && ['due', 'overdue'].includes(screenStateOf(a, t).due.status)).length : nutritionCounts(t).screenDue,
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('discharge.plan') ? (({ screenDue, followUp }) => ({ planScreenDue: screenDue, planFollowUp: followUp }))(planCounts(t)) : {}),
+          ...(sessionRole() === 'nurse' && me ? {
+            swapToRespond: db.shiftRequests.filter((r) => r.targetId === me.id && r.status === 'pending-peer').length,
+            myRequestResults: db.shiftRequests.filter((r) => r.requesterId === me.id && ['approved', 'rejected', 'declined'].includes(r.status) && (r.decidedAt ?? r.peer?.at ?? '') >= addMinutes(t, -24 * 60)).length,
+          } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           restraintCheckOverdue: inpt.reduce((n, a) => n + restraintTodosOf(a.id, t).filter((x) => x.kind === 'check' && x.urgency === 'overdue').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? (({ positive, restraintOrder }) => ({ deliriumPositive: positive, restraintOrder }))(deliriumDoctorCounts(me.doctorId, t)) : {}),
           ...(['diet', 'admin'].includes(sessionRole() ?? '') ? { nutritionToAssess: nutritionCounts(t).toAssess } : {}),

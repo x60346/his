@@ -39,3 +39,25 @@ export function monthDates(month: string): string[] {
 
 /** 複製上個月：每一天照 4 週前（同一個星期幾）那天的班 */
 export const copySourceOf = (date: string) => addDays(date, -28)
+
+// ---------- 換班與請假 ----------
+export const LEAVE_TYPES = ['特休', '病假', '事假', '公假', '喪假', '婚假']
+/** 兩班之間至少休息幾小時（少於只提醒） */
+export const REST_HOURS = 8
+const START_HOUR: Record<ShiftName, number> = { 大夜: 0, 白班: 8, 小夜: 16 }
+/** 一班的起訖（訖＝起＋8 小時），用分鐘數比較 */
+export const shiftSpan = (date: string, shift: ShiftName) => {
+  const start = Date.parse(`${date}T00:00:00`) / 60000 + START_HOUR[shift] * 60
+  return { start, end: start + 8 * 60 }
+}
+
+/** 這位護理師的班（日期＋班別）排好之後，相鄰兩班之間休息不到 8 小時的：回提醒文字 */
+export function restProblems(shifts: { date: string; shift: ShiftName }[]): string[] {
+  const xs = [...shifts].map((s) => ({ ...s, ...shiftSpan(s.date, s.shift) })).sort((a, b) => a.start - b.start)
+  const out: string[] = []
+  for (let i = 1; i < xs.length; i++) {
+    const gap = (xs[i].start - xs[i - 1].end) / 60
+    if (gap < REST_HOURS) out.push(`${xs[i - 1].date.slice(5)} ${xs[i - 1].shift}下班後只休息 ${gap} 小時就接 ${xs[i].date.slice(5)} ${xs[i].shift}`)
+  }
+  return out
+}

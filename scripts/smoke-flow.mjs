@@ -7891,6 +7891,114 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // 換班與請假：請假（自己的班、假別、原因、護理長核准後從班表拿掉）、換班（對方同意 → 核准 → 交換；同一天兩班擋、休息不足提醒）、撤回、首頁
+  console.log('\n[換班與請假]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const R = api.shiftRequestApi
+    const { addDays } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.restProblems([{ date: '2026-11-17', shift: '小夜' }, { date: '2026-11-18', shift: '大夜' }])[0]?.includes('0 小時') && !api.restProblems([{ date: '2026-11-17', shift: '小夜' }, { date: '2026-11-18', shift: '白班' }]).length, '休息：小夜接隔天大夜 0 小時（提醒）、小夜接隔天白班 8 小時（不提醒）')
+
+    // 種子
+    await as('nurse01')
+    let L = await R.listShiftRequests()
+    const seedSwap = L.toRespond.find((r) => r.id === 'SRQ-SEED-1')
+    ok(seedSwap && (await api.dashboardApi.getDashboard()).swapToRespond >= 1, '種子：nurse04 請 nurse01 換班（nurse01 首頁「別人請我換班」）')
+    await as('nurse02')
+    L = await R.listShiftRequests()
+    ok(L.canApprove && L.toApprove.some((r) => r.id === 'SRQ-SEED-2') && (await api.dashboardApi.getDashboard()).shiftRequestsToApprove >= 1, '種子：nurse05 特休待護理長（nurse02）核准')
+
+    // 請假
+    await as('nurse06')
+    const mine = await R.myUpcomingShifts()
+    const s1 = mine.find((x) => x.date >= addDays(T, 2))
+    let f = await fieldsOf(() => R.requestLeave({ shiftId: s1.id, leaveType: '', reason: '' }))
+    ok(f.leaveType, '假別要選')
+    const other = db().nurseShifts.find((x) => x.nurseId !== db().users.find((u) => u.username === 'nurse06').id && x.date >= T)
+    let msg = await errOf(() => R.requestLeave({ shiftId: other.id, leaveType: '特休', reason: 'x' }))
+    ok(msg.includes('自己的班'), '只能申請自己的班')
+    const past = db().nurseShifts.find((x) => x.nurseId === db().users.find((u) => u.username === 'nurse06').id && x.date < T)
+    msg = await errOf(() => R.requestLeave({ shiftId: past.id, leaveType: '特休', reason: 'x' }))
+    ok(msg.includes('過去'), '過去的班不能申請')
+    const lv = await R.requestLeave({ shiftId: s1.id, leaveType: '病假', reason: '發燒' })
+    ok(lv.status === 'pending' && lv.text.includes('病假'), '請假申請：等護理長核准')
+    msg = await errOf(() => R.requestLeave({ shiftId: s1.id, leaveType: '特休', reason: 'x' }))
+    ok(msg.includes('申請中'), '同一班不能重複申請')
+    await expectError(() => R.decideShiftRequest(lv.id, true), '一般護理師核准')
+    await as('nurse02')
+    f = await fieldsOf(() => R.decideShiftRequest(lv.id, false, ''))
+    ok(f.note, '退回要寫原因')
+    const okLv = await R.decideShiftRequest(lv.id, true)
+    ok(okLv.status === 'approved' && !db().nurseShifts.some((x) => x.id === s1.id), '核准請假：從班表拿掉')
+    await as('nurse06')
+    ok((await api.dashboardApi.getDashboard()).myRequestResults >= 1 && (await R.listShiftRequests()).mine.find((r) => r.id === lv.id).status === 'approved', '申請人首頁：申請有結果')
+
+    // 換班：nurse07 和 nurse08 同一天的班互換
+    const id7 = db().users.find((u) => u.username === 'nurse07').id
+    const id8 = db().users.find((u) => u.username === 'nurse08').id
+    const day = [2, 3, 4, 5, 6, 8, 9].map((k) => addDays(T, k)).find((d) => db().nurseShifts.some((x) => x.nurseId === id7 && x.date === d) && db().nurseShifts.some((x) => x.nurseId === id8 && x.date === d))
+    const a7 = db().nurseShifts.find((x) => x.nurseId === id7 && x.date === day)
+    const b8 = db().nurseShifts.find((x) => x.nurseId === id8 && x.date === day)
+    await as('nurse07')
+    const cands = await R.swapCandidates(a7.id, day)
+    ok(cands.some((c) => c.id === b8.id && !c.block), '換班對象：同一天別人的班')
+    // 換到別天：自己那天已經有班 → 擋
+    const dayOther = addDays(day, 1)
+    const c7 = db().nurseShifts.find((x) => x.nurseId === id7 && x.date === dayOther)
+    const x8 = db().nurseShifts.find((x) => x.nurseId !== id7 && x.date === dayOther && !db().shiftRequests.some((r) => ['pending', 'pending-peer'].includes(r.status) && (r.shiftId === x.id || r.targetShiftId === x.id)))
+    if (c7 && x8) {
+      f = await fieldsOf(() => R.requestSwap({ shiftId: a7.id, targetShiftId: x8.id, reason: 'x' }))
+      ok(f.targetShiftId?.includes('兩班'), `換完同一天兩班擋 → 「${f.targetShiftId}」`)
+    }
+    const sw = await R.requestSwap({ shiftId: a7.id, targetShiftId: b8.id, reason: '家裡有事' })
+    ok(sw.status === 'pending-peer', '換班申請：等對方同意')
+    await as('nurse02')
+    msg = await errOf(() => R.decideShiftRequest(sw.id, true))
+    ok(msg.includes('還沒同意'), '對方還沒同意，護理長不能核准')
+    await as('nurse09')
+    await expectError(() => R.respondSwap(sw.id, true), '別人回覆換班')
+    await as('nurse08')
+    f = await fieldsOf(() => R.respondSwap(sw.id, false, ''))
+    ok(f.note, '不同意要寫原因')
+    const resp = await R.respondSwap(sw.id, true)
+    ok(resp.status === 'pending', '對方同意：等護理長核准')
+    await as('nurse02')
+    const ap = await R.decideShiftRequest(sw.id, true)
+    ok(ap.status === 'approved' && db().nurseShifts.find((x) => x.id === a7.id).nurseId === id8 && db().nurseShifts.find((x) => x.id === b8.id).nurseId === id7, '核准換班：兩班交換')
+    // 撤回
+    await as('nurse07')
+    const mine7 = (await R.myUpcomingShifts()).find((x) => x.date > day)
+    const lv2 = await R.requestLeave({ shiftId: mine7.id, leaveType: '事假', reason: 'x' })
+    const cc = await R.cancelShiftRequest(lv2.id)
+    ok(cc.status === 'cancelled', '處理前可以撤回')
+    msg = await errOf(() => R.cancelShiftRequest(sw.id))
+    ok(msg.includes('已經處理'), '處理過的不能撤回')
+    // 核准前班表被改：要退回
+    const lv3 = await R.requestLeave({ shiftId: mine7.id, leaveType: '事假', reason: 'y' })
+    await as('nurse02')
+    await api.staffingApi.setShiftNurses(mine7.ward, mine7.date, mine7.shift, [])
+    msg = await errOf(() => R.decideShiftRequest(lv3.id, true))
+    ok(msg.includes('班表已經改過'), `核准前班表被改過 → 「${msg}」`)
+  }
+
   // 出院準備：篩選（系統自動勾、兩項收案、72 小時）→ 需求評估 → 轉介（送出、回覆）→ 出院後 7 天追蹤；權限；簽准出院提醒不擋
   console.log('\n[出院準備]')
   {

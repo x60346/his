@@ -6,6 +6,7 @@ import { Copy } from 'lucide-vue-next'
 import { UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import { masterApi, SHIFTS, staffingApi, type ScheduleCell, type ShiftName } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
+import ShiftRequestsPanel from './components/ShiftRequestsPanel.vue'
 import { useUi } from '@/stores/ui'
 import { today } from '@/utils/date'
 
@@ -78,6 +79,7 @@ async function submitRatio() {
       <USelect v-model="q.month" label="月份" :options="months.map((m) => ({ label: m, value: m }))" class="w-32" />
       <span v-if="data" class="text-xs text-slate-500">護病比上限：{{ SHIFTS.map((s) => `${s} 1:${data!.ratio[s]}`).join('・') }}<template v-if="!data.canEdit">（要改班表請找有「護理排班」權限的人）</template></span>
     </div>
+    <ShiftRequestsPanel @changed="reload" />
     <UQueryState :loading="loading && !data" :ready="!!data">
       <div v-if="data" class="overflow-x-auto rounded-md border border-slate-200 bg-white">
         <table class="w-full min-w-[40rem] text-left text-sm">
