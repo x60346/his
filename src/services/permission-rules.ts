@@ -25,6 +25,7 @@ export type PermKey =
   | 'record.copy'
   | 'report.management'
   | 'surgery.schedule'
+  | 'nursing.schedule'
   | 'charge.approveDiscount'
   | 'order.write'
   | 'mar.give'
@@ -65,6 +66,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'record.copy', group: '病歷', label: '病歷影本申請', covers: '受理病歷影本申請（核對申請人、選範圍）、收費、列印與補印、當天作廢', candidates: ['clerk'], defaults: ['clerk'], grantable: true, note: '病人個資：可以只交給病歷組的櫃台人員（先指定給個人，再把角色取消）' },
   { key: 'report.management', group: '系統', label: '經營月報', covers: '看全院的門診人次、住院佔床、收入、藥費占比、檢驗影像量，匯出 Excel', candidates: ['admin', 'doctor', 'nurse', 'pharmacist', 'clerk'], defaults: ['admin'], grantable: true, note: '全院營運與財務數字：預設只有管理員，可以指定給院長、主任等個人' },
   { key: 'surgery.schedule', group: '住院', label: '手術排程', covers: '排手術房間與時間、改期', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師；要只交給手術室護理長：先指定給個人，再把角色取消' },
+  { key: 'nursing.schedule', group: '住院', label: '護理排班', covers: '排各病房每天三班的護理師、複製上個月', candidates: ['nurse', 'admin'], defaults: ['admin'], grantable: true, note: '交給護理長：指定給個人（示範 nurse02）；所有護理師都看得到班表' },
   { key: 'order.write', group: '住院', label: '開立／修改／停止醫囑、完成看診', covers: '門診完成看診（處方）、住院醫囑開立修改停止', candidates: ['doctor'], defaults: ['doctor'], fixed: true, note: '醫療紀錄要記在有執業資格的醫師名下' },
   { key: 'mar.give', group: '住院', label: '給藥', covers: '執行給藥、暫停、拒絕、補登', candidates: ['nurse'], defaults: ['nurse'], fixed: true, note: '給藥紀錄要記在執行的護理師名下' },
   { key: 'dispense', group: '藥局', label: '核對處方、發藥', covers: '門診核對、發藥、退藥', candidates: ['pharmacist'], defaults: ['pharmacist'], fixed: true, note: '藥事法：調劑由藥師執行' },

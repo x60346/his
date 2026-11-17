@@ -1802,6 +1802,32 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/** 護理排班：某病房某天某一班排了哪位護理師（一人一筆） */
+export interface NurseShift {
+  id: string
+  ward: string
+  date: string
+  shift: '白班' | '小夜' | '大夜'
+  nurseId: string
+}
+
+/** 責任分床：某一班某位病人由哪位護理師照顧（一位病人一筆；重分就改） */
+export interface NurseAssignment {
+  id: string
+  ward: string
+  date: string
+  shift: '白班' | '小夜' | '大夜'
+  admissionId: string
+  nurseId: string
+  by: string
+  at: string
+}
+
+/** 護病比上限（一位護理師最多照顧幾位病人）：區域醫院標準 白班 7、小夜 11、大夜 15 */
+export interface StaffingSettings {
+  ratio: Record<'白班' | '小夜' | '大夜', number>
+}
+
 export interface HandoverNote {
   id: string
   ward: string

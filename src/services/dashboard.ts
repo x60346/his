@@ -21,7 +21,8 @@ import { surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
-import { nutritionCounts } from './nutrition-work'
+import { nutritionCounts, screenable, screenStateOf } from './nutrition-work'
+import { myScope } from './staffing-work'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { isObsBed, obsOpen } from './bed-work'
 
@@ -178,7 +179,7 @@ export function getDashboard(): Promise<DashboardStats> {
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
       ipdToBill: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)).length,
-      riskOverdue: db.admissions.filter((a) => a.status === 'admitted').reduce((n, a) => {
+      riskOverdue: db.admissions.filter((a) => a.status === 'admitted' && (sessionRole() !== 'nurse' || !myScope(sessionUser()?.id, now()) || myScope(sessionUser()?.id, now())!.has(a.id))).reduce((n, a) => {
         const rs = riskStateOf(a, now())
         return n + Number(rs.fall.due.status === 'overdue') + Number(rs.pressure.due.status === 'overdue')
       }, 0),
@@ -232,13 +233,15 @@ export function getDashboard(): Promise<DashboardStats> {
       transfusionTodo: transfusionTodoCount(now()),
       ...(() => {
         const t = now()
-        const inpt = db.admissions.filter((a) => a.status === 'admitted')
         const me = sessionUser()
+        // 護理師這一班有分到病人：只算自己的病人（責任分床）；沒分到＝全院
+        const scope = sessionRole() === 'nurse' ? myScope(me?.id, t) : undefined
+        const inpt = db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)))
         return {
           painReassessOverdue: inpt.filter((a) => painStateOf(a.id, t).reassess?.status === 'overdue').length,
           lineTodo: inpt.reduce((n, a) => n + lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t), nutritionUnseen: nutritionCounts(t, me.doctorId).unseen } : {}),
-          nutritionScreenDue: nutritionCounts(t).screenDue,
+          nutritionScreenDue: scope ? inpt.filter((a) => screenable(a) && ['due', 'overdue'].includes(screenStateOf(a, t).due.status)).length : nutritionCounts(t).screenDue,
           restraintCheckOverdue: inpt.reduce((n, a) => n + restraintTodosOf(a.id, t).filter((x) => x.kind === 'check' && x.urgency === 'overdue').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? (({ positive, restraintOrder }) => ({ deliriumPositive: positive, restraintOrder }))(deliriumDoctorCounts(me.doctorId, t)) : {}),
           ...(['diet', 'admin'].includes(sessionRole() ?? '') ? { nutritionToAssess: nutritionCounts(t).toAssess } : {}),

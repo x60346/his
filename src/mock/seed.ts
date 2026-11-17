@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -231,7 +231,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
-    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule'] },
+    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule', 'nursing.schedule'] },
+    // 排班用的護理師（nurse03–nurse12）：不參與舊的示範資料
+    ...['林佳穎', '陳怡君', '黃詩涵', '張雅婷', '吳欣怡', '劉靜宜', '蔡佩珊', '楊淑芬', '許雅雯', '鄭宜蓁'].map((name, i): User => ({ id: `U${203 + i}`, username: `nurse${String(3 + i).padStart(2, '0')}`, password: '1234', name, roles: ['nurse'], active: true })),
     { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
     // 第二位藥師：盤點單「清點的人不能自己覆核」，要有另一位藥師可以覆核（小診所沒有的話由管理員覆核）
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
@@ -2047,6 +2049,30 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 護理排班（示範，不抽亂數）：上個月 1 號到這個月底，3 個一般病房每天 10 個班位（5A 白班 2 人），12 位護理師輪流（每天 2 位休）；
+  // 今天 5A 白班是 nurse01、nurse02。明天 6B 小夜故意沒排（班表標紅）。現在這一班 5A 的病人依床號分給上班的護理師
+  const nurseShifts: NurseShift[] = []
+  const nurseAssignments: NurseAssignment[] = []
+  {
+    const pool = Array.from({ length: 12 }, (_, i) => `U${201 + i}`)
+    const slots: [string, NurseShift['shift']][] = [[codes.wards[0], '白班'], [codes.wards[0], '白班'], [codes.wards[0], '小夜'], [codes.wards[0], '大夜'], [codes.wards[1], '白班'], [codes.wards[1], '小夜'], [codes.wards[1], '大夜'], [codes.wards[2], '白班'], [codes.wards[2], '小夜'], [codes.wards[2], '大夜']]
+    const first = `${addDays(`${T.slice(0, 7)}-01`, -1).slice(0, 7)}-01`
+    const nextMonth = addDays(`${T.slice(0, 7)}-28`, 7).slice(0, 7)
+    let k = 0
+    for (let d = first; d < `${nextMonth}-01`; d = addDays(d, 1)) {
+      const r = ((diffDays(T, d) % 12) + 12) % 12
+      slots.forEach(([ward, shift], i) => {
+        if (d === addDays(T, 1) && ward === codes.wards[1] && shift === '小夜') return
+        nurseShifts.push({ id: `NSH-SEED-${++k}`, ward, date: d, shift, nurseId: pool[(i + r) % 12] })
+      })
+    }
+    const cur = { date: nowStr.slice(0, 10), shift: (Number(nowStr.slice(11, 13)) >= 16 ? '小夜' : Number(nowStr.slice(11, 13)) >= 8 ? '白班' : '大夜') as NurseShift['shift'] }
+    const duty = nurseShifts.filter((x) => x.ward === codes.wards[0] && x.date === cur.date && x.shift === cur.shift).map((x) => x.nurseId)
+    const pts = admissions.filter((a) => a.status === 'admitted' && beds.find((b) => b.id === a.bedId)?.ward === codes.wards[0]).sort((a, b) => (beds.find((x) => x.id === a.bedId)!.bedNo).localeCompare(beds.find((x) => x.id === b.bedId)!.bedNo))
+    const per = duty.length ? Math.ceil(pts.length / duty.length) : 0
+    pts.forEach((a, i) => duty.length && nurseAssignments.push({ id: `NAS-SEED-${i + 1}`, ward: codes.wards[0], date: cur.date, shift: cur.shift, admissionId: a.id, nurseId: duty[Math.min(duty.length - 1, Math.floor(i / per))], by: duty[0], at: `${cur.date} ${cur.shift === '白班' ? '08:10' : cur.shift === '小夜' ? '16:10' : '00:10'}` }))
+  }
+
   // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。
   // 挑「第一次掛號在最近 60 天內」、之前沒住過院的病人，第一次掛號標初診（今天最多 3 位、之前每週最多 2 位），
   // 建檔日改成那天（有更早的預防保健紀錄就改成那天：預防保健不用掛號）。和櫃台掛號時 booking.register 的判斷一樣（之前沒有任何掛號＝初診）
@@ -2134,6 +2160,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     tubeFeeds: [],
     deliriumAssessments,
     restraints,
+    nurseShifts,
+    nurseAssignments,
     vitals,
     nursingNotes,
     progressNotes,

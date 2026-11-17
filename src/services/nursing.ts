@@ -25,6 +25,7 @@ import { screenable, screenStateOf } from './nutrition-work'
 import { highResidual, tubeSlotsOf } from './tube-work'
 import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
 import { restraintState } from './delirium-rules'
+import { assignedNurse, nextShift, onDuty, shiftNow } from './staffing-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -66,6 +67,9 @@ export interface WardPatient extends AdmissionView {
   deliriumPositive: boolean
   /** 約束中：查核狀態、醫囑有沒有問題（緊急約束待補、沒補、到期） */
   restraint?: { check: 'ok' | 'due' | 'overdue'; orderProblem: boolean }
+  /** 這一班的責任護理師（沒分＝未分床） */
+  nurseId?: string
+  nurseName?: string
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -114,6 +118,10 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
+          ...(() => {
+            const nid = assignedNurse(a.id, shiftNow(t))
+            return nid ? { nurseId: nid, nurseName: nameOf.user(nid) } : {}
+          })(),
           ...(() => {
             const ds = deliriumStateOf(a, t)
             const r = activeRestraints(a.id)[0]
@@ -548,7 +556,8 @@ export function addNoteResponse(noteId: string, response: string): Promise<Nursi
 }
 
 // ---------- 交班 ----------
-export type HandoverView = HandoverNote & { nurseName: string; patientName: string; bedNo: string }
+/** receiverName：接班的人（下一班分到這位病人的護理師；還沒分床就列下一班上班的人） */
+export type HandoverView = HandoverNote & { nurseName: string; patientName: string; bedNo: string; receiverName?: string }
 
 /** 最近幾班的交班：預設 3 班（一整天），接班的人一定看得到上一班——不論中間是否跨過午夜 */
 export const HANDOVER_SHIFTS = 3
@@ -568,7 +577,11 @@ export function listHandovers(ward: string): Promise<HandoverGroup[]> {
           .filter((h) => h.ward === ward && h.date === s.date && h.shift === s.shift)
           .map((h) => {
             const a = find.admission(h.admissionId)
-            return { ...h, nurseName: nameOf.user(h.nurseId), patientName: a ? nameOf.patient(a.patientId) : '', bedNo: a?.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '' }
+            const nx = nextShift({ date: h.date, shift: h.shift })
+            const rid = assignedNurse(h.admissionId, nx)
+            const duty = onDuty(ward, nx)
+            const receiverName = rid ? nameOf.user(rid) : duty.length ? `${duty.map((id) => nameOf.user(id)).join('、')}（未分床）` : undefined
+            return { ...h, nurseName: nameOf.user(h.nurseId), patientName: a ? nameOf.patient(a.patientId) : '', bedNo: a?.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '', ...(receiverName ? { receiverName } : {}) }
           })
           // 交班是沿著病房一床一床走：依床號排，同一床再依時間
           .sort((a, b) => a.bedNo.localeCompare(b.bedNo) || a.createdAt.localeCompare(b.createdAt)),

@@ -52,11 +52,14 @@ try {
    * 重建展示資料。給藥條碼核對（預設開）只在「[給藥條碼核對]」那段測；其他段測的是別的規則，重建後先關掉掃描，
    * 不然每一筆給藥都要先掃腕帶與藥品
    */
+  // 責任分床：首頁待辦只算自己的病人——舊的測試都假設看全院，分床另外測（[護理排班與分床] 用 dbm.resetDatabase）
   const resetDb = (scale) => {
     dbm.resetDatabase(scale)
     dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    dbm.db.nurseAssignments = []
   }
   dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+  dbm.db.nurseAssignments = []
   /** 住院開醫囑時醫師確認交互作用、重複用藥提醒（不是這段要測的東西時用；嚴重的帶原因） */
   const withRxOk = async (input) => ({ ...input, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(input.admissionId, input.drugId)).map((x) => [x.key, '測試確認'])) })
   const dateUtil = await load('/src/utils/date.ts')
@@ -7781,6 +7784,111 @@ try {
     await as('nurse01')
     const q = await D.wardSafetyStats(ward, 30)
     ok(q.restraints >= 2 && q.emergency >= 1 && q.restraintActive >= 1 && q.camCount >= 2 && q.camPositive >= 1 && q.camRate > 0, `品質指標：約束 ${q.restraints} 次（緊急 ${q.emergency}）、約束日 ${q.restraintDays}、CAM 陽性 ${q.camPositive}／${q.camCount}`)
+  }
+
+  // 護理排班與分床：班表（權限、同一天一人一班、過去不能改、複製上個月）、護病比（超過標紅不擋、管理員調上限）、
+  // 這一班分床（只能分給上班的人）、護理站「我的病人」、首頁只算自己的病人、交班帶出接班人
+  console.log('\n[護理排班與分床]')
+  {
+    dbm.resetDatabase('small') // 這一段要用種子的分床：不用 resetDb（它會清掉分床）
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const S = api.staffingApi
+    const W = '5A 內科病房'
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.ratioState(14, 2, 7).text === '1：7（上限 1：7）' && !api.ratioState(14, 2, 7).over && api.ratioState(15, 2, 7).over && api.ratioState(3, 0, 7).over && !api.ratioState(0, 0, 7).over, '護病比：剛好不超過、超過、有病人沒排人')
+    const sg = api.suggestAssign(['a', 'b', 'c', 'd', 'e'], ['n1', 'n2'])
+    ok(sg.a === 'n1' && sg.c === 'n1' && sg.d === 'n2' && sg.e === 'n2', '分床建議：依床號連續平均分')
+    ok(api.monthDates('2026-02').length === 28 && api.copySourceOf('2026-11-30') === '2026-11-02', '月份日期、複製上個月照 4 週前')
+    ok(api.checkRatio({ 白班: 0, 小夜: 11, 大夜: 15 }).白班, '上限 1–30')
+
+    // 種子
+    const today0 = T
+    const shiftNow = Number(nowStr().slice(11, 13)) >= 16 ? '小夜' : Number(nowStr().slice(11, 13)) >= 8 ? '白班' : '大夜'
+    ok(db().users.filter((u) => /^nurse[0-9]+$/.test(u.username)).length === 12 && db().nurseShifts.filter((x) => x.date === today0 && x.ward === W && x.shift === '白班').map((x) => x.nurseId).sort().join() === 'U201,U202', '種子：12 位護理師（nurse01–12）；今天 5A 白班 nurse01、nurse02')
+    await as('nurse03')
+    let sch = await S.getSchedule('6B 外科病房', today0.slice(0, 7))
+    const tomorrow = sch.days.find((d) => d.date === dateUtil.addDays(today0, 1))
+    ok(!sch.canEdit && sch.days.length >= 28 && (!tomorrow || (tomorrow.cells.find((c) => c.shift === '小夜').nurses.length === 0 && tomorrow.cells.find((c) => c.shift === '小夜').ratio.over === db().admissions.some((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === '6B 外科病房'))), '一般護理師看得到班表、不能改；明天 6B 小夜沒排（有病人就標紅）')
+    await expectError(() => S.setShiftNurses(W, dateUtil.addDays(today0, 2), '白班', ['U203']), '一般護理師排班')
+
+    // 護理長排班
+    await as('nurse02')
+    const d2 = dateUtil.addDays(today0, 2)
+    const busyOn = (d) => new Set(db().nurseShifts.filter((x) => x.date === d).map((x) => x.nurseId))
+    const free = db().users.filter((u) => u.roles.includes('nurse') && !busyOn(d2).has(u.id)).map((u) => u.id)
+    const takenElsewhere = db().nurseShifts.find((x) => x.date === d2 && x.ward !== W).nurseId
+    let f = await fieldsOf(() => S.setShiftNurses(W, d2, '大夜', [takenElsewhere]))
+    ok(f.nurseIds?.includes('已經排了'), `同一天一人一班 → 「${f.nurseIds}」`)
+    let msg = await errOf(() => S.setShiftNurses(W, dateUtil.addDays(today0, -1), '白班', ['U203']))
+    ok(msg.includes('過去'), '過去的班不能改')
+    const cell = await S.setShiftNurses(W, d2, '大夜', free.slice(0, 1))
+    ok(cell.nurses.length === 1 && db().nurseShifts.filter((x) => x.date === d2 && x.ward === W && x.shift === '大夜').length === 1, '整班取代：大夜改成 1 人')
+    const cell0 = await S.setShiftNurses(W, d2, '大夜', [])
+    ok(cell0.ratio.over === db().admissions.some((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === W), '不排人：有病人就標紅（不擋）')
+    const r = await S.copyPreviousMonth(W, today0.slice(0, 7))
+    ok(r.copied >= 1 && db().nurseShifts.some((x) => x.date === d2 && x.ward === W && x.shift === '大夜'), `複製上個月：補上沒排的班（${r.copied} 人次）`)
+    // 護病比上限
+    await expectError(() => S.saveRatio({ 白班: 3, 小夜: 11, 大夜: 15 }), '護理長改護病比上限（管理員）')
+    await as('admin')
+    f = await fieldsOf(() => S.saveRatio({ 白班: 0, 小夜: 11, 大夜: 15 }))
+    ok(f.白班, '上限不合理擋')
+    await S.saveRatio({ 白班: 1, 小夜: 11, 大夜: 15 })
+    sch = await S.getSchedule(W, today0.slice(0, 7))
+    ok(sch.canEdit && sch.canEditRatio && sch.days.find((d) => d.date === today0).cells.find((c) => c.shift === '白班').ratio.over, '上限改成 1:1 後今天 5A 白班超過（標紅）')
+    await S.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 })
+
+    // 分床（現在這一班）
+    const duty = db().nurseShifts.filter((x) => x.ward === W && x.date === today0 && x.shift === shiftNow).map((x) => x.nurseId)
+    const dutyUser = db().users.find((u) => u.id === duty[0])
+    const offUser = db().users.find((u) => u.roles.includes('nurse') && !duty.includes(u.id) && !u.grants?.includes('nursing.schedule'))
+    await as(dutyUser.username)
+    let v = await S.getAssignments(W)
+    ok(v.canAssign && v.shift === shiftNow && v.patients.length && v.patients.every((p) => p.nurseId && duty.includes(p.nurseId)), `種子：${shiftNow} 5A 病人都分給上班的護理師`)
+    const myIds = v.patients.filter((p) => p.nurseId === dutyUser.id).map((p) => p.admissionId)
+    const wp = await api.nursingApi.listWardPatients(W)
+    ok(wp.filter((p) => p.nurseId === dutyUser.id).length === myIds.length && wp.every((p) => p.nurseName), '護理站清單：每位病人標責任護理師')
+    // 首頁只算自己的病人：造一個別人病人的約束查核逾時
+    const other = v.patients.find((p) => p.nurseId !== dutyUser.id)
+    if (other) {
+      db().restraints.push({ id: 'RS-T1', admissionId: other.admissionId, reason: 'x', sites: ['左手'], method: '約束帶', startedAt: dateUtil.addMinutes(nowStr(), -300), startedBy: 'U201', emergency: false, orders: [{ by: 'U201', at: dateUtil.addMinutes(nowStr(), -300), until: dateUtil.addMinutes(nowStr(), 600) }], checks: [] })
+      const mine = (await api.dashboardApi.getDashboard()).restraintCheckOverdue
+      await as(offUser.username)
+      const all = (await api.dashboardApi.getDashboard()).restraintCheckOverdue
+      ok(all === mine + 1, `首頁只算自己的病人：分床的人 ${mine}、這班沒分到病人的看全院 ${all}`)
+      msg = await errOf(() => S.assignPatients(W, { [other.admissionId]: offUser.id }))
+      ok(msg.includes('上班的護理師'), `這班沒上班（也不是護理長）不能分床 → 「${msg}」`)
+      await as(dutyUser.username)
+      f = await fieldsOf(() => S.assignPatients(W, { [other.admissionId]: offUser.id }))
+      ok(f.nurseId?.includes('沒有排'), '只能分給這班在這個病房上班的人')
+      v = await S.assignPatients(W, { [other.admissionId]: dutyUser.id })
+      ok(v.patients.find((p) => p.admissionId === other.admissionId).nurseId === dutyUser.id, '重分：改由我照顧')
+      v = await S.assignPatients(W, { [other.admissionId]: '' })
+      ok(!v.patients.find((p) => p.admissionId === other.admissionId).nurseId && !(await api.nursingApi.listWardPatients(W)).find((p) => p.id === other.admissionId).nurseId, '取消：未分床')
+    }
+
+    // 交班帶出接班人
+    const a0 = v.patients[0]
+    await as(dutyUser.username)
+    await api.nursingApi.addHandover({ ward: W, shift: shiftNow, admissionId: a0.admissionId, content: '交班測試' })
+    const hv = (await api.nursingApi.listHandovers(W)).flatMap((g) => g.items).find((h) => h.content === '交班測試')
+    ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

@@ -32,7 +32,10 @@ import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
 import WardStockPanel from './components/WardStockPanel.vue'
-import { bloodApi, masterApi, nursingApi } from '@/services'
+import { bloodApi, masterApi, nursingApi, staffingApi, suggestAssign } from '@/services'
+import { UDialog, USelect } from '@/components/ui'
+import { useAction } from '@/composables/useService'
+import { useAuth } from '@/stores/auth'
 import { useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
 
@@ -49,7 +52,37 @@ const { data, loading, reload } = useQuery(
   },
   [ward],
 )
-const patients = computed(() => (data.value?.w === ward.value ? data.value.list : undefined))
+const allPatients = computed(() => (data.value?.w === ward.value ? data.value.list : undefined))
+
+// ---------- 責任分床：這一班誰上班、病人分給誰；「我的病人」 ----------
+const auth = useAuth()
+const { data: asgData, reload: reloadAsg } = useQuery(async () => ({ w: ward.value, v: await staffingApi.getAssignments(ward.value) }), [ward, () => clock.value.slice(0, 13)])
+const asg = computed(() => (asgData.value?.w === ward.value ? asgData.value.v : undefined))
+const myCount = computed(() => (allPatients.value ?? []).filter((p) => p.nurseId === auth.user?.id).length)
+// 這一班有分到病人：預設只看自己的；可以切回全病房
+const mineOnly = ref(true)
+const showMine = computed(() => mineOnly.value && myCount.value > 0)
+const patients = computed(() => (showMine.value ? allPatients.value?.filter((p) => p.nurseId === auth.user?.id) : allPatients.value))
+const taskScope = computed(() => (showMine.value ? (allPatients.value ?? []).filter((p) => p.nurseId === auth.user?.id).map((p) => p.id) : undefined))
+const asgOpen = ref(false)
+const asgMap = ref<Record<string, string | number | undefined>>({})
+function openAsg() {
+  asgMap.value = Object.fromEntries((asg.value?.patients ?? []).map((p) => [p.admissionId, p.nurseId ?? '']))
+  asgAct.fieldErrors.value = {}
+  asgOpen.value = true
+}
+function autoAsg() {
+  const s = suggestAssign((asg.value?.patients ?? []).map((p) => p.admissionId), (asg.value?.nurses ?? []).map((n) => n.id))
+  asgMap.value = { ...asgMap.value, ...s }
+}
+const asgAct = useAction(staffingApi.assignPatients, { success: '已分床' })
+async function submitAsg() {
+  if (await asgAct.run(ward.value, Object.fromEntries(Object.entries(asgMap.value).map(([k, v]) => [k, String(v ?? '')])))) {
+    asgOpen.value = false
+    reloadAsg()
+    reload()
+  }
+}
 // 逾時數由服務層依「查詢當下」計算，每分鐘重新查一次
 let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => (timer = setInterval(reload, 60_000)))
@@ -58,9 +91,9 @@ onBeforeUnmount(() => clearInterval(timer))
 const admissionId = ref<string | undefined>(typeof useRoute().query.admission === 'string' ? String(useRoute().query.admission) : undefined)
 const wristbandOpen = ref(false)
 useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
-const adm = computed(() => patients.value?.find((p) => p.id === admissionId.value))
+const adm = computed(() => allPatients.value?.find((p) => p.id === admissionId.value))
 // 換病房或病人出院後，取消選取
-watch(patients, (list) => {
+watch(allPatients, (list) => {
   if (list && admissionId.value && !list.some((p) => p.id === admissionId.value)) admissionId.value = undefined
 })
 
@@ -77,7 +110,7 @@ const tabs = computed(() =>
         { key: 'tasks', label: '本班待辦' },
         { key: 'stock', label: '常備點班' },
         { key: 'scan', label: '給藥掃描' },
-        { key: 'isoward', label: '隔離與 DNR', count: (patients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
+        { key: 'isoward', label: '隔離與 DNR', count: (allPatients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
         { key: 'lineward', label: '品質指標' },
         { key: 'handover', label: '交班' },
       ]
@@ -116,9 +149,9 @@ function openTask(id: string, t: string) {
 }
 
 const wardTotals = computed(() => ({
-  overdue: (patients.value ?? []).reduce((s, p) => s + p.overdueCount, 0),
-  stat: (patients.value ?? []).reduce((s, p) => s + p.pendingStatCount, 0),
-  unacked: (patients.value ?? []).reduce((s, p) => s + p.unackedCount, 0),
+  overdue: (allPatients.value ?? []).reduce((s, p) => s + p.overdueCount, 0),
+  stat: (allPatients.value ?? []).reduce((s, p) => s + p.pendingStatCount, 0),
+  unacked: (allPatients.value ?? []).reduce((s, p) => s + p.unackedCount, 0),
 }))
 </script>
 
@@ -140,13 +173,27 @@ const wardTotals = computed(() => ({
       <UBadge v-if="wardTotals.unacked" tone="cyan">待核對醫囑 {{ wardTotals.unacked }}</UBadge>
       <span class="tabular ml-auto text-sm text-slate-500">現在 {{ clock.slice(11) }}</span>
     </div>
+    <!-- 這一班的人力與分床 -->
+    <div v-if="asg && ward !== masterApi.staticCodes.obsWard" class="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">
+      <span class="font-medium text-slate-700">{{ asg.shift }}</span>
+      <span class="text-slate-600">{{ asg.nurses.map((n) => `${n.name}${n.count ? `（${n.count}）` : ''}`).join('、') || '沒有排護理師' }}</span>
+      <span :class="['tabular text-xs', asg.ratio.over ? 'font-semibold text-red-700' : 'text-slate-500']">護病比 {{ asg.ratio.text }}</span>
+      <span v-if="asg.patients.some((p) => !p.nurseId)" class="text-xs text-amber-800">未分床 {{ asg.patients.filter((p) => !p.nurseId).length }} 位</span>
+      <span class="ml-auto flex gap-1.5">
+        <template v-if="myCount">
+          <UButton size="sm" :variant="showMine ? 'primary' : 'secondary'" @click="mineOnly = true">我的病人 {{ myCount }}</UButton>
+          <UButton size="sm" :variant="!showMine ? 'primary' : 'secondary'" @click="mineOnly = false">全病房 {{ allPatients?.length ?? 0 }}</UButton>
+        </template>
+        <UButton v-if="asg.canAssign" size="sm" variant="secondary" @click="openAsg">分床</UButton>
+      </span>
+    </div>
 
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-[19rem_1fr]">
       <!-- 病房病人 -->
       <UCard :padded="false" class="self-start">
         <template #title>
           <div class="text-sm font-semibold text-slate-800">{{ ward }}</div>
-          <div class="text-xs text-slate-500">住院中 {{ patients?.length ?? 0 }} 位</div>
+          <div class="text-xs text-slate-500">{{ showMine ? `我的病人 ${patients?.length ?? 0} 位（全病房 ${allPatients?.length ?? 0}）` : `住院中 ${patients?.length ?? 0} 位` }}</div>
         </template>
         <UQueryState :loading="loading && !patients" :ready="!!patients?.length" empty-title="這個病房目前沒有住院病人">
           <ul class="max-h-[calc(100vh-14rem)] divide-y divide-slate-100 overflow-y-auto">
@@ -155,8 +202,10 @@ const wardTotals = computed(() => ({
                 <div class="flex items-center gap-2">
                   <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ p.bed?.bedNo }}</span>
                   <span class="font-medium text-slate-800">{{ p.patientName }}</span>
+                  <!-- 責任護理師：自己的不寫（「我的病人」時每一列都是自己，只會擠壓姓名）；別人的寫名字、沒分的標「未分床」 -->
+                  <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
-                  <span class="ml-auto flex gap-1">
+                  <span class="ml-auto flex flex-wrap justify-end gap-1">
                     <UBadge v-if="p.overdueCount" tone="red">逾時 {{ p.overdueCount }}</UBadge>
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
@@ -176,7 +225,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
                   </span>
                 </div>
-                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<span v-if="p.lines.length" class="rounded bg-slate-100 px-1 text-slate-600" title="在身上的管路">{{ p.lines.join(' ') }}</span><span v-if="p.painScore !== undefined && p.painScore >= 4" class="font-medium text-red-700">疼痛 {{ p.painScore }}</span><RiskBadges :levels="p.riskLevels" compact /><PatientFlags :flags="p.flags" compact /></div>
+                <div class="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-slate-500"><span class="max-w-full truncate">{{ p.diagnosis }}・第 {{ p.days }} 天</span><span v-if="p.lines.length" class="rounded bg-slate-100 px-1 text-slate-600" title="在身上的管路">{{ p.lines.join(' ') }}</span><span v-if="p.painScore !== undefined && p.painScore >= 4" class="font-medium text-red-700">疼痛 {{ p.painScore }}</span><RiskBadges :levels="p.riskLevels" compact /><PatientFlags :flags="p.flags" compact /></div>
                 <div v-if="p.latestVitals" class="tabular mt-0.5 text-xs text-slate-500">
                   <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
                   {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
@@ -211,13 +260,13 @@ const wardTotals = computed(() => ({
         <UCard :padded="false">
           <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="tabs" /></div>
           <!-- 交班是病房層級，不必先選病人 -->
-          <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="patients ?? []" :selected-id="admissionId" :clock="clock" />
+          <HandoverPanel v-if="tab === 'handover'" :ward="ward" :patients="allPatients ?? []" :selected-id="admissionId" :clock="clock" />
           <!-- 沒選病人時顯示全病房的本班待辦（以前是空白的「請選擇病人」）；點一列跳到該病人的對應分頁 -->
           <WardStockPanel v-else-if="!adm && tab === 'stock'" :ward="ward" :clock="clock" />
           <ScanStatsPanel v-else-if="!adm && tab === 'scan'" :ward="ward" />
           <WardFlagsPanel v-else-if="!adm && tab === 'isoward'" :ward="ward" @open="openTask" />
           <WardLinesPanel v-else-if="!adm && tab === 'lineward'" :ward="ward" />
-          <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
+          <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" :only="taskScope" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
@@ -233,5 +282,23 @@ const wardTotals = computed(() => ({
         </UCard>
       </div>
     </div>
+    <UDialog v-model="asgOpen" :title="`分床：${ward} ${asg?.date ?? ''} ${asg?.shift ?? ''}`" @submit="submitAsg">
+      <div class="space-y-2 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-600">這班上班：{{ asg?.nurses.map((n) => n.name).join('、') || '沒有排護理師（請先排班）' }}</span>
+          <UButton v-if="asg?.nurses.length" class="ml-auto" size="sm" variant="secondary" @click="autoAsg">依床號平均分</UButton>
+        </div>
+        <div v-for="p in asg?.patients ?? []" :key="p.admissionId" class="flex items-center gap-2">
+          <span class="tabular w-14 text-slate-600">{{ p.bedNo }}</span>
+          <span class="w-20 truncate">{{ p.patientName }}</span>
+          <USelect v-model="asgMap[p.admissionId]" class="flex-1" :options="[{ label: '未分床', value: '' }, ...(asg?.nurses ?? []).map((n) => ({ label: n.name, value: n.id }))]" />
+        </div>
+        <p v-if="asgAct.fieldErrors.value.nurseId" class="text-xs text-red-600">{{ asgAct.fieldErrors.value.nurseId }}</p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="asgOpen = false">取消</UButton>
+        <UButton type="submit" :loading="asgAct.pending.value">儲存</UButton>
+      </template>
+    </UDialog>
   </div>
 </template>

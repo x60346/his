@@ -71,7 +71,7 @@ async function submit() {
               <div class="font-medium text-slate-800">{{ h.patientName }}</div>
               <div class="text-slate-600">{{ h.content }}</div>
             </div>
-            <div class="tabular shrink-0 text-right text-xs text-slate-500">{{ h.createdAt.slice(5).replace('-', '/') }}<br />{{ h.nurseName }}</div>
+            <div class="tabular shrink-0 text-right text-xs text-slate-500">{{ h.createdAt.slice(5).replace('-', '/') }}<br />{{ h.nurseName }}<template v-if="h.receiverName"><br />接班：{{ h.receiverName }}</template></div>
           </li>
         </ul>
       </section>
