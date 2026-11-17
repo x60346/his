@@ -6034,7 +6034,7 @@ try {
     // 帶菌者（CRE）：有沒隔離病人的房間、MRSA 同房都不行；整間空的、單人房可以
     const blkC = await A.bedBlocks(carrier.id)
     const occupiedRoom = (b) => db().beds.some((x) => x.id !== b.id && x.ward === b.ward && x.roomNo === b.roomNo && x.status === 'occupied')
-    const emptyMulti = db().beds.filter((b) => b.status === 'empty' && b.bedClass !== '單人房')
+    const emptyMulti = db().beds.filter((b) => b.status === 'empty' && b.bedClass !== '單人房' && b.ward !== '急診留觀區') // 留觀床另有規則（只給留觀病人）
     ok(blkC[mate.id]?.includes('MRSA') && emptyMulti.every((b) => !!blkC[b.id] === occupiedRoom(b)), 'CRE 帶菌者：有人住的房間（沒隔離或不同菌種）都不能排，整間空的可以')
     const single = db().beds.find((b) => b.status === 'empty' && b.bedClass === '單人房')
     await A.checkIn(carrier.id, single.id)
@@ -7141,6 +7141,154 @@ try {
     delete old.erCopayUrgent
     await api.adminApi.saveBillingSettings({ ...old, basicCopay: old.basicCopay })
     ok(db().billingSettings.ipdInterim?.days === 9 && db().billingSettings.erCopay === s0.erCopay, '存門診部分負擔：期中繳款提醒設定沒被洗掉；沒送的急診欄位沿用原值')
+  }
+
+  // 急診留觀：留觀＝特別的住院（急診留觀區 OB1–OB6、護理師排床、住院號與腕帶、沿用住院醫囑與護理）；結束時離院（批價含留觀期間的藥與檢驗）、
+  // 收住院（同一筆轉一般住院，不重新報到；急診費用併入住院帳單「急診」段）、轉院；超過 24 小時標紅、48 小時首頁待辦
+  console.log('\n[急診留觀]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.erApi
+    const A = api.admissionApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const N = { temp: 36.8, pulse: 80, resp: 16, sbp: 120, dbp: 75, spo2: 98 }
+    const OBS = '急診留觀區'
+
+    // 規則
+    ok(api.obsHours('2026-11-16 08:00', '2026-11-17 08:59') === 24 && api.erBillMode({ disposition: { kind: 'obs' } }) === 'obs-open' && api.erBillMode({ disposition: { kind: 'obs' }, obsEnd: { kind: 'admit' } }) === 'ipd' && api.erBillMode({ disposition: { kind: 'obs' }, obsEnd: { kind: 'home' } }) === 'opd' && api.erBillMode({ disposition: { kind: 'admit' } }) === 'ipd', '規則：留觀時數；留觀中不能結、收住院併入住院帳單、離院轉院在批價結')
+    ok(api.erStage('consulted', { disposition: { kind: 'obs' } }, { status: 'reserved' }) === 'obs-bed' && api.erStage('consulted', { disposition: { kind: 'obs' } }, { status: 'admitted' }) === 'obs' && api.erStage('consulted', { disposition: { kind: 'obs' }, obsEnd: { kind: 'admit' } }, { status: 'admitted', inObsBed: true }) === 'bed', '看板階段：待排留觀床 → 留觀中 → 收住院還在留觀床＝待床')
+
+    // 種子
+    await as('nurse01')
+    let board = await E.erBoard()
+    const so = board.items.find((i) => i.visitId === 'V-ER-OBS')
+    ok(so?.stage === 'obs' && so.obs.bedNo === 'OB1' && so.obs.long && !so.obs.overdue && board.obsBeds.length === 6 && board.obsBeds[0].patientName, `種子：留觀 OB1 ${so?.obs?.hours} 小時（超過 24 小時標紅、還沒到 48 小時）；留觀區 6 床`)
+    ok((await api.nursingApi.listWardPatients(OBS)).some((p) => p.id === 'A-ER-OBS'), '護理站選「急診留觀區」照住院流程照顧留觀病人')
+    let dash = await api.dashboardApi.getDashboard()
+    const totalBeds = db().beds.filter((b) => b.ward !== OBS).length
+    ok(dash.ipd.totalBeds === totalBeds && dash.ipd.admitted === db().admissions.filter((a) => a.status === 'admitted' && !a.obs).length, '首頁病床數、住院人數不含留觀')
+
+    // 決定留觀 → 排床
+    const busy = new Set([...db().visits.filter((v) => v.date === T || (v.er && v.status !== 'cancelled')).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
+    const [p1, p2] = db().patients.filter((p) => !busy.has(p.id) && p.defaultIdentity === '01' && !p.allergies.length)
+    const v1 = await E.triageAndRegister({ patientId: p1.id, complaint: '腹痛', vitals: N, level: 3 })
+    const v2 = await E.triageAndRegister({ patientId: p2.id, complaint: '頭暈', vitals: N, level: 3 })
+    await as('dr12')
+    const see = async (v) => {
+      const enc = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(enc.id, { subjective: v.er.complaint, objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'R10.9', name: '腹痛', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+    }
+    await see(v1)
+    await see(v2)
+    let it = await E.setDisposition(v1.id, { kind: 'obs', note: '觀察腹痛' })
+    const o1 = db().admissions.find((a) => a.id === it.admissionId)
+    ok(it.stage === 'obs-bed' && o1.obs?.visitId === v1.id && o1.status === 'reserved' && o1.doctorId === 'DR12' && o1.diagnosis === '腹痛' && o1.fromVisitId === v1.id, '決定留觀：建留觀住院（急診科、這位急診醫師、診斷帶主診斷），看板「待排留觀床」')
+    await E.setDisposition(v2.id, { kind: 'obs' })
+    await as('clerk01')
+    ok(!(await A.listAdmissions({ status: ['reserved'] })).some((a) => a.obs), '住院中心待報到不列留觀')
+    let msg = await errOf(() => A.checkIn(o1.id, db().beds.find((b) => b.ward !== OBS && b.status === 'empty').id))
+    ok(msg.includes('急診'), `住院中心不能幫留觀報到 → 「${msg}」`)
+    msg = await errOf(() => api.chargeApi.pay(v1.id, { payMethod: 'card' }))
+    ok(msg.includes('留觀中') && !(await api.chargeApi.listChargeQueue(T)).some((x) => x.id === v1.id), `留觀中不能批價、批價清單不列 → 「${msg}」`)
+    const normal = db().admissions.find((a) => a.status === 'reserved' && !a.obs)
+    msg = await errOf(() => A.checkIn(normal.id, 'BOB3'))
+    ok(msg.includes('只給急診留觀病人'), `一般住院不能排留觀床 → 「${msg}」`)
+    await as('nurse01')
+    ok((await api.dashboardApi.getDashboard()).erObsBed >= 2, '護理師首頁：急診待排留觀床')
+    msg = await errOf(() => E.assignObsBed(o1.id, db().beds.find((b) => b.ward !== OBS && b.status === 'empty').id))
+    ok(msg.includes('不是急診留觀床'), '留觀只能排留觀床')
+    msg = await errOf(() => E.assignObsBed(o1.id, 'BOB1'))
+    ok(msg.includes('無法使用'), '有人的留觀床不能排')
+    const a1 = await E.assignObsBed(o1.id, 'BOB2')
+    ok(a1.status === 'admitted' && a1.admitNo && a1.bed.bedNo === 'OB2' && a1.obsStage === 'open' && (await E.erBoard()).items.find((i) => i.visitId === v1.id).stage === 'obs', `排 OB2：住院號 ${a1.admitNo}、看板「留觀中」`)
+    await E.assignObsBed(db().admissions.find((a) => a.obs?.visitId === v2.id).id, 'BOB3')
+
+    // 留觀中：沿用住院醫囑（急診醫師開、護理師執行）；不能寫出院病摘、不能辦出院
+    await as('dr12')
+    const io = await api.ipdApi.addOrder({ admissionId: o1.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+    msg = await errOf(() => api.ipdApi.saveDischargeSummary(o1.id, { diagnosis: 'x', course: 'x', condition: 'x', followUp: 'x', dischargeType: '治癒出院' }, false))
+    ok(msg.includes('急診留觀'), `留觀不寫出院病摘 → 「${msg}」`)
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(io.id)
+    msg = await errOf(() => A.discharge(o1.id))
+    ok(msg.includes('結束留觀'), `留觀不能辦出院 → 「${msg}」`)
+
+    // 結束留觀：離院 → 批價含留觀期間的檢驗、觀察床費
+    await as('dr01')
+    msg = await errOf(() => E.endObservation(o1.id, { kind: 'home' }))
+    ok(msg.includes('急診醫師'), '結束留觀限急診醫師')
+    await as('dr12')
+    db().visits.find((v) => v.id === v1.id).er.arrivedAt = dateUtil.addMinutes(nowStr(), -13 * 60)
+    it = await E.endObservation(o1.id, { kind: 'home', note: '腹痛緩解' })
+    const o1b = db().admissions.find((a) => a.id === o1.id)
+    ok(it.stage === 'billing' && o1b.status === 'discharged' && o1b.obs.outcome === 'home' && db().beds.find((b) => b.id === 'BOB2').status === 'cleaning' && it.obs.endText.includes('離院'), `離院：留觀住院結束、OB2 清潔中、看板「待批價」（${it.obs.endText}）`)
+    msg = await errOf(() => E.endObservation(o1.id, { kind: 'home' }))
+    ok(msg.includes('已經結束'), '只能結束一次')
+    await as('clerk01')
+    ok((await api.chargeApi.listChargeQueue(T)).some((x) => x.id === v1.id), '結束留觀後出現在批價清單')
+    const pv = await api.chargeApi.previewCharge(v1.id)
+    ok(pv.lines.some((l) => l.name === '全套血液檢查 CBC（留觀）' || l.name.includes('（留觀）')) && pv.lines.find((l) => l.name.startsWith('急診觀察床費'))?.qty === 2 && pv.lines.some((l) => l.name.startsWith('急診部分負擔')), '批價：急診診察費、急診部分負擔＋留觀期間的檢驗（標留觀）、在急診 13 小時收 2 單位觀察床費')
+    await api.chargeApi.pay(v1.id, { payMethod: 'card' })
+    ok((await E.erBoard()).items.find((i) => i.visitId === v1.id).stage === 'left', '批價後：已離院')
+    await as('nurse01')
+    await E.cleanObsBed('BOB2')
+    ok(db().beds.find((b) => b.id === 'BOB2').status === 'empty', '護理師在急診看板按留觀床清潔完成')
+
+    // 結束留觀：收住院（一併轉床）→ 同一筆住院、住院號不變；急診費用併入住院帳單
+    const o2 = db().admissions.find((a) => a.obs?.visitId === v2.id)
+    const admitNo2 = o2.admitNo
+    const med = db().departments.find((x) => x.code === 'MED')
+    const medDoc = db().doctors.find((x) => x.deptId === med.id)
+    const wardBed = db().beds.find((b) => b.ward !== OBS && b.status === 'empty' && b.bedClass === '健保床')
+    await as('dr12')
+    const blocks = await A.bedBlocks(o2.id)
+    const after = await A.bedBlocks(o2.id, { afterObs: true })
+    ok(blocks[wardBed.id]?.includes('留觀') && !after[wardBed.id], '選床：留觀中標病房的床不能排；結束留觀收住院時可以選')
+    it = await E.endObservation(o2.id, { kind: 'admit', deptId: med.id, doctorId: medDoc.id, diagnosis: '眩暈待查', bedId: wardBed.id })
+    const o2b = db().admissions.find((a) => a.id === o2.id)
+    ok(it.stage === 'admitted' && o2b.status === 'admitted' && o2b.admitNo === admitNo2 && o2b.deptId === med.id && o2b.doctorId === medDoc.id && o2b.bedId === wardBed.id && o2b.attendingHistory?.at(-1)?.reason === '急診留觀收住院' && db().beds.find((b) => b.id === 'BOB3').status === 'cleaning', `收住院：同一筆住院（住院號 ${admitNo2} 不變）、改科別主治、轉到 ${wardBed.bedNo}、OB3 清潔中`)
+    await as('clerk01')
+    msg = await errOf(() => api.chargeApi.pay(v2.id, { payMethod: 'card' }))
+    ok(msg.includes('住院帳單') && !(await api.chargeApi.listChargeQueue(T)).some((x) => x.id === v2.id), `收住院：急診不在批價結 → 「${msg}」`)
+    const bill = (await api.ipdChargeApi.getIpdBill(o2.id)).bill
+    ok(bill.lines.some((l) => l.name === '急診：急診診察費') && bill.lines.some((l) => l.name.startsWith('急診：掛號費')) && !bill.lines.some((l) => l.name.includes('急診部分負擔')) && bill.meta.from === o2b.obs.endAt.slice(0, 10), '住院帳單：急診一段（急診診察費、掛號費；不收急診部分負擔），住院從結束留觀那天起算')
+    ok((await api.ipdChargeApi.listIpdBilling()).some((x) => x.admissionId === o2.id) && !(await api.ipdChargeApi.listIpdBilling()).some((x) => x.admissionId === o1.id), '住院結帳清單：留觀轉住院的列、留觀離院的不列')
+
+    // 直接收住院的急診也併入住院帳單
+    await as('nurse01')
+    const busy2 = new Set([...db().visits.filter((v) => v.date === T || v.er).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
+    const p3 = db().patients.find((p) => !busy2.has(p.id) && p.defaultIdentity === '01')
+    const v3 = await E.triageAndRegister({ patientId: p3.id, complaint: '胸痛', vitals: N, level: 2 })
+    await as('dr12')
+    await see(v3)
+    it = await E.setDisposition(v3.id, { kind: 'admit', deptId: med.id, doctorId: medDoc.id, diagnosis: '胸痛待查' })
+    await as('clerk01')
+    await A.checkIn(it.admissionId, db().beds.find((b) => b.ward !== OBS && b.status === 'empty').id)
+    msg = await errOf(() => api.chargeApi.pay(v3.id, { payMethod: 'card' }))
+    const bill3 = (await api.ipdChargeApi.getIpdBill(it.admissionId)).bill
+    ok(msg.includes('住院帳單') && bill3.lines.some((l) => l.name === '急診：急診診察費'), '直接收住院：急診費用一樣併入住院帳單')
+
+    // 種子那位：收住院不選床 → 留在留觀床「待床」→ 住院中心轉床
+    await as('dr12')
+    db().visits.find((v) => v.id === 'V-ER-OBS').er.disposition.at = dateUtil.addMinutes(nowStr(), -49 * 60)
+    ok((await api.dashboardApi.getDashboard()).erObsOverdue >= 1 && (await E.erBoard()).items.find((i) => i.visitId === 'V-ER-OBS').obs.overdue, '留觀超過 48 小時：急診醫師首頁待辦')
+    const surg = db().departments.find((x) => x.code === 'SUR')
+    const surgDoc = db().doctors.find((x) => x.deptId === surg.id)
+    it = await E.endObservation('A-ER-OBS', { kind: 'admit', deptId: surg.id, doctorId: surgDoc.id, diagnosis: '急性闌尾炎' })
+    ok(it.stage === 'bed' && db().admissions.find((a) => a.id === 'A-ER-OBS').bedId === 'BOB1' && (await api.dashboardApi.getDashboard()).erBed >= 1, '收住院沒選床：留在 OB1，看板「待床」')
+    await as('clerk01')
+    const av = await A.getAdmission('A-ER-OBS')
+    ok(av.obsStage === 'waiting-bed', '住院中心：標留觀收住院待轉床')
+    await A.transferBed('A-ER-OBS', db().beds.find((b) => b.ward !== OBS && b.status === 'empty').id)
+    ok((await E.erBoard()).items.find((i) => i.visitId === 'V-ER-OBS')?.stage === 'admitted' || !(await E.erBoard()).items.some((i) => i.visitId === 'V-ER-OBS' && i.stage !== 'admitted'), '轉到病房後：已住院')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

@@ -4,8 +4,10 @@ import type { Admission, Charge, ChargeLine, IpdBillMeta, IpdInterimRefund, IpdI
 import { db } from '@/mock/db'
 import { diffDays, now, today } from '@/utils/date'
 import { nextRefundNo } from './money'
-import { calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, summarize, type IpdBillInput } from './billing'
-import { find } from './views'
+import { calcChargeLines, calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, summarize, type IpdBillInput, type ObsItems } from './billing'
+import { billingLookup, find } from './views'
+import { erBillMode } from './er-rules'
+import { keptMedications } from './rx-rules'
 import { certFeeLines, certsOfAdmission } from './certificate-fee'
 import { isolatedDays } from './flag-work'
 import { bloodFeeItems } from './blood-work'
@@ -19,7 +21,8 @@ function bedSegments(a: Admission, from: string, to: string, days: number): IpdB
   const hist = a.bedHistory?.length ? a.bedHistory : a.bedId ? [{ bedId: a.bedId, from: a.admittedAt ?? from }] : []
   if (!hist.length) return [{ bedNo: '—', bedClass: '健保床', days, extraFee: 0 }]
   const segs = hist.map((h, i) => {
-    const start = (i === 0 ? from : h.from).slice(0, 10)
+    // 急診留觀轉住院：住院從結束留觀那天起算，留觀床那段併到起算日（觀察床費另依時數算在急診）
+    const start = (i === 0 || h.from < from ? from : h.from).slice(0, 10)
     const end = (hist[i + 1]?.from ?? to).slice(0, 10)
     const bed = find.bed(h.bedId)
     return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0, start, waivedDays: 0 }
@@ -80,6 +83,28 @@ function ordersDone(a: Admission): IpdBillInput['procedures'] {
     })
 }
 
+/** 急診留觀住院的藥與檢驗處置（離院、轉院時併進急診那次就醫在批價結） */
+export const obsItemsOf = (a: Admission): ObsItems => ({ drugs: drugsOf(a), procedures: proceduresOf(a) })
+
+/** 住院從哪一刻起算：急診留觀轉住院從結束留觀起算；其他從報到 */
+export const wardFromOf = (a: Admission) => (a.obs?.outcome === 'admit' && a.obs.endAt ? a.obs.endAt : a.admittedAt ?? a.reservedAt)
+
+/**
+ * 急診收住院（直接或留觀後）：急診那次就醫的費用併入住院帳單，名稱標「急診：」（帳單分一段「急診」）。
+ * 急診部分負擔、藥品部分負擔不收——健保點數一起算住院部分負擔；掛號費照收
+ */
+export function erLinesOf(a: Admission): ChargeLine[] {
+  const v = a.fromVisitId ? find.visit(a.fromVisitId) : undefined
+  if (!v?.er || erBillMode(v.er) !== 'ipd' || v.er.disposition?.admissionId !== a.id) return []
+  const e = find.encounterOfVisit(v.id)
+  if (!e) return []
+  // 急診開的藥退回藥局的扣掉（門診有收據時是走部分退費；這裡沒有收據，直接少算）
+  const kept = { ...e, medications: keptMedications(e.medications, db.dispenses.find((d) => d.visitId === v.id)) }
+  return calcChargeLines(v, kept, billingLookup(v.identityCode))
+    .filter((l) => l.kind !== 'copay-basic' && l.kind !== 'copay-drug')
+    .map((l) => ({ ...l, name: `急診：${l.name}` }))
+}
+
 export interface IpdBill {
   lines: ChargeLine[]
   meta: IpdBillMeta
@@ -91,7 +116,7 @@ export interface IpdBill {
 
 /** 這次住院到 to（預設今天）為止的帳單 */
 export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
-  const from = (a.admittedAt ?? a.reservedAt).slice(0, 10)
+  const from = wardFromOf(a).slice(0, 10)
   const p = find.patient(a.patientId)
   const identity = db.identities.find((x) => x.code === p?.defaultIdentity) ?? db.identities[0]
   const { lines: base, meta } = calcIpdChargeLines({
@@ -101,6 +126,7 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
     drugs: drugsOf(a),
     procedures: proceduresOf(a),
     copay: db.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
+    erLines: erLinesOf(a),
   })
   // 診斷證明書費（自費，不計入部分負擔）
   const lines = [...base, ...certFeeLines(certsOfAdmission(a.id))]

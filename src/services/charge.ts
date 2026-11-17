@@ -11,6 +11,8 @@ import { nextReceiptNo, nextRefundNo, pendingRefundOf, prepayAvailable, refundPa
 import { certFeeLines, certsOfEncounter } from './certificate-fee'
 import { consumeWitness, grantWitness, WITNESS_MIN, witnessFor } from './witness-core'
 import { buildDailyReport, REPORT_MAX_DAYS, type DailyReport } from './daily-report'
+import { obsItemsOf } from './ipd-bill'
+import { erBillMode } from './er-rules'
 
 export interface ChargeListItem extends VisitView {
   charge?: Charge
@@ -26,7 +28,8 @@ const pickupNoOf = (visitId: string) => db.dispenses.find((d) => d.visitId === v
 export function listChargeQueue(date: string): Promise<ChargeListItem[]> {
   return query(() =>
     db.visits
-      .filter((v) => v.date === date && ['consulted', 'charged', 'dispensed'].includes(v.status))
+      // 急診留觀跨日：依結束留觀那天列；留觀中、收住院（併入住院帳單）的不列
+      .filter((v) => (v.date === date || v.er?.obsEnd?.at.slice(0, 10) === date) && ['consulted', 'charged', 'dispensed'].includes(v.status) && erBillMode(v.er) === 'opd')
       .map((v) => ({
         ...visitView(v),
         charge: db.charges.find((c) => c.visitId === v.id && !c.voided),
@@ -63,7 +66,9 @@ function buildPreview(visitId: string, discountCode?: string): ChargePreview {
   const v = must(find.visit(visitId), '掛號紀錄')
   const e = must(find.encounterOfVisit(visitId), '病歷')
   // 診斷證明書費跟著這次看診收（自費項目，優免打折也適用）
-  const base = [...calcChargeLines(v, e, billingLookup(v.identityCode)), ...certFeeLines(certsOfEncounter(e.id))]
+  // 急診留觀後離院、轉院：留觀期間的藥與檢驗處置一起收
+  const obsAdm = v.er?.disposition?.kind === 'obs' && v.er.obsEnd ? find.admission(v.er.disposition.admissionId ?? '') : undefined
+  const base = [...calcChargeLines(v, e, billingLookup(v.identityCode), obsAdm ? obsItemsOf(obsAdm) : undefined), ...certFeeLines(certsOfEncounter(e.id))]
   const rule = discountCode ? usableDiscount(discountCode) : undefined
   const lines = rule ? applyDiscount(base, rule) : base
   const sum = summarize(lines)
@@ -236,6 +241,9 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
     const cashier = requirePermission('charge.pay')
     const v = must(find.visit(visitId), '掛號紀錄')
     if (v.status !== 'consulted') fail('此病人尚未完成看診或已批價', 'CONFLICT')
+    const mode = erBillMode(v.er)
+    if (mode === 'obs-open') fail('急診留觀中：急診醫師結束留觀後再批價（留觀期間的藥與檢驗一起算）', 'CONFLICT')
+    if (mode === 'ipd') fail('急診收住院：費用併入住院帳單，出院時在「住院結帳」一起結', 'CONFLICT')
     const e = must(find.encounterOfVisit(visitId), '病歷')
     const pv = buildPreview(visitId, input.discount?.code || undefined)
     const rule = input.discount?.code ? usableDiscount(input.discount.code) : undefined

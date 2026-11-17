@@ -1,6 +1,7 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
 import type { Admission, DeptTransfer, RiskLevel, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
+import { obsWard } from '@/mock/codes'
 import { db } from '@/mock/db'
 import { doseUnitOf } from './billing'
 import { ageOf, diffDays, today } from '@/utils/date'
@@ -260,6 +261,8 @@ export function visitView(v: Visit): VisitView {
 export interface AdmissionView extends Admission, PatientBrief {
   /** 從急診收住院（住院中心待報到清單標「急診」，優先安排床位） */
   fromEr: boolean
+  /** 急診留觀：open 留觀中（急診看板結束留觀）、waiting-bed 留觀後收住院、還在留觀床上（住院中心要轉床） */
+  obsStage?: 'open' | 'waiting-bed'
   /** 出院帶藥（給人看的一行一項：藥名、劑量、頻率、途徑、天數、總量）；dischargeRxStatus：pending 待藥局調劑、dispensed 已調劑 */
   dischargeMedTexts?: string[]
   dischargeRxStatus?: 'pending' | 'dispensed'
@@ -315,6 +318,7 @@ export function admissionView(a: Admission): AdmissionView {
     days: a.admittedAt ? diffDays(a.admittedAt, end) + 1 : 0,
     dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
     fromEr: !!(a.fromVisitId && find.visit(a.fromVisitId)?.er),
+    ...(a.obs && !a.obs.endAt ? { obsStage: 'open' as const } : a.obs?.outcome === 'admit' && a.status === 'admitted' && find.bed(a.bedId ?? '')?.ward === obsWard ? { obsStage: 'waiting-bed' as const } : {}),
     summaryDoctorName: a.dischargeSummary ? nameOf.doctor(a.dischargeSummary.doctorId) : undefined,
     ...(a.dischargeSummary?.meds?.length
       ? {

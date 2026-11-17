@@ -262,14 +262,24 @@ export interface TriageVitals {
 
 /** 急診去向：離院、收住院（連到住院預約）、轉院 */
 export interface ErDisposition {
-  kind: 'home' | 'admit' | 'transfer'
+  /** obs：留觀（建一筆「留觀住院」掛在急診留觀區，admissionId；結束時再決定 ErInfo.obsEnd） */
+  kind: 'home' | 'admit' | 'transfer' | 'obs'
   at: string
   by: string
   note?: string
   /** 轉院：哪一家 */
   hospital?: string
-  /** 收住院：住院預約 */
+  /** 收住院：住院預約；留觀：留觀住院 */
   admissionId?: string
+}
+
+/** 結束留觀（急診醫師）：離院、收住院（同一筆住院直接轉成一般住院，不重新報到）、轉院 */
+export interface ErObsEnd {
+  kind: 'home' | 'admit' | 'transfer'
+  at: string
+  by: string
+  note?: string
+  hospital?: string
 }
 
 /** 急診（就醫上的急診資料）：檢傷（護理師）、重新檢傷紀錄、去向（醫師） */
@@ -286,6 +296,8 @@ export interface ErInfo {
   /** 重新檢傷（等候中病情變化）：舊的留著 */
   history?: { level: TriageLevel; at: string; by: string; reason: string }[]
   disposition?: ErDisposition
+  /** 留觀結束（去向是留觀才有） */
+  obsEnd?: ErObsEnd
 }
 
 export interface Visit {
@@ -943,6 +955,11 @@ export interface Admission {
   dischargeRx?: { dispensedBy: string; dispensedAt: string; txnIds: string[] }
   /** 床位紀錄（報到、轉床、轉科換床各記一筆）：差額床費依住了幾天算。舊資料沒有，視為整段住目前的床 */
   bedHistory?: { bedId: string; from: string }[]
+  /**
+   * 急診留觀：特別的住院（急診科、急診醫師、急診留觀區的床），沿用住院醫囑、給藥、生命徵象、護理紀錄、腕帶。
+   * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院
+   */
+  obs?: { visitId: string; endAt?: string; outcome?: ErObsEnd['kind'] }
   /** 預約希望床等 */
   preferBedClass: Bed['bedClass']
   reason: string

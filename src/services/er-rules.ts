@@ -91,18 +91,42 @@ export function erObsBlocks(arrivedAt: string, endAt: string): number {
   return h >= 6 ? Math.floor(h / 6) : 0
 }
 
-export type ErStage = 'waiting' | 'seeing' | 'deciding' | 'billing' | 'bed' | 'admitted' | 'left'
-export const ER_STAGE_LABEL: Record<ErStage, string> = { waiting: '待看診', seeing: '看診中', deciding: '待決定去向', billing: '待批價', bed: '待床', admitted: '已住院', left: '已離院' }
+export type ErStage = 'waiting' | 'seeing' | 'deciding' | 'obs-bed' | 'obs' | 'billing' | 'bed' | 'admitted' | 'left'
+export const ER_STAGE_LABEL: Record<ErStage, string> = { waiting: '待看診', seeing: '看診中', deciding: '待決定去向', 'obs-bed': '待排留觀床', obs: '留觀中', billing: '待批價', bed: '待床', admitted: '已住院', left: '已離院' }
 
-/** 看板階段：看就醫狀態與去向（收住院再看住院預約報到了沒） */
-export function erStage(status: VisitStatus, er: Pick<ErInfo, 'disposition'>, admissionStatus?: string): ErStage {
+/**
+ * 看板階段：看就醫狀態與去向。收住院看住院報到了沒（留觀轉住院還在留觀床上＝待床）；
+ * 留觀看留觀住院排床了沒、結束了沒（結束後依結束的去向：離院、轉院要批價；收住院同上）
+ */
+export function erStage(status: VisitStatus, er: Pick<ErInfo, 'disposition' | 'obsEnd'>, adm?: { status: string; inObsBed?: boolean }): ErStage {
   if (status === 'registered') return 'waiting'
   if (status === 'in-consult') return 'seeing'
   const d = er.disposition
   if (!d) return status === 'consulted' ? 'deciding' : 'left'
-  if (d.kind === 'admit') return admissionStatus === 'admitted' || admissionStatus === 'discharged' ? 'admitted' : 'bed'
+  const admitted = (): ErStage => (adm && (adm.status === 'discharged' || (adm.status === 'admitted' && !adm.inObsBed)) ? 'admitted' : 'bed')
+  if (d.kind === 'obs') {
+    if (!er.obsEnd) return adm?.status === 'admitted' ? 'obs' : 'obs-bed'
+    if (er.obsEnd.kind === 'admit') return admitted()
+  } else if (d.kind === 'admit') return admitted()
   return status === 'consulted' ? 'billing' : 'left'
 }
 
-export const ER_DISPOSITION_LABEL: Record<NonNullable<ErInfo['disposition']>['kind'], string> = { home: '離院', admit: '收住院', transfer: '轉院' }
+export const ER_DISPOSITION_LABEL: Record<NonNullable<ErInfo['disposition']>['kind'], string> = { home: '離院', admit: '收住院', transfer: '轉院', obs: '留觀' }
+
+// ---------- 留觀 ----------
+/** 留觀超過幾小時看板標紅、超過幾小時列首頁待辦（急診醫師要決定去向） */
+export const OBS_LONG_HOURS = 24
+export const OBS_TODO_HOURS = 48
+/** 留觀了幾小時（從決定留觀起算，到結束或現在；無條件捨去） */
+export const obsHours = (from: string, to: string) => Math.max(0, Math.floor((Date.parse(to.replace(' ', 'T')) - Date.parse(from.replace(' ', 'T'))) / 3600000))
+/** 急診費用怎麼結：留觀中還不能結；收住院（直接或留觀後）併入住院帳單；其他（離院、轉院）在批價結 */
+export function erBillMode(er: Pick<ErInfo, 'disposition' | 'obsEnd'> | undefined): 'opd' | 'obs-open' | 'ipd' {
+  const d = er?.disposition
+  if (!d) return 'opd'
+  if (d.kind === 'admit') return 'ipd'
+  if (d.kind === 'obs') return !er!.obsEnd ? 'obs-open' : er!.obsEnd.kind === 'admit' ? 'ipd' : 'opd'
+  return 'opd'
+}
+/** 觀察床費算到什麼時候：留觀結束 → 決定去向 → 看完診 */
+export const erEndAt = (er: Pick<ErInfo, 'disposition' | 'obsEnd' | 'arrivedAt'>, completedAt?: string) => er.obsEnd?.at ?? er.disposition?.at ?? completedAt ?? er.arrivedAt
 export const ER_TRANSFER_HOSPITALS = ['區域醫學中心', '台大醫院', '榮民總醫院', '長庚紀念醫院']

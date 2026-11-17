@@ -7,6 +7,7 @@ import { failField, query, requirePermission } from './http'
 import { buildDailyReport, type DailyReport } from './daily-report'
 import { monthRange, shiftMonth } from './management-rules'
 import { nameOf } from './views'
+import { isObsBed } from './bed-work'
 
 const SEEN = new Set(['consulted', 'charged', 'dispensed'])
 
@@ -44,6 +45,9 @@ export interface MonthMetrics {
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10
+/** 病房的住院與床位：急診留觀不算住院（留觀轉住院的算；住院日從入院起算的簡化，見 README） */
+const wardAdmissions = () => db.admissions.filter((a) => !a.obs || a.obs.outcome === 'admit')
+const wardBeds = () => db.beds.filter((b) => !isObsBed(b)).length
 const inR = (at: string | undefined, from: string, to: string) => !!at && at.slice(0, 10) >= from && at.slice(0, 10) <= to
 
 function metricsOf(month: string, t: string): MonthMetrics {
@@ -51,7 +55,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
   const visits = db.visits.filter((v) => v.date >= from && v.date <= to)
   const seen = visits.filter((v) => SEEN.has(v.status))
   const charges = db.charges.filter((c) => inR(c.paidAt, from, to))
-  const stayed = (d: string) => db.admissions.filter((a) => a.admittedAt && a.admittedAt.slice(0, 10) <= d && (!a.dischargedAt || a.dischargedAt.slice(0, 10) > d) && a.status !== 'cancelled').length
+  const stayed = (d: string) => wardAdmissions().filter((a) => a.admittedAt && a.admittedAt.slice(0, 10) <= d && (!a.dischargedAt || a.dischargedAt.slice(0, 10) > d) && a.status !== 'cancelled').length
   let patientDays = 0
   for (let d = from; d <= to; d = addDays(d, 1)) patientDays += stayed(d)
   const hasData = visits.length > 0 || charges.length > 0 || patientDays > 0
@@ -61,8 +65,8 @@ function metricsOf(month: string, t: string): MonthMetrics {
   }
   if (!hasData) return empty
   const days = diffDays(from, to) + 1
-  const beds = db.beds.length
-  const disc = db.admissions.filter((a) => a.admittedAt && inR(a.dischargedAt, from, to))
+  const beds = wardBeds()
+  const disc = wardAdmissions().filter((a) => a.admittedAt && inR(a.dischargedAt, from, to))
   const rep = buildDailyReport(from, to, () => 0)
   const sumDept = (pred: (n: string) => boolean) => rep.byDept.filter((d) => pred(d.deptName)).reduce((n, d) => n + d.patientTotal, 0)
   const valid = charges.filter((c) => !c.voided || c.refund)
@@ -70,7 +74,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
   return {
     ...empty,
     opdVisits: seen.length, opdFirst: seen.filter((v) => v.firstVisit).length, opdRevisit: seen.filter((v) => !v.firstVisit).length,
-    admissions: db.admissions.filter((a) => inR(a.admittedAt, from, to)).length, discharges: disc.length, patientDays,
+    admissions: wardAdmissions().filter((a) => inR(a.admittedAt, from, to)).length, discharges: disc.length, patientDays,
     occupancy: beds ? round1((patientDays / (beds * days)) * 100) : null,
     alos: disc.length ? round1(disc.reduce((n, a) => n + Math.max(1, diffDays(a.admittedAt!.slice(0, 10), a.dischargedAt!.slice(0, 10))), 0) / disc.length) : null,
     collected: rep.collected,
@@ -127,7 +131,7 @@ export function managementReport(month: string): Promise<ManagementReport> {
     }
     for (const d of dept.values()) d.share = visits.length ? round1((d.visits / visits.length) * 100) : 0
     const ipd = new Map<string, { deptName: string; admissions: number; discharges: number; patientDays: number }>()
-    for (const a of db.admissions.filter((x) => x.admittedAt && x.status !== 'cancelled')) {
+    for (const a of wardAdmissions().filter((x) => x.admittedAt && x.status !== 'cancelled')) {
       const row = ipd.get(a.deptId) ?? { deptName: nameOf.dept(a.deptId), admissions: 0, discharges: 0, patientDays: 0 }
       if (inR(a.admittedAt, from, to)) row.admissions++
       if (inR(a.dischargedAt, from, to)) row.discharges++
@@ -140,7 +144,7 @@ export function managementReport(month: string): Promise<ManagementReport> {
       return { month: m, hasData: x.hasData, opdVisits: x.opdVisits, collected: x.collected, occupancy: x.occupancy }
     })
     return {
-      month, from, to, partial, beds: db.beds.length, current,
+      month, from, to, partial, beds: wardBeds(), current,
       prev: metricsOf(shiftMonth(month, -1), t), lastYear: metricsOf(shiftMonth(month, -12), t),
       opdByDept: [...dept.values()].sort((a, b) => b.visits - a.visits),
       opdByDoctor: [...doc.values()].sort((a, b) => b.visits - a.visits),

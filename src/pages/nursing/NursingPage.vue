@@ -32,8 +32,10 @@ import { useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
 
 const clock = useNow()
-const wards = masterApi.staticCodes.wards
-const ward = ref(wards[0])
+// 急診留觀區照病房的方式照顧（給藥、生命徵象、護理紀錄）
+const wards = [...masterApi.staticCodes.wards, masterApi.staticCodes.obsWard]
+// 從急診看板點過來帶 ?ward=急診留觀區&admission=…
+const ward = ref(wards.includes(String(useRoute().query.ward)) ? String(useRoute().query.ward) : wards[0])
 
 const { data, loading, reload } = useQuery(
   async () => {
@@ -48,7 +50,7 @@ let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => (timer = setInterval(reload, 60_000)))
 onBeforeUnmount(() => clearInterval(timer))
 
-const admissionId = ref<string>()
+const admissionId = ref<string | undefined>(typeof useRoute().query.admission === 'string' ? String(useRoute().query.admission) : undefined)
 const wristbandOpen = ref(false)
 useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
 const adm = computed(() => patients.value?.find((p) => p.id === admissionId.value))
@@ -182,7 +184,9 @@ const wardTotals = computed(() => ({
           </PatientBanner>
           <WristbandDialog v-model="wristbandOpen" :admission-id="adm.id" />
           <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
-          <IpdFeeStrip :admission-id="adm.id" />
+          <!-- 留觀中不顯示住院費用：留觀結束才算（離院在批價、收住院併入住院帳單） -->
+          <IpdFeeStrip v-if="adm.obsStage !== 'open'" :admission-id="adm.id" />
+          <p v-else class="rounded-md bg-sky-50 px-3 py-1.5 text-xs text-sky-800">急診留觀：費用等急診醫師結束留觀後再算（離院在批價結、收住院併入住院帳單）</p>
           <!-- 醫師約好的出院後回診（有約才顯示）：出院衛教時提醒病人 -->
           <AfterDischargePanel :admission-id="adm.id" class="bg-white" />
         </template>

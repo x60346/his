@@ -2,7 +2,7 @@
 // 狀態：reserved →（報到）admitted →（出院）discharged；預約可取消為 cancelled。
 // 病床：empty → occupied（報到）→ cleaning（出院或轉出）→ empty（清潔完成）。
 import type { Admission, AdmissionStatus, Bed, BedStatus, DeptTransfer } from '@/types'
-import { db, nextCounter, newId } from '@/mock/db'
+import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
@@ -13,6 +13,7 @@ import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
 import { stopOrderRecord, addChartNote } from './order-ops'
 import { placementFor } from './flag-work'
+import { admitInto, bedStatusLabel, closeOrders, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -20,6 +21,8 @@ export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; p
       .filter(
         (a) =>
           (!q.status || q.status.includes(a.status)) &&
+          !(a.status === 'reserved' && a.obs) && // 待排留觀床的在急診看板，不在住院中心
+
           (!q.patientId || a.patientId === q.patientId) &&
           (!q.ward || (a.bedId && find.bed(a.bedId)?.ward === q.ward)),
       )
@@ -53,14 +56,16 @@ export function listBeds(ward?: string): Promise<BedView[]> {
  * 選床畫面用：這筆住院（報到、轉床、轉科）哪些空床不能排、為什麼（依隔離；和 takeBed 同一個判斷）。
  * 只列空床與保留給這筆住院的床
  */
-export function bedBlocks(admissionId: string): Promise<Record<string, string>> {
+export function bedBlocks(admissionId: string, opts: { afterObs?: boolean } = {}): Promise<Record<string, string>> {
   return query(() => {
     requireUser()
     const a = must(find.admission(admissionId), '住院紀錄')
     const out: Record<string, string> = {}
+    // afterObs：急診醫師結束留觀、收住院時一併選病房的床（那時已不是留觀中）
+    const as = opts.afterObs && a.obs ? { obs: { ...a.obs, endAt: 'x' } } : a
     for (const b of db.beds) {
       if (b.status !== 'empty' && !(b.status === 'reserved' && b.reservedFor === a.id)) continue
-      const p = placementFor(a.patientId, b)
+      const p = obsPlacementProblem(as, b) ?? placementFor(a.patientId, b)
       if (p) out[b.id] = p
     }
     return out
@@ -98,43 +103,7 @@ export function cancelReservation(id: string): Promise<Admission> {
   })
 }
 
-function takeBed(bedId: string, admissionId: string): Bed {
-  const bed = must(find.bed(bedId), '病床')
-  // 保留給這位病人的床可以直接用（保留就是為了這一刻）；保留給別人的不行
-  const mine = bed.status === 'reserved' && bed.reservedFor === admissionId
-  if (bed.status === 'reserved' && !mine) {
-    const forAdm = bed.reservedFor ? find.admission(bed.reservedFor) : undefined
-    fail(`${bed.bedNo} 已保留給${forAdm ? ` ${nameOf.patient(forAdm.patientId)}` : '其他病人'}`, 'CONFLICT')
-  }
-  if (bed.status !== 'empty' && !mine) fail(`${bed.bedNo} 目前無法使用（${bedStatusLabel[bed.status]}）`, 'CONFLICT')
-  // 隔離：空氣隔離只排單人房；同房的人隔離要完全一樣（報到、轉床、轉科選床都走這裡）
-  const pid = find.admission(admissionId)?.patientId
-  const problem = pid ? placementFor(pid, bed) : undefined
-  if (problem) fail(`${bed.bedNo} 不能排：${problem}`, 'CONFLICT')
-  bed.status = 'occupied'
-  bed.admissionId = admissionId
-  delete bed.reservedFor
-  return bed
-}
-
-/** 這筆住院不再需要保留床（預約取消、或報到在別床）：保留的床放回空床，免得一直佔著沒人用 */
-function releaseReservedBeds(admissionId: string): void {
-  for (const b of db.beds.filter((x) => x.status === 'reserved' && x.reservedFor === admissionId)) {
-    b.status = 'empty'
-    delete b.reservedFor
-    audit('取消保留床位', `${b.bedNo}（${nameOf.patient(find.admission(admissionId)?.patientId)}）`)
-  }
-}
-
-function releaseBed(bedId?: string): void {
-  if (!bedId) return
-  const bed = find.bed(bedId)
-  if (!bed) return
-  bed.status = 'cleaning'
-  bed.admissionId = undefined
-}
-
-export const bedStatusLabel: Record<BedStatus, string> = { empty: '空床', occupied: '使用中', reserved: '保留', cleaning: '清潔中' }
+export { bedStatusLabel }
 
 /** 報到：配床、產生住院號 */
 export function checkIn(admissionId: string, bedId: string): Promise<AdmissionView> {
@@ -142,14 +111,8 @@ export function checkIn(admissionId: string, bedId: string): Promise<AdmissionVi
     requirePermission('admission.desk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'reserved') fail('此住院紀錄不是預約狀態', 'CONFLICT')
-    const bed = takeBed(bedId, a.id)
-    releaseReservedBeds(a.id) // 有保留床卻報到在別床：保留的那床放回空床
-    const t = now()
-    a.status = 'admitted'
-    a.bedId = bed.id
-    a.admittedAt = t
-    a.bedHistory = [{ bedId: bed.id, from: t }]
-    a.admitNo = `I${t.slice(2, 10).replace(/-/g, '')}${String(nextCounter('admitNo')).padStart(3, '0')}`
+    if (a.obs) fail('急診留觀由急診護理師在「急診」看板排留觀床', 'CONFLICT')
+    const bed = admitInto(a, bedId, now())
     audit('住院報到', `${a.admitNo} ${find.patient(a.patientId)?.name} → ${bed.bedNo}`)
     return admissionView(a)
   })
@@ -270,6 +233,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const u = requireUser('nurse', 'clerk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以辦理出院', 'CONFLICT')
+    if (obsOpen(a)) fail('急診留觀中：請急診醫師在「急診」看板結束留觀（離院、收住院、轉院）', 'CONFLICT')
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
     if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
@@ -288,15 +252,8 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     if (now0.patientTotal !== paid!.patientTotal || now0.nhiPoints !== paid!.nhiPoints) {
       fail(`結帳後費用有變動（收據 ${paid!.patientTotal} 元，現在 ${now0.patientTotal} 元）：請櫃台作廢後重新結帳`, 'CONFLICT')
     }
-    for (const o of db.ipdOrders.filter((o) => o.admissionId === a.id && o.status === 'active')) {
-      o.status = 'stopped'
-      o.stopAt = t
-    }
     // 逾時沒給的：保留紀錄，標為暫停並寫明原因；還沒到時間的：只是排程，取消即可
-    for (const m of db.mar.filter((m) => m.admissionId === a.id && m.status === 'pending' && m.scheduledAt < t)) {
-      Object.assign(m, { status: 'held', note: '出院時未給藥', executedAt: t, nurseId: u.id })
-    }
-    db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
+    closeOrders(a, u.id, t, '出院時未給藥')
     // 配好還在血庫的血袋：釋出給別人用（備血單照留，交叉試驗照樣計費）
     for (const r of db.bloodRequests.filter((x) => x.admissionId === a.id && !x.cancelled)) releaseAll(r, u.id, '病人出院', t)
     // 還沒進手術室的手術（待排程、已排程）：取消，手術房的時段空出來
@@ -322,7 +279,7 @@ export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied
       if (!reservedFor) failField('reservedFor', '請選擇要保留給哪一位待報到的病人')
       const a = must(find.admission(reservedFor!), '住院預約')
       if (a.status !== 'reserved') fail('只能保留給待報到的病人', 'CONFLICT')
-      const problem = placementFor(a.patientId, bed)
+      const problem = obsPlacementProblem(a, bed) ?? placementFor(a.patientId, bed)
       if (problem) fail(`${bed.bedNo} 不能保留給 ${nameOf.patient(a.patientId)}：${problem}`, 'CONFLICT')
       bed.reservedFor = a.id
       audit('保留床位', `${bed.bedNo} → ${nameOf.patient(a.patientId)}`)

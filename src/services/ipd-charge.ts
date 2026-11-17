@@ -40,7 +40,7 @@ export function listIpdBilling(): Promise<IpdBillingItem[]> {
     requireUser('clerk', 'admin')
     const t = today()
     return db.admissions
-      .filter((a) => a.status === 'admitted' || (a.status === 'discharged' && a.dischargedAt?.startsWith(t)))
+      .filter((a) => (!a.obs || a.obs.outcome === 'admit') && (a.status === 'admitted' || (a.status === 'discharged' && a.dischargedAt?.startsWith(t))))
       .map((a) => {
         const v = admissionView(a)
         const c = activeIpdChargeOf(a.id)

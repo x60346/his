@@ -676,6 +676,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       }
     }
   })
+  // 急診留觀區 OB1–OB6（健保床、每床一間：同房隔離規則不會互相牽連；放在最後，舊的「找一張空床」不會挑到它）
+  for (let n = 1; n <= codes.OBS_BEDS; n++) beds.push({ id: `BOB${n}`, ward: codes.obsWard, roomNo: `OB${n}`, bedNo: `OB${n}`, bedClass: '健保床', extraFee: 0, status: 'empty' })
 
   const admissions: Admission[] = []
   const ipdOrders: IpdOrder[] = []
@@ -705,7 +707,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const adultAt = (i: number) => patientRows[i][2] >= 18
   const ipdPatients = [...patients.slice(24).filter((_, k) => adultAt(24 + k)), patients[4], patients[11], patients[20]]
   const nurseIds = ['U201', 'U202']
-  const bedsByClass = (cls: Bed['bedClass']) => beds.filter((b) => b.bedClass === cls && b.status === 'empty')
+  const bedsByClass = (cls: Bed['bedClass']) => beds.filter((b) => b.bedClass === cls && b.status === 'empty' && b.ward !== codes.obsWard)
 
   const recentCut = addMinutes(nowStr, -90)
   const handovers: HandoverNote[] = []
@@ -1911,6 +1913,55 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           er: { arrivedAt: at, complaint: d.complaint, vitals: d.vitals, suggested: d.level, level: d.level, triagedBy: 'U201', triagedAt: at },
         })
       })
+      // 留觀示範：27 小時前因腹痛到院（3 級），看完診 1 小時後決定留觀、再 10 分鐘排 OB1——已留觀約 26 小時（看板標紅），還沒結束。
+      // 留觀住院（急診科、DR12）有護理與飲食醫囑、生命徵象、一筆護理紀錄；費用等結束留觀再算
+      const op = cands[4]
+      if (op) {
+        const at = addMinutes(nowStr, -27 * 60)
+        const date = at.slice(0, 10)
+        const osid = `ER-${date}`
+        if (!sessions.some((s) => s.id === osid)) sessions.push({ id: osid, date, period: 'ER', deptId: erDoc.deptId, doctorId: erDoc.id, roomNo: '100', limit: 9999 })
+        const decided = addMinutes(at, 90)
+        const placed = addMinutes(decided, 10)
+        const docUser = doctorUser(erDoc.id)
+        const v: Visit = {
+          id: 'V-ER-OBS', date, sessionId: osid, deptId: erDoc.deptId, doctorId: erDoc.id, patientId: op.id, seqNo: next(`seq:${osid}`), identityCode: op.defaultIdentity,
+          caseType: 'E1', cardSeq: String(next(`cardseq:${op.id}`)).padStart(4, '0'), status: 'consulted', firstVisit: false, preventItems: [], createdAt: at, checkedInAt: at, calledAt: addMinutes(at, 20),
+          er: {
+            arrivedAt: at, complaint: '腹痛', vitals: { temp: 37.9, pulse: 104, resp: 20, sbp: 126, dbp: 78, spo2: 97 }, suggested: 3, level: 3, triagedBy: 'U201', triagedAt: at,
+            disposition: { kind: 'obs', at: decided, by: docUser, admissionId: 'A-ER-OBS', note: '腹痛待觀察，排除闌尾炎' },
+          },
+        }
+        visits.push(v)
+        encounters.push({
+          id: 'E-ER-OBS', visitId: v.id, patientId: op.id, doctorId: erDoc.id, deptId: erDoc.deptId, date,
+          subjective: '上腹痛轉右下腹 6 小時，噁心、食慾差。', objective: '右下腹壓痛，無反彈痛；腸音減弱。', assessment: '腹痛，疑似早期闌尾炎', plan: '留觀，禁食、點滴，追蹤腹部理學檢查與白血球。',
+          vitals: { temp: 37.9, pulse: 104, sbp: 126, dbp: 78, spo2: 97 },
+          diagnoses: [{ icd: 'R10.9', name: '腹痛', primary: true }],
+          medications: [], procedures: [], refillTimes: 0, admissionRequested: false, status: 'completed', completedAt: addMinutes(at, 80),
+        })
+        const bed = beds.find((b) => b.id === 'BOB1')!
+        Object.assign(bed, { status: 'occupied', admissionId: 'A-ER-OBS' })
+        admissions.push({
+          id: 'A-ER-OBS', admitNo: `I${placed.slice(2, 10).replace(/-/g, '')}${String(next('admitNo')).padStart(3, '0')}`, patientId: op.id, fromVisitId: v.id, deptId: erDoc.deptId, doctorId: erDoc.id,
+          bedId: bed.id, bedHistory: [{ bedId: bed.id, from: placed }], preferBedClass: '健保床', reason: '急診留觀：腹痛待觀察，排除闌尾炎', diagnosis: '腹痛，疑似早期闌尾炎',
+          status: 'admitted', reservedAt: decided, expectedDate: date, admittedAt: placed, obs: { visitId: v.id },
+          wristband: { printedAt: placed, printedBy: 'U201', reprints: [] },
+        })
+        for (const [k, content, category] of [[1, '禁食', 'diet'], [2, 'Vital signs Q4H', 'nursing'], [3, '每 4 小時腹部理學檢查，疼痛加劇通知醫師', 'nursing']] as const) {
+          ipdOrders.push({ id: `IO-ER-OBS-${k}`, admissionId: 'A-ER-OBS', type: 'long', category, content, startAt: placed, status: 'active', doctorId: docUser, createdAt: placed, ackAt: addMinutes(placed, 5), ackBy: 'U201' })
+        }
+        for (let h = 0; addMinutes(placed, h * 240) <= nowStr; h++) {
+          const vt = addMinutes(placed, h * 240)
+          vitals.push({ id: `VS-ER-OBS-${h}`, admissionId: 'A-ER-OBS', at: vt, temp: h < 3 ? 37.8 : 37.3, pulse: h < 3 ? 100 : 88, resp: 18, sbp: 124, dbp: 76, spo2: 97, pain: h < 3 ? 5 : 3, nurseId: h % 2 ? 'U202' : 'U201' })
+        }
+        nursingNotes.push({ id: 'NN-ER-OBS', admissionId: 'A-ER-OBS', at: addMinutes(placed, 30), focus: '急性疼痛', data: '病人右下腹痛，疼痛 5 分，噁心。', action: '協助舒適臥位，依醫囑禁食、觀察腹部變化。', response: '病人表示疼痛可忍受。', nurseId: 'U201' })
+        // 留觀也做跌倒、壓傷入院評估（打點滴：跌倒中度）
+        for (const [scale, answers] of [['fall', { history: 0, secondary: 15, aid: 0, iv: 20, gait: 0, mental: 0 }], ['pressure', { sensory: 4, moisture: 4, activity: 3, mobility: 4, nutrition: 2, friction: 3 }]] as const) {
+          const score = riskScore(scale, answers).score
+          riskAssessments.push({ id: `RA-ER-OBS-${scale}`, admissionId: 'A-ER-OBS', scale, at: addMinutes(placed, 40), nurseId: 'U201', answers, score, level: riskLevel(scale, score), reason: 'admission' })
+        }
+      }
     }
   }
 

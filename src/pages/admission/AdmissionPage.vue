@@ -32,8 +32,9 @@ const doctorName = (id?: string) => doctors.value?.find((d) => d.id === id)?.nam
 
 const wards = masterApi.staticCodes.wards
 const ward = ref(wards[0])
+// 急診留觀區也看得到（留觀後收住院、還在留觀床上的要在這裡轉床；留觀床不能拿來報到）
 const wardTabs = computed(() =>
-  wards.map((w) => {
+  [...wards, masterApi.staticCodes.obsWard].map((w) => {
     const list = (beds.value ?? []).filter((b) => b.ward === w)
     return { key: w, label: w, count: list.filter((b) => b.status === 'empty').length }
   }),
@@ -53,6 +54,14 @@ const dueBadge = (d: string): { tone: 'red' | 'gray'; text: string } => {
   return late > 0 ? { tone: 'red', text: `逾期 ${late} 天` } : late === 0 ? { tone: 'red', text: '今日' } : { tone: 'gray', text: d.slice(5).replace('-', '/') }
 }
 // 急診收住院的排最前面（病人在急診等床）
+// 急診留觀後收住院、還在留觀床上：等病房的床（點「轉床」到病房）
+const obsWaiting = computed(() => (beds.value ?? []).filter((b) => b.ward === masterApi.staticCodes.obsWard && b.admission?.obs?.outcome === 'admit' && b.admission.status === 'admitted'))
+function transferFromObs(b: BedView) {
+  selectedBedId.value = b.id
+  ward.value = wards[0]
+  mode.value = 'transfer'
+  void admissionApi.getAdmission(b.admissionId!).then((a) => (target.value = a))
+}
 const sortedReservations = computed(() => [...(reservations.value ?? [])].sort((a, b) => Number(b.fromEr) - Number(a.fromEr) || a.expectedDate.localeCompare(b.expectedDate)))
 
 // ---------- 模式 ----------
@@ -245,6 +254,17 @@ const reserveOpen = ref(false)
           <p class="mb-3 text-sm text-slate-600">保留給 <b>{{ selectedBed.reservedForName ?? '（未指定）' }}</b>；該病人報到時可直接選這床，預約取消或報到在別床時自動解除保留。</p>
           <UButton size="sm" variant="secondary" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'empty')">取消保留</UButton>
         </template>
+      </UCard>
+
+      <UCard v-if="obsWaiting.length" title="急診留觀收住院・待轉床" :subtitle="`${obsWaiting.length} 位在留觀床上等病房的床`" :padded="false">
+        <ul class="divide-y divide-slate-100">
+          <li v-for="b in obsWaiting" :key="b.id" class="flex items-center gap-2 px-4 py-2 text-sm">
+            <UBadge tone="red">{{ b.bedNo }}</UBadge>
+            <span class="font-semibold text-slate-800">{{ b.patient?.patientName }}</span>
+            <span class="min-w-0 flex-1 truncate text-xs text-slate-500">{{ b.admission?.diagnosis }}・{{ doctorName(b.admission?.doctorId) }}</span>
+            <UButton size="sm" :icon="ArrowRightLeft" @click="transferFromObs(b)">轉床</UButton>
+          </li>
+        </ul>
       </UCard>
 
       <UCard title="待報到" :subtitle="`共 ${reservations?.length ?? 0} 位`" :padded="false">

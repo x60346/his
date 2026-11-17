@@ -19,6 +19,8 @@ import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
+import { erBillMode } from './er-rules'
+import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
   date: string
@@ -74,6 +76,9 @@ export interface DashboardStats {
   erOverdue: number
   erDeciding?: number
   erBed: number
+  /** 急診留觀：待排留觀床（護理師）、留觀超過 48 小時要決定去向（急診醫師） */
+  erObsBed: number
+  erObsOverdue?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -115,7 +120,7 @@ export function getDashboard(): Promise<DashboardStats> {
     const n = now()
     const visits = db.visits.filter((v) => v.date === t)
     const active = visits.filter((v) => v.status !== 'cancelled')
-    const count = (s: string) => visits.filter((v) => v.status === s).length
+    const count = (s: string) => visits.filter((v) => v.status === s && !(s === 'consulted' && erBillMode(v.er) !== 'opd')).length
     const charges = db.charges.filter((c) => !c.voided && c.paidAt.startsWith(t))
 
     const dept = new Map<string, number>()
@@ -141,10 +146,11 @@ export function getDashboard(): Promise<DashboardStats> {
           }
         : undefined,
       ipd: {
-        admitted: db.admissions.filter((a) => a.status === 'admitted').length,
+        admitted: db.admissions.filter((a) => a.status === 'admitted' && !obsOpen(a)).length,
         reservedToday: db.admissions.filter((a) => a.status === 'reserved' && a.expectedDate <= t).length,
-        emptyBeds: db.beds.filter((b) => b.status === 'empty').length,
-        totalBeds: db.beds.length,
+        // 急診留觀床不算病房床位
+        emptyBeds: db.beds.filter((b) => b.status === 'empty' && !isObsBed(b)).length,
+        totalBeds: db.beds.filter((b) => !isObsBed(b)).length,
         overdueMar: db.mar.filter((m) => m.status === 'pending' && m.scheduledAt < n).length,
       },
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
@@ -210,7 +216,7 @@ export function getDashboard(): Promise<DashboardStats> {
       ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount(), ...(({ work, urgent }) => ({ bloodWork: work, bloodUrgent: urgent }))(bloodLabCounts()) } : {}),
       transfusionTodo: transfusionTodoCount(now()),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
-      ...(({ waiting, overdue, deciding, bed }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding } : {}) }))(erCounts(now())),
+      ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
       ...(() => {
         const me = sessionUser()
         const role = sessionRole()

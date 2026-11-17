@@ -476,6 +476,9 @@ export const preventItems: PreventItem[] = [
 ]
 
 export const wards = ['5A 內科病房', '6B 外科病房', '7C 綜合病房']
+/** 急診留觀區：不是一般病房（住院中心報到不能排），只給急診留觀病人；護理站可以選它 */
+export const obsWard = '急診留觀區'
+export const OBS_BEDS = 6
 
 export const dischargeTypes = ['治癒出院', '改善出院', '轉院', '自動出院', '轉長照機構', '死亡']
 

@@ -4,6 +4,7 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ArrowRightLeft, Droplet, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
@@ -47,7 +48,8 @@ const myPatients = computed(() =>
   (admitted.value ?? []).filter((a) => !doctorFilter.value || a.doctorId === doctorFilter.value).sort((a, b) => (a.bed?.bedNo ?? '').localeCompare(b.bed?.bedNo ?? '')),
 )
 
-const admissionId = ref<string>()
+// 從急診看板點過來帶 ?admission=…（留觀病人）
+const admissionId = ref<string | undefined>(typeof useRoute().query.admission === 'string' ? String(useRoute().query.admission) : undefined)
 useRevealOnNarrow(admissionId) // 窄螢幕點選後把明細捲進畫面
 const adm = computed(() => admitted.value?.find((a) => a.id === admissionId.value))
 // 病人出院後從清單消失，取消選取

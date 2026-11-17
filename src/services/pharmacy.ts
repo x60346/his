@@ -15,6 +15,7 @@ import { dispenseBlocker, dispenseOpen, returnedQty, rxExpired, rxValidUntil } f
 import { consumeWitness, returnScrapRef, WITNESS_MIN, witnessFor } from './witness-core'
 import { effectiveTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
+import { erBillMode } from './er-rules'
 
 export interface DispenseItem {
   drugId: string
@@ -330,7 +331,9 @@ export function returnDispense(id: string, input: ReturnInput): Promise<Dispense
     const all = e.medications.every((m, i) => returnedQty(d, i) >= m.qty)
     if (all) {
       Object.assign(d, { status: 'returned', returnedBy: ph.id, returnedAt: t, returnReason: why })
-      must(find.visit(d.visitId), '掛號紀錄').status = 'charged'
+      const vv = must(find.visit(d.visitId), '掛號紀錄')
+      // 急診收住院的就醫沒有批價（費用在住院帳單），退完藥回到看完診的狀態
+      vv.status = erBillMode(vv.er) === 'ipd' ? 'consulted' : 'charged'
     }
     const what = ret.lines.map((x) => `${find.drug(e.medications[x.idx].drugId)?.name} ${x.qty}${x.scrap ? '（不可再用，報廢）' : ''}`).join('、')
     audit('門診退藥', `領藥號 ${d.pickupNo} ${find.patient(d.patientId)?.name}：${what}${all ? '（全部退完）' : ''}；${why}${witness ? `；覆核 ${witness.witnessName}` : ''}`)

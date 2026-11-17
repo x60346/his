@@ -3,23 +3,31 @@
 //   - 檢傷掛號（護理師）：找病人 → 主訴（常見主訴一鍵帶入）＋生命徵象 → 即時建議級數（和服務層同一個 suggestLevel）→ 選級數（比建議重要寫原因，不能比建議輕）
 //   - 看板：待看診依級數排、等候超過目標標紅；醫師在「門診看診」的急診診次看（依級數叫號）；看完後在這裡決定去向（離院、收住院、轉院）
 //   - 重新檢傷（候診中病情變化）；收住院的在看板標「待床」等了多久
+//   - 留觀＝特別的住院：醫師決定留觀 → 護理師排留觀床（OB1–OB6，產生住院號、印腕帶）→ 照住院流程開醫囑、給藥、護理（住院醫囑、護理站「急診留觀區」）
+//     → 急診醫師結束留觀（離院、收住院、轉院）；超過 24 小時標紅、48 小時首頁待辦
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { AlertTriangle, Siren, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
+import WristbandDialog from '@/components/WristbandDialog.vue'
 import {
-  ER_COMPLAINTS, ER_TRANSFER_HOSPITALS, erApi, masterApi, patientApi, suggestLevel, TRIAGE_LABEL, TRIAGE_LEVELS, TRIAGE_TARGET_MIN,
+  admissionApi, ER_COMPLAINTS, ER_TRANSFER_HOSPITALS, erApi, masterApi, OBS_LONG_HOURS, patientApi, suggestLevel, TRIAGE_LABEL, TRIAGE_LEVELS, TRIAGE_TARGET_MIN,
   type ErBoardItem,
 } from '@/services'
 import type { Patient, TriageLevel, TriageVitals } from '@/types'
 import { useAction, useDebounced, useQuery } from '@/composables/useService'
-import { ageText } from '@/utils/date'
+import { ageText, today } from '@/utils/date'
+// 今天的只顯示時刻；留觀跨日的帶日期
+const atText = (s: string) => (s.slice(0, 10) === today() ? s.slice(11) : s.slice(5))
 
 const router = useRouter()
 const { data: board, loading } = useQuery(() => erApi.erBoard())
 const LEVEL_CLASS: Record<number, string> = { 1: 'bg-red-600 text-white', 2: 'bg-orange-500 text-white', 3: 'bg-yellow-400 text-slate-900', 4: 'bg-emerald-500 text-white', 5: 'bg-sky-500 text-white' }
-const stageTone = (i: ErBoardItem) => (i.stage === 'waiting' ? (i.wait.overdue ? 'red' : 'yellow') : i.stage === 'seeing' ? 'blue' : i.stage === 'deciding' ? 'purple' : i.stage === 'bed' ? 'red' : 'gray')
+const stageTone = (i: ErBoardItem) =>
+  i.stage === 'waiting' ? (i.wait.overdue ? 'red' : 'yellow') : i.stage === 'seeing' ? 'blue' : i.stage === 'deciding' ? 'purple' : i.stage === 'bed' ? 'red'
+    : i.stage === 'obs-bed' ? 'yellow' : i.stage === 'obs' ? (i.obs?.long ? 'red' : 'blue') : 'gray'
+const OBS_BED_CLASS: Record<string, string> = { empty: 'border-emerald-300 bg-emerald-50 text-emerald-800', occupied: 'border-blue-300 bg-blue-50 text-blue-900', cleaning: 'border-slate-300 bg-slate-100 text-slate-600', reserved: 'border-amber-300 bg-amber-50 text-amber-800' }
 const active = computed(() => (board.value?.items ?? []).filter((i) => !['left', 'admitted'].includes(i.stage)))
 const done = computed(() => (board.value?.items ?? []).filter((i) => ['left', 'admitted'].includes(i.stage)))
 
@@ -72,7 +80,7 @@ async function submitRe() {
 // ---------- 去向 ----------
 const dis = ref<ErBoardItem>()
 const disOpen = computed({ get: () => !!dis.value, set: (x) => !x && (dis.value = undefined) })
-const disForm = reactive({ kind: 'home' as 'home' | 'admit' | 'transfer', note: '', hospital: '', deptId: '' as string | number | undefined, doctorId: '' as string | number | undefined, diagnosis: '' })
+const disForm = reactive({ kind: 'home' as 'home' | 'admit' | 'transfer' | 'obs', note: '', hospital: '', deptId: '' as string | number | undefined, doctorId: '' as string | number | undefined, diagnosis: '' })
 function openDis(i: ErBoardItem) {
   Object.assign(disForm, { kind: 'home', note: '', hospital: '', deptId: '', doctorId: '', diagnosis: '' })
   disAct.fieldErrors.value = {}
@@ -88,17 +96,76 @@ async function submitDis() {
   const ok = await disAct.run(dis.value.visitId, { kind: disForm.kind, note: disForm.note, hospital: disForm.hospital, deptId: String(disForm.deptId ?? ''), doctorId: String(disForm.doctorId ?? ''), diagnosis: disForm.diagnosis })
   if (ok) dis.value = undefined
 }
+
+// ---------- 留觀：排床（護理師）、清潔完成、腕帶 ----------
+const bedFor = ref<ErBoardItem>()
+const bedOpen = computed({ get: () => !!bedFor.value, set: (x) => !x && (bedFor.value = undefined) })
+const bedPick = ref('')
+const emptyObsBeds = computed(() => (board.value?.obsBeds ?? []).filter((b) => b.status === 'empty'))
+function openBed(i: ErBoardItem) {
+  bedPick.value = emptyObsBeds.value[0]?.id ?? ''
+  bedFor.value = i
+}
+const wristbandFor = ref<string>()
+const wristbandOpen = ref(false)
+const assign = useAction(erApi.assignObsBed, { success: (a) => `${a.patientName} 已排 ${a.bed?.bedNo}，住院號 ${a.admitNo}` })
+async function submitBed() {
+  if (!bedFor.value?.admissionId || !bedPick.value) return
+  const a = await assign.run(bedFor.value.admissionId, bedPick.value)
+  if (a) {
+    bedFor.value = undefined
+    wristbandFor.value = a.id
+    wristbandOpen.value = true
+  }
+}
+const clean = useAction(erApi.cleanObsBed, { success: (b) => `${b.bedNo} 清潔完成` })
+
+// ---------- 結束留觀（急診醫師） ----------
+const endFor = ref<ErBoardItem>()
+const endOpen = computed({ get: () => !!endFor.value, set: (x) => !x && (endFor.value = undefined) })
+const endForm = reactive({ kind: 'home' as 'home' | 'admit' | 'transfer', note: '', hospital: '', deptId: '' as string | number | undefined, doctorId: '' as string | number | undefined, diagnosis: '', bedId: '' as string | number | undefined, confirm: false })
+function openEnd(i: ErBoardItem) {
+  Object.assign(endForm, { kind: 'home', note: '', hospital: '', deptId: '', doctorId: '', diagnosis: '', bedId: '', confirm: false })
+  endAct.fieldErrors.value = {}
+  endFor.value = i
+}
+const endDoctors = computed(() => (doctors.value ?? []).filter((d) => d.deptId === endForm.deptId).map((d) => ({ label: d.name, value: d.id })))
+// 收住院一併轉床：病房的空床（依隔離排不了的不列）；不選＝留在留觀床，住院中心「待轉床」
+const admitting = computed(() => !!endFor.value && endForm.kind === 'admit')
+const { data: allBeds } = useQuery(async () => (admitting.value ? admissionApi.listBeds() : []), [admitting])
+const { data: endBlocks } = useQuery(async () => (admitting.value && endFor.value?.admissionId ? admissionApi.bedBlocks(endFor.value.admissionId, { afterObs: true }) : ({} as Record<string, string>)), [admitting, () => endFor.value?.admissionId])
+const wardBedOptions = computed(() => [
+  { label: '先留在留觀床（住院中心再轉床）', value: '' },
+  ...(allBeds.value ?? []).filter((b) => b.status === 'empty' && b.ward !== masterApi.staticCodes.obsWard && !endBlocks.value?.[b.id]).map((b) => ({ label: `${b.ward} ${b.bedNo}（${b.bedClass}）`, value: b.id })),
+])
+const endAct = useAction(erApi.endObservation, { success: (i) => `${i.patientName}：${i.obs?.endText ?? '已結束留觀'}` })
+async function submitEnd() {
+  if (!endFor.value?.admissionId) return
+  const ok = await endAct.run(endFor.value.admissionId, {
+    kind: endForm.kind, note: endForm.note, hospital: endForm.hospital, deptId: String(endForm.deptId ?? ''), doctorId: String(endForm.doctorId ?? ''), diagnosis: endForm.diagnosis,
+    ...(endForm.bedId ? { bedId: String(endForm.bedId) } : {}), confirmUnfinished: endForm.confirm,
+  })
+  if (ok) endFor.value = undefined
+}
 </script>
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="急診" description="檢傷掛號、急診看板（依檢傷級數）、去向（離院、收住院、轉院）">
+    <UPageHeader title="急診" description="檢傷掛號、急診看板（依檢傷級數）、去向（離院、留觀、收住院、轉院）">
       <UButton v-if="board?.canTriage" :icon="Siren" @click="openTri">檢傷掛號</UButton>
       <UButton v-if="board?.canDispose" variant="secondary" :icon="Stethoscope" @click="router.push({ name: 'opd' })">到門診看診（急診診次）</UButton>
     </UPageHeader>
     <UQueryState :loading="loading && !board" :ready="!!board">
       <template v-if="board">
         <p class="text-xs text-slate-500">目標等候時間：{{ TRIAGE_LEVELS.map((l) => `${l} 級 ${TRIAGE_TARGET_MIN[l] ? `${TRIAGE_TARGET_MIN[l]} 分` : '立即'}`).join('・') }}。醫師在「門診看診」看急診病人（依級數叫號），看完回到這裡決定去向。</p>
+        <div class="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
+          <span class="font-medium text-slate-700">急診留觀區</span>
+          <span v-for="b in board.obsBeds" :key="b.id" :class="['inline-flex items-center gap-1 rounded border-2 px-2 py-0.5', OBS_BED_CLASS[b.status]]">
+            <b>{{ b.bedNo }}</b>{{ b.patientName ?? b.statusLabel }}
+            <button v-if="b.status === 'cleaning' && board.canTriage" type="button" class="ml-1 text-brand-700 underline" :disabled="clean.pending.value" @click="clean.run(b.id)">清潔完成</button>
+          </span>
+          <span class="text-slate-500">留觀超過 {{ OBS_LONG_HOURS }} 小時標紅</span>
+        </div>
         <p v-if="!active.length" class="rounded-md border border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-400">急診目前沒有病人</p>
         <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm">
           <li v-for="i in active" :key="i.visitId" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
@@ -111,16 +178,21 @@ async function submitDis() {
                 <PatientFlags :flags="i.flags" compact />
                 <span class="text-slate-700">{{ i.complaint }}</span>
               </div>
-              <div class="tabular text-xs text-slate-500">{{ i.vitalsText }}・到院 {{ i.arrivedAt.slice(11) }}・檢傷 {{ i.triagedByName }}<span v-if="i.reason" class="text-amber-800">・調整：{{ i.reason }}</span></div>
-              <div v-if="i.dispositionText" class="text-xs text-slate-600">去向：{{ i.dispositionText }}</div>
+              <div class="tabular text-xs text-slate-500">{{ i.vitalsText }}・到院 {{ atText(i.arrivedAt) }}・檢傷 {{ i.triagedByName }}<span v-if="i.reason" class="text-amber-800">・調整：{{ i.reason }}</span></div>
+              <div v-if="i.dispositionText" class="text-xs text-slate-600">去向：{{ i.dispositionText }}<template v-if="i.obs?.endText">；{{ i.obs.endText }}</template></div>
             </div>
-            <UBadge :tone="stageTone(i)">{{ i.stageLabel }}<template v-if="i.stage === 'bed'">・等 {{ i.bedWaitMinutes }} 分</template></UBadge>
+            <UBadge :tone="stageTone(i)">{{ i.stageLabel }}<template v-if="i.stage === 'bed'">・等 {{ i.bedWaitMinutes }} 分</template><template v-if="i.stage === 'obs'">・{{ i.obs?.bedNo }}</template></UBadge>
+            <span v-if="i.stage === 'obs' && i.obs" :class="['tabular whitespace-nowrap text-xs', i.obs.long ? 'font-semibold text-red-700' : 'text-slate-500']" :title="i.obs.overdue ? '超過 48 小時：請決定去向' : undefined">留觀 {{ i.obs.hours }} 小時</span>
             <span v-if="i.stage === 'waiting' || i.stage === 'seeing'" :class="['tabular whitespace-nowrap text-xs', i.wait.overdue ? 'font-semibold text-red-700' : 'text-slate-500']">
               {{ i.stage === 'waiting' ? '等' : '等了' }} {{ i.wait.minutes }} 分／目標 {{ i.wait.target || '立即' }}{{ i.wait.target ? ' 分' : '' }}
             </span>
             <span class="flex gap-1.5">
               <UButton v-if="board.canTriage && i.stage === 'waiting'" size="sm" variant="secondary" @click="openRe(i)">重新檢傷</UButton>
               <UButton v-if="board.canDispose && i.stage === 'deciding'" size="sm" @click="openDis(i)">決定去向</UButton>
+              <UButton v-if="board.canTriage && i.stage === 'obs-bed'" size="sm" @click="openBed(i)">排留觀床</UButton>
+              <UButton v-if="board.canTriage && i.stage === 'obs'" size="sm" variant="secondary" @click="router.push({ name: 'nursing', query: { ward: masterApi.staticCodes.obsWard, admission: i.admissionId } })">護理站</UButton>
+              <UButton v-if="board.canDispose && i.stage === 'obs'" size="sm" variant="secondary" @click="router.push({ name: 'ipd', query: { admission: i.admissionId } })">留觀醫囑</UButton>
+              <UButton v-if="board.canDispose && i.stage === 'obs'" size="sm" @click="openEnd(i)">結束留觀</UButton>
             </span>
           </li>
         </ul>
@@ -192,10 +264,64 @@ async function submitDis() {
       </template>
     </UDialog>
 
+    <UDialog v-model="bedOpen" :title="`排留觀床：${bedFor?.patientName ?? ''}`" size="sm" @submit="submitBed">
+      <div class="space-y-2 text-sm">
+        <p v-if="!emptyObsBeds.length" class="rounded bg-amber-50 px-2 py-1 text-amber-800">留觀床都滿了（或在清潔中）：清潔完成後再排。</p>
+        <div v-else class="flex flex-wrap gap-2">
+          <label v-for="b in emptyObsBeds" :key="b.id" :class="['cursor-pointer rounded-md border-2 px-3 py-1.5', bedPick === b.id ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
+            <input v-model="bedPick" type="radio" :value="b.id" class="sr-only" />{{ b.bedNo }}
+          </label>
+        </div>
+        <p class="text-xs text-slate-500">排床後產生住院號、印腕帶（給藥要掃）。</p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="bedOpen = false">取消</UButton>
+        <UButton type="submit" :disabled="!bedPick" :loading="assign.pending.value">排床</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="endOpen" :title="`結束留觀：${endFor?.patientName ?? ''}`" @submit="submitEnd">
+      <div v-if="endFor" class="space-y-3 text-sm">
+        <p class="text-slate-600">{{ endFor.obs?.bedNo }}・已留觀 {{ endFor.obs?.hours }} 小時</p>
+        <fieldset class="flex gap-4">
+          <label class="flex items-center gap-1.5"><input v-model="endForm.kind" type="radio" value="home" class="h-4 w-4 text-brand-600" />離院</label>
+          <label class="flex items-center gap-1.5"><input v-model="endForm.kind" type="radio" value="admit" class="h-4 w-4 text-brand-600" />收住院</label>
+          <label class="flex items-center gap-1.5"><input v-model="endForm.kind" type="radio" value="transfer" class="h-4 w-4 text-brand-600" />轉院</label>
+        </fieldset>
+        <template v-if="endForm.kind === 'admit'">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <USelect v-model="endForm.deptId" label="住院科別" required :options="inpatientDepts" placeholder="選擇科別" :error="endAct.fieldErrors.value.deptId" @update:model-value="endForm.doctorId = ''" />
+            <USelect v-model="endForm.doctorId" label="主治醫師" required :options="endDoctors" placeholder="選擇醫師" :error="endAct.fieldErrors.value.doctorId" />
+          </div>
+          <UInput v-model="endForm.diagnosis" label="入院診斷" required :error="endAct.fieldErrors.value.diagnosis" />
+          <USelect v-model="endForm.bedId" label="一併轉到病房的床" :options="wardBedOptions" />
+          <p class="text-xs text-slate-500">同一筆住院直接轉成一般住院：住院號、腕帶不變，留觀時開的醫囑延續（新主治可以停）。急診與留觀的費用併入住院帳單。</p>
+        </template>
+        <template v-else>
+          <template v-if="endForm.kind === 'transfer'">
+            <UInput v-model="endForm.hospital" label="轉往醫院" required :error="endAct.fieldErrors.value.hospital" />
+            <div class="flex flex-wrap gap-1.5"><button v-for="h in ER_TRANSFER_HOSPITALS" :key="h" type="button" class="rounded border border-slate-300 px-2 py-0.5 text-xs hover:bg-slate-100" @click="endForm.hospital = h">{{ h }}</button></div>
+          </template>
+          <p class="text-xs text-slate-500">醫囑停止、留觀床改清潔中；急診與留觀期間的藥、檢驗處置一起到批價結帳。</p>
+        </template>
+        <UInput v-model="endForm.note" :label="endForm.kind === 'transfer' ? '轉院原因' : '備註（選填）'" :required="endForm.kind === 'transfer'" :error="endAct.fieldErrors.value.note" />
+        <label v-if="endAct.fieldErrors.value.confirmUnfinished" class="flex items-start gap-2 rounded bg-amber-50 px-2 py-1.5 text-amber-900">
+          <input v-model="endForm.confirm" type="checkbox" class="mt-0.5 h-4 w-4" />{{ endAct.fieldErrors.value.confirmUnfinished }}（勾選後再按確定：逾時沒給的藥標「暫停」保留紀錄）
+        </label>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="endOpen = false">取消</UButton>
+        <UButton type="submit" :loading="endAct.pending.value">確定</UButton>
+      </template>
+    </UDialog>
+
+    <WristbandDialog v-model="wristbandOpen" :admission-id="wristbandFor" />
+
     <UDialog v-model="disOpen" :title="`決定去向：${dis?.patientName ?? ''}`" @submit="submitDis">
       <div v-if="dis" class="space-y-3 text-sm">
         <fieldset class="flex gap-4">
           <label class="flex items-center gap-1.5"><input v-model="disForm.kind" type="radio" value="home" class="h-4 w-4 text-brand-600" />離院</label>
+          <label class="flex items-center gap-1.5"><input v-model="disForm.kind" type="radio" value="obs" class="h-4 w-4 text-brand-600" />留觀</label>
           <label class="flex items-center gap-1.5"><input v-model="disForm.kind" type="radio" value="admit" class="h-4 w-4 text-brand-600" />收住院</label>
           <label class="flex items-center gap-1.5"><input v-model="disForm.kind" type="radio" value="transfer" class="h-4 w-4 text-brand-600" />轉院</label>
         </fieldset>
@@ -205,7 +331,11 @@ async function submitDis() {
             <USelect v-model="disForm.doctorId" label="主治醫師" required :options="deptDoctors" placeholder="選擇醫師" :error="disAct.fieldErrors.value.doctorId" />
           </div>
           <UInput v-model="disForm.diagnosis" label="入院診斷" required :error="disAct.fieldErrors.value.diagnosis" />
-          <p class="text-xs text-slate-500">建立今天的住院預約（標「急診」）；住院中心有床就報到，沒床在看板標「待床」。急診的費用照樣在批價結帳。</p>
+          <p class="text-xs text-slate-500">建立今天的住院預約（標「急診」）；住院中心有床就報到，沒床在看板標「待床」。急診的費用併入住院帳單（「急診」一段），不在批價結。</p>
+        </template>
+        <template v-if="disForm.kind === 'obs'">
+          <UInput v-model="disForm.diagnosis" label="留觀診斷（選填，空白用看診的主診斷）" />
+          <p class="text-xs text-slate-500">由你擔任留觀醫師；護理師排留觀床（OB1–OB6）後開始，在「住院醫囑」開醫囑、護理站「急診留觀區」給藥與記錄。結束時再決定離院、收住院（不重新報到）或轉院；費用在結束後一起算。</p>
         </template>
         <template v-if="disForm.kind === 'transfer'">
           <UInput v-model="disForm.hospital" label="轉往醫院" required :error="disAct.fieldErrors.value.hospital" />

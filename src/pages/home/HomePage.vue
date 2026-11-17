@@ -53,6 +53,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '急診待看診', count: s.value.erWaiting, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間` : '已檢傷、等醫師看的急診病人', route: 'er', icon: Siren, urgent: !!s.value.erOverdue },
     { roles: ['doctor'], label: '急診待看診', count: s.value.erDeciding !== undefined ? s.value.erWaiting : 0, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間（在門診看診的急診診次依級數叫號）` : '在門診看診的急診診次依檢傷級數叫號', route: 'opd', icon: Siren, urgent: !!s.value.erOverdue },
     { roles: ['doctor'], label: '急診待決定去向', count: s.value.erDeciding ?? 0, hint: '看完診的急診病人：離院、收住院或轉院（急診看板）', route: 'er', icon: Siren, urgent: true },
+    { roles: ['nurse'], label: '急診待排留觀床', count: s.value.erObsBed, hint: '急診醫師決定留觀：排留觀床（OB1–OB6）、印腕帶後開始留觀', route: 'er', icon: Siren, urgent: true },
+    { roles: ['doctor'], label: '急診留觀超過 48 小時', count: s.value.erObsOverdue ?? 0, hint: '留觀太久：請決定離院、收住院或轉院（急診看板「結束留觀」）', route: 'er', icon: Siren, urgent: true },
     { roles: ['clerk', 'nurse'], label: '急診收住院待床', count: s.value.erBed, hint: '急診醫師決定收住院、還沒報到：住院中心優先安排床位', route: 'admission', icon: Siren, urgent: true },
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },

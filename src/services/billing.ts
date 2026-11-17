@@ -13,7 +13,7 @@ import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Dr
 import { diffDays } from '@/utils/date'
 import { drugPriceOn } from './drug-rules'
 import { valueOn } from './dated-rules'
-import { erObsBlocks } from './er-rules'
+import { erEndAt, erObsBlocks } from './er-rules'
 
 // ---------- 某天的價格（依看診日） ----------
 export const COPAY_KEYS = ['basicCopay', 'basicCopayReferred', 'erCopayUrgent', 'erCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
@@ -95,7 +95,13 @@ export function fixedCharges(identity: Identity, caseType: string, lk: Pick<Bill
   return [regLine(identity, date), consultLine(identity, lk.procedure(CONSULT_PROC_ID), date), basicCopayLine(identity, caseType, copayOn(lk.settings, date), referred)].filter((l): l is ChargeLine => !!l)
 }
 
-export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup): ChargeLine[] {
+/** 急診留觀期間的藥與檢驗處置（留觀住院實際扣帳、做完的）：離院、轉院時跟急診一起在批價結；依扣帳或執行那天的價格 */
+export interface ObsItems {
+  drugs: { drug: Drug; qty: number; date: string }[]
+  procedures: { proc: Procedure; qty: number; date: string }[]
+}
+
+export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup, obs?: ObsItems): ChargeLine[] {
   const selfPayVisit = lk.identity.selfPay
   const lines: ChargeLine[] = []
 
@@ -109,7 +115,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     const consult = consultLine(lk.identity, lk.procedure(visit.er ? ER_CONSULT_PROC_ID : CONSULT_PROC_ID), date)
     if (consult) lines.push(consult)
     const obs = visit.er ? lk.procedure(ER_OBS_PROC_ID) : undefined
-    const blocks = visit.er ? erObsBlocks(visit.er.arrivedAt, visit.er.disposition?.at ?? enc.completedAt ?? visit.er.arrivedAt) : 0
+    const blocks = visit.er ? erObsBlocks(visit.er.arrivedAt, erEndAt(visit.er, enc.completedAt)) : 0
     if (obs && blocks) {
       const price = procPriceOn(obs, date)
       lines.push(lk.identity.selfPay ? { kind: 'self', name: `${obs.name}（自費）`, qty: blocks, unitPrice: price.selfPrice, amount: price.selfPrice * blocks, patientPay: true } : { kind: 'procedure', name: obs.name, qty: blocks, unitPrice: price.points, amount: price.points * blocks, patientPay: false })
@@ -128,6 +134,28 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
       const amount = round(price.nhiPrice * m.qty)
       nhiDrugTotal += amount
       lines.push({ kind: 'drug', name: d.name, qty: m.qty, unitPrice: price.nhiPrice, amount, patientPay: false })
+    }
+  }
+
+  // 留觀期間的藥（同藥同價合併；退回的負數抵掉），算進藥品部分負擔
+  if (obs) {
+    const merged: ChargeLine[] = []
+    for (const x of obs.drugs) {
+      if (!x.qty) continue
+      const price = drugPriceOn(x.drug, x.date.slice(0, 10))
+      const self = selfPayVisit
+      const l: ChargeLine = self ? { kind: 'self', name: `${x.drug.name}（留觀，自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: `${x.drug.name}（留觀）`, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false }
+      const same = merged.find((m) => m.name === l.name && m.unitPrice === l.unitPrice)
+      if (same) Object.assign(same, { qty: Math.round((same.qty + l.qty) * 100) / 100, amount: round(same.amount + l.amount) })
+      else merged.push(l)
+    }
+    for (const l of merged.filter((m) => m.qty > 0)) {
+      if (l.kind === 'drug') nhiDrugTotal += l.amount
+      lines.push(l)
+    }
+    for (const x of obs.procedures) {
+      const price = procPriceOn(x.proc, x.date.slice(0, 10))
+      lines.push(selfPayVisit || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（留觀，自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: `${x.proc.name}（留觀）`, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
     }
   }
 
@@ -303,6 +331,8 @@ export interface IpdBillInput {
   /** 已執行的檢驗、處置、影像 */
   procedures: { proc: Procedure; qty: number; date: string }[]
   copay: IpdCopaySettings
+  /** 急診收住院：急診那次就醫的費用（已標「急診：」），健保點數一起算住院部分負擔 */
+  erLines?: ChargeLine[]
 }
 
 /**
@@ -338,6 +368,7 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
     add(self || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: x.proc.name, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
   }
   for (let i = lines.length - 1; i >= 0; i--) if ((lines[i].kind === 'drug' || lines[i].kind === 'self') && lines[i].qty <= 0) lines.splice(i, 1)
+  lines.push(...(input.erLines ?? []))
   for (const b of input.beds) {
     // 隔離期間住單人房是病情需要：那幾天差額免收（列一行 0 元，看得出為什麼沒收）
     const waived = Math.min(b.days, b.waivedDays ?? 0)

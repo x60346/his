@@ -424,6 +424,7 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     const user = requireUser('doctor')
     const a = activeAdmission(admissionId)
     requireCare(user.doctorId, a, '寫出院病摘、准予出院', { consult: false })
+    if (a.obs && !a.obs.endAt) fail('急診留觀不寫出院病摘：在「急診」看板結束留觀（離院、收住院、轉院）', 'CONFLICT')
     if (a.dischargeSummary?.signedAt) fail('已准予出院，要修改病摘請先取消准予出院', 'CONFLICT')
     if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
