@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2027,6 +2027,26 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 譫妄與約束（示範，不抽亂數）：住院中最年長（65 歲以上）的那位——上一班 CAM 陰性，3 小時前 CAM 陽性（夜間躁動、拉扯點滴，主治還沒確認）；
+  // 5 小時前主治開約束醫囑（雙手約束手套），最近一次查核在 2 小時 20 分前（查核逾時，本班待辦）
+  const deliriumAssessments: DeliriumAssessment[] = []
+  const restraints: Restraint[] = []
+  {
+    const ageAt = (pid: string) => { const p = patients.find((x) => x.id === pid)!; return Number(T.slice(0, 4)) - Number(p.birthDate.slice(0, 4)) }
+    const old = admissions.filter((a) => a.status === 'admitted' && a.admittedAt && !a.obs && ageAt(a.patientId) >= 66 && a.admittedAt < addMinutes(nowStr, -12 * 60)).sort((a, b) => ageAt(b.patientId) - ageAt(a.patientId))[0]
+    if (old) {
+      const docUser = users.find((u) => u.doctorId === old.doctorId)!.id
+      deliriumAssessments.push({ id: 'DL-SEED-1', admissionId: old.id, at: addMinutes(nowStr, -11 * 60), by: 'U202', acute: false, inattention: false, disorganized: false, consciousness: false, positive: false })
+      deliriumAssessments.push({ id: 'DL-SEED-2', admissionId: old.id, at: addMinutes(nowStr, -3 * 60), by: 'U201', acute: true, inattention: true, disorganized: true, consciousness: false, positive: true, note: '夜間躁動、拉扯點滴，對時間地點混亂' })
+      const st = addMinutes(nowStr, -5 * 60)
+      restraints.push({
+        id: 'RS-SEED-1', admissionId: old.id, reason: '自拔管路風險', sites: ['左手', '右手'], method: '約束手套', startedAt: st, startedBy: docUser, emergency: false,
+        orders: [{ by: docUser, at: st, until: addMinutes(st, 24 * 60) }],
+        checks: [{ at: addMinutes(nowStr, -260), by: 'U201', circulationOk: true, skinOk: true, stillNeeded: true }, { at: addMinutes(nowStr, -140), by: 'U201', circulationOk: true, skinOk: true, stillNeeded: true }],
+      })
+    }
+  }
+
   // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。
   // 挑「第一次掛號在最近 60 天內」、之前沒住過院的病人，第一次掛號標初診（今天最多 3 位、之前每週最多 2 位），
   // 建檔日改成那天（有更早的預防保健紀錄就改成那天：預防保健不用掛號）。和櫃台掛號時 booking.register 的判斷一樣（之前沒有任何掛號＝初診）
@@ -2112,6 +2132,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     nutritionAssessments,
     tubeFormulas: structuredClone(codes.tubeFormulas),
     tubeFeeds: [],
+    deliriumAssessments,
+    restraints,
     vitals,
     nursingNotes,
     progressNotes,

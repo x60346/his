@@ -24,6 +24,7 @@ import WardLinesPanel from './components/WardLinesPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import TubeFeedPanel from '@/components/TubeFeedPanel.vue'
+import SafetyPanel from '@/components/SafetyPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -77,7 +78,7 @@ const tabs = computed(() =>
         { key: 'stock', label: '常備點班' },
         { key: 'scan', label: '給藥掃描' },
         { key: 'isoward', label: '隔離與 DNR', count: (patients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
-        { key: 'lineward', label: '管路日' },
+        { key: 'lineward', label: '品質指標' },
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -86,6 +87,7 @@ const tabs = computed(() =>
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
+        { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
         ...(adm.value.tube ? [{ key: 'tube', label: '管灌', count: adm.value.tube.due + adm.value.tube.overdue || undefined }] : []),
         { key: 'nutrition', label: '營養', count: adm.value.nutritionDue && adm.value.nutritionDue !== 'todo' ? 1 : undefined },
         { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
@@ -164,6 +166,8 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.bloodTransfusing" :tone="p.bloodUrgency ? 'red' : 'purple'" :title="p.bloodUrgency ? '輸血中：該量 15 分鐘生命徵象（或已超過 4 小時）' : '輸血中'">輸血中</UBadge>
                     <UBadge v-else-if="p.bloodIssued" :tone="p.bloodUrgency === 'overdue' ? 'red' : 'yellow'" title="血庫已發血，請床邊雙人核對開始輸血">已發血</UBadge>
                     <UBadge v-if="p.painReassess === 'overdue'" tone="red" title="疼痛 ≥4 處置後 1 小時沒重評">疼痛重評逾時</UBadge>
+                    <UBadge v-if="p.restraint" :tone="p.restraint.check === 'overdue' || p.restraint.orderProblem ? 'red' : 'purple'" :title="p.restraint.check === 'overdue' ? '約束查核逾時' : p.restraint.orderProblem ? '約束醫囑待補或到期' : '約束中'">約束中</UBadge>
+                    <UBadge v-if="p.deliriumPositive" tone="red" title="最近一次 CAM 陽性">譫妄</UBadge>
                     <UBadge v-if="p.tube?.highResidual" tone="red" title="最近一次管灌反抽超過 200 ml">反抽過多</UBadge>
                     <UBadge v-else-if="p.tube?.overdue" tone="red" title="管灌該灌沒記">管灌逾時</UBadge>
                     <UBadge v-if="p.nutritionDue === 'overdue'" tone="red" title="入院 48 小時內要做營養篩檢">營養篩檢逾時</UBadge>
@@ -220,6 +224,7 @@ const wardTotals = computed(() => ({
           <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
           <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
           <TubeFeedPanel v-else-if="tab === 'tube'" :admission-id="adm.id" />
+          <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

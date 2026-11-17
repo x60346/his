@@ -7679,6 +7679,110 @@ try {
     void now0
   }
 
+  // 譫妄與約束：CAM 判定、誰要每班評、陽性主治確認；約束醫囑 24 小時、緊急約束 1 小時內補醫囑、每 2 小時查核、解除原因、出院解除；品質指標
+  console.log('\n[譫妄與約束]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.deliriumApi
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.camPositive({ acute: true, inattention: true, consciousness: true }) && !api.camPositive({ acute: true, disorganized: true, consciousness: true }) && !api.camPositive({ acute: true, inattention: true }), 'CAM：1＋2＋（3 或 4）才陽性')
+    ok(api.deliriumTarget(70, undefined, '2026-11-17 10:00') && api.deliriumTarget(40, '2026-11-15 10:00', '2026-11-17 10:00') && !api.deliriumTarget(40, '2026-11-13 10:00', '2026-11-17 10:00'), '65 歲以上、術後 72 小時內要每班評')
+    let st = api.restraintState({ startedAt: '2026-11-17 08:00', emergency: true, orders: [], checks: [] }, '2026-11-17 08:30')
+    ok(st.order === 'pending' && st.check === 'ok' && st.checkDueAt === '2026-11-17 10:00', '緊急約束：1 小時內等補醫囑；2 小時後查核')
+    st = api.restraintState({ startedAt: '2026-11-17 08:00', emergency: true, orders: [], checks: [] }, '2026-11-17 10:01')
+    ok(st.order === 'missing' && st.check === 'overdue', '超過 1 小時沒醫囑、超過 2 小時沒查核')
+    st = api.restraintState({ startedAt: '2026-11-16 08:00', emergency: false, orders: [{ at: '2026-11-16 08:00', until: '2026-11-17 08:00' }], checks: [{ at: '2026-11-17 07:50' }] }, '2026-11-17 09:00')
+    ok(st.order === 'expired' && st.check === 'ok' && st.hours === 25, '醫囑 24 小時到期')
+
+    // 種子
+    const seedR = db().restraints.find((r) => r.id === 'RS-SEED-1')
+    if (seedR) {
+      const a0 = db().admissions.find((a) => a.id === seedR.admissionId)
+      const ward = db().beds.find((b) => b.id === a0.bedId).ward
+      await as('nurse01')
+      const wp = (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === a0.id)
+      ok(wp.restraint?.check === 'overdue' && wp.deliriumPositive, '種子：約束查核逾時（清單標約束中）、譫妄陽性')
+      ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'restraint' && t.admissionId === a0.id && t.urgency === 'overdue') && (await api.dashboardApi.getDashboard()).restraintCheckOverdue >= 1, '本班待辦與護理師首頁：約束查核逾時')
+      await as(db().users.find((u) => u.doctorId === a0.doctorId).username)
+      ok((await api.dashboardApi.getDashboard()).deliriumPositive >= 1, '主治首頁：譫妄陽性待確認')
+    }
+
+    // CAM
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().restraints.some((r) => r.admissionId === x.id))
+    const docU = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(docU)
+    await expectError(() => D.saveDelirium(a.id, { acute: true, inattention: true, disorganized: true, consciousness: false }), '醫師做 CAM（護理師做）')
+    await as('nurse01')
+    let f = await fieldsOf(() => D.saveDelirium(a.id, { acute: true, inattention: true, disorganized: true, consciousness: false }))
+    ok(f.note, '陽性要寫觀察到的表現')
+    const pos = await D.saveDelirium(a.id, { acute: true, inattention: true, disorganized: false, consciousness: true, note: '嗜睡、叫醒後答非所問' })
+    ok(pos.positive, 'CAM 陽性')
+    const neg = await D.saveDelirium(a.id, { acute: true, inattention: false, disorganized: true, consciousness: true })
+    ok(!neg.positive, '沒有注意力不集中：陰性')
+    await expectError(() => D.ackDelirium(pos.id), '護理師確認譫妄')
+    await as(docU)
+    let msg = await errOf(() => D.ackDelirium(neg.id))
+    ok(msg.includes('陰性'), '陰性不用確認')
+    const ak = await D.ackDelirium(pos.id)
+    ok(ak.ackAt && ak.ackByName, '主治確認陽性')
+
+    // 約束：護理師緊急約束 → 醫師補醫囑 → 查核 → 解除
+    await as('nurse01')
+    f = await fieldsOf(() => D.startRestraint(a.id, { reason: '', sites: [], method: '' }))
+    ok(f.reason && f.sites && f.method, '原因、部位、方式一次標出')
+    let r = await D.startRestraint(a.id, { reason: '自拔管路風險', sites: ['左手', '右手'], method: '約束手套' })
+    ok(r.emergency && r.state.order === 'pending' && !r.orders.length, '護理師只能緊急約束：等醫師補醫囑')
+    msg = await errOf(() => D.startRestraint(a.id, { reason: 'x', sites: ['左腳'], method: '約束帶' }))
+    ok(msg.includes('已經在約束中'), '同時只有一筆約束')
+    // 1 小時沒補 → 醫師首頁、本班待辦
+    db().restraints.find((x) => x.id === r.id).startedAt = addMinutes(nowStr(), -70)
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'restraint' && t.text.includes('沒有醫囑')), '超過 1 小時沒醫囑：本班待辦')
+    await as(docU)
+    ok((await api.dashboardApi.getDashboard()).restraintOrder >= 1, '醫師首頁：約束醫囑待補')
+    r = await D.orderRestraint(r.id)
+    ok(r.state.order === 'ok' && r.orders.length === 1 && r.state.orderUntil > nowStr(), '醫師補醫囑：有效 24 小時')
+    await as('nurse01')
+    await expectError(() => D.orderRestraint(r.id), '護理師開約束醫囑')
+    f = await fieldsOf(() => D.checkRestraint(r.id, { circulationOk: false, skinOk: true, stillNeeded: true }))
+    ok(f.note, '末梢循環異常要寫處置')
+    r = await D.checkRestraint(r.id, { circulationOk: true, skinOk: true, stillNeeded: false })
+    ok(r.state.check === 'ok' && r.checks.length === 1 && r.state.checkDueAt > nowStr(), '查核後：下次 2 小時後')
+    f = await fieldsOf(() => D.endRestraint(r.id, ''))
+    ok(f.reason, '解除要選原因')
+    r = await D.endRestraint(r.id, '已不需要（意識清楚、配合）')
+    ok(r.endedAt && r.endReason.startsWith('已不需要'), '解除記原因')
+    msg = await errOf(() => D.checkRestraint(r.id, { circulationOk: true, skinOk: true, stillNeeded: true }))
+    ok(msg.includes('已經解除'), '解除後不能查核')
+    // 醫師直接開醫囑
+    await as(docU)
+    const r2 = await D.startRestraint(a.id, { reason: '跌倒風險（躁動下床）', sites: ['軀幹'], method: '約束背心' })
+    ok(!r2.emergency && r2.state.order === 'ok', '醫師開約束醫囑：不是緊急約束')
+
+    // 品質指標
+    await as('nurse01')
+    const q = await D.wardSafetyStats(ward, 30)
+    ok(q.restraints >= 2 && q.emergency >= 1 && q.restraintActive >= 1 && q.camCount >= 2 && q.camPositive >= 1 && q.camRate > 0, `品質指標：約束 ${q.restraints} 次（緊急 ${q.emergency}）、約束日 ${q.restraintDays}、CAM 陽性 ${q.camPositive}／${q.camCount}`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

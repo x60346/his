@@ -23,6 +23,8 @@ import { activeLines, lineTodosOf, painStateOf } from './line-work'
 import { lineKind, painActionProblem } from './line-rules'
 import { screenable, screenStateOf } from './nutrition-work'
 import { highResidual, tubeSlotsOf } from './tube-work'
+import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
+import { restraintState } from './delirium-rules'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -59,6 +61,11 @@ export interface WardPatient extends AdmissionView {
   nutritionRisk: boolean
   /** 管灌：有管灌醫囑；今天該灌沒記的（現在、逾時）；最近一次反抽過多 */
   tube?: { due: number; overdue: number; highResidual: boolean }
+  /** 譫妄：這一班要評還沒評、最近一次陽性 */
+  deliriumDue: boolean
+  deliriumPositive: boolean
+  /** 約束中：查核狀態、醫囑有沒有問題（緊急約束待補、沒補、到期） */
+  restraint?: { check: 'ok' | 'due' | 'overdue'; orderProblem: boolean }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -108,6 +115,12 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
           ...(() => {
+            const ds = deliriumStateOf(a, t)
+            const r = activeRestraints(a.id)[0]
+            const rs = r ? restraintState(r, t) : undefined
+            return { deliriumDue: !!ds.target && !ds.thisShift, deliriumPositive: ds.positive, ...(rs ? { restraint: { check: rs.check, orderProblem: rs.order !== 'ok' } } : {}) }
+          })(),
+          ...(() => {
             const tf = tubeSlotsOf(a.id, t)
             return tf.order ? { tube: { due: tf.slots.filter((x) => x.state === 'due').length, overdue: tf.slots.filter((x) => x.state === 'overdue').length, highResidual: !!highResidual(a.id) } } : {}
           })(),
@@ -130,7 +143,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -199,6 +212,11 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       // 管灌：該灌沒記的（前後 1 小時「現在」、超過「逾時」；連續灌食每班記一次）
       const tf = tubeSlotsOf(a.id, t)
       for (const x of tf.slots.filter((y) => y.state === 'due' || y.state === 'overdue')) tasks.push({ ...base, id: `tube-${a.id}-${x.slot}`, kind: 'tube', urgency: x.state as 'due' | 'overdue', at: x.slot, text: `管灌 ${x.ml} ml${tf.order!.diet.tube.mode === 'continuous' ? '（本班連續灌食量）' : ''}` })
+      // 約束：每 2 小時查核；醫囑待補、到期（醫師處理，護理站也列出來提醒）
+      for (const x of restraintTodosOf(a.id, t)) tasks.push({ ...base, id: `rs-${x.kind}-${x.restraintId}`, kind: 'restraint', urgency: x.urgency, at: x.at, text: x.text })
+      // 譫妄：65 歲以上、術後 72 小時內每班評一次 CAM
+      const ds = deliriumStateOf(a, t)
+      if (ds.target && !ds.thisShift) tasks.push({ ...base, id: `dl-${a.id}`, kind: 'delirium', urgency: 'todo', text: `譫妄評估 CAM（${ds.target}，每班）` })
       // 營養篩檢：入院 48 小時內（還早的列「待處理」、最後 6 小時「現在」、過了「逾時」）
       if (screenable(a)) {
         const nd = screenStateOf(a, t).due

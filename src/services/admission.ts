@@ -14,6 +14,7 @@ import { orderView, type OrderView } from './ipd'
 import { stopOrderRecord, addChartNote } from './order-ops'
 import { placementFor } from './flag-work'
 import { closeLines } from './line-work'
+import { closeRestraints } from './delirium-work'
 import { admitInto, bedStatusLabel, closeOrders, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
@@ -256,6 +257,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     // 逾時沒給的：保留紀錄，標為暫停並寫明原因；還沒到時間的：只是排程，取消即可
     closeOrders(a, u.id, t, '出院時未給藥')
     closeLines(a, u.id, t) // 還在身上的管路：記移除（原因「出院」）
+    closeRestraints(a, u.id, t)
     // 配好還在血庫的血袋：釋出給別人用（備血單照留，交叉試驗照樣計費）
     for (const r of db.bloodRequests.filter((x) => x.admissionId === a.id && !x.cancelled)) releaseAll(r, u.id, '病人出院', t)
     // 還沒進手術室的手術（待排程、已排程）：取消，手術房的時段空出來

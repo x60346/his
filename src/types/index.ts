@@ -1452,6 +1452,46 @@ export interface LineDevice {
   removeReason?: string
 }
 
+/**
+ * 譫妄評估（護理師，CAM）：急性發作或波動、注意力不集中，加上思考紊亂或意識改變其中一項＝陽性。
+ * 65 歲以上、術後 72 小時內每班一次；陽性主治要確認（ackAt）
+ */
+export interface DeliriumAssessment {
+  id: string
+  admissionId: string
+  at: string
+  by: string
+  acute: boolean
+  inattention: boolean
+  disorganized: boolean
+  consciousness: boolean
+  positive: boolean
+  note?: string
+  ackBy?: string
+  ackAt?: string
+}
+
+/**
+ * 身體約束：醫師開醫囑（原因、部位、方式，每次最長 24 小時，到期要續開）；緊急時護理師先約束（emergency），1 小時內補醫囑。
+ * 約束中每 2 小時查一次（末梢循環、皮膚、是否還需要）；解除寫原因
+ */
+export interface Restraint {
+  id: string
+  admissionId: string
+  reason: string
+  sites: string[]
+  method: string
+  startedAt: string
+  startedBy: string
+  emergency: boolean
+  /** 醫師醫囑（開立、續開）：每筆有效到 until */
+  orders: { by: string; at: string; until: string }[]
+  checks: { at: string; by: string; circulationOk: boolean; skinOk: boolean; stillNeeded: boolean; note?: string }[]
+  endedAt?: string
+  endedBy?: string
+  endReason?: string
+}
+
 /** 風險評估量表：fall＝跌倒（Morse）、pressure＝壓傷（Braden） */
 export type RiskScale = 'fall' | 'pressure'
 export type RiskLevel = 'high' | 'moderate' | 'low'

@@ -11,6 +11,7 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
+import SafetyPanel from '@/components/SafetyPanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -170,6 +171,7 @@ const tabs = computed(() => [
   { key: 'surgery', label: '手術' },
   { key: 'flags', label: '隔離與 DNR' },
   { key: 'lines', label: '管路' },
+  { key: 'safety', label: '譫妄與約束' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -427,6 +429,7 @@ async function submitNote() {
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
+        <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
