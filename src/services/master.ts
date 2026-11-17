@@ -98,7 +98,7 @@ export function listProcedures(q: { keyword?: string; category?: Procedure['cate
       .filter((p) => {
         if (!q.includeInactive && !p.active) return false
         // 住院每日計費項目（病房費等）不給開立的選單：開了會和出院結帳的天數重複收（主檔管理頁用 includeInactive 看全部）
-        if (!q.includeInactive && (p.dailyFee || p.blood)) return false
+        if (!q.includeInactive && (p.dailyFee || p.blood || p.recordCopy)) return false
         if (q.category && p.category !== q.category) return false
         const kw = q.keyword?.trim()
         return !kw || contains(p.name, kw) || contains(p.code, kw)

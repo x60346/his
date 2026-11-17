@@ -510,6 +510,8 @@ export interface Charge {
   visitId: string
   /** 住院結帳：哪一次住院（門診收據沒有） */
   admissionId?: string
+  /** 病歷影本申請的收據（沒有掛號、沒有住院；visitId 為空字串） */
+  copyRequestId?: string
   /** 住院結帳的計費期間與部分負擔分段（收據、帳單顯示用；結帳時就存下，之後設定改了也不變） */
   ipd?: IpdBillMeta
   patientId: string
@@ -742,6 +744,8 @@ export interface Procedure {
   dailyFee?: boolean
   /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
   blood?: BloodProduct | 'crossmatch'
+  /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
+  recordCopy?: 'base' | 'page'
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
   imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
   active: boolean
@@ -1306,6 +1310,32 @@ export interface RiskSettings {
   pressureHigh: number
   /** Braden ≤ 這個分數＝中度 */
   pressureModerate: number
+}
+
+// ---------- 病歷影本申請 ----------
+
+/** 影本可以申請的項目：門診病歷（一次看診）、出院病摘、檢驗報告、影像報告 */
+export type CopyItemKind = 'opd' | 'discharge' | 'lab' | 'imaging'
+
+/**
+ * 病歷影本申請（櫃台受理、當場收費、列印）：本人或代理人（登錄關係、勾委託書已核對）。
+ * 收費開一張收據（Charge.copyRequestId），進日結；當天可作廢（收據一起作廢）
+ */
+export interface RecordCopyRequest {
+  id: string
+  /** 申請單號（印在每一頁） */
+  no: string
+  patientId: string
+  applicant: { kind: 'self' | 'agent'; name: string; idNo: string; relation?: string; authorizationChecked?: boolean }
+  purpose: string
+  items: { kind: CopyItemKind; refId: string; label: string; pages: number }[]
+  pages: number
+  chargeId: string
+  createdAt: string
+  createdBy: string
+  /** 每次列印（第一次＋補印）都記下 */
+  printed: { at: string; by: string }[]
+  voided?: { at: string; by: string; reason: string }
 }
 
 // ---------- 輸血備血 ----------

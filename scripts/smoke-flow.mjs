@@ -6531,6 +6531,133 @@ try {
     ok(ui.every((p) => !/Rh 陰性|ABO 不相容|includes\('A'\)/.test(fs.readFileSync(p, 'utf8'))), '頁面沒有自己判斷血型相容（只在 blood-rules）')
   }
 
+  // 病歷影本申請：申請人核對（本人、代理人）、範圍、費用（主檔單價與生效日）、收據進日結、列印與補印、當天作廢、權限
+  console.log('\n[病歷影本申請]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.copyApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const P = { name: '王小明', idNo: 'A123456789' }
+    ok(!Object.keys(api.checkCopyApplicant({ kind: 'self', name: '王小明', idNo: 'a123456789 ' }, P)).length, '本人：姓名與身分證號相符（大小寫、空白不影響）')
+    let e = api.checkCopyApplicant({ kind: 'self', name: '王大明', idNo: 'A223456789' }, P)
+    ok(e.name?.includes('代理人') && e.idNo?.includes('不符'), `本人不符：「${e.name}」「${e.idNo}」`)
+    e = api.checkCopyApplicant({ kind: 'agent', name: '王太太', idNo: 'A123456789' }, P)
+    ok(e.idNo?.includes('本人') && e.relation && e.authorizationChecked, '代理人：不能用病人自己的證號、要關係、要勾委託書')
+    ok(!Object.keys(api.checkCopyApplicant({ kind: 'agent', name: '王太太', idNo: 'A223456789', relation: '配偶', authorizationChecked: true }, P)).length, '代理人資料齊全')
+    ok(api.checkCopyApplicant({ kind: 'agent', name: 'x', idNo: '12345' }, P).idNo?.includes('格式'), '身分證號格式')
+    ok(api.copyFee(100, 10, 3) === 130, '費用：基本費＋每頁×頁數')
+
+    // 主檔：不能當醫令開
+    ok(db().procedures.filter((p) => p.recordCopy).length === 2 && !(await api.masterApi.listProcedures({})).some((p) => p.recordCopy), '主檔有基本費、每頁兩項；開立選單沒有')
+
+    // 找一位有完成門診、有檢驗報告的病人
+    const pt = db().patients.find((p) => db().encounters.some((x) => x.patientId === p.id && x.status === 'completed') && db().labReports.some((r) => r.patientId === p.id))
+    await as('nurse01')
+    let msg = await errOf(() => C.copySources(pt.id))
+    ok(msg.includes('權限'), `護理師預設沒有病歷影本權限：「${msg}」`)
+    await as('clerk01')
+    const src = await C.copySources(pt.id)
+    ok(src.sources.some((s) => s.kind === 'opd') && src.sources.some((s) => s.kind === 'lab') && src.fee.base === 100 && src.fee.perPage === 10, `可申請 ${src.sources.length} 項（門診、檢驗…），基本費 100、每頁 10`)
+    ok(src.sources.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), '新的在前')
+    ok(!src.sources.some((s) => s.kind === 'opd' && db().encounters.find((x) => x.id === s.refId).status !== 'completed'), '沒完成的門診不能申請')
+    const pick = src.sources.slice(0, 3).map((s) => ({ kind: s.kind, refId: s.refId }))
+    const self = { kind: 'self', name: pt.name, idNo: pt.idNo }
+
+    let f = await fieldsOf(() => C.createRecordCopy({ patientId: pt.id, applicant: { kind: 'self', name: '別人', idNo: 'Z199999999' }, purpose: '', items: [], payMethod: 'cash', received: 1000 }))
+    ok(f.name && f.idNo && f.purpose && f.items, '欄位一次標出：姓名、證號、用途、項目')
+    const other = db().encounters.find((x) => x.patientId !== pt.id && x.status === 'completed')
+    f = await fieldsOf(() => C.createRecordCopy({ patientId: pt.id, applicant: self, purpose: '保險理賠', items: [{ kind: 'opd', refId: other.id }], payMethod: 'card' }))
+    ok(f.items?.includes('不是這位病人'), '別的病人的病歷不能印')
+    f = await fieldsOf(() => C.createRecordCopy({ patientId: pt.id, applicant: self, purpose: '保險理賠', items: pick, payMethod: 'cash', received: 100 }))
+    ok(f.received?.includes('不足'), `現金不足：「${f.received}」`)
+    const before = db().charges.length
+    const r1 = await C.createRecordCopy({ patientId: pt.id, applicant: self, purpose: '保險理賠', items: [...pick, pick[0]], payMethod: 'cash', received: 200 })
+    const c1 = db().charges.find((c) => c.id === r1.chargeId)
+    ok(r1.pages === 3 && r1.amount === 130 && r1.change === 70 && /^MR\d{11}$/.test(r1.no), `申請 ${r1.no}：3 項 3 頁（重複的只算一次）130 元，找零 70`)
+    ok(db().charges.length === before + 1 && c1.copyRequestId === r1.id && c1.visitId === '' && c1.nhiPoints === 0 && c1.lines.every((l) => l.patientPay && l.kind === 'self') && c1.receiptNo.startsWith('R'), `收據 ${c1.receiptNo}：自費，不申報健保`)
+    ok(db().auditLogs.some((l) => l.action === '病歷影本申請' && l.detail.includes(r1.no)), '稽核')
+
+    // 日結
+    const rep = await api.chargeApi.dailyReport(T)
+    const row = rep.charges.find((c) => c.id === c1.id)
+    ok(row && row.deptName === '病歷影本' && rep.byDept.some((d) => d.deptName === '病歷影本' && d.patientTotal >= 130), '日結：收據列在「病歷影本」')
+    const sum = (o) => Object.values(o).reduce((n, x) => n + x, 0)
+    ok(sum(rep.byPayMethod) === rep.collected && sum(rep.byFeeType) === rep.patientTotal, '日結各分項加總仍等於合計')
+
+    // 一般收據的作廢、退費、查詢都擋
+    msg = await errOf(() => api.chargeApi.voidCharge(c1.id, '測試'))
+    ok(msg.includes('病歷影本'), `批價頁不能作廢影本收據：「${msg}」`)
+    msg = await errOf(() => api.chargeApi.getReceipt(c1.id))
+    ok(msg.includes('病歷影本'), '批價頁查不到（請到病患資料）')
+
+    // 列印、補印
+    const pr = await C.printRecordCopy(r1.id)
+    ok(pr.pages.length === 3 && pr.times === 1 && pr.pages.every((p) => p.title && p.meta) && pr.applicantText.startsWith('本人'), `列印 ${pr.pages.length} 頁：${pr.pages.map((p) => p.title).join('、')}`)
+    const opdPage = pr.pages.find((p) => p.kind === 'opd')
+    if (opdPage) ok(opdPage.sections.some((s) => s.heading === '診斷') && !/\b(sbp|dbp|temp)\b/.test(JSON.stringify(opdPage)), '門診病歷頁：診斷、SOAP，生命徵象用中文')
+    const labPage = pr.pages.find((p) => p.kind === 'lab')
+    if (labPage) ok(labPage.table.rows.length > 0, '檢驗報告頁：結果表')
+    const pr2 = await C.printRecordCopy(r1.id)
+    ok(pr2.times === 2 && db().auditLogs.some((l) => l.action === '列印病歷影本' && l.detail.includes('補印')), '補印記第 2 次、寫稽核')
+
+    // 代理人
+    const agent = { kind: 'agent', name: '代理人甲', idNo: 'B223456789', relation: '配偶', authorizationChecked: true }
+    f = await fieldsOf(() => C.createRecordCopy({ patientId: pt.id, applicant: { ...agent, authorizationChecked: false }, purpose: '轉院、他院就醫', items: pick.slice(0, 1), payMethod: 'card' }))
+    ok(f.authorizationChecked, '代理人沒勾委託書 → 擋')
+    const r2 = await C.createRecordCopy({ patientId: pt.id, applicant: agent, purpose: '轉院、他院就醫', items: pick.slice(0, 1), payMethod: 'card' })
+    ok(r2.applicantText === '代理人 代理人甲（配偶）' && r2.amount === 110 && r2.payMethod === 'card', `代理人申請：${r2.applicantText}，刷卡 ${r2.amount} 元`)
+
+    // 主檔調價（排生效日）：今天起改價，新申請用新價；已收的收據不變
+    const base = db().procedures.find((p) => p.recordCopy === 'base')
+    base.priceChanges = [{ from: T, points: 0, selfPrice: 200, by: 'U001', at: nowStr() }]
+    const src2 = await C.copySources(pt.id)
+    ok(src2.fee.base === 200 && db().charges.find((c) => c.id === r1.chargeId).patientTotal === 130, '主檔改價後：新申請用新價，已收的不變')
+    delete base.priceChanges
+
+    // 作廢
+    f = await fieldsOf(() => C.voidRecordCopy(r2.id, ' '))
+    ok(f.reason, '作廢要原因')
+    const v2 = await C.voidRecordCopy(r2.id, '選錯項目，重新申請')
+    ok(v2.voided && db().charges.find((c) => c.id === r2.chargeId).voided && !v2.canVoid, '作廢：收據一起作廢')
+    msg = await errOf(() => C.printRecordCopy(r2.id))
+    ok(msg.includes('作廢'), '作廢的不能印')
+    const rep2 = await api.chargeApi.dailyReport(T)
+    ok(!rep2.byDept.some((d) => d.deptName === '病歷影本' && d.patientTotal >= 240) && rep2.voidedCount >= 1, '作廢的不算進日結')
+    // 隔天以後不能作廢
+    db().recordCopies.find((x) => x.id === r1.id).createdAt = `${addDaysT(-1)} 10:00`
+    msg = await errOf(() => C.voidRecordCopy(r1.id, '測試'))
+    ok(msg.includes('不能作廢'), `隔天不能作廢：「${msg}」`)
+    const list = await C.listRecordCopies(pt.id)
+    ok(list.length === 2 && list[0].id === r2.id && !list.find((x) => x.id === r1.id).canVoid, '申請紀錄：新的在前、昨天的不能作廢')
+
+    // 權限：指定給個人後取消櫃台角色
+    await as('admin')
+    await api.permissionApi.setPermissionGrant('record.copy', 'U402', { on: true, reason: '病歷組' })
+    await api.permissionApi.savePermissionRoles('record.copy', { roles: [], reason: '只給病歷組', confirm: true })
+    await as('clerk01')
+    msg = await errOf(() => C.listRecordCopies(pt.id))
+    ok(msg.includes('權限'), '角色取消後一般櫃台不能申請')
+    await as('clerk02')
+    ok((await C.listRecordCopies(pt.id)).length === 2, '被指定的櫃台（病歷組）可以')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

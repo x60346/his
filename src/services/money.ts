@@ -90,7 +90,7 @@ export interface PendingRefund {
  * 也可能部分負擔不變而退 0 元（只有申報點數減少）。全部退完的不在這裡：整張作廢或退費（醫師可重新開）
  */
 export function pendingRefundOf(c: Charge): PendingRefund | undefined {
-  if (c.voided || c.admissionId) return undefined // 住院收據沒有部分退藥、未執行（門診才有）
+  if (c.voided || c.admissionId || c.copyRequestId) return undefined // 住院收據沒有部分退藥、未執行（門診才有）
   const d = db.dispenses.find((x) => x.visitId === c.visitId)
   if (d?.status === 'returned') return undefined // 藥全部退完：整張作廢或退費
   const e = must(find.encounterOfVisit(c.visitId), '病歷')

@@ -6,6 +6,8 @@ import { Pencil, UserPlus } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UInput, UStatusBadge, UTable, UTabs, type Column } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
+import RecordCopyPanel from '@/components/RecordCopyPanel.vue'
+import { useCan } from '@/composables/useCan'
 import { admissionApi, bookingApi, patientApi, preventApi, type VisitView } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -14,6 +16,7 @@ import { genderLabel, visitStatus } from '@/utils/labels'
 import type { Patient } from '@/types'
 
 const auth = useAuth()
+const can = useCan()
 
 const keyword = ref('')
 const kw = useDebounced(keyword, 250)
@@ -25,6 +28,13 @@ useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
 const { data: patient } = useQuery(async () => (selectedId.value ? patientApi.getPatient(selectedId.value) : null), [selectedId])
 
 const tab = ref('visits')
+// 病歷影本：有「病歷影本申請」權限的人（預設櫃台）才有這個分頁
+const tabs = computed(() => [
+  { key: 'visits', label: '就醫紀錄', count: visits.value?.length },
+  { key: 'admissions', label: '住院紀錄', count: admissions.value?.length },
+  { key: 'prevent', label: '預防保健資格' },
+  ...(can('record.copy') ? [{ key: 'copy', label: '病歷影本' }] : []),
+])
 const { data: visits } = useQuery(async () => (selectedId.value ? bookingApi.listVisits({ patientId: selectedId.value }) : []), [selectedId])
 const { data: eligibility } = useQuery(async () => (selectedId.value ? preventApi.eligibilityFor(selectedId.value) : []), [selectedId])
 const visitsDesc = computed(() => [...(visits.value ?? [])].reverse())
@@ -135,7 +145,7 @@ const fields = computed(() => {
 
       <UCard :padded="false">
         <div class="px-4 pt-2">
-          <UTabs v-model="tab" :tabs="[{ key: 'visits', label: '就醫紀錄', count: visits?.length }, { key: 'admissions', label: '住院紀錄', count: admissions?.length }, { key: 'prevent', label: '預防保健資格' }]" />
+          <UTabs v-model="tab" :tabs="tabs" />
         </div>
         <UTable v-if="tab === 'visits'" :columns="visitColumns" :rows="visitsDesc" :row-key="(v) => v.id" dense empty-text="沒有就醫紀錄">
           <template #cell-status="{ row }"><UStatusBadge :map="visitStatus" :value="row.status" /></template>
@@ -159,6 +169,7 @@ const fields = computed(() => {
             </li>
           </ul>
         </template>
+        <RecordCopyPanel v-else-if="tab === 'copy' && can('record.copy')" :patient-id="patient.id" />
         <ul v-else class="divide-y divide-slate-100">
           <li v-for="e in eligibility" :key="e.itemCode" class="flex items-center gap-3 px-4 py-2.5 text-sm">
             <UBadge :tone="e.eligible ? 'green' : 'gray'">{{ e.eligible ? '符合' : '不符合' }}</UBadge>

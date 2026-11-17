@@ -1899,6 +1899,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     dnrRecords,
     bloodUnits,
     bloodRequests,
+    recordCopies: [],
     vitals,
     nursingNotes,
     progressNotes,

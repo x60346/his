@@ -432,6 +432,9 @@ const procedureBase: Procedure[] = [
   { id: 'P032', code: '93001B', name: '減除白血球紅血球濃厚液（每單位）', category: '處置', points: 1350, selfPrice: 1800, blood: 'rbc', active: true },
   { id: 'P033', code: '93005B', name: '新鮮冷凍血漿（每單位）', category: '處置', points: 600, selfPrice: 900, blood: 'ffp', active: true },
   { id: 'P034', code: '93010B', name: '分離術血小板（每單位）', category: '處置', points: 8500, selfPrice: 11000, blood: 'plt', active: true },
+  // 病歷影本（自費；申請時自動帶入，門診、醫囑都不能開）。價格可在主檔排定生效日
+  { id: 'P035', code: 'SELF03', name: '病歷影本基本費', category: '處置', points: 0, selfPrice: 100, recordCopy: 'base', active: true },
+  { id: 'P036', code: 'SELF04', name: '病歷影本（每頁）', category: '處置', points: 0, selfPrice: 10, recordCopy: 'page', active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

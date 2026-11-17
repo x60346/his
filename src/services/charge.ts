@@ -306,6 +306,8 @@ export interface CancelMode {
 
 // 內部函式（不 export：services 裡 export 的都會變成 API）
 function cancelModeOf(c: Charge): CancelMode {
+  // 病歷影本的收據：到「病患資料 → 病歷影本」作廢（申請一起作廢）；沒有退費
+  if (c.copyRequestId) return { mode: c.paidAt.slice(0, 10) === today() ? 'void' : 'refund', refundAmount: 0, blocked: '病歷影本的收據請到「病患資料 → 病歷影本」作廢（當天）' }
   if (c.admissionId) {
     // 住院收據：出院前、當天可以作廢重結（帳單算錯、結帳後又有新費用）；出院後不能作廢也不能退費
     const discharged = find.admission(c.admissionId)?.status === 'discharged'
@@ -488,6 +490,7 @@ export function markProcedureNotDone(chargeId: string, idx: number, reason: stri
     const cashier = requirePermission('charge.pay')
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.voided) fail('此收據已作廢或已退費', 'CONFLICT')
+    if (c.copyRequestId) fail('病歷影本的收據沒有檢驗處置', 'CONFLICT')
     if (c.admissionId) fail('住院收據沒有「未執行」：沒做的檢驗處置本來就不會算進住院帳單', 'CONFLICT')
     const e = must(find.encounterOfVisit(c.visitId), '病歷')
     const x = e.procedures[idx]
@@ -553,6 +556,7 @@ export function getReceipt(chargeId: string): Promise<ReceiptView> {
   return query(() => {
     const c = must(db.charges.find((x) => x.id === chargeId), '收費紀錄')
     if (c.admissionId) fail('這是住院收據，請到「住院結帳」查看', 'CONFLICT')
+    if (c.copyRequestId) fail('這是病歷影本的收據，請到「病患資料 → 病歷影本」查看', 'CONFLICT')
     return receiptOf(c)
   })
 }
@@ -673,7 +677,7 @@ export const REPORT_MONTHLY_AFTER = 62
  * 收據看結帳日、收回欠款看收回日、未收款看就醫日。
  */
 /** 收據的科別：門診看掛號；住院看住院科別（標「住院」，日結依科別分得出門診、住院） */
-const chargeDeptName = (c: Charge) => (c.admissionId ? `${nameOf.dept(find.admission(c.admissionId)?.deptId)}（住院）` : nameOf.dept(find.visit(c.visitId)?.deptId))
+const chargeDeptName = (c: Charge) => c.copyRequestId ? '病歷影本' : (c.admissionId ? `${nameOf.dept(find.admission(c.admissionId)?.deptId)}（住院）` : nameOf.dept(find.visit(c.visitId)?.deptId))
 
 export function dailyReport(date: string, to: string = date): Promise<DailyReport> {
   return query(() => {
