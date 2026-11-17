@@ -19,7 +19,7 @@ const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lin
         </div>
         <table class="w-full rounded-md border border-slate-200 text-left">
           <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
-            <tr><th class="px-3 py-1.5">管路</th><th class="px-3 py-1.5 text-right">管路日</th><th class="px-3 py-1.5 text-right">使用率</th><th class="px-3 py-1.5 text-right">目前</th><th class="px-3 py-1.5">期間內移除原因</th></tr>
+            <tr><th class="px-3 py-1.5">管路</th><th class="px-3 py-1.5 text-right">管路日</th><th class="px-3 py-1.5 text-right">使用率</th><th class="px-3 py-1.5 text-right">目前</th><th class="px-3 py-1.5 text-right">感染（每千管路日）</th><th class="px-3 py-1.5">期間內移除原因</th></tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="r in data.s.rows" :key="r.kind">
@@ -27,6 +27,7 @@ const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lin
               <td class="tabular px-3 py-1.5 text-right">{{ r.lineDays }}</td>
               <td class="tabular px-3 py-1.5 text-right">{{ r.utilization === null ? '—' : `${Math.round(r.utilization * 100)}%` }}</td>
               <td class="tabular px-3 py-1.5 text-right">{{ r.active }}</td>
+              <td class="tabular px-3 py-1.5 text-right">{{ r.infections === undefined ? '—' : `${r.infections} 例（${r.infectionRate ?? '—'}‰）` }}</td>
               <td class="px-3 py-1.5 text-xs text-slate-600">{{ Object.entries(r.removed).map(([k, n]) => `${k} ${n}`).join('、') || '—' }}</td>
             </tr>
           </tbody>

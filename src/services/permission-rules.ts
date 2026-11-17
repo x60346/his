@@ -27,6 +27,7 @@ export type PermKey =
   | 'surgery.schedule'
   | 'nursing.schedule'
   | 'discharge.plan'
+  | 'infection.control'
   | 'charge.approveDiscount'
   | 'order.write'
   | 'mar.give'
@@ -69,6 +70,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'surgery.schedule', group: '住院', label: '手術排程', covers: '排手術房間與時間、改期', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師；要只交給手術室護理長：先指定給個人，再把角色取消' },
   { key: 'nursing.schedule', group: '住院', label: '護理排班', covers: '排各病房每天三班的護理師、複製上個月', candidates: ['nurse', 'admin'], defaults: ['admin'], grantable: true, note: '交給護理長：指定給個人（示範 nurse02）；所有護理師都看得到班表' },
   { key: 'discharge.plan', group: '住院', label: '出院準備', covers: '出院準備篩選、需求評估、長照與居家轉介、出院後電話追蹤', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師；要只交給出院準備個管師：先指定給個人（示範 nurse03），再把角色取消' },
+  { key: 'infection.control', group: '住院', label: '感染管制', covers: '判定院內感染個案成立或不成立、看全院感染個案', candidates: ['doctor', 'nurse', 'admin'], defaults: ['admin'], grantable: true, note: '交給感染科醫師與感管護理師：指定給個人（示範 dr11 感染科）' },
   { key: 'order.write', group: '住院', label: '開立／修改／停止醫囑、完成看診', covers: '門診完成看診（處方）、住院醫囑開立修改停止', candidates: ['doctor'], defaults: ['doctor'], fixed: true, note: '醫療紀錄要記在有執業資格的醫師名下' },
   { key: 'mar.give', group: '住院', label: '給藥', covers: '執行給藥、暫停、拒絕、補登', candidates: ['nurse'], defaults: ['nurse'], fixed: true, note: '給藥紀錄要記在執行的護理師名下' },
   { key: 'dispense', group: '藥局', label: '核對處方、發藥', covers: '門診核對、發藥、退藥', candidates: ['pharmacist'], defaults: ['pharmacist'], fixed: true, note: '藥事法：調劑由藥師執行' },

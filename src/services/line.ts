@@ -5,6 +5,7 @@ import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
+import { INFECTION_KINDS, per1000 } from './infection-rules'
 import { checkLineInput, LINE_KINDS, LINE_REMOVE_REASONS, lineDays, lineKind, lineState, type LineState } from './line-rules'
 
 export interface LineView extends LineDevice {
@@ -102,7 +103,7 @@ export interface WardLineStats {
   to: string
   /** 住院人日（分母參考）與各種管路的管路日、目前在身上的條數、期間內移除的原因 */
   patientDays: number
-  rows: { kind: LineKind; label: string; lineDays: number; active: number; utilization: number | null; removed: Record<string, number> }[]
+  rows: { kind: LineKind; label: string; lineDays: number; active: number; utilization: number | null; removed: Record<string, number>; infections?: number; infectionRate?: number | null }[]
 }
 
 /** 病房管路日統計（最近 days 天，含今天）：依病人現在住哪個病房（轉床前在別病房的也算在這裡，簡化） */
@@ -122,7 +123,10 @@ export function wardLineStats(ward: string, days = 30): Promise<WardLineStats> {
         const r = (l.removeReason ?? '').split(/[：（]/)[0]
         removed[r] = (removed[r] ?? 0) + 1
       }
-      return { kind: k.kind, label: k.label, lineDays: ld, active: ls.filter((l) => !l.removedAt).length, utilization: patientDays ? Math.round((ld / patientDays) * 1000) / 1000 : null, removed }
+      // 院內感染（判定成立、期間內發生、那條管路）：導尿管→CAUTI、CVC→CLABSI，每千管路日幾例
+      const inf = INFECTION_KINDS.find((x) => x.line === k.kind)
+      const cases = inf ? db.infectionCases.filter((c) => c.kind === inf.kind && c.status === 'confirmed' && c.onsetAt >= from && c.onsetAt <= to && ls.some((l) => l.id === c.lineId)).length : 0
+      return { kind: k.kind, label: k.label, lineDays: ld, active: ls.filter((l) => !l.removedAt).length, utilization: patientDays ? Math.round((ld / patientDays) * 1000) / 1000 : null, removed, ...(inf ? { infections: cases, infectionRate: per1000(cases, ld) } : {}) }
     })
     return { from, to, patientDays, rows }
   })

@@ -7891,6 +7891,80 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // 院內感染：管路相關要放超過 2 天、通報欄位、手術部位要選手術、判定（權限、原因）、隔離提醒、每千管路日感染率
+  console.log('\n[院內感染]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.infectionApi
+    const L = api.lineApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.lineDayAt('2026-11-15 10:00', '2026-11-17') === 3 && api.lineRelated('2026-11-15 10:00', '2026-11-17') && !api.lineRelated('2026-11-16 10:00', '2026-11-17'), '管路放超過 2 天（第 3 天起）才算管路相關')
+    ok(api.lineRelated('2026-11-10 10:00', '2026-11-17', '2026-11-16 09:00') && !api.lineRelated('2026-11-10 10:00', '2026-11-17', '2026-11-14 09:00'), '移除隔天發生仍算；移除兩天以上不算')
+    ok(api.per1000(2, 400) === 5 && api.per1000(1, 0) === null, '每千管路日感染率')
+
+    // 種子
+    const seed = db().infectionCases.find((c) => c.id === 'INF-SEED-1')
+    await as('dr11')
+    let work = await I.listInfectionWork()
+    if (seed) ok(work.pending.some((c) => c.id === seed.id && c.lineText?.includes('導尿管')) && (await api.dashboardApi.getDashboard()).infectionToDecide >= 1, '種子：導尿管相關泌尿道感染待感染管制（dr11）判定（首頁）')
+    await as('nurse01')
+    await expectError(() => I.listInfectionWork(), '一般護理師看感染管制清單')
+
+    // 通報：導尿管放 1 天不算
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().lines.some((l) => l.admissionId === x.id && l.kind === 'foley' && !l.removedAt))
+    const fresh = await L.addLine({ admissionId: a.id, kind: 'foley', site: '尿道', size: '16Fr', insertedAt: dateUtil.addMinutes(nowStr(), -60), placedBy: 'x' })
+    let f = await fieldsOf(() => I.reportInfection(a.id, { kind: 'cauti', lineId: fresh.id, onsetAt: T, symptoms: '發燒', culture: '待報告' }))
+    ok(f.lineId?.includes('不算管路相關'), `導尿管放不到 3 天 → 「${f.lineId}」`)
+    f = await fieldsOf(() => I.reportInfection(a.id, { kind: 'cauti', onsetAt: T, symptoms: '', culture: '' }))
+    ok(f.symptoms && f.culture, '症狀、培養必填')
+    db().lines.find((l) => l.id === fresh.id).insertedAt = dateUtil.addMinutes(nowStr(), -4 * 24 * 60)
+    f = await fieldsOf(() => I.reportInfection(a.id, { kind: 'clabsi', lineId: fresh.id, onsetAt: T, symptoms: 'x', culture: 'x' }))
+    ok(f.lineId?.includes('中心靜脈導管'), 'CLABSI 要選 CVC（不能選導尿管）')
+    f = await fieldsOf(() => I.reportInfection(a.id, { kind: 'ssi', onsetAt: T, symptoms: 'x', culture: 'x' }))
+    ok(f.surgeryId, '手術部位感染要選手術')
+    const c = await I.reportInfection(a.id, { kind: 'cauti', lineId: fresh.id, onsetAt: T, symptoms: '發燒、恥骨上壓痛', culture: '尿液培養 Klebsiella ≥10⁵' })
+    ok(c.status === 'reported' && c.lineText.includes('第 5 天'), `通報成立：${c.lineText}`)
+
+    // 判定
+    await expectError(() => I.decideInfection(c.id, true, 'x'), '一般護理師判定')
+    await as('dr11')
+    f = await fieldsOf(() => I.decideInfection(c.id, true, ''))
+    ok(f.reason, '判定要寫依據')
+    const hasContact = db().isolations?.some((i) => i.patientId === a.patientId && i.kind === 'contact' && !i.endedAt)
+    const d = await I.decideInfection(c.id, true, '符合收案定義')
+    ok(d.status === 'confirmed' && d.suggestIsolation === !hasContact, `判定成立${d.suggestIsolation ? '，提醒可以開接觸隔離（不自動開）' : ''}`)
+    let msg = await errOf(() => I.decideInfection(c.id, false, 'x'))
+    ok(msg.includes('已經判定'), '只能判定一次')
+    if (seed) {
+      const r = await I.decideInfection(seed.id, false, '入院時已有症狀')
+      ok(r.status === 'rejected', '不成立')
+    }
+
+    // 品質指標：每千管路日
+    await as('nurse01')
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    const st = await L.wardLineStats(ward, 30)
+    const foley = st.rows.find((r) => r.kind === 'foley')
+    ok(foley.infections === 1 && foley.infectionRate === api.per1000(1, foley.lineDays) && st.rows.find((r) => r.kind === 'pivc').infections === undefined, `品質指標：導尿管感染 ${foley.infections} 例、${foley.infectionRate}‰（不成立的不算）`)
+  }
+
   // PCA：醫囑範圍與執照、雙人核對架設（扣住院藥局、進帳單與簿冊）、每 4 小時紀錄（警示、處置）、疼痛評估、醫師處理警示、
   // 結束剩餘量雙人銷毀（簿冊殘餘量）、出院擋、PCA 藥袋不能當一般醫囑
   console.log('\n[PCA]')

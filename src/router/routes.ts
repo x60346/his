@@ -7,6 +7,7 @@ import {
   Utensils,
   CalendarDays,
   HousePlus,
+  ShieldAlert,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
 import type { PermKey } from '@/services/permission-rules'
@@ -50,6 +51,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'discharge-plan', name: 'discharge-plan', component: () => import('@/pages/nursing/DischargePlanPage.vue'), meta: { title: '出院準備', icon: HousePlus, group: '住院', roles: ['nurse', 'admin'], permission: 'discharge.plan' } },
   { path: 'nutrition', name: 'nutrition', component: () => import('@/pages/nutrition/NutritionPage.vue'), meta: { title: '營養', icon: Utensils, group: '住院', roles: ['diet', 'nurse'] } },
 
+  { path: 'infection', name: 'infection', component: () => import('@/pages/infection/InfectionPage.vue'), meta: { title: '感染管制', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'admin'], permission: 'infection.control' } },
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
   { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },
   { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '其他', roles: ['doctor'] } },

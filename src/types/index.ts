@@ -1804,6 +1804,28 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/** 院內感染種類：導尿管相關泌尿道感染、中心靜脈導管相關血流感染、手術部位感染、其他 */
+export type InfectionKind = 'cauti' | 'clabsi' | 'ssi' | 'other'
+
+/**
+ * 院內感染個案：醫師或護理師通報（症狀、培養）→ 感染管制（權限「感染管制」）判定成立或不成立。
+ * 管路相關的要選當時在身上的那條管路（放超過 2 天才算）；手術部位感染選那次手術
+ */
+export interface InfectionCase {
+  id: string
+  admissionId: string
+  kind: InfectionKind
+  lineId?: string
+  surgeryId?: string
+  onsetAt: string
+  symptoms: string
+  culture: string
+  reportedBy: string
+  reportedAt: string
+  status: 'reported' | 'confirmed' | 'rejected'
+  decision?: { by: string; at: string; reason: string }
+}
+
 /** PCA 每 4 小時的紀錄（護理師）：按壓次數、實際給藥次數、累計用量 ml、疼痛、鎮靜（POSS 1–4）、呼吸；鎮靜 ≥3 或呼吸 <10 是警示 */
 export interface PcaRecord {
   at: string

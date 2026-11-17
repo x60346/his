@@ -27,6 +27,7 @@ import TubeFeedPanel from '@/components/TubeFeedPanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
 import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import PcaPanel from '@/components/PcaPanel.vue'
+import InfectionPanel from '@/components/InfectionPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -122,6 +123,7 @@ const tabs = computed(() =>
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
+        { key: 'infection', label: '感染通報' },
         { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
         ...(adm.value.pca ? [{ key: 'pca', label: 'PCA', count: (adm.value.pca.status === 'ordered' || adm.value.pca.record !== 'ok' || adm.value.pca.alert ? 1 : 0) || undefined }] : []),
         ...(adm.value.tube ? [{ key: 'tube', label: '管灌', count: adm.value.tube.due + adm.value.tube.overdue || undefined }] : []),
@@ -281,6 +283,7 @@ const wardTotals = computed(() => ({
           <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
           <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
           <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
+          <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

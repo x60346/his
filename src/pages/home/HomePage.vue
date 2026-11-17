@@ -62,6 +62,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: '疼痛 ≥4 處置後 1 小時還沒重評（全院；護理站生命徵象記疼痛分數就算重評）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: '導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（全院，護理站「管路」分頁）', route: 'nursing', icon: Droplet },
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'PCA 警示待處理', count: s.value.pcaAlerts ?? 0, hint: 'PCA 使用中的病人鎮靜過深或呼吸過慢：請處理（住院醫囑「PCA」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: 'PCA 紀錄逾時', count: s.value.pcaRecordOverdue, hint: 'PCA 每 4 小時要記按壓、用量、疼痛、鎮靜、呼吸（全院；護理站「PCA」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '別人請我換班', count: s.value.swapToRespond ?? 0, hint: '同事想和你換班：到「護理排班」同意或不同意', route: 'nurse-schedule', icon: Droplet, urgent: true },

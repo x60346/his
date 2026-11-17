@@ -28,6 +28,7 @@ import * as staffing from './staffing'
 import * as dischargePlan from './discharge-plan'
 import * as shiftRequest from './shift-request'
 import * as pca from './pca'
+import * as infection from './infection'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -78,6 +79,7 @@ export const staffingApi = overNetwork(staffing)
 export const dischargePlanApi = overNetwork(dischargePlan)
 export const shiftRequestApi = overNetwork(shiftRequest)
 export const pcaApi = overNetwork(pca)
+export const infectionApi = overNetwork(infection)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -151,6 +153,7 @@ export * from './delirium-rules'
 export * from './staffing-rules'
 export * from './discharge-plan-rules'
 export * from './pca-rules'
+export * from './infection-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -194,6 +197,7 @@ export type { MonthSchedule, ScheduleCell, WardAssignments } from './staffing'
 export type { PatientPlan, PlanView, PlanWorkItem } from './discharge-plan'
 export type { ShiftRequestView, ShiftRequestLists } from './shift-request'
 export type { PcaView, PatientPca, PcaInput, PcaRecordInput } from './pca'
+export type { InfectionView, PatientInfections, InfectionInput } from './infection'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

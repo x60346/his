@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -228,6 +228,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       name: d.name, roles: ['doctor'], doctorId: d.id, active: true,
       // dr01：被指定維護全院（醫師）片語（示範：醫療部主任）
       ...(i === 0 ? { grants: ['phrase.hospital'] } : {}),
+      // dr11（感染科）：被指定「感染管制」，判定院內感染個案
+      ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
@@ -2146,6 +2148,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 院內感染（示範，不抽亂數）：腦梗塞病人的導尿管（放 9 天）昨天發燒、尿液培養 E. coli ≥10⁵，護理師今天早上通報，等感染管制（dr11）判定
+  const infectionCases: InfectionCase[] = []
+  {
+    const foley = lines.find((l) => l.id === 'LN-SEED-1')
+    if (foley) infectionCases.push({
+      id: 'INF-SEED-1', admissionId: foley.admissionId, kind: 'cauti', lineId: foley.id, onsetAt: addDays(T, -1),
+      symptoms: '發燒 38.6°C、恥骨上壓痛，尿液混濁', culture: 'E. coli ≥10⁵ CFU/ml（尿液，昨天送檢，今天初步報告）',
+      reportedBy: 'U201', reportedAt: `${T} ${nowStr.slice(11) < '08:30' ? nowStr.slice(11) : '08:30'}`, status: 'reported',
+    })
+  }
+
   // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。
   // 挑「第一次掛號在最近 60 天內」、之前沒住過院的病人，第一次掛號標初診（今天最多 3 位、之前每週最多 2 位），
   // 建檔日改成那天（有更早的預防保健紀錄就改成那天：預防保健不用掛號）。和櫃台掛號時 booking.register 的判斷一樣（之前沒有任何掛號＝初診）
@@ -2237,6 +2250,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     nurseAssignments,
     shiftRequests,
     pcas,
+    infectionCases,
     dischargePlans,
     vitals,
     nursingNotes,
