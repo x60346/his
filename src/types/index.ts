@@ -10,7 +10,8 @@ export interface DatedChange {
 }
 
 export type Gender = 'M' | 'F'
-export type Period = 'AM' | 'PM' | 'NIGHT'
+/** ER＝急診（24 小時，不排門診表；每天一個急診診次） */
+export type Period = 'AM' | 'PM' | 'NIGHT' | 'ER'
 export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab'
 
 /** 系統使用者（展示用帳號，密碼明文存於 mock） */
@@ -140,6 +141,10 @@ export interface CopayValues {
   basicCopay: number
   /** 門診基本部分負擔（元）：經轉診（持外院轉診單、或同一療程醫師約的回診） */
   basicCopayReferred: number
+  /** 急診部分負擔（元）：檢傷 1、2 級 */
+  erCopayUrgent: number
+  /** 急診部分負擔（元）：檢傷 3–5 級 */
+  erCopay: number
   drugCopayFreeUpTo: number
   drugCopayStep: number
   drugCopayPerStep: number
@@ -241,8 +246,52 @@ export interface NoShowContact {
   rebookedVisitId?: string
 }
 
+/** 急診檢傷級數：1 復甦急救、2 危急、3 緊急、4 次緊急、5 非緊急 */
+export type TriageLevel = 1 | 2 | 3 | 4 | 5
+
+export interface TriageVitals {
+  temp?: number
+  pulse?: number
+  resp?: number
+  sbp?: number
+  dbp?: number
+  spo2?: number
+  /** 意識（GCS 3–15） */
+  gcs?: number
+}
+
+/** 急診去向：離院、收住院（連到住院預約）、轉院 */
+export interface ErDisposition {
+  kind: 'home' | 'admit' | 'transfer'
+  at: string
+  by: string
+  note?: string
+  /** 轉院：哪一家 */
+  hospital?: string
+  /** 收住院：住院預約 */
+  admissionId?: string
+}
+
+/** 急診（就醫上的急診資料）：檢傷（護理師）、重新檢傷紀錄、去向（醫師） */
+export interface ErInfo {
+  arrivedAt: string
+  complaint: string
+  vitals: TriageVitals
+  /** 依主訴與生命徵象建議的級數；實際級數比建議嚴重（調升）要寫原因，不能比建議輕 */
+  suggested: TriageLevel
+  level: TriageLevel
+  reason?: string
+  triagedBy: string
+  triagedAt: string
+  /** 重新檢傷（等候中病情變化）：舊的留著 */
+  history?: { level: TriageLevel; at: string; by: string; reason: string }[]
+  disposition?: ErDisposition
+}
+
 export interface Visit {
   id: string
+  /** 急診（急診診次的就醫才有） */
+  er?: ErInfo
   date: string
   sessionId: string
   deptId: string
@@ -748,6 +797,8 @@ export interface Procedure {
   recordCopy?: 'base' | 'page'
   /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
   surgery?: { minutes: number }
+  /** 急診計費：診察費（取代門診診察費）、觀察床費（每 6 小時）；急診就醫依紀錄自動帶入，門診與醫囑都不能開 */
+  er?: 'consult' | 'obs'
   /** 麻醉費：哪一種麻醉（手術做完依麻醉方式帶入；局部麻醉不另收） */
   anesthesiaFee?: AnesthesiaType
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */

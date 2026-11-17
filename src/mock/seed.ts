@@ -261,7 +261,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
   codes.doctors.forEach((d) => {
     // 放射科不看門診（判讀影像）：不排門診表，也不影響其他醫師的排班與種子
-    if (['RAD', 'INF'].includes(codes.departments.find((x) => x.id === d.deptId)?.code ?? '')) return
+    if (['RAD', 'INF', 'ER'].includes(codes.departments.find((x) => x.id === d.deptId)?.code ?? '')) return
     const deptIdx = codes.departments.findIndex((x) => x.id === d.deptId)
     const sameDept = codes.doctors.filter((x) => x.deptId === d.deptId)
     const k = sameDept.indexOf(d)
@@ -1880,6 +1880,38 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       })
     }
     counters[`surgery:${T}`] = surgeries.length
+  }
+
+  // ---------- 急診（示範，不抽亂數、固定 id）----------
+  // 今天的急診診次（24 小時，DR12）：四位候診中——胸痛 2 級（等 25 分，超過 10 分鐘目標）、腹痛 3 級、撕裂傷 4 級（等 80 分，超過 60 分）、
+  // 喉嚨痛 5 級。挑有就醫紀錄、今天沒有掛號、沒有住院的病人；到院時間依「現在」往前推（不跨日）
+  {
+    const erDoc = codes.doctors.find((d) => codes.departments.find((x) => x.id === d.deptId)?.code === 'ER')
+    const later = (a: string, b: string) => (a > b ? a : b)
+    if (erDoc) {
+      rooms.push({ roomNo: '100', location: '1 樓 急診', active: true })
+      const sid = `ER-${T}`
+      sessions.push({ id: sid, date: T, period: 'ER', deptId: erDoc.deptId, doctorId: erDoc.id, roomNo: '100', limit: 9999 })
+      const busy = new Set([...admissions.filter((a) => a.status === 'admitted' || a.status === 'reserved').map((a) => a.patientId), ...visits.filter((v) => v.date === T).map((v) => v.patientId)])
+      const cands = patients.filter((p) => !busy.has(p.id) && visits.some((v) => v.patientId === p.id))
+      const demo: { complaint: string; level: 1 | 2 | 3 | 4 | 5; back: number; vitals: Record<string, number> }[] = [
+        { complaint: '胸痛', level: 2, back: 25, vitals: { temp: 36.8, pulse: 112, resp: 22, sbp: 158, dbp: 96, spo2: 96 } },
+        { complaint: '腹痛', level: 3, back: 15, vitals: { temp: 37.8, pulse: 98, resp: 18, sbp: 128, dbp: 80, spo2: 98 } },
+        { complaint: '外傷：撕裂傷', level: 4, back: 80, vitals: { temp: 36.5, pulse: 88, resp: 16, sbp: 132, dbp: 84, spo2: 99 } },
+        { complaint: '喉嚨痛、咳嗽', level: 5, back: 30, vitals: { temp: 37.4, pulse: 84, resp: 16, sbp: 118, dbp: 72, spo2: 98 } },
+      ]
+      // 看診號依到院先後
+      demo.sort((a, b) => b.back - a.back).forEach((d, i) => {
+        const p = cands[i]
+        if (!p) return
+        const at = notFuture(later(addMinutes(nowStr, -d.back), `${T} 00:01`), 1)
+        visits.push({
+          id: `V-ER-${i + 1}`, date: T, sessionId: sid, deptId: erDoc.deptId, doctorId: erDoc.id, patientId: p.id, seqNo: next(`seq:${sid}`), identityCode: p.defaultIdentity,
+          caseType: 'E1', cardSeq: String(next(`cardseq:${p.id}`)).padStart(4, '0'), status: 'registered', firstVisit: false, preventItems: [], createdAt: at, checkedInAt: at,
+          er: { arrivedAt: at, complaint: d.complaint, vitals: d.vitals, suggested: d.level, level: d.level, triagedBy: 'U201', triagedAt: at },
+        })
+      })
+    }
   }
 
   // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。

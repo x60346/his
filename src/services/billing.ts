@@ -13,12 +13,13 @@ import type { BillingSettings, Charge, ChargeLine, CopayValues, DiscountRule, Dr
 import { diffDays } from '@/utils/date'
 import { drugPriceOn } from './drug-rules'
 import { valueOn } from './dated-rules'
+import { erObsBlocks } from './er-rules'
 
 // ---------- 某天的價格（依看診日） ----------
-export const COPAY_KEYS = ['basicCopay', 'basicCopayReferred', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
+export const COPAY_KEYS = ['basicCopay', 'basicCopayReferred', 'erCopayUrgent', 'erCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const
 
 /** 只取部分負擔參數（不帶 changes、修改人） */
-export const pickCopay = (s: CopayValues): CopayValues => ({ basicCopay: s.basicCopay, basicCopayReferred: s.basicCopayReferred, drugCopayFreeUpTo: s.drugCopayFreeUpTo, drugCopayStep: s.drugCopayStep, drugCopayPerStep: s.drugCopayPerStep, drugCopayMax: s.drugCopayMax })
+export const pickCopay = (s: CopayValues): CopayValues => ({ basicCopay: s.basicCopay, basicCopayReferred: s.basicCopayReferred, erCopayUrgent: s.erCopayUrgent, erCopay: s.erCopay, drugCopayFreeUpTo: s.drugCopayFreeUpTo, drugCopayStep: s.drugCopayStep, drugCopayPerStep: s.drugCopayPerStep, drugCopayMax: s.drugCopayMax })
 
 /** 醫令某天的點數與自費價 */
 export function procPriceOn(p: Pick<Procedure, 'points' | 'selfPrice' | 'priceChanges'>, date: string): { points: number; selfPrice: number } {
@@ -34,6 +35,16 @@ export function copayOn(s: BillingSettings, date: string): CopayValues {
 }
 
 export const CONSULT_PROC_ID = 'P001'
+/** 急診：診察費（取代門診診察費）、觀察床費（每 6 小時） */
+export const ER_CONSULT_PROC_ID = 'P044'
+export const ER_OBS_PROC_ID = 'P045'
+
+/** 急診部分負擔：依檢傷級數（1、2 級一個金額，3–5 級一個金額）；自費、免部分負擔身分不收 */
+function erCopayLine(identity: Identity, level: number, s: CopayValues): ChargeLine | undefined {
+  if (identity.selfPay || identity.copayExempt) return undefined
+  const amount = level <= 2 ? s.erCopayUrgent : s.erCopay
+  return { kind: 'copay-basic', name: `急診部分負擔（檢傷 ${level} 級）`, qty: 1, unitPrice: amount, amount, patientPay: true }
+}
 
 /** 藥品部分負擔（純函式）：收費設定頁的即時試算也用它，畫面與批價永遠算出同一個數字 */
 export function drugCopay(nhiDrugTotal: number, s: CopayValues): number {
@@ -94,8 +105,15 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
   const copay = copayOn(lk.settings, date)
   if (!refill) {
     lines.push(regLine(lk.identity, date))
-    const consult = consultLine(lk.identity, lk.procedure(CONSULT_PROC_ID), date)
+    // 急診：急診診察費取代門診診察費；到院到離開急診滿 6 小時，每 6 小時收一單位觀察床費
+    const consult = consultLine(lk.identity, lk.procedure(visit.er ? ER_CONSULT_PROC_ID : CONSULT_PROC_ID), date)
     if (consult) lines.push(consult)
+    const obs = visit.er ? lk.procedure(ER_OBS_PROC_ID) : undefined
+    const blocks = visit.er ? erObsBlocks(visit.er.arrivedAt, visit.er.disposition?.at ?? enc.completedAt ?? visit.er.arrivedAt) : 0
+    if (obs && blocks) {
+      const price = procPriceOn(obs, date)
+      lines.push(lk.identity.selfPay ? { kind: 'self', name: `${obs.name}（自費）`, qty: blocks, unitPrice: price.selfPrice, amount: price.selfPrice * blocks, patientPay: true } : { kind: 'procedure', name: obs.name, qty: blocks, unitPrice: price.points, amount: price.points * blocks, patientPay: false })
+    }
   }
 
   let nhiDrugTotal = 0
@@ -125,7 +143,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup)
     }
   }
 
-  const basic = refill ? undefined : basicCopayLine(lk.identity, visit.caseType, copay, lk.referredOf ? lk.referredOf(visit) : visit.referralIn ? '經轉診' : false)
+  const basic = refill ? undefined : visit.er ? erCopayLine(lk.identity, visit.er.level, copay) : basicCopayLine(lk.identity, visit.caseType, copay, lk.referredOf ? lk.referredOf(visit) : visit.referralIn ? '經轉診' : false)
   if (basic) lines.push(basic)
   if (!selfPayVisit && !lk.identity.copayExempt) {
     const dc = visit.caseType === '08' ? 0 : drugCopay(nhiDrugTotal, copay)

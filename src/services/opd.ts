@@ -26,11 +26,12 @@ export function listQueue(q: { date: string; doctorId: string; period?: string }
       .map((v) => ({ ...visitView(v), encounterStatus: find.encounterOfVisit(v.id)?.status }))
       .filter((v) => !q.period || v.period === q.period)
       // 先依診別（上午→下午→夜診）再依看診號，不同診別的號碼才不會交錯
-      .sort((a, b) => periodOrder[a.period] - periodOrder[b.period] || a.seqNo - b.seqNo),
+      // 急診：依檢傷級數（1 級最先）、再依檢傷時間——「下一位」（nextInQueue）就會先叫最危急的
+      .sort((a, b) => periodOrder[a.period] - periodOrder[b.period] || (a.er && b.er ? a.er.level - b.er.level || a.er.triagedAt.localeCompare(b.er.triagedAt) : a.seqNo - b.seqNo)),
   )
 }
 
-const periodOrder = { AM: 0, PM: 1, NIGHT: 2 } as const
+const periodOrder = { AM: 0, PM: 1, NIGHT: 2, ER: 3 } as const
 
 const LOCKED: VisitStatus[] = ['charged', 'dispensed']
 

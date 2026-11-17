@@ -2,7 +2,7 @@
 // 規則在 surgery-rules（純函式）；API 在 surgery.ts
 import type { Admission, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
-import { addMinutes } from '@/utils/date'
+import { addMinutes, ageOf } from '@/utils/date'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL } from './surgery-rules'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
@@ -46,7 +46,7 @@ export function surgeryView(s: Surgery): SurgeryView {
   return {
     ...s,
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', gender: p?.gender === 'M' ? '男' : '女',
-    age: p ? `${Number(s.createdAt.slice(0, 4)) - Number(p.birthDate.slice(0, 4))} 歲` : '',
+    age: p ? `${ageOf(p.birthDate, s.createdAt.slice(0, 10))} 歲` : '',
     bedNo: bed?.bedNo ?? '', ward: bed?.ward ?? '', admitNo: a?.admitNo ?? '', allergies: p?.allergies ?? [], flags: flagsOf(s.patientId),
     doctorName: nameOf.doctor(s.doctorId), procName: find.procedure(s.procId)?.name ?? s.procId,
     sideText: SIDE_LABEL[s.side], anesthesiaText: ANESTHESIA_LABEL[s.anesthesia], statusLabel: SURGERY_STATUS_LABEL[s.status],

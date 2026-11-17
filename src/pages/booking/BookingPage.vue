@@ -123,7 +123,8 @@ const caseType = ref<string | number>('01')
 const preventItems = ref<string[]>([])
 const { data: identities } = useQuery(() => masterApi.listIdentities())
 // 08 慢箋調劑不看診，不在這裡掛（走病人卡片上的「登記領藥」）；以前可以選 08 掛進醫師的診，醫師得重開一次處方
-const caseTypeOptions = masterApi.staticCodes.caseTypes.filter((c) => c.code !== '08').map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
+// 08 慢箋領藥走「登記領藥」；E1 急診由護理師在「急診」檢傷掛號
+const caseTypeOptions = masterApi.staticCodes.caseTypes.filter((c) => c.code !== '08' && c.code !== 'E1').map((c) => ({ label: `${c.code} ${c.name}`, value: c.code }))
 
 // 換病人時，身分、案件分類、預防保健都回到預設——以前案件分類沒重設，上一位選 04 慢性病，下一位就沿用
 watch(patient, (p) => {

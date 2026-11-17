@@ -16,7 +16,7 @@ const { data: settings } = useQuery(() => adminApi.getBillingSettings())
 const { data: identities } = useQuery(() => masterApi.listIdentities())
 
 // ---------- 部分負擔參數 ----------
-const form = reactive<CopayValues>({ basicCopay: 0, basicCopayReferred: 0, drugCopayFreeUpTo: 0, drugCopayStep: 1, drugCopayPerStep: 0, drugCopayMax: 0 })
+const form = reactive<CopayValues>({ basicCopay: 0, basicCopayReferred: 0, erCopayUrgent: 0, erCopay: 0, drugCopayFreeUpTo: 0, drugCopayStep: 1, drugCopayPerStep: 0, drugCopayMax: 0 })
 /** 這組參數從哪天起（空白＝今天） */
 const from = ref('')
 // 只在第一次載入時帶入；之後重新查詢不覆蓋使用者正在改的內容
@@ -27,10 +27,12 @@ watch(settings, (s) => {
     loaded = true
   }
 })
-const dirty = computed(() => !!settings.value && (['basicCopay', 'basicCopayReferred', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const).some((k) => form[k] !== settings.value![k]))
+const dirty = computed(() => !!settings.value && (['basicCopay', 'basicCopayReferred', 'erCopayUrgent', 'erCopay', 'drugCopayFreeUpTo', 'drugCopayStep', 'drugCopayPerStep', 'drugCopayMax'] as const).some((k) => form[k] !== settings.value![k]))
 const fields: { key: keyof CopayValues; label: string; hint: string }[] = [
   { key: 'basicCopay', label: '門診基本部分負擔', hint: '元／次（未經轉診）' },
   { key: 'basicCopayReferred', label: '基本部分負擔（經轉診）', hint: '元／次（持外院轉診單）' },
+  { key: 'erCopayUrgent', label: '急診部分負擔（檢傷 1、2 級）', hint: '元／次' },
+  { key: 'erCopay', label: '急診部分負擔（檢傷 3–5 級）', hint: '元／次' },
   { key: 'drugCopayFreeUpTo', label: '藥品部分負擔免收額度', hint: '健保藥費在此金額以下免收' },
   { key: 'drugCopayStep', label: '每一級距', hint: '元' },
   { key: 'drugCopayPerStep', label: '每級加收', hint: '元' },

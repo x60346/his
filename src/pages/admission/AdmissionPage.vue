@@ -52,7 +52,8 @@ const dueBadge = (d: string): { tone: 'red' | 'gray'; text: string } => {
   const late = diffDays(d, todayStr.value)
   return late > 0 ? { tone: 'red', text: `逾期 ${late} 天` } : late === 0 ? { tone: 'red', text: '今日' } : { tone: 'gray', text: d.slice(5).replace('-', '/') }
 }
-const sortedReservations = computed(() => [...(reservations.value ?? [])].sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)))
+// 急診收住院的排最前面（病人在急診等床）
+const sortedReservations = computed(() => [...(reservations.value ?? [])].sort((a, b) => Number(b.fromEr) - Number(a.fromEr) || a.expectedDate.localeCompare(b.expectedDate)))
 
 // ---------- 模式 ----------
 type Mode = 'idle' | 'checkin' | 'transfer'
@@ -254,7 +255,8 @@ const reserveOpen = ref(false)
               <div class="flex items-center gap-2">
                 <span class="font-semibold text-slate-800">{{ a.patientName }}</span>
                 <span class="tabular text-xs text-slate-500">{{ a.chartNo }}</span>
-                <UBadge v-if="a.fromVisitId" tone="purple">門診轉入</UBadge>
+                <UBadge v-if="a.fromEr" tone="red" title="病人在急診等床，請優先安排">急診待床</UBadge>
+                <UBadge v-else-if="a.fromVisitId" tone="purple">門診轉入</UBadge>
                 <!-- 帶菌者（例：CRE）預約住院：報到前就看得到要排單人房或同類隔離的房間 -->
                 <PatientFlags :flags="a.flags" compact />
                 <UBadge :tone="dueBadge(a.expectedDate).tone" class="ml-auto">{{ dueBadge(a.expectedDate).text }}</UBadge>

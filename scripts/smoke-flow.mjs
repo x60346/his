@@ -881,7 +881,8 @@ try {
     const p = dbm.db.patients.find((x) => x.id === v.patientId)
     const age = ageOf(p.birthDate, v.date)
     const dn = deptName(v.deptId)
-    return (dn === '小兒科' && age >= 18) || (dn !== '小兒科' && age < 13) || (dn === '婦產科' && p.gender !== 'F')
+    // 急診不分年齡、性別
+    return !v.er && ((dn === '小兒科' && age >= 18) || (dn !== '小兒科' && age < 13) || (dn === '婦產科' && p.gender !== 'F'))
   })
   ok(misfit.length === 0, `門診掛號的科別符合病人年齡與性別（違規 ${misfit.length} 筆${misfit.length ? '，例：' + misfit.slice(0, 2).map((v) => `${dbm.db.patients.find((p) => p.id === v.patientId).name}→${deptName(v.deptId)}`).join('、') : ''}）`)
   const allergic = dbm.db.patients.find((p) => p.allergies.includes('Penicillin'))
@@ -3912,7 +3913,8 @@ try {
       ok(!seqBad.length && !rcBad.length && !pkBad.length && !csBad.length,
         `${label} 重建：看診號、收據號、領藥號、就醫序號都依時間先後${[...seqBad, ...rcBad, ...pkBad, ...csBad].slice(0, 2).join('；')}`)
       // 4. 今天：看過診的人數、下午診的掛號
-      const todayV = db.visits.filter((v) => v.date === Td && !v.refillOf)
+      // 急診（檢傷時才掛號）不算：這裡檢查的是門診的預約與看診順序
+      const todayV = db.visits.filter((v) => v.date === Td && !v.refillOf && !v.er)
       const seen = todayV.filter((v) => ['consulted', 'charged', 'dispensed'].includes(v.status))
       const pmSessionIds = new Set(db.sessions.filter((x) => x.date === Td && x.period === 'PM').map((x) => x.id))
       const pmRegs = todayV.filter((v) => pmSessionIds.has(v.sessionId))
@@ -5340,7 +5342,7 @@ try {
     ok(msg.includes('開立醫師'), `別的醫師確認 → 「${msg}」`)
     await as('nurse01')
     const nv = await IM.patientImaging(pt.id)
-    ok(nv.reports.length === 2 && nv.reports.every((r) => !r.canAck && !r.canAddendum), '護理師可以看影像報告（不能確認、不能補充）')
+    ok(nv.reports.filter((r) => r.encounterId === ee.id).length === 2 && nv.reports.every((r) => !r.canAck && !r.canAddendum), '護理師可以看影像報告（不能確認、不能補充）')
     await as('clerk01')
     await expectError(() => IM.patientImaging(pt.id), '櫃台看影像報告')
     await as(drUser)
@@ -6988,6 +6990,157 @@ try {
     const fs = await import('node:fs')
     const ui = ['src/components/surgery/SurgeryPanel.vue', 'src/pages/or/OrPage.vue'].map((p) => fs.readFileSync(p, 'utf8')).join('\n')
     ok(!/overlaps\(|countsProblem\(|prepMissing\(/.test(ui), '頁面不自己判斷撞期、計數、準備（服務層算好）')
+  }
+
+  // 急診：檢傷規則（主訴、生命徵象、不能比建議輕、調升要原因）、急診診次、依級數叫號、重新檢傷、去向（離院、收住院待床、轉院）、
+  // 費用（急診診察費、急診部分負擔依級數、觀察床費）、收費設定、首頁待辦
+  console.log('\n[急診]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.erApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const { addMinutes } = dateUtil
+    const N = { temp: 36.8, pulse: 80, resp: 16, sbp: 120, dbp: 75, spo2: 98 }
+
+    // 規則
+    ok(api.vitalsLevel({ ...N, spo2: 85 }).level === 2 && api.vitalsLevel({ ...N, sbp: 65 }).level === 1 && api.vitalsLevel({ ...N, temp: 39.2 }).level === 3 && api.vitalsLevel(N).level === 5, '生命徵象判級：血氧 85 → 2 級、收縮壓 65 → 1 級、發燒 39.2 → 3 級、正常 → 5 級')
+    ok(api.suggestLevel('胸痛', N).level === 2 && api.suggestLevel('喉嚨痛、咳嗽', { ...N, spo2: 88 }).level === 2 && api.suggestLevel('自己寫的主訴', N).level === 3, '建議級數：主訴與生命徵象取嚴重的；清單外的主訴預設 3 級')
+    let e = api.checkTriageInput({ complaint: '胸痛', vitals: N, level: 3 })
+    ok(e.level?.includes('不能比建議輕'), `不能比建議輕：「${e.level}」`)
+    e = api.checkTriageInput({ complaint: '腹痛', vitals: N, level: 2 })
+    ok(e.reason && !e.level, '比建議嚴重（調升）要寫原因')
+    e = api.checkTriageInput({ complaint: '腹痛', vitals: {}, level: 3 })
+    ok(e.pulse && e.sbp && e.spo2 && !Object.keys(api.checkTriageInput({ complaint: '心跳或呼吸停止', vitals: {}, level: 1 })).length, '脈搏、血壓、血氧必填（1 級急救中可以先不填）')
+    ok(api.waitState(2, '2026-11-17 10:00', undefined, '2026-11-17 10:11').overdue && !api.waitState(3, '2026-11-17 10:00', '2026-11-17 10:20', '2026-11-17 12:00').overdue, '等候：2 級超過 10 分鐘逾時；叫號後就停止計算')
+    ok(api.erObsBlocks('2026-11-17 08:00', '2026-11-17 13:59') === 0 && api.erObsBlocks('2026-11-17 08:00', '2026-11-17 14:00') === 1 && api.erObsBlocks('2026-11-17 08:00', '2026-11-17 21:30') === 2, '觀察床費：滿 6 小時一單位')
+    ok(!api.isNoShow({ status: 'registered', date: addDaysT(-1), er: {} }, T) && api.isNoShow({ status: 'registered', date: addDaysT(-1) }, T), '急診沒等到看診不算預約未到')
+
+    // 種子
+    const seeded = db().visits.filter((v) => v.er && v.date === T)
+    ok(seeded.length === 4 && seeded.every((v) => v.sessionId === `ER-${T}` && v.caseType === 'E1' && v.checkedInAt) && db().sessions.find((s) => s.id === `ER-${T}`)?.period === 'ER', '種子：今天急診 4 位候診（急診診次、案件 E1、已報到）')
+    ok(!(await api.scheduleApi.listSessions({ date: T })).some((s) => s.period === 'ER'), '掛號頁的診次清單沒有急診')
+    await as('nurse01')
+    let d = await api.dashboardApi.getDashboard()
+    ok(d.erWaiting >= 4 && d.erOverdue >= 1, `首頁：急診待看診 ${d.erWaiting}（逾時 ${d.erOverdue}）`)
+    let board = await E.erBoard()
+    const waiting = board.items.filter((i) => i.stage === 'waiting')
+    ok(board.canTriage && !board.canDispose && waiting.every((x, i, a) => i === 0 || a[i - 1].level <= x.level), '看板：待看診依級數排')
+
+    // 檢傷掛號
+    const busy = new Set([...db().visits.filter((v) => v.date === T).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
+    // 健保一般身分（榮民等免部分負擔的不收急診部分負擔，另外測）
+    const [p1, p2, p3] = db().patients.filter((p) => !busy.has(p.id) && p.defaultIdentity === '01')
+    await as('clerk01')
+    await expectError(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 2 }), '櫃台不能檢傷')
+    await as('nurse01')
+    const inpt = db().admissions.find((a) => a.status === 'admitted')
+    let msg = await errOf(() => E.triageAndRegister({ patientId: inpt.patientId, complaint: '腹痛', vitals: N, level: 3 }))
+    ok(msg.includes('住院中'), '住院中的病人不能掛急診')
+    let f = await fieldsOf(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 4 }))
+    ok(f.level?.includes('不能比建議輕'), '服務層：不能比建議輕')
+    const v1 = await E.triageAndRegister({ patientId: p1.id, complaint: '呼吸困難', vitals: { ...N, spo2: 86, pulse: 126 }, level: 1, reason: '冒冷汗、意識變差' })
+    ok(v1.er.level === 1 && v1.er.suggested === 2 && v1.er.reason && v1.caseType === 'E1' && v1.checkedInAt && v1.period === 'ER', '檢傷掛號：建議 2 級、調升 1 級（有原因），急診案件、已報到')
+    msg = await errOf(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 2 }))
+    ok(msg.includes('已經在急診'), '同一位病人在急診中不能重複掛')
+    const v2 = await E.triageAndRegister({ patientId: p2.id, complaint: '外傷：撕裂傷', vitals: N, level: 4 })
+    const v3 = await E.triageAndRegister({ patientId: p3.id, complaint: '腹痛', vitals: { ...N, temp: 38.2 }, level: 3 })
+
+    // 重新檢傷
+    await as('dr12')
+    await expectError(() => E.retriage(v2.id, { level: 3, reason: '出血變多' }), '醫師不能重新檢傷（護理師做）')
+    await as('nurse01')
+    f = await fieldsOf(() => E.retriage(v2.id, { level: 4, reason: '' }))
+    ok(f.level, '級數沒變擋')
+    const r2 = await E.retriage(v2.id, { level: 3, reason: '傷口持續出血' })
+    ok(r2.level === 3 && r2.history.length === 1 && r2.history[0].level === 4, '重新檢傷 4 → 3 級，舊的留在紀錄')
+
+    // 醫師：依級數叫號
+    await as('dr12')
+    const q = await api.opdApi.listQueue({ date: T, doctorId: 'DR12' })
+    const next = api.nextInQueue(q)
+    ok(next.id === v1.id && q.every((x, i, a) => i === 0 || !x.er || !a[i - 1].er || a[i - 1].er.level <= x.er.level), '門診看診的急診診次：依級數排，「下一位」是 1 級')
+    msg = await errOf(() => E.setDisposition(v1.id, { kind: 'home' }))
+    ok(msg.includes('先完成看診'), '還沒看完不能決定去向')
+    const see = async (v, dx = { icd: 'I25.10', name: '冠狀動脈粥狀硬化心臟病', primary: true }) => {
+      const enc = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
+      await api.opdApi.completeEncounter(enc.id, { subjective: v.er.complaint, objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [dx], medications: [], procedures: [], refillTimes: 0, admissionRequested: false })
+    }
+    await see(v1)
+    board = await E.erBoard()
+    ok(board.canDispose && board.items.find((i) => i.visitId === v1.id).stage === 'deciding' && (await api.dashboardApi.getDashboard()).erDeciding >= 1, '看完：待決定去向（急診醫師首頁）')
+    await as('dr01')
+    msg = await errOf(() => E.setDisposition(v1.id, { kind: 'home' }))
+    ok(msg.includes('急診醫師'), '非急診醫師不能決定去向')
+    await as('dr12')
+    // 收住院
+    f = await fieldsOf(() => E.setDisposition(v1.id, { kind: 'admit' }))
+    ok(f.deptId && f.doctorId && f.diagnosis, '收住院：科別、主治、入院診斷一次標出')
+    const med = db().departments.find((x) => x.code === 'MED')
+    const medDoc = db().doctors.find((x) => x.deptId === med.id)
+    f = await fieldsOf(() => E.setDisposition(v1.id, { kind: 'admit', deptId: med.id, doctorId: 'DR04', diagnosis: '急性冠心症' }))
+    ok(f.doctorId?.includes('不是'), '主治要是那一科的醫師')
+    let it = await E.setDisposition(v1.id, { kind: 'admit', deptId: med.id, doctorId: medDoc.id, diagnosis: '急性冠心症' })
+    const adm = db().admissions.find((a) => a.id === it.admissionId)
+    ok(it.stage === 'bed' && adm.status === 'reserved' && adm.fromVisitId === v1.id && adm.expectedDate === T, `收住院：建住院預約（今天、來自急診），看板「待床」`)
+    msg = await errOf(() => E.setDisposition(v1.id, { kind: 'home' }))
+    ok(msg.includes('已經決定'), '去向只決定一次')
+    await as('clerk01')
+    const res = await api.admissionApi.listAdmissions({ status: ['reserved'] })
+    ok(res.find((a) => a.id === adm.id).fromEr && (await api.dashboardApi.getDashboard()).erBed >= 1, '住院中心：標「急診」、首頁急診待床')
+    const bed = db().beds.find((b) => b.status === 'empty' && db().admissions.every((a) => a.bedId !== b.id))
+    await api.admissionApi.checkIn(adm.id, bed.id)
+    ok((await E.erBoard()).items.find((i) => i.visitId === v1.id).stage === 'admitted', '報到後：看板「已住院」')
+
+    // 費用：急診診察費、急診部分負擔依級數、觀察床費
+    await as('clerk01')
+    let pv = await api.chargeApi.previewCharge(v1.id)
+    const nm = (k) => pv.lines.filter((l) => l.name.startsWith(k))
+    const s0 = db().billingSettings
+    ok(nm('急診診察費').length === 1 && !nm('一般門診診察費').length && nm('急診部分負擔（檢傷 1 級）')[0]?.amount === s0.erCopayUrgent && !nm('門診基本部分負擔').length, `批價：急診診察費、急診部分負擔 1 級 ${s0.erCopayUrgent} 元（不收門診基本部分負擔）`)
+    await as('dr12')
+    await see(v3, { icd: 'K29.70', name: '胃炎', primary: true })
+    db().visits.find((v) => v.id === v3.id).er.arrivedAt = addMinutes(nowStr(), -7 * 60)
+    await E.setDisposition(v3.id, { kind: 'home', note: '症狀緩解' })
+    await as('clerk01')
+    pv = await api.chargeApi.previewCharge(v3.id)
+    ok(pv.lines.find((l) => l.name.startsWith('急診部分負擔')).amount === s0.erCopay && pv.lines.find((l) => l.name.startsWith('急診觀察床費'))?.qty === 1, `3 級收 ${s0.erCopay} 元；在急診 7 小時收 1 單位觀察床費`)
+    await api.chargeApi.pay(v3.id, { payMethod: 'card' })
+    ok((await E.erBoard()).items.find((i) => i.visitId === v3.id).stage === 'left', '離院批價後：已離院')
+
+    // 轉院
+    await as('dr12')
+    await see(v2, { icd: 'J06.9', name: '急性上呼吸道感染', primary: true })
+    f = await fieldsOf(() => E.setDisposition(v2.id, { kind: 'transfer' }))
+    ok(f.hospital, '轉院要寫醫院')
+    it = await E.setDisposition(v2.id, { kind: 'transfer', hospital: '區域醫學中心', note: '需整形外科處理' })
+    ok(it.stage === 'billing' && it.dispositionText.includes('區域醫學中心'), '轉院：待批價')
+
+    // 收費設定
+    await as('admin')
+    f = await fieldsOf(() => api.adminApi.saveBillingSettings({ ...api.pickCopay(db().billingSettings), erCopayUrgent: 900, erCopay: 300 }))
+    ok(f.erCopayUrgent, '急診部分負擔：1、2 級不能比 3–5 級高')
+    db().billingSettings.ipdInterim = { days: 9, amount: 30000 }
+    const old = api.pickCopay(db().billingSettings)
+    delete old.erCopay
+    delete old.erCopayUrgent
+    await api.adminApi.saveBillingSettings({ ...old, basicCopay: old.basicCopay })
+    ok(db().billingSettings.ipdInterim?.days === 9 && db().billingSettings.erCopay === s0.erCopay, '存門診部分負擔：期中繳款提醒設定沒被洗掉；沒送的急診欄位沿用原值')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

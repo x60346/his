@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  Droplet, Scissors,
+  Droplet, Scissors, Siren,
   AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, ShieldAlert, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
@@ -50,6 +50,10 @@ const todos = computed<Todo[]>(() => {
   const list: (Todo & { roles: string[] })[] = [
     { roles: ['lab'], label: '備血待處理', count: s.value.bloodWork ?? 0, hint: s.value.bloodUrgent ? `其中急件 ${s.value.bloodUrgent} 張` : '待驗血型、交叉試驗還沒配滿的備血單', route: 'blood', icon: Droplet, urgent: !!s.value.bloodUrgent },
     { roles: ['doctor'], label: '輸血反應待確認', count: s.value.bloodReactions ?? 0, hint: '我的病人輸血時發生反應、已停止輸血：請在住院醫囑「輸血」分頁寫處置', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '急診待看診', count: s.value.erWaiting, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間` : '已檢傷、等醫師看的急診病人', route: 'er', icon: Siren, urgent: !!s.value.erOverdue },
+    { roles: ['doctor'], label: '急診待看診', count: s.value.erDeciding !== undefined ? s.value.erWaiting : 0, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間（在門診看診的急診診次依級數叫號）` : '在門診看診的急診診次依檢傷級數叫號', route: 'opd', icon: Siren, urgent: !!s.value.erOverdue },
+    { roles: ['doctor'], label: '急診待決定去向', count: s.value.erDeciding ?? 0, hint: '看完診的急診病人：離院、收住院或轉院（急診看板）', route: 'er', icon: Siren, urgent: true },
+    { roles: ['clerk', 'nurse'], label: '急診收住院待床', count: s.value.erBed, hint: '急診醫師決定收住院、還沒報到：住院中心優先安排床位', route: 'admission', icon: Siren, urgent: true },
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['doctor'], label: '手術紀錄待寫', count: s.value.opRecordsDue ?? 0, hint: '我主刀、已完成的手術：在住院醫囑「手術」分頁寫手術紀錄', route: 'ipd', icon: Scissors, urgent: true },

@@ -65,7 +65,7 @@ export function toRoc(s: string): string {
   return `${Number(y) - 1911}/${m}/${d}${rest}`
 }
 
-export const periodLabel: Record<string, string> = { AM: '上午診', PM: '下午診', NIGHT: '夜診' }
+export const periodLabel: Record<string, string> = { AM: '上午診', PM: '下午診', NIGHT: '夜診', ER: '急診' }
 
 /** 依目前時間推算當下診別 */
 export function currentPeriod(): 'AM' | 'PM' | 'NIGHT' {

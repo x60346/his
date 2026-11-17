@@ -20,6 +20,7 @@ import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
 import * as surgery from './surgery'
+import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -61,6 +62,7 @@ export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
 export const surgeryApi = overNetwork(surgery)
+export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -127,6 +129,7 @@ export * from './blood-rules'
 export * from './copy-rules'
 export * from './management-rules'
 export * from './surgery-rules'
+export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
 export * from './interaction-rules'
@@ -163,6 +166,8 @@ export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-wor
 export type { ManagementReport, MonthMetrics } from './management'
 export type { PatientSurgeries, SurgeryInput, OpRecordInput, OrBoard } from './surgery'
 export type { SurgeryView } from './surgery-work'
+export type { ErBoard, TriageInput, DispositionInput } from './er'
+export type { ErBoardItem } from './er-work'
 export type { CopySource, CopySources, RecordCopyView, RecordCopyInput, CopyPage, CopyPrint } from './copy'
 export type { RoomRow } from './schedule'
 export type { SessionView, WeeklySlotView, SessionImpact, AffectedVisit, NoticeRow, SlotResult } from './schedule'

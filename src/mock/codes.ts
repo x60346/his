@@ -29,6 +29,8 @@ export const departments: Department[] = [
   { id: 'D09', code: 'RAD', name: '放射科', active: true },
   // 感染科：審核管制性抗生素（示範不排門診）
   { id: 'D10', code: 'INF', name: '感染科', active: true },
+  // 急診科：24 小時急診（不排門診表，每天一個急診診次）
+  { id: 'D11', code: 'ER', name: '急診科', active: true },
 ]
 
 /** 管制藥品使用執照（展示用）：DR08 鄭雅婷沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
@@ -47,6 +49,8 @@ export const doctors: Doctor[] = [
   { id: 'DR10', name: '杜明遠', deptId: 'D09', title: '主治醫師', licenseNo: 'A102420', controlledLicense: { no: 'C11-2420', validUntil: '' }, active: true },
   // 感染科醫師：審核管制性抗生素（不看門診）
   { id: 'DR11', name: '高子晴', deptId: 'D10', title: '主治醫師', licenseNo: 'A102641', controlledLicense: { no: 'C11-2641', validUntil: '' }, active: true },
+  // 急診醫師（不排門診表；急診病人在「門診看診」的急診診次看）
+  { id: 'DR12', name: '江承翰', deptId: 'D11', title: '主治醫師', licenseNo: 'A102862', controlledLicense: { no: 'C11-2862', validUntil: '' }, active: true },
 ]
 
 export const identities: Identity[] = [
@@ -71,7 +75,7 @@ export const discounts: DiscountRule[] = [
 ]
 
 /** 收費參數預設值（展示用的簡化規則） */
-export const billingSettings: BillingSettings = { basicCopay: 80, basicCopayReferred: 50, drugCopayFreeUpTo: 100, drugCopayStep: 100, drugCopayPerStep: 20, drugCopayMax: 200 }
+export const billingSettings: BillingSettings = { basicCopay: 80, basicCopayReferred: 50, erCopayUrgent: 150, erCopay: 300, drugCopayFreeUpTo: 100, drugCopayStep: 100, drugCopayPerStep: 20, drugCopayMax: 200 }
 
 export const caseTypes = [
   { code: '01', name: '西醫一般案件' },
@@ -443,6 +447,9 @@ const procedureBase: Procedure[] = [
   { id: 'P041', code: '96020C', name: '全身麻醉費', category: '處置', points: 3700, selfPrice: 8000, anesthesiaFee: 'general', active: true },
   { id: 'P042', code: '96005C', name: '脊髓麻醉費', category: '處置', points: 2000, selfPrice: 5000, anesthesiaFee: 'spinal', active: true },
   { id: 'P043', code: '96007C', name: '神經阻斷麻醉費', category: '處置', points: 1500, selfPrice: 4000, anesthesiaFee: 'regional', active: true },
+  // 急診（急診就醫自動帶入；門診、醫囑都不能開）。點數為展示用近似值
+  { id: 'P044', code: '00201B', name: '急診診察費', category: '診察', points: 650, selfPrice: 800, er: 'consult', active: true },
+  { id: 'P045', code: '03023B', name: '急診觀察床費（每 6 小時）', category: '處置', points: 400, selfPrice: 600, er: 'obs', active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

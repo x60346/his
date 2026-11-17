@@ -26,7 +26,8 @@ export function refillFollowUpDays(maxRxDays: number, refillTimes: number): numb
 export const NO_SHOW_TRACK_DAYS = 14
 
 /** 預約未到：就醫日已過（今天的不算，下午還可能來）、還是已掛號（沒報到、沒看診、沒退掛）。慢箋領藥登記不算 */
-export const isNoShow = (v: Pick<Visit, 'status' | 'date' | 'refillOf'>, today: string) => v.status === 'registered' && v.date < today && !v.refillOf
+/** 急診沒等到看診就走了不算「預約未到」（不是預約） */
+export const isNoShow = (v: Pick<Visit, 'status' | 'date' | 'refillOf' | 'er'>, today: string) => v.status === 'registered' && v.date < today && !v.refillOf && !v.er
 
 /** 未到的類別（排序依這個）：出院後回診 > 醫師約的回診 > 慢性病 > 一般 */
 export type NoShowKind = 'afterDischarge' | 'followUp' | 'chronic' | 'normal'

@@ -337,9 +337,11 @@ export const getBillingSettings = (): Promise<BillingSettingsView> => query(getB
 const pendingChargeCount = (from: string) => db.visits.filter((v) => v.status === 'consulted' && v.date >= from).length
 
 /** from：這天起生效（空白＝今天，不能早於今天） */
-export function saveBillingSettings(input: CopayValues & { from?: string }): Promise<{ settings: BillingSettingsView; affectedPending: number; from: string }> {
+export function saveBillingSettings(raw: Partial<CopayValues> & { from?: string }): Promise<{ settings: BillingSettingsView; affectedPending: number; from: string }> {
   return mutate(() => {
     const u = requireUser('admin')
+    // 沒送的欄位（例：舊畫面沒有急診部分負擔）沿用那天原本的值
+    const input = { ...copayOn(db.billingSettings, raw.from?.trim() || today()), ...raw } as CopayValues & { from?: string }
     const keys = COPAY_KEYS
     const t = today()
     const from = input.from?.trim() || t
@@ -352,14 +354,16 @@ export function saveBillingSettings(input: CopayValues & { from?: string }): Pro
     }
     if (input.drugCopayStep < 1) v.add('drugCopayStep', '級距至少 1 元（不能為 0，否則無法計算）')
     if (input.basicCopayReferred > input.basicCopay) v.add('basicCopayReferred', '經轉診的不能比未經轉診的高（轉診是為了讓病人少付）')
+    if (input.erCopayUrgent > input.erCopay) v.add('erCopayUrgent', '檢傷 1、2 級（危急）的不能比 3–5 級高')
     if (input.drugCopayMax < input.drugCopayPerStep) v.add('drugCopayMax', '上限不能小於每級加收金額')
     v.done()
     const s = db.billingSettings
     const before = copayOn(s, from)
     const values = pickCopay(input)
     const changes = applyChange<CopayValues>(s, s.changes, { ...values, from, by: u.id, at: now() }, keys)
-    // 住院部分負擔是另一組設定（ipd-charge.saveIpdCopay），這裡要留著，不然改門診參數會把它洗掉
-    db.billingSettings = { ...pickCopay(s), ...(changes.length ? { changes } : {}), ...(db.billingSettings.ipdCopay ? { ipdCopay: db.billingSettings.ipdCopay } : {}), updatedAt: now(), updatedBy: u.id }
+    // 住院部分負擔、期中繳款提醒是另外的設定（ipd-charge.saveIpdCopay／saveIpdInterim），這裡要留著，不然改門診參數會把它們洗掉
+    // （以前只留了住院部分負擔，存一次門診部分負擔，期中繳款的提醒設定就回到預設）
+    db.billingSettings = { ...pickCopay(s), ...(changes.length ? { changes } : {}), ...(db.billingSettings.ipdCopay ? { ipdCopay: db.billingSettings.ipdCopay } : {}), ...(db.billingSettings.ipdInterim ? { ipdInterim: db.billingSettings.ipdInterim } : {}), updatedAt: now(), updatedBy: u.id }
     const after = copayOn(db.billingSettings, from)
     const changed = keys.filter((k) => before[k] !== after[k]).map((k) => `${k} ${before[k]}→${after[k]}`)
     audit('修改收費設定', changed.length ? `${from} 起：${changed.join('、')}` : '無變更')

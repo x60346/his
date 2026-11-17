@@ -520,7 +520,7 @@ const lastOpen = ref(true)
             <span :class="['tabular w-8 text-center text-lg font-bold', v.status === 'registered' ? 'text-brand-600' : 'text-slate-400']">{{ v.seqNo }}</span>
             <span class="min-w-0 flex-1">
               <span class="block truncate font-medium text-slate-800">{{ v.patientName }}</span>
-              <span class="block text-xs text-slate-500">{{ periodLabel[v.period] }}・{{ v.gender === 'M' ? '男' : '女' }} {{ ageText(v.birthDate) }}<template v-if="v.firstVisit">・初診</template></span>
+              <span class="block text-xs text-slate-500">{{ periodLabel[v.period] }}・{{ v.gender === 'M' ? '男' : '女' }} {{ ageText(v.birthDate) }}<template v-if="v.firstVisit">・初診</template><template v-if="v.er">・<b :class="v.er.level <= 2 ? 'text-red-700' : 'text-amber-700'">檢傷 {{ v.er.level }} 級</b>・{{ v.er.complaint }}</template></span>
             </span>
             <UBadge v-if="v.status === 'registered' && v.skippedAt" tone="yellow">過號</UBadge>
             <UBadge v-else-if="v.canCheckIn">未報到</UBadge>
@@ -540,6 +540,7 @@ const lastOpen = ref(true)
         <UBadge tone="blue">{{ visit.identityName }}</UBadge>
         <UBadge>{{ visit.caseType }} {{ caseTypeName(visit.caseType) }}</UBadge>
         <UBadge v-if="visit.firstVisit" tone="purple">初診</UBadge>
+        <UBadge v-if="visit.er" :tone="visit.er.level <= 2 ? 'red' : 'yellow'">急診・檢傷 {{ visit.er.level }} 級：{{ visit.er.complaint }}</UBadge>
         <!-- 預防保健：每一項一顆按鈕，點了就在這裡登錄；登錄過的顯示結果 -->
         <template v-if="preventStatus?.length">
           <template v-for="s in preventStatus" :key="s.item.code">

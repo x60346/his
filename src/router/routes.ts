@@ -2,7 +2,7 @@
 import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import {
-  Activity, BarChart3, BedDouble, Bug, Droplet, Scissors, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
+  Activity, BarChart3, BedDouble, Bug, Droplet, Scissors, Siren, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
   UserPlus, Users,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
@@ -32,6 +32,7 @@ export const appRoutes: RouteRecordRaw[] = [
 
   { path: 'booking', name: 'booking', component: () => import('@/pages/booking/BookingPage.vue'), meta: { title: '掛號作業', icon: UserPlus, group: '門診', roles: ['clerk', 'nurse'] } },
   { path: 'patients', name: 'patients', component: () => import('@/pages/patients/PatientsPage.vue'), meta: { title: '病患資料', icon: Users, group: '門診', roles: ['clerk', 'nurse', 'doctor'] } },
+  { path: 'er', name: 'er', component: () => import('@/pages/er/ErPage.vue'), meta: { title: '急診', icon: Siren, group: '門診', roles: ['nurse', 'doctor', 'clerk'] } },
   { path: 'opd', name: 'opd', component: () => import('@/pages/opd/OpdPage.vue'), meta: { title: '門診看診', icon: Stethoscope, group: '門診', roles: ['doctor'] } },
   { path: 'charge', name: 'charge', component: () => import('@/pages/charge/ChargePage.vue'), meta: { title: '批價結帳', icon: Receipt, group: '門診', roles: ['clerk'] } },
   { path: 'pharmacy', name: 'pharmacy', component: () => import('@/pages/pharmacy/PharmacyPage.vue'), meta: { title: '門診藥局', icon: Pill, group: '門診', roles: ['pharmacist'] } },

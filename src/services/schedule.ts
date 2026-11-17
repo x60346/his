@@ -33,7 +33,7 @@ export function ensureSessions(date: string): boolean {
 }
 
 /** 各診別的掛號截止時間（展示用設定） */
-export const periodCloseTime: Record<Period, string> = { AM: '12:00', PM: '17:30', NIGHT: '21:30' }
+export const periodCloseTime: Record<Period, string> = { AM: '12:00', PM: '17:30', NIGHT: '21:30', ER: '24:00' }
 
 
 /** 診次是否已結束（過去日期，或今天但已過截止時間） */
@@ -86,14 +86,15 @@ function sessionView(s: ClinicSession): SessionView {
   }
 }
 
-const periodOrder: Record<Period, number> = { AM: 0, PM: 1, NIGHT: 2 }
+const periodOrder: Record<Period, number> = { AM: 0, PM: 1, NIGHT: 2, ER: 3 }
 
 export function listSessions(q: { date: string; deptId?: string; doctorId?: string; period?: Period }): Promise<SessionView[]> {
   return query(() => {
     // 讀取時補產生診次屬於「隱性寫入」，需要自行 commit 才會保存
     if (ensureSessions(q.date)) commitIfPossible()
     return db.sessions
-      .filter((s) => s.date === q.date && (!q.deptId || s.deptId === q.deptId) && (!q.doctorId || s.doctorId === q.doctorId) && (!q.period || s.period === q.period))
+      // 急診診次不在掛號頁、排班頁出現（急診由護理師檢傷後掛號）：只有指定 period ER 才列
+      .filter((s) => s.date === q.date && (!q.deptId || s.deptId === q.deptId) && (!q.doctorId || s.doctorId === q.doctorId) && (q.period ? s.period === q.period : s.period !== 'ER'))
       .sort((a, b) => periodOrder[a.period] - periodOrder[b.period] || a.roomNo.localeCompare(b.roomNo))
       .map(sessionView)
   })

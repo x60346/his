@@ -18,6 +18,7 @@ import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } f
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { surgeryCounts } from './surgery-work'
+import { erCounts, isErDoctor } from './er-work'
 
 export interface DashboardStats {
   date: string
@@ -68,6 +69,11 @@ export interface DashboardStats {
   /** 手術：待排程（有手術排程權限的人）、今明兩天要開但術前準備沒完成（護理站）、我是主刀手術紀錄待寫 */
   surgeryToSchedule?: number
   surgeryPrepDue: number
+  /** 急診：待看診（其中超過目標等候時間）、待決定去向（急診醫師）、收住院待床（護理師、櫃台） */
+  erWaiting: number
+  erOverdue: number
+  erDeciding?: number
+  erBed: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -204,6 +210,7 @@ export function getDashboard(): Promise<DashboardStats> {
       ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount(), ...(({ work, urgent }) => ({ bloodWork: work, bloodUrgent: urgent }))(bloodLabCounts()) } : {}),
       transfusionTodo: transfusionTodoCount(now()),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
+      ...(({ waiting, overdue, deciding, bed }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding } : {}) }))(erCounts(now())),
       ...(() => {
         const me = sessionUser()
         const role = sessionRole()
