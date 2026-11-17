@@ -49,7 +49,7 @@ import type {
   ImagingReport,
   MedicalCertificate,
 } from '@/types'
-import { addDays, addMinutes, ageOf, now, parseDate, toDateStr, today } from '@/utils/date'
+import { addDays, addMinutes, ageOf, diffDays, now, parseDate, toDateStr, today } from '@/utils/date'
 import { autoQty, calcChargeLines, calcIpdChargeLines, ipdDays, IPD_COPAY_DEFAULT, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
@@ -1839,6 +1839,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         put(a, 'fall', F(0, 0, 0, 20, 0, 0), first(a), 'admission')
         if (a !== skipPressure) put(a, 'pressure', B(4, 4, 3, 4, 3, 3), first(a), 'admission')
       }
+    }
+  }
+
+  // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。
+  // 挑「第一次掛號在最近 60 天內」、之前沒住過院的病人，第一次掛號標初診（今天最多 3 位、之前每週最多 2 位），
+  // 建檔日改成那天（有更早的預防保健紀錄就改成那天：預防保健不用掛號）。和櫃台掛號時 booking.register 的判斷一樣（之前沒有任何掛號＝初診）
+  {
+    const firstOf = new Map<string, Visit>()
+    for (const v of [...visits].filter((x) => x.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt))) if (!firstOf.has(v.patientId)) firstOf.set(v.patientId, v)
+    const earlier = (pid: string, v: Visit) => admissions.some((a) => a.patientId === pid && (a.admittedAt ?? a.reservedAt) < v.createdAt)
+    const picked = new Map<string, number>()
+    for (const [pid, v] of [...firstOf.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (earlier(pid, v) || v.date < addDays(T, -60) || v.date > T) continue
+      const week = v.date === T ? 'today' : `w${Math.floor(diffDays(v.date, T) / 7)}`
+      const n = picked.get(week) ?? 0
+      if (n >= (week === 'today' ? 3 : 2)) continue
+      picked.set(week, n + 1)
+      v.firstVisit = true
+      const p = patients.find((x) => x.id === pid)!
+      const pv = preventRecords.filter((r) => r.patientId === pid).map((r) => r.date).sort()[0]
+      p.createdAt = pv && pv < v.date ? `${pv} 08:00` : `${v.date} ${v.createdAt.slice(11, 16) < '07:30' ? v.createdAt.slice(11, 16) : '07:30'}`
     }
   }
 

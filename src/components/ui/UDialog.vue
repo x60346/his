@@ -77,6 +77,17 @@ watch(
   },
   { immediate: true },
 )
+/**
+ * 內容已經存好（例：存檔後切到預覽）：清掉「改過、關閉要擋」的狀態，Esc 和 × 恢復可以直接關；游標移回對話框裡。
+ * 以前存好轉診回覆單切到預覽後，按 Esc 會被「還沒存」的保護擋下，焦點也留在已經消失的按鈕上
+ */
+function markSaved() {
+  touched.value = false
+  blockedHint.value = false
+  focusInside()
+}
+defineExpose({ markSaved })
+
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   clearTimeout(hintTimer)

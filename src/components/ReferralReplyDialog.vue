@@ -13,6 +13,7 @@ const props = defineProps<{ visitId?: string }>()
 const form = reactive<ReferralReplyInput>({ diagnosis: '', treatment: '', advice: '' })
 /** 存好之後切到預覽 */
 const saved = ref<ReferralInView>()
+const dlg = ref<InstanceType<typeof UDialog>>()
 watch(open, async (o) => {
   if (!o || !props.visitId) return
   saved.value = undefined
@@ -24,7 +25,9 @@ const save = useAction(referralApi.saveReferralReply, { success: () => '已存�
 async function submit() {
   if (!props.visitId) return
   const r = await save.run(props.visitId, { ...form })
-  if (r) saved.value = r
+  if (!r) return
+  saved.value = r
+  dlg.value?.markSaved()
 }
 const doPrint = useAction(referralApi.printReferralReply)
 async function print() {
@@ -38,7 +41,7 @@ async function print() {
 </script>
 
 <template>
-  <UDialog v-model="open" title="轉診回覆單" size="lg" @submit="saved ? undefined : submit()">
+  <UDialog ref="dlg" v-model="open" title="轉診回覆單" size="lg" @submit="saved ? undefined : submit()">
     <template v-if="!saved">
       <div class="space-y-3">
         <UTextarea v-model="form.diagnosis" label="本院診斷" :rows="2" required :error="save.fieldErrors.value.diagnosis" />

@@ -160,15 +160,9 @@ export function bloodLabCounts(): { work: number; urgent: number } {
 
 /** 護理站（全院）：已發血待輸、輸血中 15 分鐘該量生命徵象（或已超過）的血袋數 */
 export function transfusionTodoCount(t: string): number {
-  let n = 0
-  for (const r of liveRequests())
-    for (const c of activeMatches(r)) {
-      const i = latestIssue(r, c.unitId)
-      if (!i) continue
-      const s = issueState(i)
-      if (s === 'issued' || (s === 'transfusing' && issueTodo(i, t).check)) n++
-    }
-  return n
+  // 和護理站病房清單、本班待辦同一個判斷（transfusionTasksOf）：輸血中但還沒到 15 分鐘的不算待處理
+  const ids = new Set(liveRequests().map((r) => r.admissionId))
+  return [...ids].reduce((n, id) => n + transfusionTasksOf(id, t).filter((x) => x.urgency !== 'todo').length, 0)
 }
 
 /** 輸血反應待醫師確認：主治是我、或備血單是我開的 */
@@ -235,3 +229,23 @@ export function releaseAll(r: BloodRequest, by: string, reason: string, t: strin
   }
 }
 
+
+/**
+ * 護理站：這位病人現在的輸血（病房清單的標記、本班待辦共用同一個判斷）——
+ * 已發血待輸（超過 30 分鐘標逾時）、輸血中（15 分鐘生命徵象到了或逾時、超過 4 小時）
+ */
+export function transfusionTasksOf(admissionId: string, t: string): { id: string; state: 'issued' | 'transfusing'; urgency: 'overdue' | 'due' | 'todo'; at: string; text: string }[] {
+  const out: ReturnType<typeof transfusionTasksOf> = []
+  for (const r of db.bloodRequests.filter((x) => x.admissionId === admissionId))
+    for (const c of activeMatches(r)) {
+      const i = latestIssue(r, c.unitId)
+      const s = i && issueState(i)
+      if (!i || (s !== 'issued' && s !== 'transfusing')) continue
+      const u = unitOf(c.unitId)
+      const what = `${u?.unitNo ?? ''} ${BLOOD_PRODUCT_LABEL[r.product]}`
+      const todo = issueTodo(i, t)
+      if (s === 'issued') out.push({ id: `bl-${r.id}-${c.unitId}`, state: s, urgency: todo.lateStart ? 'overdue' : 'due', at: i.issuedAt, text: `已發血、待床邊核對輸血：${what}${todo.lateStart ? '（發血已超過 30 分鐘）' : ''}` })
+      else out.push({ id: `bl-${r.id}-${c.unitId}`, state: s, urgency: todo.check === 'overdue' || todo.long ? 'overdue' : todo.check === 'due' ? 'due' : 'todo', at: todo.checkDueAt ?? i.transfusion!.startAt, text: `輸血中：${what}${todo.check ? '・量 15 分鐘生命徵象' : ''}${todo.long ? '・已超過 4 小時' : ''}` })
+    }
+  return out
+}

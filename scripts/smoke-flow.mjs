@@ -6735,6 +6735,80 @@ try {
     ok(bytes[0] === 0x50 && bytes[1] === 0x4b && api.managementXlsxFileName(r) === `經營月報_${month}.xlsx`, `匯出 Excel（${bytes.length} bytes，${api.managementXlsxFileName(r)}）`)
   }
 
+  // 第五輪小項目：護理站病房清單與本班待辦的輸血標記、示範資料的初診病人、存好後的對話框可以 Esc 關閉
+  console.log('\n[小項目：輸血標記、初診、對話框]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const B = api.bloodApi
+    const N = api.nursingApi
+    const { addMinutes } = dateUtil
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+
+    // 初診
+    const first = db().visits.filter((v) => v.firstVisit)
+    const today = first.filter((v) => v.date === T)
+    ok(first.length >= 2 && today.length <= 3 && first.every((v) => v.date >= addDaysT(-60)), `種子初診 ${first.length} 位（今天 ${today.length} 位）`)
+    ok(first.every((v) => !db().visits.some((x) => x.patientId === v.patientId && x.status !== 'cancelled' && x.createdAt < v.createdAt) && db().patients.find((p) => p.id === v.patientId).createdAt <= v.createdAt && !db().admissions.some((a) => a.patientId === v.patientId && (a.admittedAt ?? a.reservedAt) < v.createdAt)), '初診病人：之前沒有任何掛號、建檔在掛號之前、之前沒住過院')
+    const weeks = new Map()
+    for (const v of first.filter((x) => x.date !== T)) {
+      const w = Math.floor(dateUtil.diffDays(v.date, T) / 7)
+      weeks.set(w, (weeks.get(w) ?? 0) + 1)
+    }
+    ok([...weeks.values()].every((n) => n <= 2), '之前每週最多 2 位')
+    await as('admin')
+    const mr = await api.managementApi.managementReport(T.slice(0, 7))
+    ok(mr.current.opdFirst > 0 || !first.some((v) => v.date.slice(0, 7) === T.slice(0, 7) && ['consulted', 'charged', 'dispensed'].includes(v.status)), `經營月報的初診：${mr.current.opdFirst}`)
+
+    // 輸血標記：自己造一袋發血
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().bloodRequests.some((r) => r.admissionId === a.id))
+    const ward = db().beds.find((b) => b.id === adm.bedId).ward
+    await as(userOf(adm.doctorId))
+    const req = await B.orderBlood({ admissionId: adm.id, product: 'ffp', units: 1, indication: '大量輸血' })
+    await as('lab01')
+    await B.recordBloodTyping(req.id, { abo: 'AB', rh: '+' })
+    const unit = (await B.bloodCandidates(req.id))[0]
+    await B.crossmatchBlood(req.id, [unit.id])
+    await as('nurse01')
+    const wp = async () => (await N.listWardPatients(ward)).find((p) => p.id === adm.id)
+    const bt = async () => (await N.listWardTasks(ward)).filter((x) => x.kind === 'blood' && x.admissionId === adm.id)
+    ok((await wp()).bloodIssued === 0 && !(await bt()).length, '配好還沒發血：護理站沒有標記')
+    await as('lab01')
+    await B.issueBlood(req.id, unit.id)
+    await as('nurse01')
+    let p = await wp()
+    let tasks = await bt()
+    ok(p.bloodIssued === 1 && p.bloodUrgency === 'due' && tasks.length === 1 && tasks[0].urgency === 'due' && tasks[0].text.includes('已發血'), `發血後：病房清單「已發血」、本班待辦「${tasks[0]?.text}」`)
+    const dash = async () => (await api.dashboardApi.getDashboard()).transfusionTodo
+    const d1 = await dash()
+    ok(d1 >= 1, `首頁輸血待處理 ${d1}`)
+    const iss = () => db().bloodRequests.find((r) => r.id === req.id).issues.at(-1)
+    iss().issuedAt = addMinutes(nowStr(), -31)
+    ok((await wp()).bloodUrgency === 'overdue' && (await bt())[0].text.includes('超過 30 分鐘'), '發血超過 30 分鐘：標逾時')
+    iss().issuedAt = addMinutes(nowStr(), -2)
+    const w = await api.witnessApi.approveWitness({ purpose: 'transfusion', requestId: req.id, unitId: unit.id, username: 'nurse02', password: '1234' })
+    await B.startTransfusion(req.id, unit.id, { witness: w.token, vitals: { temp: 36.6, pulse: 80, sbp: 120, dbp: 70 } })
+    p = await wp()
+    tasks = await bt()
+    ok(p.bloodTransfusing === 1 && p.bloodIssued === 0 && !p.bloodUrgency && tasks[0].urgency === 'todo' && (await dash()) === d1 - 1, '剛開始輸血：標「輸血中」，還不用量（首頁不算待處理）')
+    iss().transfusion.startAt = addMinutes(nowStr(), -16)
+    p = await wp()
+    tasks = await bt()
+    ok(p.bloodUrgency === 'due' && tasks[0].urgency === 'due' && tasks[0].text.includes('15 分鐘') && (await dash()) === d1, '開始 15 分鐘：清單、待辦、首頁都提醒量生命徵象')
+    iss().transfusion.startAt = addMinutes(nowStr(), -31)
+    ok((await wp()).bloodUrgency === 'overdue' && (await bt())[0].urgency === 'overdue', '超過 30 分鐘還沒量：逾時')
+    await B.recordTransfusionCheck(req.id, unit.id, { temp: 36.7, pulse: 82, sbp: 118, dbp: 70 })
+    await B.endTransfusion(req.id, unit.id, { volume: 200, vitals: { temp: 36.7, pulse: 80, sbp: 120, dbp: 72 } })
+    p = await wp()
+    ok(!p.bloodTransfusing && !p.bloodIssued && !(await bt()).length, '輸完：標記與待辦消失')
+
+    // 存好後 Esc 可以關
+    const fs = await import('node:fs')
+    const dlg = fs.readFileSync('src/components/ui/UDialog.vue', 'utf8')
+    const rr = fs.readFileSync('src/components/ReferralReplyDialog.vue', 'utf8')
+    ok(dlg.includes('defineExpose({ markSaved })') && /saved\.value = r\s*\n\s*dlg\.value\?\.markSaved\(\)/.test(rr), '轉診回覆單存好切到預覽後清掉「改過」狀態（Esc、× 可以直接關）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

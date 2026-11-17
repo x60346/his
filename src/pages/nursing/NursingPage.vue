@@ -149,6 +149,8 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.unackedCount" tone="cyan">新醫囑 {{ p.unackedCount }}</UBadge>
                     <UBadge v-if="p.dischargeReady" tone="green">准出院</UBadge>
                     <UBadge v-if="!p.wristband" tone="red" title="腕帶還沒印：給藥掃描要用">未印腕帶</UBadge>
+                    <UBadge v-if="p.bloodTransfusing" :tone="p.bloodUrgency ? 'red' : 'purple'" :title="p.bloodUrgency ? '輸血中：該量 15 分鐘生命徵象（或已超過 4 小時）' : '輸血中'">輸血中</UBadge>
+                    <UBadge v-else-if="p.bloodIssued" :tone="p.bloodUrgency === 'overdue' ? 'red' : 'yellow'" title="血庫已發血，請床邊雙人核對開始輸血">已發血</UBadge>
                     <UBadge v-if="p.riskOverdue" tone="red" title="跌倒或壓傷評估過了期限">評估逾時</UBadge>
                     <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
                   </span>
