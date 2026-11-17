@@ -26,6 +26,7 @@ import { myScope } from './staffing-work'
 import { planCounts } from './discharge-plan-work'
 import { pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusionTodosOf } from './infusion-work'
+import { woundStallCount } from './wound-work'
 import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { isObsBed, obsOpen } from './bed-work'
@@ -113,6 +114,8 @@ export interface DashboardStats {
   infectionToDecide?: number
   /** 點滴已滴完沒換、醫囑停了還在滴（護理師） */
   infusionOverdue: number
+  /** 傷口 2 週沒變小（醫師，本科住院病人） */
+  woundStall?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -267,6 +270,7 @@ export function getDashboard(): Promise<DashboardStats> {
           } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t) } : {}),
           infusionOverdue: inpt.reduce((n, a) => n + infusionTodosOf(a.id, t).filter((x) => x.urgency === 'overdue').length, 0),
           pcaRecordOverdue: inpt.reduce((n, a) => { const p = runningPca(a.id); return n + (p && pcaRecordState(p, t)?.status === 'overdue' ? 1 : 0) }, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { pcaAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').filter((a) => { const p = runningPca(a.id); return !!p && !!pcaOpenAlert(p) }).length } : {}),

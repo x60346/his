@@ -7891,6 +7891,83 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // 傷口與壓傷：分級必填、面積、院內壓傷（入院 24 小時後）、病情變化加評提醒、換藥、2 週沒變小提醒主治、結案、品質指標
+  console.log('\n[傷口與壓傷]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const W = api.woundApi
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.areaOf({ lengthCm: 3.2, widthCm: 2.5 }) === 8 && api.hospitalAcquired('pressure', '2026-11-17 10:00', '2026-11-16 08:00') && !api.hospitalAcquired('pressure', '2026-11-16 20:00', '2026-11-16 08:00') && !api.hospitalAcquired('surgical', '2026-11-17 10:00', '2026-11-10 08:00'), '面積；入院 24 小時後才發現的壓傷算院內壓傷（手術傷口不算）')
+    const cs = [{ at: '2026-11-01 10:00', lengthCm: 3, widthCm: 2 }, { at: '2026-11-15 10:00', lengthCm: 3, widthCm: 2.2 }]
+    ok(api.stalled(cs, '2026-11-17 10:00')?.to.area === 6.6 && !api.stalled([...cs, { at: '2026-11-17 09:00', lengthCm: 2, widthCm: 2 }], '2026-11-17 10:00') && !api.stalled([cs[1]], '2026-11-17 10:00'), '連續 2 週沒變小（變小了就不提醒；不到 2 週不判斷）')
+    ok(api.checkWoundCare({ dressing: 'x', exudate: 'small', lengthCm: 1, widthCm: 1, depthCm: 0 }, 'pressure').stage && !api.checkWoundCare({ dressing: 'x', exudate: 'small', lengthCm: 1, widthCm: 1, depthCm: 0 }, 'surgical').stage, '壓傷要分級（其他傷口不用）')
+
+    // 種子
+    const seedW = db().wounds.find((w) => w.id === 'WD-SEED-1')
+    if (seedW) {
+      const a0 = db().admissions.find((a) => a.id === seedW.admissionId)
+      await as(db().users.find((u) => u.doctorId === a0.doctorId).username)
+      ok((await api.dashboardApi.getDashboard()).woundStall >= 1, '種子：薦骨壓傷 2 週沒變小（主治首頁）')
+      const pw = await W.patientWounds(a0.id)
+      ok(pw.open[0].stall && pw.open[0].hospitalAcquired && pw.riskChangeDue, '院內壓傷、沒變小、待病情變化加評')
+    }
+
+    // 登錄
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.admittedAt < addMinutes(nowStr(), -48 * 60) && !db().wounds.some((w) => w.admissionId === x.id))
+    await as('nurse01')
+    let f = await fieldsOf(() => W.addWound(a.id, { kind: 'pressure', site: '', foundAt: '2099-01-01 00:00', dressing: '', exudate: '', lengthCm: 0, widthCm: 1, depthCm: 0 }))
+    ok(f.site && f.foundAt && f.dressing && f.exudate && f.lengthCm && f.stage, '部位、時間、敷料、滲液、大小、分級一次標出')
+    const r = await W.addWound(a.id, { kind: 'pressure', site: '右足跟', foundAt: nowStr(), dressing: '泡棉敷料', exudate: 'none', lengthCm: 2, widthCm: 1.5, depthCm: 0, stage: '1' })
+    ok(r.wound.hospitalAcquired && r.riskReminder?.includes('病情變化加評'), `院內壓傷：提醒「${r.riskReminder}」`)
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'wound' && t.admissionId === a.id && t.text.includes('病情變化加評')), '本班待辦：院內壓傷待病情變化加評')
+    // 做了病情變化加評 → 待辦消失
+    const B = { sensory: 3, moisture: 3, activity: 2, mobility: 2, nutrition: 3, friction: 2 }
+    await api.riskApi.saveRiskAssessment({ admissionId: a.id, scale: 'pressure', answers: B, change: true, measures: ['turn', 'mattress'] })
+    ok(!(await W.patientWounds(a.id)).riskChangeDue && !(await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'wound' && t.admissionId === a.id), '做了壓傷病情變化加評：提醒消失')
+    // 入院當天的手術傷口不算院內壓傷
+    const s2 = await W.addWound(a.id, { kind: 'surgical', site: '右下腹', foundAt: addMinutes(nowStr(), -60), dressing: '紗布乾敷', exudate: 'small', lengthCm: 4, widthCm: 0.5, depthCm: 0 })
+    ok(!s2.wound.hospitalAcquired && !s2.riskReminder && !s2.wound.stageText, '手術傷口：不分級、不算院內壓傷')
+
+    // 換藥、2 週沒變小、結案
+    await as(db().users.find((u) => u.doctorId === a.doctorId).username)
+    await expectError(() => W.recordCare(r.wound.id, { dressing: 'x', exudate: 'none', lengthCm: 1, widthCm: 1, depthCm: 0, stage: '1' }), '醫師換藥')
+    await as('nurse01')
+    db().wounds.find((w) => w.id === r.wound.id).cares[0].at = addMinutes(nowStr(), -15 * 24 * 60)
+    let v = await W.recordCare(r.wound.id, { dressing: '泡棉敷料', exudate: 'small', lengthCm: 2.5, widthCm: 1.5, depthCm: 0.2, stage: '2' })
+    ok(v.stall && v.stageText === '第 2 級' && v.careViews.length === 2, '15 天前 3 cm² → 現在 3.75 cm²：沒變小提醒、分級改第 2 級')
+    v = await W.recordCare(r.wound.id, { dressing: '泡棉敷料', exudate: 'small', lengthCm: 1.5, widthCm: 1, depthCm: 0, stage: '2' })
+    ok(!v.stall, '變小了：提醒消失')
+    f = await fieldsOf(() => W.closeWound(r.wound.id, ''))
+    ok(f.reason, '結案要原因')
+    v = await W.closeWound(r.wound.id, '已癒合，上皮化完整')
+    ok(v.closedAt && (await W.patientWounds(a.id)).closed.length === 1, '結案')
+    let msg = await errOf(() => W.recordCare(r.wound.id, { dressing: 'x', exudate: 'none', lengthCm: 1, widthCm: 1, depthCm: 0, stage: '1' }))
+    ok(msg.includes('結案'), '結案後不能換藥')
+
+    // 品質指標
+    const q = await W.wardPressureStats(ward, 30)
+    ok(q.hapi >= 1 && q.rate === api.per1000(q.hapi, q.patientDays), `品質指標：院內壓傷 ${q.hapi} 例、每千住院人日 ${q.rate}`)
+  }
+
   // 點滴：醫囑（容量、流速、加藥、只長期注射）、不排給藥時間、接上（留置針、通暢、扣帳進帳單）、流速與換瓶時間、調流速、換瓶（實際量）、
   // 今日輸入量、醫囑停了還在滴、停止
   console.log('\n[點滴]')

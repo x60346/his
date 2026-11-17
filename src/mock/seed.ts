@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2161,6 +2161,21 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 傷口（示範，不抽亂數）：腦梗塞病人（住院超過 20 天）16 天前發現薦骨第 2 級壓傷（院內壓傷），換藥三次，大小沒有變小
+  // → 主治首頁「傷口 2 週沒變小」、護理站待辦；登錄後還沒做壓傷「病情變化加評」
+  const wounds: Wound[] = []
+  {
+    const sk = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -20 * 24 * 60))
+    if (sk) {
+      const at = (d: number) => `${addDays(T, -d)} 10:00`
+      const c = (d: number, l: number, w: number, dressing: string, exudate: WoundCare['exudate']): WoundCare => ({ at: at(d), by: d % 2 ? 'U201' : 'U202', dressing, exudate, lengthCm: l, widthCm: w, depthCm: 0.1, stage: '2' })
+      wounds.push({
+        id: 'WD-SEED-1', admissionId: sk.id, kind: 'pressure', site: '薦骨', foundAt: at(16), hospitalAcquired: true, recordedBy: 'U201',
+        cares: [c(16, 3, 2, '人工皮（親水性敷料）', 'small'), c(9, 3, 2.5, '人工皮（親水性敷料）', 'small'), c(2, 3.2, 2.5, '泡棉敷料', 'moderate')],
+      })
+    }
+  }
+
   // 院內感染（示範，不抽亂數）：腦梗塞病人的導尿管（放 9 天）昨天發燒、尿液培養 E. coli ≥10⁵，護理師今天早上通報，等感染管制（dr11）判定
   const infectionCases: InfectionCase[] = []
   {
@@ -2265,6 +2280,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     pcas,
     infectionCases,
     infusions,
+    wounds,
     dischargePlans,
     vitals,
     nursingNotes,

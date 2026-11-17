@@ -30,6 +30,7 @@ import * as shiftRequest from './shift-request'
 import * as pca from './pca'
 import * as infection from './infection'
 import * as infusion from './infusion'
+import * as wound from './wound'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -82,6 +83,7 @@ export const shiftRequestApi = overNetwork(shiftRequest)
 export const pcaApi = overNetwork(pca)
 export const infectionApi = overNetwork(infection)
 export const infusionApi = overNetwork(infusion)
+export const woundApi = overNetwork(wound)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -157,6 +159,7 @@ export * from './discharge-plan-rules'
 export * from './pca-rules'
 export * from './infection-rules'
 export * from './infusion-rules'
+export * from './wound-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -202,6 +205,7 @@ export type { ShiftRequestView, ShiftRequestLists } from './shift-request'
 export type { PcaView, PatientPca, PcaInput, PcaRecordInput } from './pca'
 export type { InfectionView, PatientInfections, InfectionInput } from './infection'
 export type { InfusionView, PatientInfusions } from './infusion'
+export type { WoundView, PatientWounds, CareInput } from './wound'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

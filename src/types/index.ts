@@ -1806,6 +1806,41 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/** 壓傷分級：1–4 級、無法分級、深部組織損傷 */
+export type PressureStage = '1' | '2' | '3' | '4' | 'unstageable' | 'dti'
+
+/** 換藥紀錄（第一筆是發現時的評估）：敷料、滲液、大小 cm（壓傷可以改分級） */
+export interface WoundCare {
+  at: string
+  by: string
+  dressing: string
+  exudate: 'none' | 'small' | 'moderate' | 'large'
+  lengthCm: number
+  widthCm: number
+  depthCm: number
+  stage?: PressureStage
+  note?: string
+}
+
+/**
+ * 傷口（護理師登錄）：壓傷、手術傷口、其他；入院 24 小時後才發現的壓傷算「院內壓傷」（品質指標）。
+ * 每次換藥記大小，連續 2 週沒變小提醒主治；癒合結案
+ */
+export interface Wound {
+  id: string
+  admissionId: string
+  kind: 'pressure' | 'surgical' | 'other'
+  site: string
+  foundAt: string
+  /** 院內發生（入院 24 小時後才發現的壓傷） */
+  hospitalAcquired: boolean
+  recordedBy: string
+  cares: WoundCare[]
+  closedAt?: string
+  closedBy?: string
+  closeReason?: string
+}
+
 /**
  * 點滴的一瓶（護理師接上 → 換瓶或停止）：接上時確認留置針通暢、扣一瓶（加藥一起扣）；
  * 流速調整留紀錄（原因）；輸入量依流速與時間算，結束時可以修正為實際量

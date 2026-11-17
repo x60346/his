@@ -29,6 +29,7 @@ import { assignedNurse, nextShift, onDuty, shiftNow } from './staffing-work'
 import { planOf, plannable, planScreenStateOf } from './discharge-plan-work'
 import { openPca, pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusedToday, infusionOrders, infusionTodosOf } from './infusion-work'
+import { openWounds, woundTodosOf } from './wound-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -80,6 +81,9 @@ export interface WardPatient extends AdmissionView {
   pca?: { status: 'ordered' | 'running'; record: 'ok' | 'due' | 'overdue'; alert: boolean }
   /** 點滴：有點滴醫囑（或醫囑停了還在滴）；待辦數（待接上、要換瓶、要停止） */
   infusion?: { todo: number; overdue: boolean }
+  /** 傷口：還沒癒合的條數、待辦（2 週沒變小、院內壓傷待病情變化加評） */
+  wounds: number
+  woundTodo: number
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -128,6 +132,8 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
+          wounds: openWounds(a.id).length,
+          woundTodo: woundTodosOf(a, t).length,
           ...(() => {
             const it = infusionTodosOf(a.id, t)
             const has = infusionOrders(a.id).length > 0 || it.length > 0
@@ -175,7 +181,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -249,6 +255,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       // 譫妄：65 歲以上、術後 72 小時內每班評一次 CAM
       const ds = deliriumStateOf(a, t)
       if (ds.target && !ds.thisShift) tasks.push({ ...base, id: `dl-${a.id}`, kind: 'delirium', urgency: 'todo', text: `譫妄評估 CAM（${ds.target}，每班）` })
+      // 傷口：2 週沒變小（提醒主治，護理站也列）、院內壓傷待病情變化加評（點了到風險評估）
+      for (const x of woundTodosOf(a, t)) tasks.push({ ...base, id: `wd-${x.kind}-${x.woundId}`, kind: 'wound', urgency: 'todo', text: x.text })
       // 點滴：待接上、快滴完／已滴完要換瓶、醫囑停了還在滴
       for (const x of infusionTodosOf(a.id, t)) tasks.push({ ...base, id: `iv-${x.kind}-${x.runId ?? x.orderId}`, kind: 'infusion', urgency: x.urgency, ...(x.at ? { at: x.at } : {}), text: x.text })
       // PCA：每 4 小時紀錄（到期前 30 分鐘「現在」、過了「逾時」）；未處理的警示（醫師處理，護理站也列出來）
