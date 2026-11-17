@@ -964,6 +964,8 @@ export interface Admission {
   bedHistory?: { bedId: string; from: string }[]
   /** 鎮靜目標（RASS 範圍，加護病房主治設定）：護理師每 4 小時評，超出範圍列主治首頁 */
   rassTarget?: { min: number; max: number; by: string; at: string }
+  /** APACHE II 要手動填的（醫師）：嚴重慢性病（器官衰竭或免疫抑制）、這次是不是手術後（急診／常規手術） */
+  apache?: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; by: string; at: string }
   /**
    * 急診留觀：特別的住院（急診科、急診醫師、急診留觀區的床），沿用住院醫囑、給藥、生命徵象、護理紀錄、腕帶。
    * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院
@@ -1473,6 +1475,27 @@ export interface VentSetting {
   changeReason?: string
 }
 
+/** 轉入加護病房的類別 */
+export type IcuCategory = 'resp' | 'shock' | 'postop' | 'other'
+/**
+ * 轉入加護病房申請：主治（本科醫師）申請、寫原因與類別 → 加護病房主治（權限）同意（有床就排床）或不同意（寫原因）→
+ * 同意了沒床先候床，有床再排（placed）。住院中轉床進加護病房一定要有同意的申請
+ */
+export interface IcuRequest {
+  id: string
+  admissionId: string
+  category: IcuCategory
+  reason: string
+  requestedBy: string
+  requestedAt: string
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'placed'
+  decidedBy?: string
+  decidedAt?: string
+  decideNote?: string
+  placedAt?: string
+  bedId?: string
+}
+
 /** 每日脫離評估：自發性甦醒試驗（停鎮靜，SAT）→ 通過才做自發性呼吸試驗（SBT）；不適合要寫原因 */
 export type WeanResult = 'pass' | 'fail' | 'na'
 export interface WeanTrial {
@@ -1849,7 +1872,7 @@ export interface ProgressNote {
    * 特殊紀錄（系統依動作寫入，內容在 items）：轉出摘要、接收評估、會診申請、會診回覆。
    * 沒有 kind 的是一般 SOAP 病程紀錄
    */
-  kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply'
+  kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply' | 'icuOut'
   items?: { label: string; text: string }[]
   subjective: string
   objective: string

@@ -5601,7 +5601,7 @@ try {
     ok((await IC.getIpdBill(ready.id)).charge.canVoid?.includes('出院') && (await IC.listIpdBilling()).some((x) => x.admissionId === ready.id && x.status === 'discharged' && x.receiptNo === ch2.receiptNo), '今天出院的仍在清單（看收據、重印）')
 
     // 轉床：差額床費依住的天數
-    const tb = db().admissions.find((a) => a.status === 'admitted' && !db().isolations.some((i) => i.patientId === a.patientId && !i.ended)) // 隔離中的排床另有規則（空氣隔離只排單人房）
+    const tb = db().admissions.find((a) => a.status === 'admitted' && !db().isolations.some((i) => i.patientId === a.patientId && !i.ended) && db().beds.find((b) => b.id === a.bedId)?.ward !== '3I 加護病房') // 隔離中的排床另有規則（空氣隔離只排單人房）；加護病房轉出要摘要
     const dbl = db().beds.find((b) => b.status === 'empty' && b.extraFee > 0)
     await api.admissionApi.transferBed(tb.id, dbl.id)
     const a2 = db().admissions.find((a) => a.id === tb.id)
@@ -8514,7 +8514,7 @@ try {
     ok(icuBeds.length === 8 && icuBeds.every((b) => b.bedClass === '健保床' && b.extraFee === 0), '種子：加護病房 ICU1–ICU8（健保床）')
     const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
     const sepBed = db().beds.find((b) => b.id === sep.bedId)
-    ok(sepBed.ward === ICU && db().admissions.filter((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === ICU).length === 1, `種子：敗血症病人住 ${sepBed.bedNo}（其他人沒有被排進加護病房）`)
+    ok(sepBed.ward === ICU && db().admissions.filter((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === ICU).length === 2, `種子：敗血症病人住 ${sepBed.bedNo}（另一位是申請轉入的糖尿病酮酸中毒）`)
     const hourly = db().vitals.filter((v) => v.admissionId === sep.id && v.hourly)
     const lastAt = hourly.map((v) => v.at).sort().pop()
     ok(hourly.length >= 10 && lastAt <= addMinutes(nowStr(), -80) && hourly.some((v) => v.gcs && v.pupils) && hourly.some((v) => api.mapLow(api.mapOf(v.sbp, v.dbp))), `種子：流程表 ${hourly.length} 筆（有 GCS、瞳孔、MAP 偏低），最後一筆 ${lastAt.slice(11)}`)
@@ -8531,7 +8531,7 @@ try {
     ok((await api.nursingApi.listWardTasks(ICU)).some((t) => t.kind === 'icu' && t.admissionId === sep.id && t.urgency === 'overdue'), '本班待辦：重症流程表漏記（逾時）')
     ok((await api.dashboardApi.getDashboard()).icuHourlyLate === 1, '護理師首頁：重症流程表漏記 1 位')
     let board = await I.icuBoard()
-    ok(board.length === 8 && board.find((b) => b.admissionId === sep.id)?.late && board.find((b) => b.admissionId === sep.id)?.nurseName === dutyUser.name && board.filter((b) => !b.admissionId).length === 7, '床邊看板：8 床、敗血症紅框（漏記）、責任護理師')
+    ok(board.length === 8 && board.find((b) => b.admissionId === sep.id)?.late && board.find((b) => b.admissionId === sep.id)?.nurseName === dutyUser.name && board.filter((b) => !b.admissionId).length === 6, '床邊看板：8 床（2 床有人）、敗血症紅框（漏記）、責任護理師')
     const sb = board.find((b) => b.admissionId === sep.id)
     ok(sb.neuro?.gcs && sb.neuro.pupils && !sb.last.gcs ? sb.neuro.gcs.at < sb.last.at : !!sb.neuro?.gcs, '看板：最新一筆沒評意識時，顯示最近一次的 GCS、瞳孔（附時間）')
     let fs = await I.getFlowsheet(sep.id)
@@ -8598,27 +8598,37 @@ try {
       await as(dutyUser.username)
       fs = await I.getFlowsheet(resv.id)
       ok(fs.inIcu && fs.canRecord && !fs.state.late && fs.state.minutes <= 1 && !fs.state.lastAt, '剛住進來：還沒記、從報到時間算')
+      // 轉出要先寫轉出摘要（③）
+      await as(db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === resv.id).doctorId).username)
+      await api.icuMoveApi.writeIcuSummary(resv.id, { diagnosis: '測試', course: '測試', lines: '', todo: '測試' })
       await as('clerk01')
       await api.admissionApi.transferBed(resv.id, db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床').id)
     }
-    // 一般病房轉進加護病房、再轉出
+    // 一般病房轉進加護病房（③：要主治申請、加護病房主治同意並選床）、再轉出
     const icu3 = db().beds.find((b) => b.ward === ICU && b.status === 'empty')
-    await api.admissionApi.transferBed(gen.id, icu3.id)
+    msg = await errOf(() => api.admissionApi.transferBed(gen.id, icu3.id))
+    ok(msg.includes('主治申請'), `沒有申請就轉床進加護病房 → 「${msg}」`)
+    await as(db().users.find((u) => u.doctorId === gen.doctorId).username)
+    const greq = await api.icuMoveApi.requestIcu(gen.id, { category: 'other', reason: '測試' })
+    await as('dr03')
+    await api.icuMoveApi.decideIcuRequest(greq.id, { accept: true, bedId: icu3.id })
     await as(dutyUser.username)
     fs = await I.getFlowsheet(gen.id)
     ok(fs.inIcu && fs.since >= addMinutes(nowStr(), -1) && !fs.state.late, '一般病房轉進加護病房：從轉入那一刻開始算')
     await I.addFlowsheetEntry({ admissionId: gen.id, pulse: 88, sbp: 120, dbp: 70 })
     const two = await api.staffingApi.getAssignments(ICU)
-    ok(two.ratio.text.includes('1：2') && !two.ratio.over, `加護病房 2 位病人、1 位護理師：${two.ratio.text}`)
+    ok(two.ratio.text.includes('1：3') && two.ratio.over, `加護病房 3 位病人、1 位護理師：${two.ratio.text} 標紅（不擋）`)
     await as('admin')
     f = await fieldsOf(() => api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 }, 0))
     ok(f.icuRatio, '加護病房護病比 1–30')
-    await api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 }, 1)
+    await api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 }, 3)
     await as(dutyUser.username)
-    ok((await api.staffingApi.getAssignments(ICU)).ratio.over && !(await api.staffingApi.getAssignments('5A 內科病房')).ratio.text.includes('上限 1：1'), '加護病房上限改 1:1：2 位病人標紅；一般病房不受影響')
+    ok(!(await api.staffingApi.getAssignments(ICU)).ratio.over && !(await api.staffingApi.getAssignments('5A 內科病房')).ratio.text.includes('上限 1：3'), '加護病房上限改 1:3：不再標紅；一般病房不受影響')
     await as('admin')
     await api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 })
-    ok(db().staffingSettings.icuRatio === 1, '只改一般病房時，加護病房的上限保留')
+    ok(db().staffingSettings.icuRatio === 3, '只改一般病房時，加護病房的上限保留')
+    await as(db().users.find((u) => u.doctorId === gen.doctorId).username)
+    await api.icuMoveApi.writeIcuSummary(gen.id, { diagnosis: '測試', course: '測試', lines: '', todo: '測試' })
     await as('clerk01')
     const back = db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床')
     await api.admissionApi.transferBed(gen.id, back.id)
@@ -8762,8 +8772,10 @@ try {
     await as(genDoc)
     msg = await errOf(() => V.orderVent(gen.id, { mode: 'AC/VC', fio2: 50, peep: 8, vt: 420, rr: 16 }))
     ok(msg.includes('限加護病房'), `一般病房 → 「${msg}」`)
-    await as('clerk01')
-    await api.admissionApi.transferBed(gen.id, db().beds.find((b) => b.ward === ICU && b.status === 'empty').id)
+    // 轉入加護病房：主治申請、加護病房主治同意並選床
+    const gq = await api.icuMoveApi.requestIcu(gen.id, { category: 'resp', reason: '測試' })
+    await as('dr03')
+    await api.icuMoveApi.decideIcuRequest(gq.id, { accept: true, bedId: db().beds.find((b) => b.ward === ICU && b.status === 'empty').id })
     await as(genDoc)
     msg = await errOf(() => V.orderVent(gen.id, { mode: 'AC/VC', fio2: 50, peep: 8, vt: 420, rr: 16 }))
     ok(msg.includes('沒有氣管內管'), `沒插管 → 「${msg}」`)
@@ -8801,6 +8813,138 @@ try {
     const st = await api.lineApi.wardLineStats(ICU, 30)
     const row = st.rows.find((r) => r.kind === 'ett')
     ok(row && row.lineDays >= 5 && row.infections === 1 && row.infectionRate === api.per1000(1, row.lineDays), `品質指標：氣管內管（呼吸器日）${row?.lineDays} 天、VAP ${row?.infections} 例、每千 ${row?.infectionRate}`)
+  }
+
+  // 加護病房轉入轉出與嚴重度：申請（類別、原因、不重複）→ 加護病房主治同意（選床直接轉入、或候床）／不同意（寫原因）、排床；
+  // 轉床進加護病房要有同意的申請；轉出要摘要、接著呼吸器不能轉出；交班帶出轉出摘要；SOFA、APACHE II；再轉回與品質指標
+  console.log('\n[加護病房轉入轉出與嚴重度]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const M = api.icuMoveApi
+    const ICU = '3I 加護病房'
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.checkIcuRequest({}).category && api.checkIcuRequest({}).reason && !Object.keys(api.checkIcuRequest({ category: 'shock', reason: 'x' })).length, '轉入申請：類別、原因')
+    let e = api.checkIcuSummary({ lines: '' })
+    ok(e.diagnosis && e.course && e.todo && !e.lines, '轉出摘要：診斷、經過、待追蹤必填（管路可以空）')
+    let so = api.sofaScore({ pf: { ratio: 180, vent: true }, plt: 92, bili: 2.4, map: 64, gcs: 12, cre: 1.8, urine: 450 })
+    ok(so.total === 3 + 2 + 2 + 1 + 2 + 3 && !so.missing.length, `SOFA：呼吸 3、凝血 2、肝 2、心血管 1、神經 2、腎 3（尿量 450 比肌酸酐差）＝${so.total}`)
+    so = api.sofaScore({ pf: { ratio: 80, vent: false }, plt: 200 })
+    ok(so.parts.resp === 2 && so.parts.coag === 0 && so.missing.length === 4 && so.total === 2, '沒接呼吸器呼吸最多 2 分；缺的項目 null、不算進總分')
+    const ap = api.apacheScore({ temp: [38.6, 37.2], map: [61, 75], hr: [118], rr: [26], oxy: [{ fio2: 0.6, pao2: 68, paco2: 34 }], ph: [7.24], na: [], k: [], cre: [2.1], hct: [], wbc: [18.6], gcs: [13], age: 60, chronic: true, surgery: 'none' })
+    ok(ap.parts.temp === 1 && ap.parts.map === 2 && ap.parts.hr === 2 && ap.parts.rr === 1 && ap.parts.oxy === 2 && ap.parts.ph === 3 && ap.parts.cre === 3 && ap.parts.wbc === 1 && ap.parts.gcs === 2 && ap.aps === 17 && ap.agePts === 3 && ap.chronicPts === 5 && ap.total === 25, `APACHE II：生理 ${ap.aps}＋年齡 3＋慢性病 5＝${ap.total}（各項取最差）`)
+    ok(ap.missing.join() === 'na,k,hct' && api.aaGradient(0.6, 68, 34) === 317 && api.oxyPoints({ fio2: 0.4, pao2: 58, paco2: 40 }) === 3, '缺鈉、鉀、血比容；FiO2 ≥0.5 看 A-a（317→2 分）、<0.5 看 PaO2')
+    ok(api.agePoints(44) === 0 && api.agePoints(75) === 6 && api.chronicPoints(true, 'elective') === 2 && api.chronicPoints(false, 'none') === 0, '年齡、慢性病分數')
+    const st = api.icuStays([{ from: '2026-11-01 10:00', icu: false }, { from: '2026-11-02 10:00', icu: true }, { from: '2026-11-03 08:00', icu: true }, { from: '2026-11-05 10:00', icu: false }, { from: '2026-11-06 09:00', icu: true }], '2026-11-08 10:00')
+    ok(st.length === 2 && st[0].to === '2026-11-05 10:00' && st[1].to === '2026-11-08 10:00' && api.bounceBacks(st).length === 1 && !api.bounceBacks([st[0], { from: '2026-11-08 11:00' }]).length, '加護病房裡換床算同一段；轉出 48 小時內再轉回、超過不算')
+
+    // 種子
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const dka = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    const uti = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39'))
+    ok(db().beds.find((b) => b.id === dka.bedId).ward === ICU && db().icuRequests.find((r) => r.admissionId === dka.id)?.status === 'placed' && db().icuRequests.find((r) => r.admissionId === uti.id)?.status === 'pending', '種子：糖尿病酮酸中毒申請轉入、已在加護病房；泌尿道感染申請轉入（休克）待同意')
+    ok(db().users.find((u) => u.username === 'dr03').grants?.includes('icu.attending'), '種子：dr03 被指定加護病房主治')
+    { const since = db().admissions.find((a) => a.id === dka.id).bedHistory.at(-1).from
+      ok(!db().handovers.some((h) => h.admissionId === dka.id && h.createdAt >= since) && !db().vitals.some((v) => v.admissionId === dka.id && !v.hourly && v.at > since && v.at <= db().vitals.filter((x) => x.admissionId === dka.id && x.hourly).map((x) => x.at).sort().pop()), '種子：轉入加護病房之後沒有原病房的交班、流程表那段沒有重複的生命徵象') }
+    await as('dr03')
+    ok((await api.dashboardApi.getDashboard()).icuRequestsPending === 1, '加護病房主治首頁：轉入待處理 1')
+    let work = await M.listIcuWork()
+    ok(work.pending.length === 1 && work.pending[0].patientName && work.pending[0].categoryLabel === '休克' && work.canDecide && work.emptyBeds.length === 6, '加護病房頁：待同意 1（休克）、空床 6、可以處理')
+    let pi = await M.patientIcu(sep.id)
+    const y = pi.sofa.find((s) => !s.partial && s.parts.liver !== null)
+    ok(pi.inIcu && pi.sofa.length >= 2 && (!y || (y.parts.resp >= 2 && y.parts.coag === 2 && y.parts.liver === 2 && y.parts.renal >= 1 && y.parts.cns === null)), `敗血症 SOFA（膽紅素 2.4→肝 2、血小板 92→凝血 2、插管的 GCS T 不算神經項）：${pi.sofa.map((s) => `${s.date.slice(5)} ${s.total}${s.missing.length ? '+' : ''}`).join('、')}`)
+    { // 轉入那天只住半天：就算尿量很少也不看（沒修之前會變 4 分），腎臟只看肌酸酐 2.1 → 2
+      const d0 = sep.admittedAt.slice(0, 10)
+      for (const v of db().vitals.filter((x) => x.admissionId === sep.id && x.at.startsWith(d0) && x.output !== undefined)) v.output = 0
+      const first = (await M.patientIcu(sep.id)).sofa.find((s) => s.date === d0)
+      ok(!first || first.parts.renal === 2, `轉入那一天不滿一整天：不看尿量（腎臟 ${first?.parts.renal}：只看肌酸酐 2.1，沒變成 4）`) }
+    ok(pi.apache && pi.apache.parts.oxy === 2 && pi.apache.parts.ph === 3 && pi.apache.parts.wbc === 1 && pi.apache.parts.cre === 3 && pi.apache.missing.includes('na') && !pi.apache.input.set, `敗血症 APACHE II ${pi.apache?.total}（缺 ${pi.apache?.missing.length} 項以 0 分計）`)
+
+    // 申請：已經有一筆不能再申請；護理師不能申請
+    await as(db().users.find((u) => u.doctorId === 'DR02').username)
+    let msg = await errOf(() => M.requestIcu(uti.id, { category: 'shock', reason: 'x' }))
+    ok(msg.includes('已經有一筆'), `重複申請 → 「${msg}」`)
+    msg = await errOf(() => M.decideIcuRequest(db().icuRequests.find((r) => r.admissionId === uti.id).id, { accept: true }))
+    ok(msg.includes('權限'), `不是加護病房主治的醫師同意 → 「${msg}」`)
+    await as('nurse01')
+    await expectError(() => M.requestIcu(uti.id, { category: 'shock', reason: 'x' }), '護理師申請轉入')
+    await as('admin')
+    msg = await errOf(() => M.decideIcuRequest(db().icuRequests.find((r) => r.admissionId === uti.id).id, { accept: true }))
+    ok(msg.includes('加護病房主治醫師'), `管理員同意 → 「${msg}」`)
+    // 同意（先候床）→ 住院中心轉床（有同意的申請就可以）
+    await as('dr03')
+    const ureq = db().icuRequests.find((r) => r.admissionId === uti.id)
+    let f = await fieldsOf(() => M.decideIcuRequest(ureq.id, { accept: false }))
+    ok(f.note, '不同意要寫原因')
+    let rv = await M.decideIcuRequest(ureq.id, { accept: true, note: '先候床' })
+    ok(rv.status === 'accepted' && (await M.listIcuWork()).waiting.length === 1 && (await api.dashboardApi.getDashboard()).icuRequestsPending === 1, '同意、沒選床：候床中（首頁照樣算）')
+    await as('clerk01')
+    f = await fieldsOf(() => M.placeIcuRequest(ureq.id, db().beds.find((b) => b.ward !== ICU && b.status === 'empty').id))
+    ok(f.bedId, '排床要選加護病房的床')
+    const utiBed = db().beds.find((b) => b.ward === ICU && b.status === 'empty')
+    rv = await M.placeIcuRequest(ureq.id, utiBed.id)
+    ok(rv.status === 'placed' && rv.bedId === utiBed.id && db().admissions.find((a) => a.id === uti.id).bedId === utiBed.id, `住院中心排床：轉入 ${utiBed.bedNo}、申請標已轉入`)
+
+    // 轉出：要摘要；接著呼吸器不能轉出
+    const gen = db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床')
+    msg = await errOf(() => api.admissionApi.transferBed(dka.id, gen.id))
+    ok(msg.includes('轉出摘要'), `沒寫摘要就轉出 → 「${msg}」`)
+    ok((await api.admissionApi.bedBlocks(dka.id))[gen.id]?.includes('轉出摘要'), '選床畫面：一般病房的床標「先寫轉出摘要」')
+    await as(db().users.find((u) => u.doctorId === dka.doctorId).username)
+    await M.setApacheInput(dka.id, { chronic: false, surgery: 'none' })
+    f = await fieldsOf(() => M.writeIcuSummary(dka.id, { diagnosis: '', course: '', lines: '', todo: '' }))
+    ok(f.diagnosis && f.course && f.todo, '摘要欄位一次標出')
+    await api.ventApi.setRassTarget(dka.id, -1, 0)
+    pi = await M.writeIcuSummary(dka.id, { diagnosis: '糖尿病酮酸中毒，已緩解', course: '胰島素點滴 30 小時，酸中毒改善後改皮下注射', lines: '周邊靜脈留置針', todo: '每餐前驗血糖；糖尿病衛教' })
+    ok(pi.summary?.items.length === 4 && pi.summary.items[0].text.includes('酮酸'), '寫了轉出摘要')
+    await as('dr02')
+    const sepSum = await M.writeIcuSummary(sep.id, { diagnosis: 'x', course: 'x', lines: '', todo: 'x' })
+    await as('clerk01')
+    msg = await errOf(() => api.admissionApi.transferBed(sep.id, gen.id))
+    ok(sepSum.summary && msg.includes('還接著呼吸器'), `接著呼吸器轉出 → 「${msg}」`)
+    await api.admissionApi.transferBed(dka.id, gen.id)
+    const dkaA = db().admissions.find((a) => a.id === dka.id)
+    ok(db().beds.find((b) => b.id === dkaA.bedId).ward === gen.ward && !dkaA.rassTarget, `寫了摘要就能轉出（轉到 ${gen.ward}）、鎮靜目標清掉`)
+    await as('nurse01')
+    const wp = (await api.nursingApi.listWardPatients(gen.ward)).find((p) => p.id === dka.id)
+    ok(wp.icuOut?.items.some((x) => x.text.includes('驗血糖')), '接手病房：48 小時內從加護病房轉來，交班帶出轉出摘要')
+    pi = await M.patientIcu(dka.id)
+    ok(!pi.inIcu && pi.stays.length === 1 && pi.stays[0].to && !pi.sofa.length, '轉出後：住加護病房的紀錄一段、沒有 SOFA')
+
+    // 48 小時內再轉回
+    await as(db().users.find((u) => u.doctorId === dka.doctorId).username)
+    const r2 = await M.requestIcu(dka.id, { category: 'other', reason: '血糖又升到 480、酮體陽性' })
+    await as('dr03')
+    await M.decideIcuRequest(r2.id, { accept: true, bedId: db().beds.find((b) => b.ward === ICU && b.status === 'empty').id })
+    pi = await M.patientIcu(dka.id)
+    ok(pi.inIcu && pi.stays.length === 2 && pi.stays[1].bounce && !pi.summary, '轉出 48 小時內又轉回：標「再轉回」，上一段的摘要不算這一段')
+    const qs = await M.icuStats(30)
+    ok(qs.stays >= 3 && qs.bounce === 1 && qs.patientDays > 0 && qs.avgDays !== null && qs.bounceRate === Math.round((1 / qs.stays) * 1000) / 10, `品質指標：轉入 ${qs.stays} 次、住院人日 ${qs.patientDays}、平均 ${qs.avgDays} 天、再轉回 ${qs.bounce}（${qs.bounceRate}%）`)
+
+    // APACHE II 手動欄位
+    await as('dr02')
+    f = await fieldsOf(() => M.setApacheInput(sep.id, { chronic: true, surgery: 'x' }))
+    ok(f.surgery, '手術要選')
+    pi = await M.setApacheInput(sep.id, { chronic: true, surgery: 'none' })
+    ok(pi.apache.chronicPts === 5 && pi.apache.input.set, '有嚴重慢性病、非手術：慢性病 +5')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
@@ -9856,7 +10000,7 @@ try {
     }
     // 醫師剛好又開了一筆（藥師畫面上沒有）：不會被一起調劑
     await as('dr02')
-    const admId = w.daily[0].admissionId
+    const admId = (w.daily.find((g) => db().admissions.find((x) => x.id === g.admissionId)?.deptId === 'D02') ?? w.daily[0]).admissionId // dr02 是內科：挑內科的病人
     const fresh = await api.ipdApi.addOrder({ admissionId: admId, type: 'long', category: 'medication', drugId: 'M010', content: '', dose: 1, freq: 'QID', route: 'PO', allowDuplicate: true })
     await as('ph01')
     const need = {}

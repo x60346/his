@@ -19,6 +19,7 @@ import { openPca } from './pca-work'
 import { closeInfusions } from './infusion-work'
 import { admitInto, bedStatusLabel, closeOrders, isIcuBed, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
 import { icuCheckInProblem } from './icu-rules'
+import { afterIcuMove, icuMoveProblem } from './icu-move-work'
 
 /** 急診收住院（住院預約是急診醫師開的）：可以直接住加護病房 */
 const fromEr = (a: Admission) => !!(a.fromVisitId && find.visit(a.fromVisitId)?.er)
@@ -73,7 +74,7 @@ export function bedBlocks(admissionId: string, opts: { afterObs?: boolean } = {}
     const as = opts.afterObs && a.obs ? { obs: { ...a.obs, endAt: 'x' } } : a
     for (const b of db.beds) {
       if (b.status !== 'empty' && !(b.status === 'reserved' && b.reservedFor === a.id)) continue
-      const p = obsPlacementProblem(as, b) ?? (a.status === 'reserved' && isIcuBed(b) ? icuCheckInProblem(fromEr(a)) : undefined) ?? placementFor(a.patientId, b)
+      const p = obsPlacementProblem(as, b) ?? (a.status === 'reserved' && isIcuBed(b) ? icuCheckInProblem(fromEr(a)) : undefined) ?? (a.status === 'admitted' && !opts.afterObs ? icuMoveProblem(a, b) : undefined) ?? placementFor(a.patientId, b)
       if (p) out[b.id] = p
     }
     return out
@@ -134,11 +135,16 @@ export function transferBed(admissionId: string, bedId: string): Promise<Admissi
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以轉床')
     if (a.bedId === bedId) fail('與目前床位相同')
-    const from = find.bed(a.bedId ?? '')?.bedNo
+    // 進出加護病房：要有同意的轉入申請；轉出要摘要、不能接著呼吸器
+    const icuP = icuMoveProblem(a, must(find.bed(bedId), '病床'))
+    if (icuP) fail(icuP, 'CONFLICT')
+    const fromBed = find.bed(a.bedId ?? '')
+    const from = fromBed?.bedNo
     releaseBed(a.bedId)
     const bed = takeBed(bedId, a.id)
     a.bedId = bed.id
     ;(a.bedHistory ??= []).push({ bedId: bed.id, from: now() })
+    afterIcuMove(a, fromBed, bed, now())
     audit('轉床', `${a.admitNo} ${from} → ${bed.bedNo}`)
     return admissionView(a)
   })
@@ -465,12 +471,16 @@ export function acceptDeptTransfer(admissionId: string, input: { shownOrderIds: 
     for (const o of stops) stopOrderRecord(o, u.id, t)
     let bedNote = ''
     if (input.bedId && input.bedId !== a.bedId) {
+      const icuP = icuMoveProblem(a, must(find.bed(input.bedId), '病床'))
+      if (icuP) fail(icuP, 'CONFLICT')
       const fromBed = a.bedId
-      const from = find.bed(fromBed ?? '')?.bedNo
+      const fromB = find.bed(fromBed ?? '')
+      const from = fromB?.bedNo
       releaseBed(fromBed)
       const bed = takeBed(input.bedId, a.id)
       a.bedId = bed.id
       ;(a.bedHistory ??= []).push({ bedId: bed.id, from: now() })
+      afterIcuMove(a, fromB, bed, now())
       Object.assign(x!, { fromBedId: fromBed, toBedId: bed.id })
       bedNote = `；轉床 ${from} → ${bed.bedNo}`
     }

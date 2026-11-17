@@ -1,12 +1,12 @@
 <script setup lang="ts">
 // 病房層級「管路日」：最近 30 天各種管路的管路日、目前在身上的條數、使用率（管路日 ÷ 住院人日）、移除原因。
 // 感染管制看的分母（導尿管相關泌尿道感染、CVC 相關血流感染每千管路日幾例）；本系統沒有感染個案，只統計管路日
-import { deliriumApi, lineApi, woundApi } from '@/services'
+import { deliriumApi, icuMoveApi, lineApi, masterApi, woundApi } from '@/services'
 import { UQueryState } from '@/components/ui'
 import { useQuery } from '@/composables/useService'
 
 const props = defineProps<{ ward: string }>()
-const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lineApi.wardLineStats(props.ward, 30), q: await deliriumApi.wardSafetyStats(props.ward, 30), p: await woundApi.wardPressureStats(props.ward, 30) }), [() => props.ward])
+const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lineApi.wardLineStats(props.ward, 30), q: await deliriumApi.wardSafetyStats(props.ward, 30), p: await woundApi.wardPressureStats(props.ward, 30), icu: props.ward === masterApi.staticCodes.icuWard ? await icuMoveApi.icuStats(30) : undefined }), [() => props.ward])
 </script>
 
 <template>
@@ -40,6 +40,16 @@ const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lin
           <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">院內壓傷（每千住院人日）</dt><dd class="tabular text-lg font-semibold">{{ data.p.hapi }}<span class="text-sm font-normal text-slate-500">（{{ data.p.rate ?? '—' }}‰）</span></dd></div>
           <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">CAM 陽性率</dt><dd class="tabular text-lg font-semibold">{{ data.q.camRate === null ? '—' : `${Math.round(data.q.camRate * 100)}%` }}<span class="text-sm font-normal text-slate-500">（{{ data.q.camPositive }}／{{ data.q.camCount }}）</span></dd></div>
         </dl>
+        <!-- 加護病房：轉入次數、加護病房住院人日、平均住幾天（已轉出的）、48 小時內再轉回 -->
+        <template v-if="data.icu">
+          <div class="mt-4 mb-2 font-semibold text-slate-700">加護病房</div>
+          <dl class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">轉入次數</dt><dd class="tabular text-lg font-semibold">{{ data.icu.stays }}</dd></div>
+            <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">加護病房住院人日</dt><dd class="tabular text-lg font-semibold">{{ data.icu.patientDays }}</dd></div>
+            <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">平均住幾天（已轉出）</dt><dd class="tabular text-lg font-semibold">{{ data.icu.avgDays ?? '—' }}</dd></div>
+            <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">48 小時內再轉回</dt><dd class="tabular text-lg font-semibold">{{ data.icu.bounce }}<span class="text-sm font-normal text-slate-500">（{{ data.icu.bounceRate ?? '—' }}%）</span></dd></div>
+          </dl>
+        </template>
         <p class="mt-2 text-xs text-slate-500">管路日：每條管路在身上的日數（放置、移除當天都算）。氣管內管的管路日就是呼吸器日（呼吸器相關肺炎 VAP 的分母）。依病人目前住的病房統計。</p>
       </template>
     </UQueryState>

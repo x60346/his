@@ -397,6 +397,14 @@ const labItemsOf: Record<string, LabItemDef[]> = {
     { code: 'U-OB', name: '尿潛血', ...NEG },
   ],
   P011: [{ code: 'CRP', name: 'C 反應蛋白', unit: 'mg/dL', high: 0.5 }],
+  // 動脈血液氣體分析（加護病房：SOFA 的 PaO2/FiO2、APACHE II 的氧合與酸鹼）、總膽紅素（SOFA 肝臟）
+  P052: [
+    { code: 'pH', name: '酸鹼值', unit: '', low: 7.35, high: 7.45, critLow: 7.2, critHigh: 7.6 },
+    { code: 'PaCO2', name: '二氧化碳分壓', unit: 'mmHg', low: 35, high: 45, critLow: 20, critHigh: 70 },
+    { code: 'PaO2', name: '氧分壓', unit: 'mmHg', low: 80, high: 100, critLow: 55 },
+    { code: 'HCO3', name: '碳酸氫根', unit: 'mmol/L', low: 22, high: 26, critLow: 10, critHigh: 40 },
+  ],
+  P053: [{ code: 'T-BIL', name: '總膽紅素', unit: 'mg/dL', low: 0.2, high: 1.2, critHigh: 15 }],
   P012: [
     { code: 'FLU-A', name: 'A 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
     { code: 'FLU-B', name: 'B 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
@@ -462,6 +470,9 @@ const procedureBase: Procedure[] = [
   // 加護病房每日計費：住在加護病房的那幾天收這兩項（取代一般病床的病房費、護理費）。點數為展示用近似值
   { id: 'P050', code: '03010E', name: '病房費（加護病床，每日）', category: '處置', points: 2650, selfPrice: 4000, dailyFee: true, icu: true, active: true },
   { id: 'P051', code: '03047E', name: '護理費（加護病床，每日）', category: '處置', points: 2350, selfPrice: 3500, dailyFee: true, icu: true, active: true },
+  // 加護病房常用檢驗（SOFA、APACHE II 要用）。點數為展示用近似值
+  { id: 'P052', code: '09041B', name: '動脈血液氣體分析 ABG', category: '檢驗', points: 350, selfPrice: 500, active: true },
+  { id: 'P053', code: '09029C', name: '總膽紅素 T-Bilirubin', category: '檢驗', points: 40, selfPrice: 80, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

@@ -61,6 +61,17 @@ async function submit() {
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>
 
+    <!-- 48 小時內從加護病房轉來：帶出加護病房的轉出摘要（接班的人先看） -->
+    <section v-if="patients.some((p) => p.icuOut)" class="rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm">
+      <div class="mb-1 font-semibold text-sky-900">從加護病房轉來（48 小時內）</div>
+      <div v-for="p in patients.filter((x) => x.icuOut)" :key="p.id" class="mt-2 first:mt-0">
+        <div class="font-medium text-slate-800"><span class="tabular mr-2 text-slate-600">{{ p.bed?.bedNo }}</span>{{ p.patientName }}<span class="tabular ml-2 text-xs font-normal text-slate-500">{{ p.icuOut!.at.slice(5).replace('-', '/') }} 轉出</span></div>
+        <dl class="mt-0.5 grid grid-cols-[auto_1fr] gap-x-3 text-slate-700">
+          <template v-for="it in p.icuOut!.items" :key="it.label"><dt class="text-xs text-slate-500">{{ it.label }}</dt><dd class="whitespace-pre-line">{{ it.text || '—' }}</dd></template>
+        </dl>
+      </div>
+    </section>
+
     <UQueryState :loading="loading && !grouped" :ready="!!grouped?.length" :empty-title="`${ward} 最近一天沒有交班紀錄`">
       <section v-for="g in grouped" :key="g.date + g.shift" class="mb-4 last:mb-0">
         <h3 class="mb-2 text-sm font-semibold text-slate-700"><span class="tabular">{{ g.date.slice(5).replace('-', '/') }}</span> {{ g.shift }}</h3>

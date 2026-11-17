@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -231,6 +231,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ...(i === 0 ? { grants: ['phrase.hospital'] } : {}),
       // dr11（感染科）：被指定「感染管制」，判定院內感染個案
       ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
+      // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
+      ...(d.id === 'DR03' ? { grants: ['icu.attending'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
@@ -2085,6 +2087,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 今天 5A 白班是 nurse01、nurse02。明天 6B 小夜故意沒排（班表標紅）。現在這一班 5A 的病人依床號分給上班的護理師
   const nurseShifts: NurseShift[] = []
   const weanTrials: WeanTrial[] = []
+  const icuRequests: IcuRequest[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2231,6 +2234,70 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         })
       })
     }
+    // 敗血症的加護病房檢驗（SOFA、APACHE II 要用；沒有危急值）：轉入 90 分鐘的 ABG、CBC、肌酸酐；昨天早上（或轉入 6 小時後）的 ABG、CBC、膽紅素、肌酸酐
+    if (sep) {
+      const later = (a: string, b: string) => (a > b ? a : b)
+      const pt = patients.find((x) => x.id === sep.patientId)!
+      const procMap = new Map(codes.procedures.map((p) => [p.id, p]))
+      let k = 0
+      const lab = (procId: string, at: string, input: Record<string, string>) => {
+        k++
+        const o: IpdOrder = { id: `IO-ICU-LAB${k}`, admissionId: sep.id, type: 'stat', category: 'procedure', procId, content: procMap.get(procId)!.name, startAt: addMinutes(at, -40), stopAt: addMinutes(at, -30), status: 'done', doctorId: sep.doctorId, createdAt: addMinutes(at, -40), ackAt: addMinutes(at, -35), ackBy: 'U213' }
+        ipdOrders.push(o)
+        labReports.push({ id: `LR-ICU-${k}`, no: `L${at.slice(0, 10).replace(/-/g, '')}${9800 + k}`, patientId: sep.patientId, procId, orderId: o.id, admissionId: sep.id, doctorId: sep.doctorId, orderedAt: o.createdAt, values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+      }
+      const a1 = addMinutes(sep.admittedAt!, 90)
+      lab('P052', a1, { pH: '7.24', PaCO2: '34', PaO2: '68', HCO3: '15' })
+      lab('P003', a1, { WBC: '18.6', Hb: '11.2', PLT: '128' })
+      lab('P008', a1, { CRE: '2.1' })
+      const a2 = later(`${addDays(T, -1)} 06:00`, addMinutes(sep.admittedAt!, 6 * 60))
+      if (a2 < nowStr) {
+        lab('P052', a2, { pH: '7.34', PaCO2: '40', PaO2: '82', HCO3: '21' })
+        lab('P003', a2, { WBC: '15.2', Hb: '10.6', PLT: '92' })
+        lab('P053', a2, { 'T-BIL': '2.4' })
+        lab('P008', a2, { CRE: '1.8' })
+      }
+    }
+    // 糖尿病酮酸中毒：兩天前（或入院 2 小時後）申請轉入、加護病房主治 dr03 同意轉到 ICU2；現在穩定，等醫師寫轉出摘要再轉回病房
+    const dka = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    const icu2 = beds.find((b) => b.ward === codes.icuWard && b.status === 'empty')
+    if (dka && icu2) {
+      const dr02 = users.find((u) => u.doctorId === 'DR02')!.id
+      const dr03 = users.find((u) => u.doctorId === 'DR03')!.id
+      const since = [addMinutes(dka.admittedAt!, 120), `${addMinutes(nowStr, -40 * 60).slice(0, 13)}:20`].sort().pop()!
+      const old = beds.find((b) => b.id === dka.bedId)!
+      old.status = 'empty'
+      delete old.admissionId
+      icu2.status = 'occupied'
+      icu2.admissionId = dka.id
+      dka.bedHistory = [{ bedId: old.id, from: dka.admittedAt! }, { bedId: icu2.id, from: since }]
+      dka.bedId = icu2.id
+      icuRequests.push({ id: 'ICR-SEED-1', admissionId: dka.id, category: 'other', reason: '糖尿病酮酸中毒：血糖 520、pH 7.18，需胰島素點滴、每小時驗血糖', requestedBy: dr02, requestedAt: addMinutes(since, -50), status: 'placed', decidedBy: dr03, decidedAt: addMinutes(since, -30), placedAt: since, bedId: icu2.id })
+      // 轉入之後還留在原病房的交班（住院時產生的）拿掉：人已經在加護病房
+      for (let j = handovers.length - 1; j >= 0; j--) if (handovers[j].admissionId === dka.id && handovers[j].createdAt >= since) handovers.splice(j, 1)
+      // 分床：從 5A 的分床拿掉、分給加護病房這一班的護理師
+      for (let j = nurseAssignments.length - 1; j >= 0; j--) if (nurseAssignments[j].admissionId === dka.id) nurseAssignments.splice(j, 1)
+      if (duty) nurseAssignments.push({ id: 'NAS-ICU-DKA', ward: codes.icuWard, date: cur.date, shift: cur.shift, admissionId: dka.id, nurseId: duty.nurseId, by: duty.nurseId, at: `${cur.date} ${cur.shift === '白班' ? '08:10' : cur.shift === '小夜' ? '16:10' : '00:10'}` })
+      // 流程表：轉入後每小時一筆，最後一筆在 15 分鐘以前的整點（還沒漏記）；那段時間原本的生命徵象刪掉
+      const hourOf = (t: string) => `${t.slice(0, 13)}:00`
+      const firstH = addMinutes(hourOf(since), 60)
+      const lastH = hourOf(addMinutes(nowStr, -15))
+      for (let j = vitals.length - 1; j >= 0; j--) if (vitals[j].admissionId === dka.id && vitals[j].at >= firstH && vitals[j].at <= addMinutes(lastH, 59)) vitals.splice(j, 1)
+      const hrs: string[] = []
+      for (let h = firstH; h <= lastH; h = addMinutes(h, 60)) hrs.push(h)
+      const n = hrs.length
+      hrs.forEach((at, j) => {
+        const nid = nurseShifts.find((x) => x.ward === codes.icuWard && x.date === at.slice(0, 10) && x.shift === (Number(at.slice(11, 13)) >= 16 ? '小夜' : Number(at.slice(11, 13)) >= 8 ? '白班' : '大夜'))?.nurseId ?? 'U214'
+        vitals.push({
+          id: `VS-DKA-${j + 1}`, admissionId: dka.id, at, hourly: true, nurseId: nid,
+          temp: 36.8, pulse: 92 - (j % 3), resp: 18, sbp: 126 + (j % 4), dbp: 74, spo2: 98, intake: 150, output: 110,
+          ...((n - 1 - j) % 4 === 0 ? { pain: 0, rass: 0, gcs: { e: 4, v: 5, m: 6 }, pupils: { l: 3, r: 3, lightL: 'brisk' as const, lightR: 'brisk' as const } } : {}),
+        })
+      })
+    }
+    // 泌尿道感染：血壓掉、乳酸上升，主治 40 分鐘前申請轉入（休克），等加護病房主治同意
+    const uti = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39'))
+    if (uti) icuRequests.push({ id: 'ICR-SEED-2', admissionId: uti.id, category: 'shock', reason: '血壓 86/48，輸液 1.5 L 後仍低，乳酸 3.8，尿量 0.3 ml/kg/h', requestedBy: users.find((u) => u.doctorId === 'DR02')!.id, requestedAt: addMinutes(nowStr, -40), status: 'pending' })
   }
 
   // 傷口（示範，不抽亂數）：腦梗塞病人（住院超過 20 天）16 天前發現薦骨第 2 級壓傷（院內壓傷），換藥三次，大小沒有變小
@@ -2354,6 +2421,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     infusions,
     wounds,
     weanTrials,
+    icuRequests,
     dischargePlans,
     vitals,
     nursingNotes,

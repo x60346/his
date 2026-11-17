@@ -33,6 +33,7 @@ import * as infusion from './infusion'
 import * as wound from './wound'
 import * as icu from './icu'
 import * as vent from './vent'
+import * as icuMove from './icu-move'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -88,6 +89,7 @@ export const infusionApi = overNetwork(infusion)
 export const woundApi = overNetwork(wound)
 export const icuApi = overNetwork(icu)
 export const ventApi = overNetwork(vent)
+export const icuMoveApi = overNetwork(icuMove)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -166,6 +168,7 @@ export * from './infusion-rules'
 export * from './wound-rules'
 export * from './icu-rules'
 export * from './vent-rules'
+export * from './icu-score-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -214,6 +217,7 @@ export type { InfusionView, PatientInfusions } from './infusion'
 export type { WoundView, PatientWounds, CareInput } from './wound'
 export type { Flowsheet, FlowHour, FlowCell, FlowInput, IcuBedRow } from './icu'
 export type { PatientVent, VentOrderView } from './vent'
+export type { IcuRequestView, IcuWork, PatientIcu, SofaDay, IcuStats } from './icu-move'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

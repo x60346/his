@@ -19,6 +19,7 @@ import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
 import VentPanel from '@/components/VentPanel.vue'
+import IcuCarePanel from '@/components/IcuCarePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -101,7 +102,7 @@ const cancelConsultOpen = computed({ get: () => !!cancelling.value, set: (v) => 
 async function confirmCancelConsult(reason: string) {
   if (cancelling.value && (await cancelConsult.run(cancelling.value.id, reason))) cancelling.value = null
 }
-const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', consult: '會診申請', consultReply: '會診回覆' } as const
+const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', consult: '會診申請', consultReply: '會診回覆', icuOut: '加護病房轉出摘要' } as const
 
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
@@ -186,6 +187,7 @@ const tabs = computed(() => [
   { key: 'infection', label: '感染通報' },
   { key: 'infusion', label: '點滴' },
   { key: 'wounds', label: '傷口' },
+  { key: 'icu', label: '加護病房' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -452,6 +454,7 @@ async function submitNote() {
         <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" />
         <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
         <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" />
+        <IcuCarePanel v-else-if="tab === 'icu'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->

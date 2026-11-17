@@ -33,6 +33,7 @@ import { openWounds, woundTodosOf } from './wound-work'
 import { buildVital, type VitalInput } from './vital-work'
 import { icuHourly, icuTodosOf } from './icu-work'
 import { activeVent, rassStateOf, ventTodosOf } from './vent-work'
+import { recentIcuOut } from './icu-move-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -91,6 +92,8 @@ export interface WardPatient extends AdmissionView {
   icu?: { minutes: number; late: boolean }
   /** 呼吸器使用中；RASS 最近一次超出鎮靜目標；呼吸器實測、RASS 該做（現在、逾時）的數目 */
   vent?: { on: boolean; rassOut: boolean; todo: number; overdue: boolean }
+  /** 48 小時內從加護病房轉出：轉出時間與摘要（交班帶出） */
+  icuOut?: { at: string; items: { label: string; text: string }[] }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -145,6 +148,10 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             const vt = ventTodosOf(a, t)
             const rs = rassStateOf(a, t)
             return { icu: { minutes: h.minutes, late: h.late }, vent: { on: !!activeVent(a.id), rassOut: !!rs?.vs && rs.vs !== 'in', todo: vt.length, overdue: vt.some((x) => x.urgency === 'overdue') } }
+          })(),
+          ...(() => {
+            const o = recentIcuOut(a, t)
+            return o ? { icuOut: { at: o.at, items: o.note?.items ?? [] } } : {}
           })(),
           wounds: openWounds(a.id).length,
           woundTodo: woundTodosOf(a, t).length,
