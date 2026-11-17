@@ -24,6 +24,8 @@ import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
 import { nutritionCounts, screenable, screenStateOf } from './nutrition-work'
 import { myScope } from './staffing-work'
 import { planCounts } from './discharge-plan-work'
+import { pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
+import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { isObsBed, obsOpen } from './bed-work'
 
@@ -103,6 +105,9 @@ export interface DashboardStats {
   swapToRespond?: number
   myRequestResults?: number
   shiftRequestsToApprove?: number
+  /** PCA：警示待醫師處理（醫師，本科住院病人）；紀錄逾時（護理師） */
+  pcaAlerts?: number
+  pcaRecordOverdue: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -256,6 +261,8 @@ export function getDashboard(): Promise<DashboardStats> {
             myRequestResults: db.shiftRequests.filter((r) => r.requesterId === me.id && ['approved', 'rejected', 'declined'].includes(r.status) && (r.decidedAt ?? r.peer?.at ?? '') >= addMinutes(t, -24 * 60)).length,
           } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
+          pcaRecordOverdue: inpt.reduce((n, a) => { const p = runningPca(a.id); return n + (p && pcaRecordState(p, t)?.status === 'overdue' ? 1 : 0) }, 0),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { pcaAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').filter((a) => { const p = runningPca(a.id); return !!p && !!pcaOpenAlert(p) }).length } : {}),
           restraintCheckOverdue: inpt.reduce((n, a) => n + restraintTodosOf(a.id, t).filter((x) => x.kind === 'check' && x.urgency === 'overdue').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? (({ positive, restraintOrder }) => ({ deliriumPositive: positive, restraintOrder }))(deliriumDoctorCounts(me.doctorId, t)) : {}),
           ...(['diet', 'admin'].includes(sessionRole() ?? '') ? { nutritionToAssess: nutritionCounts(t).toAssess } : {}),

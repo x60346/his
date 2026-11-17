@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -1165,7 +1165,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
   /** 不走一般庫存帳重播的藥（不抽亂數、不用流水號：加進來不會改變其他藥與後面的種子資料），在迴圈後另外開帳 */
-  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044'])
+  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044', 'M045'])
   drugs.forEach((drug, di) => {
     if (FIXED_STOCK.has(drug.id)) return
     // 展示用：幾種藥庫存偏低、一種缺貨（codes 的安全庫存是依原庫存的 15% 設的，不調低的話永遠不會「偏低」）
@@ -1305,7 +1305,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 門診示範用的第二級管制藥（Morphine 錠）：只放門診藥局，期初一批、之後沒有異動。
   // 大型醫院期初一律進藥庫，當天整批撥給門診藥局（和其他藥一樣：藥局的批號都來自藥庫、撥出撥入成對）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx)) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx && !d.pca)) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}M`
@@ -1326,7 +1326,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 管制性抗生素（M042–M044）：只放住院藥局，期初一批；住院調劑（UD）扣帳在這裡補上（和其他藥一樣在核對時扣、異動記到 UD 明細）。
   // 大型醫院期初進藥庫、當天整批撥給住院藥局
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && d.restrictedAbx)) {
+  // PCA 示範（不抽亂數）：闌尾炎病人（入院超過 12 小時）主治 10 小時前開 PCA、10 分鐘後雙人核對架設（住院藥局扣一袋）；
+  // 每 4 小時紀錄，最近一次鎮靜 3 分、呼吸 9 次（警示，主治還沒處理）
+  const pcas: PcaOrder[] = []
+  const pcaAdm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('K35') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -12 * 60))
+  // PCA 藥袋（M045）也一樣只放住院藥局（大型：藥庫、住院藥局、門診藥局都有一點，照同一套撥補）
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && (d.restrictedAbx || d.pca))) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}V`
@@ -1361,6 +1366,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       x.lots = [{ lotNo, qty: -l.qty }]
       stockTxns.push(x)
       l.txnId = x.id
+    }
+    if (drug.pca && pcaAdm) {
+      const ordered = addMinutes(nowStr, -10 * 60)
+      const setupAt = addMinutes(ordered, 10)
+      const doc = users.find((u) => u.doctorId === pcaAdm.doctorId)!.id
+      home.qty -= 1
+      const x = txn(ipdLoc, 'dispense', setupAt, -1, home.qty, `PCA ${pcaAdm.admitNo}`)
+      Object.assign(x, { lots: [{ lotNo, qty: -1 }], userId: 'U201', patientId: pcaAdm.patientId, doctorId: pcaAdm.doctorId, witnessBy: 'U202' })
+      stockTxns.push(x)
+      const rec = (h: number, r: Omit<PcaRecord, 'at' | 'by' | 'alert'>): PcaRecord => ({ at: addMinutes(setupAt, h * 60), by: h % 8 ? 'U201' : 'U202', ...r, alert: r.sedation >= 3 || r.resp < 10 })
+      pcas.push({
+        id: 'PCA-SEED-1', admissionId: pcaAdm.id, drugId: drug.id, bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0, orderedBy: doc, orderedAt: ordered, status: 'running',
+        setup: { at: setupAt, by: 'U201', witnessBy: 'U202', txnId: x.id },
+        records: [
+          rec(4, { demands: 14, delivered: 9, usedMl: 9, pain: 5, sedation: 2, resp: 16 }),
+          rec(8, { demands: 22, delivered: 15, usedMl: 24, pain: 3, sedation: 3, resp: 9, note: '叫醒後回答慢，暫停 PCA、給氧 2 L，已通知醫師' }),
+        ],
+      })
     }
     drug.stock = lots.reduce((s, l) => s + l.qty, 0)
     drugLots.push(...lots)
@@ -2213,6 +2236,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     nurseShifts,
     nurseAssignments,
     shiftRequests,
+    pcas,
     dischargePlans,
     vitals,
     nursingNotes,

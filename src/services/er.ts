@@ -13,6 +13,7 @@ import { transfusionOpen } from './blood-work'
 import { surgeryOpen } from './surgery-work'
 import { closeLines } from './line-work'
 import { closeRestraints } from './delirium-work'
+import { openPca } from './pca-work'
 
 export interface ObsBedView {
   id: string
@@ -245,6 +246,7 @@ export function endObservation(admissionId: string, input: ObsEndInput): Promise
     const v = must(find.visit(a.obs!.visitId), '急診就醫')
     if (surgeryOpen(a)) fail('病人在手術室，手術完成後才能結束留觀', 'CONFLICT')
     if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完才能結束留觀', 'CONFLICT')
+    if (input.kind !== 'admit' && openPca(a.id)) fail('PCA 還沒結束：請先結束 PCA 並雙人銷毀剩餘量', 'CONFLICT')
     if (!['home', 'admit', 'transfer'].includes(input.kind)) fail('請選擇去向')
     const t = now()
     const note = input.note?.trim()

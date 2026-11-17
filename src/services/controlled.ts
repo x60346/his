@@ -146,6 +146,19 @@ function ledgerOf(drug: Drug, loc: StockLocation, from: string, to: string): Con
       doctorName: nameOf.doctor(o.doctorId), userName: nameOf.user(m.nurseId), witnessName: nameOf.user(m.residual!.witnessBy),
     })
   }
+  // PCA 剩餘量銷毀：架設時從住院藥局扣一整袋，結束時剩下的 ml 換算成袋（不動結存，只記錄銷毀與見證）
+  for (const p of db.pcas.filter((x) => x.drugId === drug.id && x.end && x.end.residualMl > 0 && inRange(x.end.at))) {
+    if (stockLoc.ipd() !== loc.id) continue
+    const vol = drug.pca?.volumeMl ?? 100
+    const a = find.admission(p.admissionId)
+    const pt = a ? find.patient(a.patientId) : undefined
+    rows.push({
+      at: p.end!.at, kind: 'residual', typeLabel: '殘餘量銷毀', qty: Math.round((p.end!.residualMl / vol) * 100) / 100, balance: 0,
+      reason: `PCA 結束（${p.end!.reason}），剩餘 ${p.end!.residualMl} ml 當場銷毀`,
+      ...(a ? { ref: a.admitNo } : {}), ...(pt ? { patientName: pt.name, chartNo: pt.chartNo } : {}),
+      doctorName: nameOf.doctor(find.user(p.orderedBy)?.doctorId), userName: nameOf.user(p.end!.by), witnessName: nameOf.user(p.end!.witnessBy),
+    })
+  }
   // 依時間排；同一刻殘餘量排在給藥那一筆後面。殘餘量那一列的結存＝前一筆
   rows.sort((a, b) => a.at.localeCompare(b.at) || Number(a.kind === 'residual') - Number(b.kind === 'residual'))
   let bal = opening

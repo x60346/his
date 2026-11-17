@@ -10,7 +10,7 @@ import type { User } from '@/types'
 import { db, newId } from '@/mock/db'
 import { audit, fieldErrors } from './http'
 
-export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion'
+export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion' | 'pca'
 export const WITNESS_MIN = 10
 
 export interface WitnessGrant {
@@ -85,6 +85,8 @@ export const expiredScrapRef = (drugId: string, locationId: string) => `E|${drug
 export const quarantineScrapRef = (lotId: string) => `Q|${lotId}`
 /** 門診退藥不可再用、退回後直接報廢：綁那張調劑單 */
 export const returnScrapRef = (dispenseId: string) => `R|${dispenseId}`
+/** PCA 架設、結束（剩餘量銷毀）：綁那一筆 PCA 與哪一段 */
+export const pcaRef = (pcaId: string, stage: 'setup' | 'end') => `P|${pcaId}|${stage}`
 /** 床邊輸血雙人核對：綁那張備血單的那一袋 */
 export const transfusionRef = (requestId: string, unitId: string) => `T|${requestId}|${unitId}`
 

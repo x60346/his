@@ -2,11 +2,13 @@
 import type { Admission, LineDevice } from '@/types'
 import { db } from '@/mock/db'
 import { shiftRange } from './nursing-rules'
+import { pcaPainRecords } from './pca-work'
 import { lineKind, lineState, painState, PIVC_REPLACE_HOURS, LINE_ATTENDING_DAYS, type PainState } from './line-rules'
 
 export const activeLines = (admissionId: string): LineDevice[] => db.lines.filter((l) => l.admissionId === admissionId && !l.removedAt)
 
-export const painStateOf = (admissionId: string, t: string): PainState => painState(db.vitals.filter((v) => v.admissionId === admissionId), t, shiftRange(t).start)
+/** 疼痛：生命徵象上的、加上 PCA 紀錄上的（PCA 每 4 小時也評疼痛） */
+export const painStateOf = (admissionId: string, t: string): PainState => painState([...db.vitals.filter((v) => v.admissionId === admissionId), ...pcaPainRecords(admissionId)], t, shiftRange(t).start)
 
 export interface LineTodo {
   id: string

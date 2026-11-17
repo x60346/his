@@ -43,6 +43,7 @@ export const usable = {
   drug(id: string) {
     const d = must(find.drug(id), `藥品 ${id}`)
     if (!d.active) fail(`${d.name} 已停用，不能開立`)
+    if (d.pca) fail(`${d.name}是病人自控止痛（PCA）藥袋：請在住院醫囑「PCA」分頁開立`)
     return d
   },
   procedure(id: string) {

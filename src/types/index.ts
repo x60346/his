@@ -771,6 +771,8 @@ export interface Drug {
   controlled?: 1 | 2 | 3 | 4
   /** 管制性抗生素：住院開立要填使用理由，感染科 48 小時內審核（先用後審） */
   restrictedAbx?: boolean
+  /** 病人自控止痛（PCA）用的藥袋：一袋多少 mg、多少 ml（只能在住院醫囑「PCA」開，不能當一般醫囑或處方） */
+  pca?: { totalMg: number; volumeMl: number }
   /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
@@ -1802,6 +1804,42 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/** PCA 每 4 小時的紀錄（護理師）：按壓次數、實際給藥次數、累計用量 ml、疼痛、鎮靜（POSS 1–4）、呼吸；鎮靜 ≥3 或呼吸 <10 是警示 */
+export interface PcaRecord {
+  at: string
+  by: string
+  demands: number
+  delivered: number
+  usedMl: number
+  pain: number
+  sedation: 1 | 2 | 3 | 4
+  resp: number
+  note?: string
+  alert: boolean
+}
+
+/**
+ * 病人自控止痛（PCA）：醫師開（藥袋、單次劑量、鎖定時間、每小時上限、基礎速率；要有管制藥執照）→ 護理師雙人核對架設（扣住院藥局一袋）
+ * → 每 4 小時紀錄 → 結束時剩餘量雙人銷毀（記進管制藥簿冊殘餘量）。警示（鎮靜 ≥3、呼吸 <10）主治要處理（alertAck）
+ */
+export interface PcaOrder {
+  id: string
+  admissionId: string
+  drugId: string
+  bolusMg: number
+  lockoutMin: number
+  hourLimitMg: number
+  basalMgH: number
+  orderedBy: string
+  orderedAt: string
+  status: 'ordered' | 'running' | 'ended' | 'cancelled'
+  setup?: { at: string; by: string; witnessBy: string; txnId: string }
+  records: PcaRecord[]
+  alertAck?: { at: string; by: string; note: string }
+  end?: { at: string; by: string; witnessBy: string; reason: string; residualMl: number }
+  cancelled?: { at: string; by: string; reason: string }
+}
+
 /** 出院準備的轉介：長照 2.0、居家護理、呼吸照護、輔具、喘息服務 */
 export type DischargeReferralKind = 'ltc' | 'homecare' | 'respiratory' | 'aids' | 'respite'
 

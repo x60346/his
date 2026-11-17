@@ -6,7 +6,7 @@ import { today } from '@/utils/date'
 import { fail, must, mutate, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { residualOf } from './drug-rules'
-import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, returnScrapRef, transfusionRef, type WitnessResult } from './witness-core'
+import { expiredScrapRef, grantWitness, hasRole, pcaRef, quarantineScrapRef, returnScrapRef, transfusionRef, type WitnessResult } from './witness-core'
 import { BLOOD_PRODUCT_LABEL, bloodTypeText, issueState, latestIssue } from './blood-rules'
 
 export type WitnessTarget =
@@ -22,6 +22,8 @@ export type WitnessTarget =
   | { purpose: 'residual'; orderId: string }
   /** 床邊輸血雙人核對（病人、血型、血袋號、效期）：另一位護理師或醫師 */
   | { purpose: 'transfusion'; requestId: string; unitId: string }
+  /** PCA 架設（藥袋、設定）與結束（剩餘量銷毀）：另一位護理師 */
+  | { purpose: 'pca'; pcaId: string; stage: 'setup' | 'end' }
 
 export type { WitnessResult }
 
@@ -73,6 +75,20 @@ export function approveWitness(input: WitnessTarget & { username: string; passwo
         qualifies: (w) => (hasRole(w, ['nurse', 'doctor']) ? null : `${w.name} 不是護理師或醫師，不能核對輸血`),
         auditAction: '輸血雙人核對', verb: '核對',
         what: `${nameOf.patient(r.patientId)} ${r.no} 血袋 ${unit.unitNo} ${BLOOD_PRODUCT_LABEL[unit.product]} ${bloodTypeText(unit)}（輸血 ${u.name}）`,
+      })
+    }
+    if (input.purpose === 'pca') {
+      const u = requireUser('nurse')
+      const p = must(db.pcas.find((x) => x.id === input.pcaId), 'PCA')
+      if (input.stage === 'setup' && p.status !== 'ordered') fail('這筆 PCA 已經架設了', 'CONFLICT')
+      if (input.stage === 'end' && p.status !== 'running') fail('這筆 PCA 沒有在使用中', 'CONFLICT')
+      const drug = find.drug(p.drugId)
+      return grantWitness({
+        purpose: 'pca', refId: pcaRef(p.id, input.stage), actor: u, ...cred, who: '核對護理師',
+        selfMessage: 'PCA 要兩個人核對，請另一位護理師核對',
+        qualifies: (w) => (hasRole(w, ['nurse']) ? null : `${w.name} 不是護理師，不能核對 PCA`),
+        auditAction: input.stage === 'setup' ? 'PCA 架設雙人核對' : 'PCA 剩餘量銷毀見證', verb: input.stage === 'setup' ? '核對' : '見證',
+        what: `${nameOf.patient(find.admission(p.admissionId)?.patientId)} ${drug?.name ?? ''}（單次 ${p.bolusMg} mg、鎖定 ${p.lockoutMin} 分、每小時上限 ${p.hourLimitMg} mg、基礎 ${p.basalMgH} mg/h；${u.name}）`,
       })
     }
     const u = requireUser('pharmacist')

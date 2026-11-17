@@ -13,6 +13,7 @@ import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
 import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
+import PcaPanel from '@/components/PcaPanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -174,6 +175,7 @@ const tabs = computed(() => [
   { key: 'lines', label: '管路' },
   { key: 'safety', label: '譫妄與約束' },
   { key: 'plan', label: '出院準備' },
+  { key: 'pca', label: 'PCA' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -434,6 +436,7 @@ async function submitNote() {
         <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
         <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
         <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
+        <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->

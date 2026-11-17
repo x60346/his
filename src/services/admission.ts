@@ -15,6 +15,7 @@ import { stopOrderRecord, addChartNote } from './order-ops'
 import { placementFor } from './flag-work'
 import { closeLines } from './line-work'
 import { closeRestraints } from './delirium-work'
+import { openPca } from './pca-work'
 import { admitInto, bedStatusLabel, closeOrders, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
@@ -241,6 +242,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
     if (surgeryOpen(a)) fail('病人在手術室（已送或手術中），手術完成後才能辦理出院', 'CONFLICT')
     if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完（或請血庫退回）才能辦理出院', 'CONFLICT')
+    if (openPca(a.id)) fail('PCA 還沒結束：請護理師結束 PCA 並雙人銷毀剩餘量（還沒架設的請醫師取消）後再辦理出院', 'CONFLICT')
     const t = now()
     const check = dischargeCheckOf(a, t)
     const unfinished = check.overdueMar.length + check.pendingStat.length

@@ -4581,7 +4581,7 @@ try {
     const csv = CSV.controlledLedgerCsv(L)
     ok(csv.startsWith('\uFEFF') && csv.includes('管制藥品收支結存簿冊') && csv.includes('殘餘量銷毀') && csv.includes('孫佩君') && csv.includes(`期末結存,${L.closing}`), '匯出 CSV：表頭、逐筆（含殘餘量、見證人）、期末')
     const opts = await api.controlledApi.controlledLedgerOptions()
-    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 5 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥；地點含病房常備')
+    ok(opts.drugs.every((d) => d.controlled) && opts.drugs.length === 6 && opts.locations.some((l) => l.kind === 'ward'), '簿冊選項：只有管制藥（含 PCA 藥袋共 6 種）；地點含病房常備')
     // STAT 也一樣
     await as(docUser)
     const st = await api.ipdApi.addOrder({ admissionId: a.id, type: 'stat', category: 'medication', drugId: 'M039', content: '', dose: 0.5, freq: 'STAT', route: 'IM', allowDuplicate: true })
@@ -7891,6 +7891,121 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // PCA：醫囑範圍與執照、雙人核對架設（扣住院藥局、進帳單與簿冊）、每 4 小時紀錄（警示、處置）、疼痛評估、醫師處理警示、
+  // 結束剩餘量雙人銷毀（簿冊殘餘量）、出院擋、PCA 藥袋不能當一般醫囑
+  console.log('\n[PCA]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.pcaApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.checkPcaInput({ bolusMg: 5, lockoutMin: 3, hourLimitMg: 30, basalMgH: 3 }).bolusMg && api.checkPcaInput({ bolusMg: 2, lockoutMin: 10, hourLimitMg: 2, basalMgH: 1 }).hourLimitMg?.includes('不能低於') && !Object.keys(api.checkPcaInput({ bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 })).length, '醫囑範圍：單次、鎖定、上限不能低於單次＋基礎')
+    ok(api.pcaMaxPerHour({ bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0.5 }) === 6 && api.pcaMaxPerHour({ bolusMg: 1, lockoutMin: 15, hourLimitMg: 10, basalMgH: 0 }) === 4, '每小時理論最多：受鎖定與上限限制')
+    ok(api.pcaAlert({ sedation: 3, resp: 14 }) && api.pcaAlert({ sedation: 1, resp: 9 }) && !api.pcaAlert({ sedation: 2, resp: 10 }), '警示：鎮靜 ≥3 或呼吸 <10')
+    ok(api.pcaRecordDue('2026-11-17 08:00', '2026-11-17 11:45').status === 'due' && api.pcaRecordDue('2026-11-17 08:00', '2026-11-17 12:01').status === 'overdue', '每 4 小時紀錄（到期前 30 分鐘提醒）')
+    ok(api.checkPcaRecord({ demands: 3, delivered: 5, usedMl: 10, pain: 3, sedation: 1, resp: 14 }, 20, 100).delivered && api.checkPcaRecord({ demands: 3, delivered: 2, usedMl: 10, pain: 3, sedation: 1, resp: 14 }, 20, 100).usedMl, '紀錄：給藥不能多於按壓、累計用量只增不減')
+
+    // 種子
+    const seed = db().pcas.find((p) => p.id === 'PCA-SEED-1')
+    if (seed) {
+      const a0 = db().admissions.find((a) => a.id === seed.admissionId)
+      await as(db().users.find((u) => u.doctorId === a0.doctorId).username)
+      ok((await api.dashboardApi.getDashboard()).pcaAlerts >= 1, '種子：PCA 鎮靜 3、呼吸 9 → 主治首頁「PCA 警示待處理」')
+      await as('nurse01')
+      const wp = (await api.nursingApi.listWardPatients(db().beds.find((b) => b.id === a0.bedId).ward)).find((p) => p.id === a0.id)
+      ok(wp.pca?.alert && wp.pca.status === 'running', '護理站清單標 PCA（警示）')
+      ok(db().stockTxns.some((t) => t.id === seed.setup.txnId && t.ref === `PCA ${a0.admitNo}` && t.witnessBy === 'U202'), '種子：架設時住院藥局扣一袋（簿冊有見證人）')
+    }
+
+    // 開 PCA：藥袋不能當一般醫囑；範圍；執照
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().pcas.some((p) => p.admissionId === x.id))
+    const docU = db().users.find((u) => u.doctorId === a.doctorId)
+    await as(docU.username)
+    let msg = await errOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'medication', drugId: 'M045', content: '', dose: 1, freq: 'PRN', route: 'IV' }))
+    ok(msg.includes('PCA'), `PCA 藥袋不能當一般醫囑 → 「${msg}」`)
+    let f = await fieldsOf(() => P.orderPca(a.id, { drugId: 'M045', bolusMg: 5, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 }))
+    ok(f.bolusMg, '單次劑量超過範圍擋')
+    const doc = db().doctors.find((d) => d.id === a.doctorId)
+    const lic = doc.controlledLicense
+    doc.controlledLicense = { no: lic?.no ?? 'x', validUntil: '2020-01-01' }
+    f = await fieldsOf(() => P.orderPca(a.id, { drugId: 'M045', bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 }))
+    ok(f.drugId?.includes('管制藥'), `管制藥執照過期不能開 → 「${f.drugId}」`)
+    db().doctors.find((d) => d.id === a.doctorId).controlledLicense = lic // 失敗的 mutate 會回滾換新物件：重新 find 再改回
+    let p = await P.orderPca(a.id, { drugId: 'M045', bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 })
+    ok(p.status === 'ordered' && p.maxPerHour === 6, '開 PCA：待架設（每小時最多 6 mg）')
+    msg = await errOf(() => P.orderPca(a.id, { drugId: 'M045', bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 }))
+    ok(msg.includes('已經有一筆'), '同時只能一筆')
+    await as('nurse01')
+    await expectError(() => P.orderPca(a.id, { drugId: 'M045', bolusMg: 1, lockoutMin: 10, hourLimitMg: 6, basalMgH: 0 }), '護理師開 PCA')
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'pca' && t.text.includes('架設')), '本班待辦：新開的 PCA 待架設')
+
+    // 架設：要雙人
+    f = await fieldsOf(() => P.setupPca(p.id))
+    ok(f.witness, '沒有第二位護理師核對不能架設')
+    const w1 = await api.witnessApi.approveWitness({ purpose: 'pca', pcaId: p.id, stage: 'setup', username: 'nurse01', password: '1234' })
+    ok(!w1.ok, '不能自己核對自己')
+    const w2 = await api.witnessApi.approveWitness({ purpose: 'pca', pcaId: p.id, stage: 'setup', username: 'nurse02', password: '1234' })
+    const stockBefore = db().drugLots.filter((l) => l.drugId === 'M045').reduce((n, l) => n + l.qty, 0)
+    p = await P.setupPca(p.id, w2.token)
+    ok(p.status === 'running' && p.setupWitnessName === '孫佩君' && db().drugLots.filter((l) => l.drugId === 'M045').reduce((n, l) => n + l.qty, 0) === stockBefore - 1, '雙人核對架設：使用中、住院藥局扣一袋')
+    await as('clerk01')
+    ok((await api.ipdChargeApi.getIpdBill(a.id)).bill.lines.some((l) => l.name.startsWith('Morphine PCA')), '住院帳單有 PCA 藥袋')
+
+    // 紀錄：疼痛算疼痛評估；警示要處置
+    await as('nurse01')
+    f = await fieldsOf(() => P.recordPca(p.id, { demands: 4, delivered: 2, usedMl: 3, pain: 3, sedation: 3, resp: 12 }))
+    ok(f.note, '有警示要寫處置')
+    let r = await P.recordPca(p.id, { demands: 4, delivered: 2, usedMl: 3, pain: 5, sedation: 1, resp: 14 })
+    ok(!r.warning && r.pca.usedMl === 3, '紀錄：沒有警示')
+    const wp2 = (await api.nursingApi.listWardPatients(ward)).find((x) => x.id === a.id)
+    ok(wp2.painScore === 5 && wp2.painReassess === 'upcoming' && wp2.painThisShift, 'PCA 紀錄的疼痛算疼痛評估（本班已評、≥4 要重評）')
+    r = await P.recordPca(p.id, { demands: 9, delivered: 5, usedMl: 8, pain: 2, sedation: 3, resp: 9, note: '暫停 PCA、給氧' })
+    ok(r.warning?.includes('通知醫師') && r.pca.openAlert, `警示：「${r.warning}」`)
+    await as(docU.username)
+    ok((await api.dashboardApi.getDashboard()).pcaAlerts >= 1, '主治首頁：PCA 警示待處理')
+    f = await fieldsOf(() => P.ackPcaAlert(p.id, ''))
+    ok(f.note, '處理警示要寫處置')
+    p = await P.ackPcaAlert(p.id, '停止 PCA、改口服止痛')
+    ok(!p.openAlert && p.alertAck, '醫師處理後警示解除')
+
+    // 出院擋
+    await as('clerk01')
+    db().admissions.find((x) => x.id === a.id).dischargeSummary = { ...(db().admissions.find((x) => x.id === a.id).dischargeSummary ?? {}), signedAt: nowStr(), dischargeType: '改善出院', doctorId: a.doctorId }
+    msg = await errOf(() => api.admissionApi.discharge(a.id, { confirmUnfinished: true }))
+    ok(msg.includes('PCA'), `PCA 還沒結束不能出院 → 「${msg}」`)
+
+    // 結束：剩餘量雙人銷毀 → 管制藥簿冊殘餘量
+    await as('nurse01')
+    f = await fieldsOf(() => P.endPca(p.id, { reason: '醫師停止（改口服止痛）', residualMl: 92 }))
+    ok(f.witness, '剩餘量銷毀要見證')
+    const w3 = await api.witnessApi.approveWitness({ purpose: 'pca', pcaId: p.id, stage: 'end', username: 'nurse02', password: '1234' })
+    f = await fieldsOf(() => P.endPca(p.id, { reason: '醫師停止（改口服止痛）', residualMl: 150, witness: w3.token }))
+    ok(f.residualMl, '剩餘量不能超過一袋')
+    p = await P.endPca(p.id, { reason: '醫師停止（改口服止痛）', residualMl: 92, witness: w3.token })
+    ok(p.status === 'ended' && p.end.residualMl === 92 && p.endWitnessName === '孫佩君', '結束：剩餘 92 ml 雙人銷毀')
+    await as('ph01')
+    const L = await api.controlledApi.controlledLedger({ drugId: 'M045', locationId: db().stockLocations.find((l) => l.dispensesIpd).id, from: dateUtil.addDays(T, -1), to: T })
+    const res = L.rows.find((x) => x.kind === 'residual' && x.reason.includes('92 ml'))
+    ok(res && res.qty === 0.92 && res.witnessName === '孫佩君' && L.rows.some((x) => x.kind === 'out' && x.ref === `PCA ${a.admitNo}`), `管制藥簿冊：架設那袋支出、殘餘量 0.92 袋銷毀（見證人）`)
+  }
+
   // 換班與請假：請假（自己的班、假別、原因、護理長核准後從班表拿掉）、換班（對方同意 → 核准 → 交換；同一天兩班擋、休息不足提醒）、撤回、首頁
   console.log('\n[換班與請假]')
   {
@@ -9394,7 +9509,7 @@ try {
       `偏低／缺貨的數量合理：小型 ${flagCount(small, 'LOC-PH')}、大型門診藥局 ${flagCount(large, 'LOC-OPD')}、藥庫 ${flagCount(large, 'LOC-WH')}（不會一大半都在警示）`)
     ok(ledgerBroken(large).length === 0, '大型：每個地點的批號、帳本、結存都對得起來')
     const byType = (t) => [...new Set(large.stockTxns.filter((x) => x.type === t).map((x) => x.locationId))].join()
-    ok(byType('dispense') === 'LOC-OPD,LOC-IPD' && large.stockTxns.filter((x) => x.type === 'dispense' && x.locationId === 'LOC-IPD').every((x) => x.ref.startsWith('UD')) && byType('receive') === 'LOC-WH' && byType('opening') === 'LOC-WH', '門診發藥從門診藥局扣、住院調劑從住院藥局扣；期初、進貨只進藥庫')
+    ok(byType('dispense') === 'LOC-OPD,LOC-IPD' && large.stockTxns.filter((x) => x.type === 'dispense' && x.locationId === 'LOC-IPD').every((x) => x.ref.startsWith('UD') || x.ref.startsWith('PCA ')) && byType('receive') === 'LOC-WH' && byType('opening') === 'LOC-WH', '門診發藥從門診藥局扣、住院調劑（UD、PCA 架設）從住院藥局扣；期初、進貨只進藥庫')
     const outs = large.stockTxns.filter((x) => x.type === 'transfer-out' && !x.ref?.startsWith('WR'))
     const unpaired = outs.filter((o) => {
       const i = large.stockTxns.find((x) => x.type === 'transfer-in' && x.ref === o.ref && x.drugId === o.drugId)

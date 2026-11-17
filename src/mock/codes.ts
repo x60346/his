@@ -241,6 +241,8 @@ const drugBase = [
   { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true },
   { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
   { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
+  // 病人自控止痛（PCA）藥袋：只放住院藥局、只能在 PCA 開（seed 另外開帳）
+  { ...drug('M045', 'AC00045100', 'Morphine PCA 100mg/100ml', 'Morphine', '1 mg/ml，100 ml/袋', 'BAG', '注射', 260, 520, 30, 1, 'PRN', 'IV', true), safetyStock: 5, pca: { totalMg: 100, volumeMl: 100 } },
 ]
 
 /**
@@ -292,6 +294,7 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M042: ['抗生素（注射，抗藥性菌如 MRSA）', '要慢慢滴注（至少 1 小時）；滴太快會臉紅發癢；需抽血監測藥物濃度與腎功能'],
   M043: ['抗生素（注射，嚴重或抗藥性感染）', '出現皮疹、呼吸困難立即告知醫護人員；可能腹瀉'],
   M044: ['抗生素（注射，嚴重感染）', '對盤尼西林過敏者不可使用；出現皮疹、呼吸困難立即告知醫護人員'],
+  M045: ['術後止痛（病人自控止痛機）', '覺得痛再按，機器會限制次數；嗜睡、呼吸變慢請立即告知醫護人員；家屬不可代按'],
 }
 
 /**
@@ -355,10 +358,11 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M042: ['萬古黴素注射劑', ['Vanco']],
   M043: ['美羅培南注射劑', ['Mepem']],
   M044: ['哌拉西林／他唑巴坦注射劑', ['Tazocin']],
+  M045: ['嗎啡病人自控止痛藥袋', ['PCA']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */
-const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M041: 2, M031: 4, M028: 4, M029: 4 }
+const controlledOf: Record<string, Drug['controlled']> = { M039: 2, M041: 2, M045: 2, M031: 4, M028: 4, M029: 4 }
 
 export const drugs: Drug[] = drugBase.map((d) => ({
   ...d,
