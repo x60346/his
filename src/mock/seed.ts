@@ -59,6 +59,7 @@ import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
+import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -260,7 +261,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
   codes.doctors.forEach((d) => {
     // 放射科不看門診（判讀影像）：不排門診表，也不影響其他醫師的排班與種子
-    if (codes.departments.find((x) => x.id === d.deptId)?.code === 'RAD') return
+    if (['RAD', 'INF'].includes(codes.departments.find((x) => x.id === d.deptId)?.code ?? '')) return
     const deptIdx = codes.departments.findIndex((x) => x.id === d.deptId)
     const sameDept = codes.doctors.filter((x) => x.deptId === d.deptId)
     const k = sameDept.indexOf(d)
@@ -1045,6 +1046,54 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   void doctorUser
 
+  // ---------- 管制性抗生素（示範，不抽亂數）：先用後審，感染科 DR11 審核 ----------
+  //   - 敗血症：Meropenem 50 小時前開立（經驗性、血流），還沒審 → 逾時
+  //   - 蜂窩性組織炎（MRSA）：Vancomycin 依培養結果開立，隔天核准 7 天（今天約第 3 天）
+  //   - 肺炎：Piperacillin/Tazobactam 昨天開立，不核准（已有 Ceftriaxone、培養無抗藥菌），等主治處理
+  {
+    const inpt = admissions.filter((a) => a.status === 'admitted')
+    const later = (a: string, b: string) => (a > b ? a : b)
+    const idDoc = doctorUser('DR11')
+    // 要在昨天 15:00 的每日調劑之前開（今天的劑量才在那次調劑裡）；病人住進來太晚（入院時間隨日期變）就不放這一筆
+    const udCut = `${addDays(T, -1)} 14:50`
+    const addAbx = (a: Admission | undefined, drugId: string, startAt: string, abx: Omit<NonNullable<IpdOrder['abx']>, 'courseStart' | 'requestedAt' | 'steps' | 'status'>, decide?: { approve: boolean; at: string; text: string; days?: number }) => {
+      if (!a || startAt >= udCut) return
+      const d = drugMap.get(drugId)!
+      const req = `${ABX_REASON_LABEL[abx.reason]}${abx.organism ? `（${abx.organism}）` : ''}・${abx.site}${abx.note ? `：${abx.note}` : ''}`
+      const o: IpdOrder = {
+        id: id('IO'), admissionId: a.id, type: 'long', category: 'medication', drugId, content: d.name, dose: 1, freq: d.defaultFreq, route: 'IV',
+        startAt, status: 'active', doctorId: a.doctorId, createdAt: startAt,
+        abx: {
+          ...abx, courseStart: startAt, requestedAt: startAt,
+          status: decide ? (decide.approve ? 'approved' : 'rejected') : 'pending', ...(decide?.days ? { approvedDays: decide.days } : {}),
+          steps: [{ action: 'request', at: startAt, by: doctorUser(a.doctorId), text: req }, ...(decide ? [{ action: decide.approve ? 'approve' as const : 'reject' as const, at: decide.at, by: idDoc, text: decide.text, ...(decide.days ? { days: decide.days } : {}) }] : [])],
+        },
+      }
+      ipdOrders.push(o)
+      const f = codes.frequencies.find((x) => x.code === o.freq)!
+      for (let day = startAt.slice(0, 10); day <= T; day = addDays(day, 1)) {
+        for (const tm of marTimes(f.code, f.times, undefined, 'IV')) {
+          const at = `${day} ${tm}`
+          if (at < startAt) continue
+          const past = at < recentCut
+          mar.push({ id: id('MAR'), orderId: o.id, admissionId: a.id, scheduledAt: at, status: past ? 'given' : 'pending', ...(past ? { executedAt: at, nurseId: 'U201' } : {}) })
+        }
+      }
+    }
+    const sepsis = inpt.find((a) => a.diagnosis.startsWith('A41'))
+    const cell = inpt.find((a) => a.diagnosis.startsWith('L03'))
+    const pneu = inpt.find((a) => a.diagnosis.startsWith('J18'))
+    if (sepsis) addAbx(sepsis, 'M043', later(addMinutes(nowStr, -50 * 60), addMinutes(sepsis.admittedAt!, 60)), { reason: 'empiric', site: '血流', note: '血壓偏低、乳酸上升，先擴大涵蓋' })
+    if (cell) {
+      const s = later(`${addDays(T, -2)} 10:00`, addMinutes(cell.admittedAt!, 240))
+      addAbx(cell, 'M042', s, { reason: 'culture', site: '皮膚軟組織', organism: 'MRSA', note: '傷口培養 MRSA' }, { approve: true, at: notFuture(addMinutes(s, 20 * 60), 30), text: '同意使用，請監測 Vancomycin 谷濃度與腎功能', days: 7 })
+    }
+    if (pneu) {
+      const s = later(`${addDays(T, -1)} 09:00`, addMinutes(pneu.admittedAt!, 60))
+      addAbx(pneu, 'M044', s, { reason: 'empiric', site: '肺部', note: '發燒未退' }, { approve: false, at: notFuture(addMinutes(s, 7 * 60), 20), text: '已使用 Ceftriaxone，痰液培養無抗藥菌：建議停用 Piperacillin/Tazobactam，續用 Ceftriaxone' })
+    }
+  }
+
   // ---------- 住院調劑（UD）：昨天 15:00 調劑、15:20 另一位藥師核對送出今天整天的劑量（不抽亂數） ----------
   // 今天的排程（已給的、待給的）都由這一次調劑送到病房；明天的還沒調——藥師下午打開「住院藥局」就有每日調劑可做。
   // 核對通過才扣帳：扣庫存的異動在下面重播帳本時一起產生（時間＝核對，和門診發藥同一套 FEFO），txnId 那時才填
@@ -1110,7 +1159,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
   /** 不走一般庫存帳重播的藥（不抽亂數、不用流水號：加進來不會改變其他藥與後面的種子資料），在迴圈後另外開帳 */
-  const FIXED_STOCK = new Set(['M041'])
+  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044'])
   drugs.forEach((drug, di) => {
     if (FIXED_STOCK.has(drug.id)) return
     // 展示用：幾種藥庫存偏低、一種缺貨（codes 的安全庫存是依原庫存的 15% 設的，不調低的話永遠不會「偏低」）
@@ -1250,7 +1299,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 門診示範用的第二級管制藥（Morphine 錠）：只放門診藥局，期初一批、之後沒有異動。
   // 大型醫院期初一律進藥庫，當天整批撥給門診藥局（和其他藥一樣：藥局的批號都來自藥庫、撥出撥入成對）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id))) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx)) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}M`
@@ -1267,6 +1316,48 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       stockTxns.push(txn(2, recvLoc, 'transfer-out', when, -n, 0, ref), txn(3, opdLoc, 'transfer-in', when, n, n, ref))
       drugLots.push(lot(recvLoc, 0, 1), lot(opdLoc, n, 2))
     }
+  }
+
+  // 管制性抗生素（M042–M044）：只放住院藥局，期初一批；住院調劑（UD）扣帳在這裡補上（和其他藥一樣在核對時扣、異動記到 UD 明細）。
+  // 大型醫院期初進藥庫、當天整批撥給住院藥局
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && d.restrictedAbx)) {
+    const year = Number(T.slice(0, 4))
+    const at = `${addDays(T, -31)} 08:00`
+    const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}V`
+    const n = drug.stock
+    let k = 0
+    const txn = (loc: string, type: StockTxn['type'], when: string, qty: number, balance: number, ref?: string): StockTxn =>
+      ({ id: `ST-${drug.id}-${++k}`, drugId: drug.id, locationId: loc, at: when, type, qty, balance, lots: [{ lotNo, qty }], ...(ref ? { ref } : {}), userId: 'U301' })
+    stockTxns.push(txn(recvLoc, 'opening', at, n, n))
+    const lots: DrugLot[] = []
+    const expiry = `${year + 2}-06-30`
+    if (ipdLoc === recvLoc) lots.push({ id: `LOT-${drug.id}-1`, drugId: drug.id, locationId: ipdLoc, lotNo, expiry, qty: n, receivedAt: at })
+    else {
+      // 大型：藥庫留 1/4、撥一半給住院藥局（調劑用）、1/4 給門診藥局（各地點都高於安全庫存，不會一開就缺貨警示）
+      const when = `${addDays(T, -31)} 09:00`
+      const toIpd = Math.round(n / 2)
+      const toOpd = Math.round(n / 4)
+      stockTxns.push(
+        txn(recvLoc, 'transfer-out', when, -toIpd, n - toIpd, `撥補 TR${drug.id}-01`), txn(ipdLoc, 'transfer-in', when, toIpd, toIpd, `撥補 TR${drug.id}-01`),
+        txn(recvLoc, 'transfer-out', when, -toOpd, n - toIpd - toOpd, `撥補 TR${drug.id}-02`), txn(opdLoc, 'transfer-in', when, toOpd, toOpd, `撥補 TR${drug.id}-02`),
+      )
+      for (const x of stockTxns.slice(-4)) x.lots = [{ lotNo, qty: x.qty }]
+      lots.push(
+        { id: `LOT-${drug.id}-1`, drugId: drug.id, locationId: recvLoc, lotNo, expiry, qty: n - toIpd - toOpd, receivedAt: at },
+        { id: `LOT-${drug.id}-2`, drugId: drug.id, locationId: ipdLoc, lotNo, expiry, qty: toIpd, receivedAt: when },
+        { id: `LOT-${drug.id}-3`, drugId: drug.id, locationId: opdLoc, lotNo, expiry, qty: toOpd, receivedAt: when },
+      )
+    }
+    const home = lots.find((l) => l.locationId === ipdLoc)!
+    for (const l of udLines.filter((x) => x.drugId === drug.id && x.qty > 0)) {
+      home.qty -= l.qty
+      const x = txn(ipdLoc, 'dispense', udVerifiedAt, -l.qty, home.qty, udNo)
+      x.lots = [{ lotNo, qty: -l.qty }]
+      stockTxns.push(x)
+      l.txnId = x.id
+    }
+    drug.stock = lots.reduce((s, l) => s + l.qty, 0)
+    drugLots.push(...lots)
   }
 
   // 展示用（U25）：一張昨天提出、還沒到貨的補貨申請（第一種「偏低」的藥）——

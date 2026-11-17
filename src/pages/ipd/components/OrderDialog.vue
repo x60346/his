@@ -4,15 +4,16 @@
 // 送出時「依類別組裝」要送的欄位，而不是把整個表單丟出去——
 // 否則切換類別後殘留的欄位（例如先選了藥又改成飲食）會被一起送出。
 // 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
+// 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
-import type { Drug, DrugTiming, IpdOrderCategory, Procedure } from '@/types'
+import type { AbxReason, Drug, DrugTiming, IpdOrderCategory, Procedure } from '@/types'
 
 const open = defineModel<boolean>({ default: false })
 const props = defineProps<{ admission?: AdmissionView }>()
@@ -38,9 +39,15 @@ const form = reactive({
   proc: null as Procedure | null,
   content: '',
 })
+const abx = reactive({ reason: '' as AbxReason | '', site: '' as string | number | undefined, organism: '', note: '' })
+const ABX_REASONS = Object.keys(ABX_REASON_LABEL) as AbxReason[]
 
 watch(open, (v) => {
-  if (v) Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
+  if (v) {
+    Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
+    Object.assign(abx, { reason: '', site: '', organism: '', note: '' })
+    save.fieldErrors.value = {}
+  }
 })
 // 檢驗、處置通常是臨時醫囑；飲食、護理通常是長期醫囑
 watch(() => form.category, (c) => {
@@ -88,7 +95,10 @@ function buildInput(): OrderInput | string {
     case 'medication':
       if (!form.drug) return '請選擇藥品'
       if (!form.dose || form.dose <= 0) return '請輸入劑量'
-      return { ...base, content: '', drugId: form.drug.id, dose: form.dose, freq: String(form.freq), route: String(form.route), ...(showTiming.value && form.timing ? { timing: String(form.timing) as DrugTiming } : {}) }
+      return {
+        ...base, content: '', drugId: form.drug.id, dose: form.dose, freq: String(form.freq), route: String(form.route), ...(showTiming.value && form.timing ? { timing: String(form.timing) as DrugTiming } : {}),
+        ...(form.drug.restrictedAbx ? { abx: { reason: abx.reason as AbxReason, site: String(abx.site ?? ''), organism: abx.organism, note: abx.note } } : {}),
+      }
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
       return { ...base, content: '', procId: form.proc.id }
@@ -196,9 +206,24 @@ ${doseNote(drug, input.dose ?? 0)}。
           @select="pickDrug"
         />
         <div v-if="form.drug" class="flex items-center gap-2 text-sm">
-          已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge>
+          已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge><UBadge v-if="form.drug.restrictedAbx" tone="yellow">管制性抗生素</UBadge>
         </div>
         <RxAlertList :alerts="rxAlerts ?? []" />
+        <!-- 管制性抗生素：先用後審（第一劑照常給），感染科 48 小時內審核 -->
+        <section v-if="form.drug?.restrictedAbx" class="space-y-2 rounded-md border border-amber-300 bg-amber-50/50 px-3 py-2">
+          <div class="text-sm font-medium text-amber-900">管制性抗生素：請填使用理由（開立後照常給藥，感染科 {{ ABX_REVIEW_HOURS }} 小時內審核）</div>
+          <div class="flex flex-wrap gap-4 text-sm">
+            <label v-for="r in ABX_REASONS" :key="r" class="flex items-center gap-1.5">
+              <input v-model="abx.reason" type="radio" name="abx-reason" :value="r" class="h-4 w-4 text-brand-600" />{{ ABX_REASON_LABEL[r] }}
+            </label>
+          </div>
+          <p v-if="save.fieldErrors.value.abxReason" class="text-xs text-red-600">{{ save.fieldErrors.value.abxReason }}</p>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <USelect v-model="abx.site" label="感染部位" required :options="ABX_SITES" placeholder="選擇部位" :error="save.fieldErrors.value.abxSite" />
+            <UInput v-if="abx.reason === 'culture'" v-model="abx.organism" label="菌種" required :error="save.fieldErrors.value.abxOrganism" />
+          </div>
+          <UInput v-model="abx.note" label="說明（選填，例：敗血性休克、先前 Ceftriaxone 治療 3 天無效）" />
+        </section>
         <div class="grid grid-cols-3 gap-3">
           <UInput
             v-model="form.dose"

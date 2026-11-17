@@ -26,7 +26,7 @@ import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
 import { consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
-import { admissionApi, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
+import { abxApi, admissionApi, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -92,6 +92,18 @@ const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', cons
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
 const consultUnseen = computed(() => (orders.value ?? []).filter((o) => o.consultUnseen))
+// 管制性抗生素：不核准（停藥、改藥或申覆）、核准天數快到（申請續用）——上方紅條／黃條
+const abxRejected = computed(() => (orders.value ?? []).filter((o) => o.abx?.status === 'rejected' && o.abxInfo))
+const abxExtend = computed(() => (orders.value ?? []).filter((o) => o.abxInfo?.extend))
+const abxResubmit = ref<{ order: OrderView; kind: 'appeal' | 'extend' }>()
+const abxResubmitOpen = computed({ get: () => !!abxResubmit.value, set: (v) => !v && (abxResubmit.value = undefined) })
+const appeal = useAction(abxApi.appealAbx, { success: (o) => `已申覆：${o.content}（回到待感染科審核）` })
+const extendAbx = useAction(abxApi.requestAbxExtension, { success: (o) => `已申請續用：${o.content}（待感染科審核）` })
+async function confirmAbx(note: string) {
+  const x = abxResubmit.value
+  if (x && (await (x.kind === 'appeal' ? appeal : extendAbx).run(x.order.id, note))) abxResubmit.value = undefined
+}
+const lastReject = (o: OrderView) => o.abxInfo?.steps.filter((s) => s.action === 'reject').at(-1)
 const ackConsult = useAction(ipdApi.ackConsultOrders, { success: (r) => `已閱 ${r.count} 筆會診醫囑` })
 const longOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'long'))
 const statOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'stat'))
@@ -338,6 +350,15 @@ async function submitNote() {
         </div>
 
         <!-- 會診醫師開了醫囑：本科醫師看過按「已閱」才消失（首頁待辦也有） -->
+        <div v-for="o in abxRejected" :key="`abxr-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert">
+          <span class="min-w-0 flex-1"><b>抗生素審核未通過：</b>{{ o.content }}（{{ o.abxInfo!.text.split('・')[0] }}）—{{ lastReject(o)?.byName }}：{{ lastReject(o)?.text }}。請停藥、改藥，或寫說明申覆。</span>
+          <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'appeal' }">申覆</UButton>
+          <UButton v-if="!isAdmin" size="sm" variant="danger" @click="onStop(o)">停止</UButton>
+        </div>
+        <div v-for="o in abxExtend" :key="`abxe-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+          <span class="min-w-0 flex-1"><b>抗生素核准天數{{ o.abxInfo!.extend === 'over' ? '已超過' : '快到了' }}：</b>{{ o.content }}，{{ o.abxInfo!.text }}。要續用請申請；不用了請停止。</span>
+          <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'extend' }">申請續用</UButton>
+        </div>
         <div v-if="consultUnseen.length" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-sm text-purple-900">
           <span class="min-w-0 flex-1">會診醫師新開了 <b>{{ consultUnseen.length }}</b> 筆醫囑：{{ consultUnseen.map((o) => `${o.content}（${o.consultLabel?.replace('會診：', '')}）`).join('、') }}</span>
           <UButton size="sm" variant="secondary" :loading="ackConsult.pending.value" @click="adm && ackConsult.run(adm.id)">已閱</UButton>
@@ -357,6 +378,7 @@ async function submitNote() {
                       <UBadge v-if="o.highAlert && o.status === 'active'" tone="purple" class="ml-1">高警訊</UBadge>
                       <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>
                     </div>
+                    <div v-if="o.abxInfo" :class="['text-xs', o.abx?.status === 'rejected' || o.abxInfo.overdue ? 'font-semibold text-red-700' : o.abx?.status === 'pending' ? 'text-amber-800' : 'text-emerald-700']" :title="o.abxInfo.reasonText">管制性抗生素・{{ o.abxInfo.text }}</div>
                     <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}<template v-if="o.doseStrength">（{{ o.doseStrength }}）</template>・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template><span v-if="o.timingSet" class="ml-1 rounded bg-sky-100 px-1 text-sky-800">醫師指定</span></div>
                     <div v-if="o.replacesText" class="text-xs text-sky-700" :title="o.reviseReason">修改自：{{ o.replacesText }}（{{ o.reviseReason }}）</div>
                     <div v-if="o.replacedByText" class="text-xs no-underline">已修改為：{{ o.replacedByText }}</div>
@@ -474,6 +496,17 @@ async function submitNote() {
     <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />
     <RequestConsultDialog v-model="consultOpen" :admission="adm" />
     <AnswerConsultDialog :item="answeringLive" @close="answering = null" />
+    <ReasonDialog
+      v-model="abxResubmitOpen"
+      :title="abxResubmit?.kind === 'appeal' ? '申覆：管制性抗生素' : '申請續用：管制性抗生素'"
+      :subject="abxResubmit ? `${abxResubmit.order.content}・${abxResubmit.order.abxInfo?.text}` : ''"
+      :label="abxResubmit?.kind === 'appeal' ? '申覆說明（感染科會看到）' : '續用理由（感染科會看到）'"
+      :presets="abxResubmit?.kind === 'appeal' ? ['病人對建議的藥過敏', '培養仍為抗藥菌', '已會診討論，維持原用藥'] : ['臨床改善中，需完成療程', '骨髓炎或心內膜炎需長療程', '培養仍陽性']"
+      :ok-text="abxResubmit?.kind === 'appeal' ? '送出申覆' : '送出申請'"
+      :pending="appeal.pending.value || extendAbx.pending.value"
+      :error="(abxResubmit?.kind === 'appeal' ? appeal : extendAbx).fieldErrors.value.note"
+      @confirm="confirmAbx"
+    />
     <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回" :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">

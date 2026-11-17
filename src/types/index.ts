@@ -704,6 +704,8 @@ export interface Drug {
   highAlert: boolean
   /** 管制藥品級別（管制藥品管理條例第一～四級）；沒有＝非管制藥。病房點班含管制藥要雙人、報廢要覆核 */
   controlled?: 1 | 2 | 3 | 4
+  /** 管制性抗生素：住院開立要填使用理由，感染科 48 小時內審核（先用後審） */
+  restrictedAbx?: boolean
   /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
@@ -1053,6 +1055,37 @@ export interface IpdOrder {
   consultId?: string
   consultSeenAt?: string
   consultSeenBy?: string
+  /** 管制性抗生素的使用申請與感染科審核（修改醫囑沿用：療程、審核結果都跟著走） */
+  abx?: AbxRequest
+}
+
+/** 管制性抗生素的使用理由：經驗性治療、依培養結果（要寫菌種）、手術預防 */
+export type AbxReason = 'empiric' | 'culture' | 'prophylaxis'
+export type AbxStatus = 'pending' | 'approved' | 'rejected'
+/** 送審與審核的每一步：開立、核准、不核准、申覆、續用申請 */
+export interface AbxStep {
+  action: 'request' | 'approve' | 'reject' | 'appeal' | 'extend'
+  at: string
+  by: string
+  text: string
+  /** 核准：核准到療程第幾天 */
+  days?: number
+}
+export interface AbxRequest {
+  reason: AbxReason
+  /** 感染部位 */
+  site: string
+  /** 依培養結果時的菌種 */
+  organism?: string
+  note?: string
+  /** 療程第一天（第一張醫囑開始的時間；修改劑量後的新醫囑沿用，天數接著算） */
+  courseStart: string
+  status: AbxStatus
+  /** 最近一次送審（開立、申覆、續用申請）：48 小時內要審 */
+  requestedAt: string
+  /** 核准到療程第幾天（核准過才有；續用申請審核中仍保留上次的） */
+  approvedDays?: number
+  steps: AbxStep[]
 }
 
 export interface OrderQuery {

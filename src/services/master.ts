@@ -200,7 +200,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       })(),
       safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
-      highAlert: !!input.highAlert, ...(controlled ? { controlled: controlled as Drug['controlled'] } : {}), doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
+      highAlert: !!input.highAlert, ...(controlled ? { controlled: controlled as Drug['controlled'] } : {}), ...(input.restrictedAbx ? { restrictedAbx: true } : {}), doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
       indication: input.indication.trim(), warning: input.warning.trim(),
       timing: input.category === '口服' ? input.timing : 'ANY',
       // 庫存不是主檔欄位，只能透過進貨、發藥、盤點的異動改變。

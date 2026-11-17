@@ -16,6 +16,8 @@ import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
 import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
+import { ABX_DEFAULT_DAYS, ABX_REASON_LABEL, abxText, checkAbxInput } from './abx-rules'
+import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -61,6 +63,8 @@ export interface OrderView extends IpdOrder {
   residualQty?: number
   /** 劑量換算成含量（0.5 AMP →「5 mg」）；只在不是整數的劑量時給 */
   doseStrength?: string
+  /** 管制性抗生素：第幾天、審核狀態（醫囑列、審核頁顯示） */
+  abxInfo?: AbxInfo
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -78,6 +82,7 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(o.replacedBy ? { replacedByText: summaryOf(o.replacedBy) } : {}),
     ...(drug && residualOf(drug, o.dose) ? { residualQty: residualOf(drug, o.dose)!.residual } : {}),
     ...(drug && o.dose && !Number.isInteger(o.dose) && doseStrengthText(drug, o.dose) ? { doseStrength: doseStrengthText(drug, o.dose) } : {}),
+    ...(o.abx && o.status === 'active' ? { abxInfo: abxInfoOf(o.abx) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
 }
@@ -106,6 +111,8 @@ export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'd
   confirmHighDose?: boolean
   /** 交互作用、重複用藥提醒的確認（key → 原因；嚴重的原因必填）——這次送出的確認，原因存在醫囑的 rxAlerts */
   rxAlertReasons?: Record<string, string>
+  /** 管制性抗生素的使用申請（理由、感染部位、菌種、說明）；修改醫囑不用填（沿用） */
+  abx?: { reason: NonNullable<IpdOrder['abx']>['reason']; site: string; organism?: string; note?: string }
 }
 
 /** 開醫囑前查詢：這個藥和病人執行中的其他給藥醫囑之間的交互作用、成分／同類重複（同一種藥另有 listActiveSameDrug） */
@@ -131,9 +138,27 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     let content = input.content.trim()
     let timing: Pick<IpdOrder, 'timing' | 'timingSet'> = {}
     let rxAlerts: IpdOrder['rxAlerts']
+    let abx: IpdOrder['abx']
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
+      // 管制性抗生素：先用後審——要填使用理由與感染部位（依培養結果要寫菌種），感染科 48 小時內審核。
+      // 修改醫囑（同一個藥、只改劑量頻率）沿用療程與審核結果；感染科醫師自己開的直接核准
+      const prev = extra.replaces ? db.ipdOrders.find((x) => x.id === extra.replaces) : undefined
+      if (drug.restrictedAbx) {
+        if (prev?.abx) abx = structuredClone(prev.abx)
+        else {
+          failFields(checkAbxInput(input.abx))
+          const x = input.abx!
+          const self = isInfectious(user.doctorId)
+          const why = `${ABX_REASON_LABEL[x.reason]}${x.organism?.trim() ? `（${x.organism.trim()}）` : ''}・${x.site.trim()}${x.note?.trim() ? `：${x.note.trim()}` : ''}`
+          abx = {
+            reason: x.reason, site: x.site.trim(), ...(x.reason === 'culture' ? { organism: x.organism!.trim() } : {}), ...(x.note?.trim() ? { note: x.note.trim() } : {}),
+            courseStart: extra.startAt ?? t, status: self ? 'approved' : 'pending', requestedAt: t, ...(self ? { approvedDays: ABX_DEFAULT_DAYS } : {}),
+            steps: [{ action: 'request', at: t, by: user.id, text: why }, ...(self ? [{ action: 'approve' as const, at: t, by: user.id, text: '感染科醫師開立，免審', days: ABX_DEFAULT_DAYS }] : [])],
+          }
+        }
+      }
       // 第一～三級管制藥：開立的醫師（會診醫師開的就是會診醫師）要有有效的管制藥品使用執照
       if (needsSpecialRx(drug.controlled)) {
         const doc = find.doctor(user.doctorId ?? a.doctorId)
@@ -168,11 +193,12 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
+      ...(abx ? { abx } : {}),
       content,
       id: newId('IO'),
       startAt: t,
@@ -306,6 +332,9 @@ export interface MarView extends MarRecord {
   residualWitnessName?: string
   /** 劑量換算成含量（不是整數的劑量才給） */
   doseStrength?: string
+  /** 管制性抗生素：「使用第 3 天」、審核未通過（只標示，不擋給藥——停不停藥是醫師的決定） */
+  abxText?: string
+  abxRejected?: boolean
 }
 
 /** 組出某日的給藥紀錄檢視（服務層內部共用：不補排程、不包 query） */
@@ -333,6 +362,7 @@ export function marViews(admissionId: string, date: string): MarView[] {
         nurseName: nameOf.user(m.nurseId),
         ...(d && residualOf(d, o?.dose) ? { residualQty: residualOf(d, o?.dose)!.residual } : {}),
         ...(m.residual ? { residualWitnessName: nameOf.user(m.residual.witnessBy) } : {}),
+        ...(o?.abx ? { abxText: abxText(o.abx, m.scheduledAt > now() ? now() : m.scheduledAt), ...(o.abx.status === 'rejected' && o.status === 'active' ? { abxRejected: true } : {}) } : {}),
         ...(d && o?.dose && !Number.isInteger(o.dose) && doseStrengthText(d, o.dose) ? { doseStrength: doseStrengthText(d, o.dose) } : {}),
       }
     })

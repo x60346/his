@@ -13,6 +13,7 @@ import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
+import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 
@@ -51,6 +52,11 @@ export interface DashboardStats {
   /** 醫師：待我判讀的影像（放射科；心電圖是開立醫師自己）、待我確認的影像報告（重要發現或補充） */
   imagingWork?: number
   imagingAcks?: number
+  /** 感染科：管制性抗生素待審核（其中超過 48 小時的）；主治：審核未通過待處理、核准天數快到（要申請續用） */
+  abxPending?: number
+  abxOverdue?: number
+  abxRejected?: number
+  abxExtend?: number
   consultUrgent?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -161,6 +167,8 @@ export function getDashboard(): Promise<DashboardStats> {
           labAcks: labAckCount(me.doctorId),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
+          ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue }))(abxPendingCounts(now())) : {}),
+          ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,
           transferIncoming: db.admissions.filter((a) => {
             const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined

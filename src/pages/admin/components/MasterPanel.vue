@@ -73,10 +73,11 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'warning', label: '警語或副作用（印在藥袋）', required: true, wide: true, hint: '例：可能頭暈、腳踝水腫；起身請放慢' },
   { key: 'controlled', label: '管制藥品級別', type: 'select', options: [{ label: '非管制藥', value: '' }, ...[1, 2, 3, 4].map((n) => ({ label: `第${'一二三四'[n - 1]}級管制藥品`, value: n }))], hint: '病房點班含管制藥要另一位護理師見證' },
   { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
+  { key: 'restrictedAbx', label: '管制性抗生素', type: 'checkbox', hint: '住院開立要填使用理由，感染科 48 小時內審核' },
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
 // 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
-const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, controlled: '', timing: '', indication: '', warning: '', active: true })
+const blankDrug = () => ({ name: '', nameZh: '', aliases: [], generic: '', nhiCode: '', spec: '', category: '口服', unit: 'TAB', doseUnit: '', nhiPrice: undefined, selfPrice: undefined, safetyStock: 50, defaultDose: 1, defaultFreq: 'TID', defaultRoute: 'PO', highAlert: false, restrictedAbx: false, controlled: '', timing: '', indication: '', warning: '', active: true })
 
 // ---------- 醫令 ----------
 const procColumns: Column<ProcedureView>[] = [
@@ -159,7 +160,7 @@ const tabs = computed(() => [
         </div>
       </template>
       <template #cell-name="{ row }">
-        <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span><span v-if="row.controlled" class="ml-1 text-xs text-rose-700">管制 {{ row.controlled }} 級</span>
+        <span class="font-medium">{{ row.name }}</span><span v-if="row.highAlert" class="ml-1 text-xs text-violet-700">高警訊</span><span v-if="row.controlled" class="ml-1 text-xs text-rose-700">管制 {{ row.controlled }} 級</span><span v-if="row.restrictedAbx" class="ml-1 text-xs text-amber-700">管制性抗生素</span>
         <div class="text-xs text-slate-500">{{ row.nameZh }}・{{ row.generic }}・{{ row.spec }}</div>
       </template>
     </MasterTable>

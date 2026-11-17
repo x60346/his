@@ -27,6 +27,8 @@ export const departments: Department[] = [
   { id: 'D08', code: 'REH', name: '復健科', active: true },
   // 放射科：判讀影像（不看門診，seed 不排門診表）
   { id: 'D09', code: 'RAD', name: '放射科', active: true },
+  // 感染科：審核管制性抗生素（示範不排門診）
+  { id: 'D10', code: 'INF', name: '感染科', active: true },
 ]
 
 /** 管制藥品使用執照（展示用）：DR08 鄭雅婷沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
@@ -43,6 +45,8 @@ export const doctors: Doctor[] = [
   { id: 'DR09', name: '許立群', deptId: 'D08', title: '主治醫師', licenseNo: 'A102199', controlledLicense: { no: 'C08-2199', validUntil: 'expired' }, active: true },
   // 放射科醫師：判讀 X 光、超音波、電腦斷層（不看門診）
   { id: 'DR10', name: '杜明遠', deptId: 'D09', title: '主治醫師', licenseNo: 'A102420', controlledLicense: { no: 'C11-2420', validUntil: '' }, active: true },
+  // 感染科醫師：審核管制性抗生素（不看門診）
+  { id: 'DR11', name: '高子晴', deptId: 'D10', title: '主治醫師', licenseNo: 'A102641', controlledLicense: { no: 'C11-2641', validUntil: '' }, active: true },
 ]
 
 export const identities: Identity[] = [
@@ -229,6 +233,10 @@ const drugBase = [
   drug('M040', 'AC00040100', 'Potassium Chloride 20mEq Inj', 'Potassium chloride', '20 mEq/amp', 'AMP', '注射', 12, 30, 160, 1, 'QD', 'IV', true),
   // 門診示範用的第二級管制藥（要專用處方箋）：只放門診藥局、不進一般種子（seed 另外開帳，不抽亂數）
   { ...drug('M041', 'AC00041100', 'Morphine 15mg Tab', 'Morphine sulfate', '15 mg/tab', 'TAB', '口服', 9, 20, 60, 1, 'Q12H', 'PO', true), safetyStock: 20 },
+  // 管制性抗生素（住院開立要感染科審核）：只放住院藥局，不進一般種子（seed 另外開帳，不抽亂數）
+  { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true },
+  { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
+  { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
 ]
 
 /**
@@ -277,6 +285,9 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M039: ['強效止痛', '可能嗜睡、呼吸變慢、便秘；不要喝酒'],
   M040: ['補充鉀離子', '須稀釋後緩慢點滴；注射處疼痛請告知醫護人員'],
   M041: ['強效止痛（癌症或嚴重疼痛）', '管制藥品，請妥善保管、不可給他人使用；可能嗜睡、便秘、呼吸變慢，不要喝酒或開車'],
+  M042: ['抗生素（注射，抗藥性菌如 MRSA）', '要慢慢滴注（至少 1 小時）；滴太快會臉紅發癢；需抽血監測藥物濃度與腎功能'],
+  M043: ['抗生素（注射，嚴重或抗藥性感染）', '出現皮疹、呼吸困難立即告知醫護人員；可能腹瀉'],
+  M044: ['抗生素（注射，嚴重感染）', '對盤尼西林過敏者不可使用；出現皮疹、呼吸困難立即告知醫護人員'],
 }
 
 /**
@@ -337,6 +348,9 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M039: ['嗎啡注射劑'],
   M040: ['氯化鉀注射劑', ['KCl']],
   M041: ['嗎啡錠', ['MST']],
+  M042: ['萬古黴素注射劑', ['Vanco']],
+  M043: ['美羅培南注射劑', ['Mepem']],
+  M044: ['哌拉西林／他唑巴坦注射劑', ['Tazocin']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */

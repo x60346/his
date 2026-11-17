@@ -6115,6 +6115,147 @@ try {
     ok(db().isolations.filter((i) => i.patientId === carrier.patientId && !i.ended).length === 1, '隔離掛在病人身上（不是這次住院）')
   }
 
+  // 管制性抗生素審核：開立要理由（先用後審）、感染科核准／不核准、48 小時逾時、使用第 N 天、修改沿用、續用申請、申覆、首頁待辦
+  console.log('\n[管制性抗生素審核]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const X = api.abxApi
+    const I = api.ipdApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const { addMinutes } = await load('/src/utils/date.ts')
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    // 規則
+    const ce = api.checkAbxInput({ reason: 'culture', site: ' ' })
+    ok(ce.abxSite && ce.abxOrganism && api.checkAbxInput(undefined).abxReason && !Object.keys(api.checkAbxInput({ reason: 'empiric', site: '肺部' })).length, '理由、感染部位必填；依培養結果要寫菌種')
+    ok(api.abxDay('2026-11-10 23:50', '2026-11-10 23:59') === 1 && api.abxDay('2026-11-10 23:50', '2026-11-11 00:10') === 2, '療程第幾天：開始那天是第 1 天、過午夜就是第 2 天')
+    const P0 = { courseStart: '2026-11-10 10:00', status: 'pending', requestedAt: '2026-11-10 10:00' }
+    ok(!api.abxState(P0, '2026-11-12 10:00').overdue && api.abxState(P0, '2026-11-12 10:01').overdue, '送審後 48 小時內要審，超過算逾時')
+    const A0 = { ...P0, status: 'approved', approvedDays: 7 }
+    ok(!api.abxState(A0, '2026-11-14 23:59').extend && api.abxState(A0, '2026-11-15 00:01').extend === 'soon' && api.abxState(A0, '2026-11-16 08:00').extend === 'soon' && api.abxState(A0, '2026-11-17 08:00').extend === 'over', '核准 7 天：第 6、7 天提醒續用，第 8 天起算超過')
+    ok(api.abxText(A0, '2026-11-12 08:00') === '使用第 3 天（核准至第 7 天）' && api.abxText(P0, '2026-11-13 08:00') === '使用第 4 天・待感染科審核（逾時）', `顯示：「${api.abxText(A0, '2026-11-12 08:00')}」「${api.abxText(P0, '2026-11-13 08:00')}」`)
+
+    // 種子
+    ok(['M042', 'M043', 'M044'].every((id) => db().drugs.find((d) => d.id === id)?.restrictedAbx) && !db().drugs.find((d) => d.id === 'M036').restrictedAbx, '主檔：Vancomycin、Meropenem、Piperacillin/Tazobactam 是管制性抗生素；Ceftriaxone 不是')
+    ok(db().departments.some((d) => d.code === 'INF') && db().users.some((u) => u.username === 'dr11' && u.doctorId === 'DR11'), '感染科 dr11')
+    const seeded = db().ipdOrders.filter((o) => o.abx)
+    ok(seeded.length >= 1 && seeded.every((o) => db().mar.some((m) => m.orderId === o.id && m.scheduledAt.startsWith(T) && m.udLineId)), `種子：${seeded.length} 筆管制性抗生素，今天的劑量都在昨天的每日調劑裡`)
+    ok(seeded.every((o) => { const l = db().udDispenses[0].lines.find((x) => x.orderId === o.id); return l && db().stockTxns.some((x) => x.id === l.txnId && x.qty === -l.qty) }), '種子：管制性抗生素的調劑有扣住院藥局的帳')
+    await as('dr11')
+    let list = await X.listAbxReviews()
+    const dash0 = await api.dashboardApi.getDashboard()
+    ok(list.canReview && dash0.abxPending === list.pending.length && dash0.abxOverdue === list.pending.filter((x) => x.abx.overdue).length, `感染科首頁：待審核 ${dash0.abxPending}（逾時 ${dash0.abxOverdue}），和審核頁一樣`)
+    const sMero = seeded.find((o) => o.drugId === 'M043')
+    if (sMero) ok(list.pending[0].order.id === sMero.id && list.pending[0].abx.overdue && list.pending[0].antibiotics.some((s) => s.startsWith('Ceftriaxone')), '種子：敗血症 Meropenem 50 小時前開立沒審（逾時，排最前）；審核頁列出病人其他的抗生素')
+    const sPip = seeded.find((o) => o.drugId === 'M044')
+    if (sPip) ok(sPip.abx.status === 'rejected' && list.decided.some((x) => x.order.id === sPip.id && x.decision.action === 'reject'), '種子：肺炎 Piperacillin/Tazobactam 不核准（最近審核列得到）')
+
+    // 開立
+    const stroke = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(stroke.doctorId))
+    const base = { admissionId: stroke.id, type: 'long', category: 'medication', drugId: 'M043', content: '', dose: 1, freq: 'Q8H', route: 'IV' }
+    let f = await fieldsOf(async () => I.addOrder(await withRxOk(base)))
+    ok(f.abxReason && f.abxSite, '管制性抗生素沒填理由、部位 → 擋')
+    f = await fieldsOf(async () => I.addOrder(await withRxOk({ ...base, abx: { reason: 'culture', site: '泌尿道' } })))
+    ok(f.abxOrganism && !f.abxReason, '依培養結果沒寫菌種 → 擋')
+    const o1 = await I.addOrder(await withRxOk({ ...base, abx: { reason: 'culture', site: '泌尿道', organism: 'ESBL 大腸桿菌', note: '尿液培養' } }))
+    ok(o1.abx.status === 'pending' && o1.abxInfo.text === '使用第 1 天・待感染科審核' && o1.abxInfo.reasonText === '依培養結果（ESBL 大腸桿菌）・泌尿道' && db().mar.some((m) => m.orderId === o1.id), `開立：先用後審（有給藥排程）、${o1.abxInfo.text}`)
+    const plain = await I.addOrder(await withRxOk({ ...base, drugId: 'M036', freq: 'Q12H' }))
+    ok(!plain.abx && !plain.abxInfo, '一般抗生素（Ceftriaxone）不用審')
+    await as('nurse01')
+    const mar1 = await I.listMar(stroke.id, db().mar.find((m) => m.orderId === o1.id).scheduledAt.slice(0, 10))
+    ok(mar1.some((m) => m.orderId === o1.id && m.abxText?.startsWith('使用第 1 天') && !m.abxRejected), '護理站給藥列標「使用第 1 天」')
+    // 審核
+    await as(userOf(stroke.doctorId))
+    let msg = await errOf(() => X.reviewAbx(o1.id, { approve: true }))
+    ok(msg.includes('感染科'), `非感染科醫師審核 → 「${msg}」`)
+    list = await X.listAbxReviews()
+    ok(!list.canReview && list.pending.some((x) => x.order.id === o1.id), '非感染科看得到待審核（不能審）')
+    await as('dr11')
+    f = await fieldsOf(() => X.reviewAbx(o1.id, { approve: false, note: ' ' }))
+    ok(!!f.note, '不核准要寫建議')
+    f = await fieldsOf(() => X.reviewAbx(o1.id, { approve: true, days: 0 }))
+    ok(!!f.days, '核准天數 0 → 擋')
+    const r1 = await X.reviewAbx(o1.id, { approve: true, days: 5, note: '同意，培養敏感' })
+    ok(r1.abx.status === 'approved' && r1.abx.approvedDays === 5 && r1.abxInfo.text === '使用第 1 天（核准至第 5 天）' && db().auditLogs[0].action === '核准管制性抗生素', '核准 5 天、寫稽核')
+    msg = await errOf(() => X.reviewAbx(o1.id, { approve: false, note: 'x' }))
+    ok(msg.includes('已經審核過'), '審過的不能再審（申覆、續用才會再送審）')
+    // 修改醫囑沿用
+    await as(userOf(stroke.doctorId))
+    const o2 = await I.reviseOrder(o1.id, { dose: 2, freq: 'Q8H', route: 'IV', reason: '依腎功能調整' })
+    ok(o2.abx.status === 'approved' && o2.abx.approvedDays === 5 && o2.abx.courseStart === r1.abx.courseStart && o2.abx.steps.length === 2, '修改劑量：沿用療程與核准（不必重審、天數接著算）')
+    // 續用申請
+    msg = await errOf(() => X.requestAbxExtension(o2.id, '需完成療程'))
+    ok(msg.includes('最後一天前後'), `第 1 天就申請續用 → 「${msg}」`)
+    const oo = () => db().ipdOrders.find((o) => o.id === o2.id)
+    oo().abx.courseStart = `${addDaysT(-4)} 09:00`
+    const v2 = (await I.listOrders(stroke.id)).find((o) => o.id === o2.id)
+    ok(v2.abxInfo.day === 5 && v2.abxInfo.extend === 'soon' && (await api.dashboardApi.getDashboard()).abxExtend >= 1, '第 5 天（核准至第 5 天）：醫囑列提醒續用、主治首頁「核准天數將到」')
+    f = await fieldsOf(() => X.requestAbxExtension(o2.id, ''))
+    ok(!!f.note, '續用要寫理由')
+    const e2 = await X.requestAbxExtension(o2.id, '腎盂腎炎需 10–14 天')
+    ok(e2.abx.status === 'pending' && e2.abx.approvedDays === 5 && e2.abxInfo.text.includes('續用申請'), '申請續用：回到待審核，原核准天數保留')
+    await as('dr11')
+    msg = (await fieldsOf(() => X.reviewAbx(o2.id, { approve: true, days: 4 }))).days
+    ok(msg?.includes('不能比今天少'), `核准天數比今天少 → 「${msg}」`)
+    await X.reviewAbx(o2.id, { approve: true, days: 14 })
+    ok(oo().abx.approvedDays === 14 && !(await I.listOrders(stroke.id)).find((o) => o.id === o2.id).abxInfo.extend, '續用核准到第 14 天：不再提醒')
+    // 不核准、申覆
+    await as(userOf(stroke.doctorId))
+    const o3 = await I.addOrder(await withRxOk({ ...base, drugId: 'M044', abx: { reason: 'empiric', site: '肺部' }, allowDuplicate: true }))
+    await as('dr11')
+    await X.reviewAbx(o3.id, { approve: false, note: '建議改用 Ceftriaxone' })
+    await as(userOf(stroke.doctorId))
+    const dash = await api.dashboardApi.getDashboard()
+    const v3 = (await I.listOrders(stroke.id)).find((o) => o.id === o3.id)
+    ok(dash.abxRejected >= 1 && v3.abxInfo.text.endsWith('審核未通過') && v3.abxInfo.steps.at(-1).text === '建議改用 Ceftriaxone', '不核准：主治首頁「抗生素審核未通過」、醫囑列標示與建議')
+    await as('nurse01')
+    const mar3 = await I.listMar(stroke.id, db().mar.find((m) => m.orderId === o3.id).scheduledAt.slice(0, 10))
+    ok(mar3.some((m) => m.orderId === o3.id && m.abxRejected), '護理站給藥列標「審核未通過」（不擋給藥）')
+    const other = db().users.find((u) => u.doctorId && db().doctors.find((d) => d.id === u.doctorId).deptId !== stroke.deptId && u.doctorId !== 'DR11').username
+    await as(other)
+    msg = await errOf(() => X.appealAbx(o3.id, '我覺得要用'))
+    ok(!!msg, `別科醫師申覆 → 「${msg}」`)
+    await as(userOf(stroke.doctorId))
+    f = await fieldsOf(() => X.appealAbx(o3.id, ' '))
+    ok(!!f.note, '申覆要寫說明')
+    const ap = await X.appealAbx(o3.id, '病人對 Ceftriaxone 過敏')
+    ok(ap.abx.status === 'pending' && ap.abx.steps.at(-1).action === 'appeal' && db().auditLogs[0].action === '申覆管制性抗生素', '申覆：回到待審核、寫稽核')
+    // 48 小時逾時
+    db().ipdOrders.find((o) => o.id === o3.id).abx.requestedAt = addMinutes(nowStr(), -49 * 60)
+    await as('dr11')
+    list = await X.listAbxReviews()
+    ok(list.pending[0].order.id === o3.id || list.pending[0].abx.overdue, '超過 48 小時：逾時、排在前面')
+    ok((await api.dashboardApi.getDashboard()).abxOverdue >= 1, '感染科首頁算逾時')
+    // 停藥：不用再審
+    await as(userOf(stroke.doctorId))
+    await I.stopOrder(o3.id)
+    await as('dr11')
+    ok(!(await X.listAbxReviews()).pending.some((x) => x.order.id === o3.id), '停藥後不在待審核')
+    msg = await errOf(() => X.reviewAbx(o3.id, { approve: true }))
+    ok(msg.includes('已停止'), '停了的不能審')
+    // 感染科醫師自己開的：直接核准
+    const frac = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    Object.assign(db().admissions.find((a) => a.id === frac.id), { deptId: 'D10', doctorId: 'DR11' })
+    const o4 = await I.addOrder(await withRxOk({ ...base, admissionId: frac.id, drugId: 'M042', freq: 'Q12H', abx: { reason: 'prophylaxis', site: '手術部位' } }))
+    ok(o4.abx.status === 'approved' && o4.abx.approvedDays === 7 && o4.abx.steps.at(-1).text.includes('免審'), '感染科醫師自己開的：直接核准 7 天')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
