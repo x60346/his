@@ -323,8 +323,8 @@ export interface IpdBillInput {
   from: string
   to: string
   /** 各床位住了幾天（加總＝住院天數）；差額床費依 extraFee */
-  beds: { bedNo: string; bedClass: string; days: number; extraFee: number; waivedDays?: number }[]
-  /** 每日計費項目（病房費、護理費、住院診察費），依住院天數 */
+  beds: { bedNo: string; bedClass: string; days: number; extraFee: number; waivedDays?: number; icu?: boolean }[]
+  /** 每日計費項目（病房費、護理費、住院診察費），依住院天數；加護病床的（icu）依住加護病房的天數，一般病床的（generalBed）扣掉那幾天 */
   daily: Procedure[]
   /** 藥：實際扣帳的量（調劑扣的減退回的，加病房常備給藥扣的），date 用來查當天的藥價 */
   drugs: { drug: Drug; qty: number; date: string }[]
@@ -353,9 +353,13 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
       same.amount = round(same.amount + l.amount)
     } else lines.push(l)
   }
+  const icuDays = Math.min(days, input.beds.filter((b) => b.icu).reduce((n, b) => n + b.days, 0))
   for (const p of input.daily) {
     const price = procPriceOn(p, input.from.slice(0, 10))
-    add(self ? { kind: 'self', name: `${p.name}（自費）`, qty: days, unitPrice: price.selfPrice, amount: price.selfPrice * days, patientPay: true } : { kind: 'ward', name: p.name, qty: days, unitPrice: price.points, amount: price.points * days, patientPay: false })
+    // 加護病床的只收住加護病房的天數；一般病床的病房費、護理費扣掉那幾天；住院診察費每天都收
+    const qty = p.icu ? icuDays : p.generalBed ? days - icuDays : days
+    if (!qty) continue
+    add(self ? { kind: 'self', name: `${p.name}（自費）`, qty, unitPrice: price.selfPrice, amount: price.selfPrice * qty, patientPay: true } : { kind: 'ward', name: p.name, qty, unitPrice: price.points, amount: price.points * qty, patientPay: false })
   }
   // 退回的是負數（出院帶藥退回）：和扣帳的同藥同價合併抵銷，合併後數量是 0 的整列拿掉
   for (const x of input.drugs) {

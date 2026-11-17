@@ -17,6 +17,7 @@ export const staticCodes = {
   routes: codes.routes,
   wards: codes.wards,
   obsWard: codes.obsWard,
+  icuWard: codes.icuWard,
   dischargeTypes: codes.dischargeTypes,
   familyHistoryOptions: codes.familyHistoryOptions,
   allergyOptions: codes.allergyOptions,

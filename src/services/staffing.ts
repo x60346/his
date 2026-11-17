@@ -8,7 +8,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { find, nameOf } from './views'
 import { checkRatio, copySourceOf, monthDates, SHIFTS, type ShiftName } from './staffing-rules'
-import { onDuty, ratioOf, shiftNow, staffingOf, wardAdmissions, type ShiftRef } from './staffing-work'
+import { icuRatioOf, onDuty, ratioOf, shiftNow, staffingOf, wardAdmissions, type ShiftRef } from './staffing-work'
 
 const allWards = () => [...new Set(db.beds.map((b) => b.ward))]
 const checkWard = (ward: string) => {
@@ -33,6 +33,8 @@ export interface MonthSchedule {
   days: { date: string; cells: ScheduleCell[] }[]
   nurses: { id: string; name: string; username: string }[]
   ratio: StaffingSettings['ratio']
+  /** 加護病房護病比上限 */
+  icuRatio: number
   canEdit: boolean
   canEditRatio: boolean
   /** 現在這一班（畫面標出來） */
@@ -55,7 +57,7 @@ export function getSchedule(ward: string, month: string): Promise<MonthSchedule>
         }),
       })),
       nurses: activeNurses().map((x) => ({ id: x.id, name: x.name, username: x.username })),
-      ratio: ratioOf(), canEdit: canSchedule(), canEditRatio: u.role === 'admin', current: shiftNow(t),
+      ratio: ratioOf(), icuRatio: icuRatioOf(), canEdit: canSchedule(), canEditRatio: u.role === 'admin', current: shiftNow(t),
     }
   })
 }
@@ -104,12 +106,14 @@ export function copyPreviousMonth(ward: string, month: string): Promise<{ copied
 }
 
 /** 護病比上限（管理員） */
-export function saveRatio(ratio: StaffingSettings['ratio']): Promise<StaffingSettings['ratio']> {
+export function saveRatio(ratio: StaffingSettings['ratio'], icuRatio?: number): Promise<StaffingSettings['ratio']> {
   return mutate(() => {
     requireUser('admin')
-    failFields(checkRatio(ratio))
-    db.staffingSettings = { ratio: { 白班: ratio.白班, 小夜: ratio.小夜, 大夜: ratio.大夜 } }
-    audit('護病比上限', SHIFTS.map((s) => `${s} 1:${ratio[s]}`).join('、'))
+    // 加護病房（三班同一個上限）：沒給就保留原來的
+    const icu = icuRatio ?? icuRatioOf()
+    failFields({ ...checkRatio(ratio), ...(Number.isInteger(icu) && icu >= 1 && icu <= 30 ? {} : { icuRatio: '1–30 的整數' }) })
+    db.staffingSettings = { ratio: { 白班: ratio.白班, 小夜: ratio.小夜, 大夜: ratio.大夜 }, icuRatio: icu }
+    audit('護病比上限', `${SHIFTS.map((s) => `${s} 1:${ratio[s]}`).join('、')}；加護病房 1:${icu}`)
     return db.staffingSettings.ratio
   })
 }

@@ -40,8 +40,11 @@ export function infusionTodosOf(admissionId: string, t: string): InfusionTodo[] 
 
 /** 今天（00:00 到現在）點滴滴入的 ml（依流速與時間；結束時修正過的用實際量） */
 export function infusedToday(admissionId: string, t: string): number {
-  const from = `${t.slice(0, 10)} 00:00`
-  const to = `${addDays(t.slice(0, 10), 1)} 00:00`
+  return infusedIn(admissionId, `${t.slice(0, 10)} 00:00`, `${addDays(t.slice(0, 10), 1)} 00:00`, t)
+}
+
+/** 某段時間 [from, to) 滴入的 ml：加護病房流程表每小時的點滴輸入量 */
+export function infusedIn(admissionId: string, from: string, to: string, t: string): number {
   return db.infusions.filter((r) => r.admissionId === admissionId && (!r.endAt || r.endAt >= from)).reduce((n, r) => n + infusedBetween(r, volOf(r.orderId), from, to, t), 0)
 }
 

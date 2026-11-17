@@ -5,6 +5,8 @@ import { addDays } from '@/utils/date'
 import { shiftOf } from './nursing-rules'
 import { RATIO_DEFAULT, ratioState, type ShiftName } from './staffing-rules'
 import { find } from './views'
+import { icuWard } from '@/mock/codes'
+import { ICU_RATIO_DEFAULT } from './icu-rules'
 
 export interface ShiftRef { date: string; shift: ShiftName }
 
@@ -17,6 +19,8 @@ export function nextShift(s: ShiftRef): ShiftRef {
 }
 
 export const ratioOf = () => db.staffingSettings?.ratio ?? RATIO_DEFAULT
+/** 加護病房護病比上限（三班同一個） */
+export const icuRatioOf = () => db.staffingSettings?.icuRatio ?? ICU_RATIO_DEFAULT
 
 /** 這一班這個病房排了誰（依排班順序） */
 export const onDuty = (ward: string, s: ShiftRef): string[] =>
@@ -33,7 +37,7 @@ export const wardAdmissions = (ward: string) => db.admissions.filter((a) => a.st
 export function staffingOf(ward: string, s: ShiftRef) {
   const nurses = onDuty(ward, s)
   const patients = wardAdmissions(ward).length
-  const limit = ratioOf()[s.shift]
+  const limit = ward === icuWard ? icuRatioOf() : ratioOf()[s.shift]
   return { nurses, patients, limit, ...ratioState(patients, nurses.length, limit) }
 }
 

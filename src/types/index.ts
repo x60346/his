@@ -805,6 +805,9 @@ export interface Procedure {
   labItems?: LabItemDef[]
   /** 住院每日計費的項目（病房費、護理費、住院診察費）：出院結帳依住院天數自動帶入，門診與醫囑都不能開 */
   dailyFee?: boolean
+  /** 每日計費依病床：generalBed 一般病床的病房費、護理費（住加護病房的那幾天不收）；icu 加護病床的（只收住加護病房的那幾天）。都沒標的（住院診察費）每天都收 */
+  generalBed?: boolean
+  icu?: boolean
   /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
   blood?: BloodProduct | 'crossmatch'
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
@@ -1429,7 +1432,14 @@ export interface VitalRecord {
   intake?: number
   output?: number
   nurseId: string
+  /** 加護病房重症流程表（每小時一筆）：意識 GCS 三項、瞳孔大小（mm）與光反射 */
+  hourly?: boolean
+  gcs?: { e: number; v: number; m: number }
+  pupils?: { l: number; r: number; lightL: PupilLight; lightR: PupilLight }
 }
+
+/** 瞳孔光反射：靈敏、遲鈍、無反應 */
+export type PupilLight = 'brisk' | 'sluggish' | 'none'
 
 /** 管路：導尿管、中心靜脈導管、周邊靜脈留置針、鼻胃管 */
 export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg'
@@ -2007,6 +2017,8 @@ export interface ShiftRequest {
 /** 護病比上限（一位護理師最多照顧幾位病人）：區域醫院標準 白班 7、小夜 11、大夜 15 */
 export interface StaffingSettings {
   ratio: Record<'白班' | '小夜' | '大夜', number>
+  /** 加護病房護病比上限（三班同一個；預設 1:2） */
+  icuRatio?: number
 }
 
 export interface HandoverNote {

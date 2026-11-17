@@ -16,11 +16,11 @@ import { RISK_REASON_LABEL, RISK_SCALE_NAME } from './risk-rules'
 import { activeIsolations, placementFor } from './flag-work'
 import { ISOLATION_REVIEW_TEXT, isolationReviewDue, isoText } from './flag-rules'
 import { scanText, settleScan, type ScanInput } from './scan-work'
-import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, lineTodosOf, painStateOf } from './line-work'
-import { lineKind, painActionProblem } from './line-rules'
+import { lineKind } from './line-rules'
 import { screenable, screenStateOf } from './nutrition-work'
 import { highResidual, tubeSlotsOf } from './tube-work'
 import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
@@ -30,6 +30,8 @@ import { planOf, plannable, planScreenStateOf } from './discharge-plan-work'
 import { openPca, pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusedToday, infusionOrders, infusionTodosOf } from './infusion-work'
 import { openWounds, woundTodosOf } from './wound-work'
+import { buildVital, type VitalInput } from './vital-work'
+import { icuHourly, icuTodosOf } from './icu-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -84,6 +86,8 @@ export interface WardPatient extends AdmissionView {
   /** 傷口：還沒癒合的條數、待辦（2 週沒變小、院內壓傷待病情變化加評） */
   wounds: number
   woundTodo: number
+  /** 加護病房：重症流程表多久沒記、是否漏記（超過 75 分鐘） */
+  icu?: { minutes: number; late: boolean }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -132,6 +136,10 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
+          ...(() => {
+            const h = icuHourly(a, t)
+            return h ? { icu: { minutes: h.minutes, late: h.late } } : {}
+          })(),
           wounds: openWounds(a.id).length,
           woundTodo: woundTodosOf(a, t).length,
           ...(() => {
@@ -181,7 +189,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -257,6 +265,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       if (ds.target && !ds.thisShift) tasks.push({ ...base, id: `dl-${a.id}`, kind: 'delirium', urgency: 'todo', text: `譫妄評估 CAM（${ds.target}，每班）` })
       // 傷口：2 週沒變小（提醒主治，護理站也列）、院內壓傷待病情變化加評（點了到風險評估）
       for (const x of woundTodosOf(a, t)) tasks.push({ ...base, id: `wd-${x.kind}-${x.woundId}`, kind: 'wound', urgency: 'todo', text: x.text })
+      // 加護病房：重症流程表每小時一筆，超過 75 分鐘沒記列逾時
+      for (const x of icuTodosOf(a, t)) tasks.push({ ...base, id: `icu-${a.id}`, kind: 'icu', urgency: 'overdue', at: x.at, text: x.text })
       // 點滴：待接上、快滴完／已滴完要換瓶、醫囑停了還在滴
       for (const x of infusionTodosOf(a.id, t)) tasks.push({ ...base, id: `iv-${x.kind}-${x.runId ?? x.orderId}`, kind: 'infusion', urgency: x.urgency, ...(x.at ? { at: x.at } : {}), text: x.text })
       // PCA：每 4 小時紀錄（到期前 30 分鐘「現在」、過了「逾時」）；未處理的警示（醫師處理，護理站也列出來）
@@ -528,29 +538,13 @@ export function listVitals(admissionId: string): Promise<VitalRecord[]> {
   return query(() => db.vitals.filter((v) => v.admissionId === admissionId).sort((a, b) => a.at.localeCompare(b.at)))
 }
 
-export type VitalInput = Omit<VitalRecord, 'id' | 'nurseId' | 'at'>
+export type { VitalInput } from './vital-work'
 
 export function addVitals(input: VitalInput): Promise<VitalRecord> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     const a = admitted(input.admissionId)
-    const v: VitalRecord = { admissionId: a.id, id: newId('VS'), at: now(), nurseId: nurse.id }
-    // 只收已知欄位、逐項檢查合理範圍（輸入錯誤直接擋下；「異常但合理」照常記錄）；所有錯誤一次標出
-    const errs = fieldErrors()
-    for (const k of Object.keys(vitalSpecs) as VitalKey[]) {
-      const val = input[k]
-      if (val === undefined || val === null || Number.isNaN(val)) continue
-      const problem = vitalInputProblem(k, val)
-      if (problem) errs.add(k, problem)
-      v[k] = val
-    }
-    if (v.sbp !== undefined && v.dbp !== undefined && !errs.has('sbp') && v.dbp >= v.sbp) errs.add('dbp', '舒張壓應小於收縮壓')
-    errs.done()
-    // 疼痛 ≥4 要寫處置（1 小時內重評：下一筆有疼痛分數的紀錄）
-    const pp = painActionProblem(v.pain, input.painAction)
-    if (pp) failField('painAction', pp)
-    if (v.pain !== undefined && input.painAction?.trim()) v.painAction = input.painAction.trim()
-    if (Object.keys(v).length === 4) fail('請至少輸入一項生命徵象')
+    const v = buildVital(input, nurse.id, now())
     db.vitals.push(v)
     audit('生命徵象', a.admitNo)
     return v

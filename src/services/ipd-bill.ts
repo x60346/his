@@ -13,6 +13,7 @@ import { certFeeLines, certsOfAdmission } from './certificate-fee'
 import { isolatedDays } from './flag-work'
 import { bloodFeeItems } from './blood-work'
 import { surgeryFeeItems } from './surgery-work'
+import { isIcuBed } from './bed-work'
 
 /**
  * 床位分段：每張床住了幾天（加總＝住院天數）。舊資料沒有床位紀錄，視為整段住目前的床。
@@ -26,7 +27,7 @@ function bedSegments(a: Admission, from: string, to: string, days: number): IpdB
     const start = (i === 0 || h.from < from ? from : h.from).slice(0, 10)
     const end = (hist[i + 1]?.from ?? to).slice(0, 10)
     const bed = find.bed(h.bedId)
-    return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0, start, waivedDays: 0 }
+    return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0, start, waivedDays: 0, ...(isIcuBed(bed) ? { icu: true } : {}) }
   })
   // 當天入院當天出院、或同一天轉床：天數至少 1，算給最後住的那張床
   const counted = segs.reduce((n, s) => n + s.days, 0)

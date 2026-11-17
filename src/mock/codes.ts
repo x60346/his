@@ -433,8 +433,8 @@ const procedureBase: Procedure[] = [
   { id: 'P027', code: 'SELF01', name: '診斷證明書', category: '處置', points: 0, selfPrice: 150, active: true },
   { id: 'P028', code: 'SELF02', name: '流感疫苗（自費）', category: '處置', points: 0, selfPrice: 800, active: true },
   // 住院每日計費（出院結帳依天數帶入；門診、醫囑都不能開）。點數為展示用近似值
-  { id: 'P029', code: '03005B', name: '病房費（急性一般病床，每日）', category: '處置', points: 1230, selfPrice: 1800, dailyFee: true, active: true },
-  { id: 'P030', code: '03026B', name: '護理費（急性一般病床，每日）', category: '處置', points: 620, selfPrice: 900, dailyFee: true, active: true },
+  { id: 'P029', code: '03005B', name: '病房費（急性一般病床，每日）', category: '處置', points: 1230, selfPrice: 1800, dailyFee: true, generalBed: true, active: true },
+  { id: 'P030', code: '03026B', name: '護理費（急性一般病床，每日）', category: '處置', points: 620, selfPrice: 900, dailyFee: true, generalBed: true, active: true },
   // 輸血（備血單由血庫配血、發血；住院帳單依血庫紀錄帶入，門診、醫囑都不能開）。點數為展示用近似值
   { id: 'P031', code: '11003C', name: '交叉配合試驗（每單位）', category: '檢驗', points: 260, selfPrice: 400, blood: 'crossmatch', active: true },
   { id: 'P032', code: '93001B', name: '減除白血球紅血球濃厚液（每單位）', category: '處置', points: 1350, selfPrice: 1800, blood: 'rbc', active: true },
@@ -459,6 +459,9 @@ const procedureBase: Procedure[] = [
   { id: 'P047', code: 'MEAL02', name: '伙食費（軟質、流質，每日）', category: '處置', points: 0, selfPrice: 240, meal: ['soft', 'liquid'], active: true },
   { id: 'P048', code: 'MEAL03', name: '伙食費（治療飲食，每日）', category: '處置', points: 0, selfPrice: 270, meal: ['diabetic', 'low-salt'], active: true },
   { id: 'P049', code: 'MEAL04', name: '伙食費（管灌飲食，每日）', category: '處置', points: 0, selfPrice: 320, meal: ['tube'], active: true },
+  // 加護病房每日計費：住在加護病房的那幾天收這兩項（取代一般病床的病房費、護理費）。點數為展示用近似值
+  { id: 'P050', code: '03010E', name: '病房費（加護病床，每日）', category: '處置', points: 2650, selfPrice: 4000, dailyFee: true, icu: true, active: true },
+  { id: 'P051', code: '03047E', name: '護理費（加護病床，每日）', category: '處置', points: 2350, selfPrice: 3500, dailyFee: true, icu: true, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */
@@ -488,6 +491,9 @@ export const wards = ['5A 內科病房', '6B 外科病房', '7C 綜合病房']
 /** 急診留觀區：不是一般病房（住院中心報到不能排），只給急診留觀病人；護理站可以選它 */
 export const obsWard = '急診留觀區'
 export const OBS_BEDS = 6
+/** 加護病房：不是一般病房（住院中心不能直接排預約住院；急診收住院、或住院中轉床進來）；每床一間 */
+export const icuWard = '3I 加護病房'
+export const ICU_BEDS = 8
 
 export const dischargeTypes = ['治癒出院', '改善出院', '轉院', '自動出院', '轉長照機構', '死亡']
 

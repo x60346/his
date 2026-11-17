@@ -17,7 +17,11 @@ import { closeLines } from './line-work'
 import { closeRestraints } from './delirium-work'
 import { openPca } from './pca-work'
 import { closeInfusions } from './infusion-work'
-import { admitInto, bedStatusLabel, closeOrders, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
+import { admitInto, bedStatusLabel, closeOrders, isIcuBed, obsOpen, obsPlacementProblem, releaseBed, releaseReservedBeds, takeBed } from './bed-work'
+import { icuCheckInProblem } from './icu-rules'
+
+/** 急診收住院（住院預約是急診醫師開的）：可以直接住加護病房 */
+const fromEr = (a: Admission) => !!(a.fromVisitId && find.visit(a.fromVisitId)?.er)
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -69,7 +73,7 @@ export function bedBlocks(admissionId: string, opts: { afterObs?: boolean } = {}
     const as = opts.afterObs && a.obs ? { obs: { ...a.obs, endAt: 'x' } } : a
     for (const b of db.beds) {
       if (b.status !== 'empty' && !(b.status === 'reserved' && b.reservedFor === a.id)) continue
-      const p = obsPlacementProblem(as, b) ?? placementFor(a.patientId, b)
+      const p = obsPlacementProblem(as, b) ?? (a.status === 'reserved' && isIcuBed(b) ? icuCheckInProblem(fromEr(a)) : undefined) ?? placementFor(a.patientId, b)
       if (p) out[b.id] = p
     }
     return out
@@ -116,6 +120,8 @@ export function checkIn(admissionId: string, bedId: string): Promise<AdmissionVi
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'reserved') fail('此住院紀錄不是預約狀態', 'CONFLICT')
     if (a.obs) fail('急診留觀由急診護理師在「急診」看板排留觀床', 'CONFLICT')
+    const icuProblem = isIcuBed(find.bed(bedId)) ? icuCheckInProblem(fromEr(a)) : undefined
+    if (icuProblem) fail(icuProblem, 'CONFLICT')
     const bed = admitInto(a, bedId, now())
     audit('住院報到', `${a.admitNo} ${find.patient(a.patientId)?.name} → ${bed.bedNo}`)
     return admissionView(a)

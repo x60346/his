@@ -5507,7 +5507,7 @@ try {
     const P = (id) => db().procedures.find((p) => p.id === id)
     const ident = (code) => db().identities.find((i) => i.code === code)
     const daily = db().procedures.filter((p) => p.dailyFee)
-    ok(daily.map((p) => p.id).sort().join() === 'P002,P029,P030', '每日計費：住院診察費、病房費、護理費')
+    ok(daily.map((p) => p.id).sort().join() === 'P002,P029,P030,P050,P051' && daily.filter((p) => p.icu).map((p) => p.id).join() === 'P050,P051', '每日計費：住院診察費、病房費、護理費（加護病床的病房費、護理費另一組）')
     const drug = db().drugs.find((d) => d.id === 'M036')
     const base = { from: '2026-11-01', to: '2026-11-04', beds: [{ bedNo: '501-1', bedClass: '健保床', days: 2, extraFee: 0 }, { bedNo: '601-1', bedClass: '雙人房', days: 1, extraFee: 1500 }], daily, drugs: [{ drug, qty: 2, date: '2026-11-01' }, { drug, qty: 3, date: '2026-11-02' }], procedures: [{ proc: P('P003'), qty: 1, date: '2026-11-01' }], copay: S }
     const r1 = B.calcIpdChargeLines({ ...base, identity: ident('01') })
@@ -5528,7 +5528,7 @@ try {
     ok(disc.length > 0 && disc.every((a) => ipdCharges.some((c) => c.admissionId === a.id && !c.voided && c.ipd.days === B.ipdDays(a.admittedAt, a.dischargedAt) && c.paidAt < a.dischargedAt)), `種子：已出院的 ${disc.length} 位都有住院收據（出院前結帳、天數正確）`)
     const nos = db().charges.map((c) => c.receiptNo)
     ok(new Set(nos).size === nos.length, '收據號碼不重複（住院收據依結帳日編）')
-    ok(db().procedures.find((p) => p.id === 'P029').dailyFee && !(await api.masterApi.listProcedures({ keyword: '病房費' })).length && (await api.masterApi.listProcedures({ keyword: '病房費', includeInactive: true })).length === 1, '病房費不在開立選單（主檔管理看得到）')
+    ok(db().procedures.find((p) => p.id === 'P029').dailyFee && !(await api.masterApi.listProcedures({ keyword: '病房費' })).length && (await api.masterApi.listProcedures({ keyword: '病房費', includeInactive: true })).length === 2, '病房費（一般、加護）不在開立選單（主檔管理看得到）')
 
     // 准出院才能結帳
     const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)
@@ -6037,7 +6037,7 @@ try {
     // 帶菌者（CRE）：有沒隔離病人的房間、MRSA 同房都不行；整間空的、單人房可以
     const blkC = await A.bedBlocks(carrier.id)
     const occupiedRoom = (b) => db().beds.some((x) => x.id !== b.id && x.ward === b.ward && x.roomNo === b.roomNo && x.status === 'occupied')
-    const emptyMulti = db().beds.filter((b) => b.status === 'empty' && b.bedClass !== '單人房' && b.ward !== '急診留觀區') // 留觀床另有規則（只給留觀病人）
+    const emptyMulti = db().beds.filter((b) => b.status === 'empty' && b.bedClass !== '單人房' && b.ward !== '急診留觀區' && b.ward !== '3I 加護病房') // 留觀床另有規則（只給留觀病人）；加護病房不收預約住院
     ok(blkC[mate.id]?.includes('MRSA') && emptyMulti.every((b) => !!blkC[b.id] === occupiedRoom(b)), 'CRE 帶菌者：有人住的房間（沒隔離或不同菌種）都不能排，整間空的可以')
     const single = db().beds.find((b) => b.status === 'empty' && b.bedClass === '單人房')
     await A.checkIn(carrier.id, single.id)
@@ -7821,7 +7821,7 @@ try {
     // 種子
     const today0 = T
     const shiftNow = Number(nowStr().slice(11, 13)) >= 16 ? '小夜' : Number(nowStr().slice(11, 13)) >= 8 ? '白班' : '大夜'
-    ok(db().users.filter((u) => /^nurse[0-9]+$/.test(u.username)).length === 12 && db().nurseShifts.filter((x) => x.date === today0 && x.ward === W && x.shift === '白班').map((x) => x.nurseId).sort().join() === 'U201,U202', '種子：12 位護理師（nurse01–12）；今天 5A 白班 nurse01、nurse02')
+    ok(db().users.filter((u) => /^nurse[0-9]+$/.test(u.username)).length === 16 && db().nurseShifts.filter((x) => x.date === today0 && x.ward === W && x.shift === '白班').map((x) => x.nurseId).sort().join() === 'U201,U202', '種子：16 位護理師（nurse01–12 一般病房、nurse13–16 加護病房）；今天 5A 白班 nurse01、nurse02')
     await as('nurse03')
     let sch = await S.getSchedule('6B 外科病房', today0.slice(0, 7))
     const tomorrow = sch.days.find((d) => d.date === dateUtil.addDays(today0, 1))
@@ -8469,6 +8469,176 @@ try {
       await as('nurse03')
       ok((await P.screenPlan(b.id, ['alone'])).screenedByName === '林佳穎', '被指定的個管師（nurse03）照樣可以')
     }
+  }
+
+  // 加護病房：床位（預約住院不能直接報到、急診收住院可以、轉床可以）、重症流程表（每小時；GCS、瞳孔、MAP；生命徵象同一套檢查）、
+  // 漏記 75 分鐘（待辦、首頁、看板）、每小時輸入輸出（點滴自動算）與 24 小時平衡、護病比 1:2、加護病房的每日計費
+  console.log('\n[加護病房]')
+  {
+    dbm.resetDatabase('small') // 要用種子的分床（加護病房這一班的責任護理師）：不用 resetDb（它會清掉分床）
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const I = api.icuApi
+    const ICU = '3I 加護病房'
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.mapOf(90, 50) === 63 && api.mapLow(63) && !api.mapLow(65) && api.mapOf(90, undefined) === undefined, 'MAP＝（收縮壓＋2×舒張壓）÷3；<65 偏低')
+    ok(api.gcsTotal({ e: 3, v: 4, m: 6 }) === 13 && api.gcsLow({ e: 1, v: 2, m: 5 }) && !api.gcsLow({ e: 3, v: 4, m: 6 }), 'GCS 總分、≤8 昏迷')
+    let e = api.checkNeuro({ gcs: { e: 3 }, pupils: { l: 3 } })
+    ok(e.gcsV && e.gcsM && !e.gcsE && e.pupilR && e.lightL && e.lightR, 'GCS 三項、瞳孔兩側與光反射要一起記')
+    e = api.checkNeuro({ gcs: { e: 5, v: 0, m: 6 }, pupils: { l: 3.3, r: 10, lightL: 'brisk', lightR: 'none' } })
+    ok(e.gcsE && e.gcsV && !e.gcsM && e.pupilL && e.pupilR && !e.lightL, 'GCS 範圍（E 1–4、V 1–5、M 1–6）、瞳孔 1–9 mm 以 0.5 為單位')
+    ok(Object.keys(api.checkNeuro({})).length === 0, '都不記也可以（只記生命徵象）')
+    const hs = api.hourlyState('2026-11-17 08:00', '2026-11-16 20:00', '2026-11-17 09:16')
+    ok(hs.late && hs.minutes === 76 && hs.dueAt === '2026-11-17 09:15' && !api.hourlyState('2026-11-17 08:00', '2026-11-16 20:00', '2026-11-17 09:15').late && api.hourlyState(undefined, '2026-11-17 09:00', '2026-11-17 09:30').minutes === 30, '超過 75 分鐘沒記＝漏記；還沒記過從轉入時間算')
+    ok(api.icuCheckInProblem(false)?.includes('預約住院') && !api.icuCheckInProblem(true), '預約住院不能直接排加護病房、急診收住院可以')
+
+    // 種子：8 床、敗血症病人住加護病房，流程表最後一筆在 80 分鐘以前（漏記）
+    const icuBeds = db().beds.filter((b) => b.ward === ICU)
+    ok(icuBeds.length === 8 && icuBeds.every((b) => b.bedClass === '健保床' && b.extraFee === 0), '種子：加護病房 ICU1–ICU8（健保床）')
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const sepBed = db().beds.find((b) => b.id === sep.bedId)
+    ok(sepBed.ward === ICU && db().admissions.filter((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === ICU).length === 1, `種子：敗血症病人住 ${sepBed.bedNo}（其他人沒有被排進加護病房）`)
+    const hourly = db().vitals.filter((v) => v.admissionId === sep.id && v.hourly)
+    const lastAt = hourly.map((v) => v.at).sort().pop()
+    ok(hourly.length >= 10 && lastAt <= addMinutes(nowStr(), -80) && hourly.some((v) => v.gcs && v.pupils) && hourly.some((v) => api.mapLow(api.mapOf(v.sbp, v.dbp))), `種子：流程表 ${hourly.length} 筆（有 GCS、瞳孔、MAP 偏低），最後一筆 ${lastAt.slice(11)}`)
+    const hourlyFrom = hourly.map((v) => v.at).sort()[0]
+    ok(!db().vitals.some((v) => v.admissionId === sep.id && !v.hourly && v.at >= hourlyFrom && v.at <= lastAt), '流程表那段時間沒有重複的一般生命徵象')
+    const dutyNurse = db().nurseAssignments.find((x) => x.admissionId === sep.id)?.nurseId
+    const dutyUser = db().users.find((u) => u.id === dutyNurse)
+    ok(!!dutyUser && /^nurse1[3-6]$/.test(dutyUser.username), `種子：這一班分給加護病房的護理師（${dutyUser?.name}）`)
+    await as(dutyUser.username)
+    const asg = await api.staffingApi.getAssignments(ICU)
+    ok(asg.nurses.length === 1 && asg.ratio.text.includes('上限 1：2') && !asg.ratio.over, `加護病房護病比 ${asg.ratio.text}`)
+    let wp = (await api.nursingApi.listWardPatients(ICU)).find((p) => p.id === sep.id)
+    ok(wp.icu?.late && wp.icu.minutes >= 80, `護理站病人清單：流程表 ${wp.icu?.minutes} 分鐘沒記`)
+    ok((await api.nursingApi.listWardTasks(ICU)).some((t) => t.kind === 'icu' && t.admissionId === sep.id && t.urgency === 'overdue'), '本班待辦：重症流程表漏記（逾時）')
+    ok((await api.dashboardApi.getDashboard()).icuHourlyLate === 1, '護理師首頁：重症流程表漏記 1 位')
+    let board = await I.icuBoard()
+    ok(board.length === 8 && board.find((b) => b.admissionId === sep.id)?.late && board.find((b) => b.admissionId === sep.id)?.nurseName === dutyUser.name && board.filter((b) => !b.admissionId).length === 7, '床邊看板：8 床、敗血症紅框（漏記）、責任護理師')
+    const sb = board.find((b) => b.admissionId === sep.id)
+    ok(sb.neuro?.gcs && sb.neuro.pupils && !sb.last.gcs ? sb.neuro.gcs.at < sb.last.at : !!sb.neuro?.gcs, '看板：最新一筆沒評意識時，顯示最近一次的 GCS、瞳孔（附時間）')
+    let fs = await I.getFlowsheet(sep.id)
+    ok(fs.inIcu && fs.canRecord && fs.hours.length === 24 && fs.state?.late && fs.since === sep.admittedAt, '流程表：今天 24 欄、轉入時間、漏記')
+    ok(fs.day.intake === fs.shifts.reduce((n, s) => n + s.intake, 0) && fs.day.balance === fs.day.intake - fs.day.output, '三班加起來＝24 小時；平衡＝輸入－輸出')
+
+    // 記一筆：錯誤一次標出（生命徵象範圍、GCS、瞳孔、疼痛處置）
+    let f = await fieldsOf(() => I.addFlowsheetEntry({ admissionId: sep.id, sbp: 300, pain: 6, gcs: { e: 3 }, pupils: { l: 3 } }))
+    ok(f.sbp && f.gcsV && f.gcsM && f.pupilR && f.lightL, '收縮壓不合理、GCS 缺項、瞳孔缺項一次標出')
+    f = await fieldsOf(() => I.addFlowsheetEntry({ admissionId: sep.id, pain: 6 }))
+    ok(f.painAction, '疼痛 ≥4 要寫處置（和生命徵象同一條）')
+    let msg = await errOf(() => I.addFlowsheetEntry({ admissionId: sep.id }))
+    ok(msg.includes('至少輸入一項'), `什麼都沒記 → 「${msg}」`)
+    const before = db().vitals.length
+    const c = await I.addFlowsheetEntry({ admissionId: sep.id, temp: 37.9, pulse: 104, resp: 22, sbp: 88, dbp: 50, spo2: 95, intake: 200, output: 80, gcs: { e: 3, v: 4, m: 6 }, pupils: { l: 3, r: 4, lightL: 'brisk', lightR: 'sluggish' } })
+    ok(c.map === 63 && c.gcsSum === 13 && c.abnormal.includes('MAP') && c.abnormal.includes('瞳孔不等大') && c.abnormal.includes('脈搏') && db().vitals.length === before + 1 && db().vitals.at(-1).hourly, '記一筆：MAP 63、GCS 13、瞳孔不等大都標異常；寫進生命徵象')
+    ok((await api.nursingApi.listVitals(sep.id)).some((v) => v.id === c.id), '一般的生命徵象紀錄看得到（不用記兩次）')
+    wp = (await api.nursingApi.listWardPatients(ICU)).find((p) => p.id === sep.id)
+    ok(!wp.icu.late && wp.latestVitals.id === c.id && wp.measuredThisShift, '記了之後：不再漏記、最新生命徵象就是這筆、本班已量')
+    ok(!(await api.nursingApi.listWardTasks(ICU)).some((t) => t.kind === 'icu') && (await api.dashboardApi.getDashboard()).icuHourlyLate === 0, '待辦、首頁的漏記消失')
+    fs = await I.getFlowsheet(sep.id)
+    const h = fs.hours.find((x) => x.hour === c.at.slice(11, 13))
+    ok(h.cell?.id === c.id && h.io.manual >= 200 && h.io.output >= 80 && !fs.state.late && fs.state.lastAt === c.at, '這一小時的欄位：最新一筆、輸入輸出')
+    const old = db().vitals.filter((v) => v.admissionId === sep.id && v.hourly && v.at < c.at.slice(0, 10)).map((v) => v.at.slice(0, 10))
+    if (old.length) {
+      const y = await I.getFlowsheet(sep.id, old[0])
+      ok(y.hours.some((x) => x.cell) && !y.state, '前一天的流程表看得到（沒有漏記狀態）')
+    }
+    // 點滴依流速自動算進每小時輸入量（不用再記）
+    const run = { id: 'IVR-ICU-T', admissionId: sep.id, orderId: 'IO-ICU-T', bagNo: 1, startAt: `${c.at.slice(0, 13)}:00`, startBy: dutyNurse, rateMlH: 60, rateChanges: [], txnIds: [] }
+    db().ipdOrders.push({ id: 'IO-ICU-T', admissionId: sep.id, type: 'long', category: 'medication', content: '生理食鹽水', infusion: { volumeMl: 500, rateMlH: 60, additives: [] }, startAt: run.startAt, status: 'active', doctorId: sep.doctorId, createdAt: run.startAt })
+    db().infusions.push(run)
+    fs = await I.getFlowsheet(sep.id)
+    const h2 = fs.hours.find((x) => x.hour === c.at.slice(11, 13))
+    ok(h2.io.iv > 0 && h2.io.intake === h2.io.manual + h2.io.iv + h2.io.tube, `點滴依流速自動算進輸入量（這一小時 ${h2.io.iv} ml）`)
+    db().infusions = db().infusions.filter((r) => r.id !== run.id)
+    db().ipdOrders = db().ipdOrders.filter((o) => o.id !== 'IO-ICU-T')
+
+    // 誰能記、記給誰
+    // 沒有隔離的（空氣隔離只能排單人房：加護病房的床不是單人房）
+    const gen = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !db().isolations.some((i) => i.patientId === a.patientId) && db().beds.find((b) => b.id === a.bedId)?.ward !== ICU && db().beds.find((b) => b.id === a.bedId)?.ward !== '急診留觀區')
+    msg = await errOf(() => I.addFlowsheetEntry({ admissionId: gen.id, pulse: 80 }))
+    ok(msg.includes('只給加護病房'), `一般病房的病人 → 「${msg}」`)
+    ok(!(await api.nursingApi.listWardPatients(db().beds.find((b) => b.id === gen.bedId).ward)).find((p) => p.id === gen.id).icu, '一般病房的病人沒有流程表狀態')
+    await as(db().users.find((u) => u.doctorId === sep.doctorId).username)
+    await expectError(() => I.addFlowsheetEntry({ admissionId: sep.id, pulse: 80 }), '醫師記流程表')
+    fs = await I.getFlowsheet(sep.id)
+    ok(fs.hours.some((x) => x.cell) && !fs.canRecord, '醫師看得到流程表（唯讀）')
+
+    // 床位：預約住院不能直接報到進加護病房；急診收住院可以；住院中轉床可以（轉入時間重新算）
+    await as('clerk01')
+    const resv = db().admissions.find((a) => a.status === 'reserved' && !a.obs && !(a.fromVisitId && db().visits.find((v) => v.id === a.fromVisitId)?.er))
+    const icu2 = db().beds.find((b) => b.ward === ICU && b.status === 'empty')
+    const blk = await api.admissionApi.bedBlocks(resv.id)
+    ok(blk[icu2.id]?.includes('預約住院') && db().beds.filter((b) => b.ward === ICU && b.status === 'empty').every((b) => blk[b.id]), '選床畫面：加護病房的床標「不收預約住院」')
+    msg = await errOf(() => api.admissionApi.checkIn(resv.id, icu2.id))
+    ok(msg.includes('加護病房不收預約住院'), `預約住院報到進加護病房 → 「${msg}」`)
+    const erV = db().visits.find((v) => v.er)
+    if (erV) {
+      db().admissions.find((a) => a.id === resv.id).fromVisitId = erV.id
+      ok(!(await api.admissionApi.bedBlocks(resv.id))[icu2.id], '急診收住院：加護病房的床可以選')
+      const av = await api.admissionApi.checkIn(resv.id, icu2.id)
+      ok(av.bed?.ward === ICU, `急診收住院報到進 ${icu2.bedNo}`)
+      await as(dutyUser.username)
+      fs = await I.getFlowsheet(resv.id)
+      ok(fs.inIcu && fs.canRecord && !fs.state.late && fs.state.minutes <= 1 && !fs.state.lastAt, '剛住進來：還沒記、從報到時間算')
+      await as('clerk01')
+      await api.admissionApi.transferBed(resv.id, db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床').id)
+    }
+    // 一般病房轉進加護病房、再轉出
+    const icu3 = db().beds.find((b) => b.ward === ICU && b.status === 'empty')
+    await api.admissionApi.transferBed(gen.id, icu3.id)
+    await as(dutyUser.username)
+    fs = await I.getFlowsheet(gen.id)
+    ok(fs.inIcu && fs.since >= addMinutes(nowStr(), -1) && !fs.state.late, '一般病房轉進加護病房：從轉入那一刻開始算')
+    await I.addFlowsheetEntry({ admissionId: gen.id, pulse: 88, sbp: 120, dbp: 70 })
+    const two = await api.staffingApi.getAssignments(ICU)
+    ok(two.ratio.text.includes('1：2') && !two.ratio.over, `加護病房 2 位病人、1 位護理師：${two.ratio.text}`)
+    await as('admin')
+    f = await fieldsOf(() => api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 }, 0))
+    ok(f.icuRatio, '加護病房護病比 1–30')
+    await api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 }, 1)
+    await as(dutyUser.username)
+    ok((await api.staffingApi.getAssignments(ICU)).ratio.over && !(await api.staffingApi.getAssignments('5A 內科病房')).ratio.text.includes('上限 1：1'), '加護病房上限改 1:1：2 位病人標紅；一般病房不受影響')
+    await as('admin')
+    await api.staffingApi.saveRatio({ 白班: 7, 小夜: 11, 大夜: 15 })
+    ok(db().staffingSettings.icuRatio === 1, '只改一般病房時，加護病房的上限保留')
+    await as('clerk01')
+    const back = db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床')
+    await api.admissionApi.transferBed(gen.id, back.id)
+    await as(dutyUser.username)
+    fs = await I.getFlowsheet(gen.id)
+    ok(!fs.inIcu && !fs.canRecord && fs.hours.some((x) => x.cell), '轉出後：流程表留著看，不能再記')
+    msg = await errOf(() => I.addFlowsheetEntry({ admissionId: gen.id, pulse: 80 }))
+    ok(msg.includes('只給加護病房'), '轉出後不能再記')
+
+    // 計費：住加護病房的天數收加護病床的病房費、護理費，其他天收一般病床的
+    const B = await load('/src/services/billing.ts')
+    const daily = db().procedures.filter((p) => p.dailyFee)
+    const S = db().billingSettings.ipdCopay ?? B.IPD_COPAY_DEFAULT
+    const ident = db().identities.find((i) => !i.selfPay && !i.exempt) ?? db().identities[0]
+    const bill = B.calcIpdChargeLines({ identity: ident, from: '2026-11-01', to: '2026-11-05', beds: [{ bedNo: 'ICU1', bedClass: '健保床', days: 3, extraFee: 0, icu: true }, { bedNo: '501-1', bedClass: '健保床', days: 1, extraFee: 0 }], daily, drugs: [], procedures: [], copay: S })
+    const ln = (name) => bill.lines.find((l) => l.name === name)
+    ok(ln('病房費（加護病床，每日）')?.qty === 3 && ln('護理費（加護病床，每日）')?.qty === 3 && ln('病房費（急性一般病床，每日）')?.qty === 1 && ln('護理費（急性一般病床，每日）')?.qty === 1 && bill.lines.find((l) => l.name.includes('住院診察費'))?.qty === 4, '帳單：加護病床 3 天、一般病床 1 天；住院診察費每天都收（4 天）')
+    await as('clerk01')
+    const st = await api.ipdChargeApi.getIpdStatement(sep.id)
+    ok(st.bill.lines.some((l) => l.name === '病房費（加護病床，每日）') && !st.bill.lines.some((l) => l.name === '病房費（急性一般病床，每日）') && st.bill.lines.some((l) => l.name === '住院診察費（每日）'), '敗血症病人（一直住加護病房）的費用明細：只有加護病床的病房費、護理費，住院診察費照收')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

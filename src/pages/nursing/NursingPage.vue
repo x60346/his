@@ -30,6 +30,8 @@ import PcaPanel from '@/components/PcaPanel.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
 import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
+import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
+import IcuBoardPanel from './components/IcuBoardPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -46,7 +48,9 @@ import { useNow } from '@/composables/useNow'
 
 const clock = useNow()
 // 急診留觀區照病房的方式照顧（給藥、生命徵象、護理紀錄）
-const wards = [...masterApi.staticCodes.wards, masterApi.staticCodes.obsWard]
+// 加護病房：病房層級多一個「床邊看板」、病人多一個「重症流程表」
+const icuWard = masterApi.staticCodes.icuWard
+const wards = [...masterApi.staticCodes.wards, icuWard, masterApi.staticCodes.obsWard]
 // 從急診看板點過來帶 ?ward=急診留觀區&admission=…
 const ward = ref(wards.includes(String(useRoute().query.ward)) ? String(useRoute().query.ward) : wards[0])
 
@@ -105,7 +109,7 @@ watch(allPatients, (list) => {
 // 分頁分兩組：沒選病人時是病房層級（本班待辦、交班）；選了病人才有個人的五個分頁。
 // 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
 // 首頁待辦可以直接帶到某個病房層級的分頁（例：本班未點班 → 常備點班）
-const tab = ref(['stock', 'handover'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
+const tab = ref(['stock', 'handover', 'icuboard'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
 // 輸血：已發血待輸、輸血中（分頁上的數字）
 const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
 const bloodTodo = computed(() => (blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.reduce((n, r) => n + r.rows.filter((x) => x.state === 'issued' || x.state === 'transfusing').length, 0) : 0))
@@ -113,6 +117,7 @@ const tabs = computed(() =>
   !adm.value
     ? [
         { key: 'tasks', label: '本班待辦' },
+        ...(ward.value === icuWard ? [{ key: 'icuboard', label: '床邊看板' }] : []),
         { key: 'stock', label: '常備點班' },
         { key: 'scan', label: '給藥掃描' },
         { key: 'isoward', label: '隔離與 DNR', count: (allPatients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
@@ -120,6 +125,7 @@ const tabs = computed(() =>
         { key: 'handover', label: '交班' },
       ]
     : [
+        ...(adm.value.icu ? [{ key: 'flowsheet', label: '重症流程表', count: adm.value.icu.late ? 1 : undefined }] : []),
         { key: 'mar', label: '給藥紀錄', count: adm.value.overdueCount + adm.value.dueCount || undefined },
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
@@ -142,9 +148,9 @@ const tabs = computed(() =>
 )
 // 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
 // 停在病房層級的分頁（常備點班、給藥掃描）時點病人，也換到給藥紀錄（以前會落到護理紀錄）
-const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward', 'lineward']
+const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward', 'lineward', 'icuboard']
 watch(admissionId, (id) => {
-  if (id && WARD_ONLY.includes(tab.value)) tab.value = 'mar'
+  if (id && WARD_ONLY.includes(tab.value)) tab.value = adm.value?.icu ? 'flowsheet' : 'mar'
   else if (!id && tab.value !== 'handover' && !WARD_ONLY.includes(tab.value)) tab.value = 'tasks'
 })
 
@@ -216,6 +222,7 @@ const wardTotals = computed(() => ({
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
                   <span class="ml-auto flex flex-wrap justify-end gap-1">
+                    <UBadge v-if="p.icu?.late" tone="red" title="重症流程表超過 75 分鐘沒記">流程表 {{ p.icu.minutes }} 分</UBadge>
                     <UBadge v-if="p.overdueCount" tone="red">逾時 {{ p.overdueCount }}</UBadge>
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
@@ -278,7 +285,9 @@ const wardTotals = computed(() => ({
           <ScanStatsPanel v-else-if="!adm && tab === 'scan'" :ward="ward" />
           <WardFlagsPanel v-else-if="!adm && tab === 'isoward'" :ward="ward" @open="openTask" />
           <WardLinesPanel v-else-if="!adm && tab === 'lineward'" :ward="ward" />
+          <IcuBoardPanel v-else-if="!adm && tab === 'icuboard' && ward === icuWard" @open="openTask" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" :only="taskScope" @open="openTask" />
+          <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />

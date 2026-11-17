@@ -7,7 +7,7 @@ import {
   AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, ShieldAlert, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
-import { dashboardApi, opdApi } from '@/services'
+import { dashboardApi, masterApi, opdApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
@@ -65,6 +65,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'PCA 警示待處理', count: s.value.pcaAlerts ?? 0, hint: 'PCA 使用中的病人鎮靜過深或呼吸過慢：請處理（住院醫囑「PCA」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '傷口 2 週沒變小', count: s.value.woundStall ?? 0, hint: '你的住院病人傷口連續 2 週面積沒變小：評估換敷料、會診整形外科、營養（住院醫囑「傷口」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '重症流程表漏記', count: s.value.icuHourlyLate ?? 0, hint: '加護病房病人超過 75 分鐘沒記流程表（每小時一筆；護理站「重症流程表」分頁）', route: 'nursing', query: { ward: masterApi.staticCodes.icuWard }, icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '點滴已滴完未換', count: s.value.infusionOverdue, hint: '點滴已滴完還沒換瓶、或醫囑停了還在滴（護理站「點滴」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: 'PCA 紀錄逾時', count: s.value.pcaRecordOverdue, hint: 'PCA 每 4 小時要記按壓、用量、疼痛、鎮靜、呼吸（全院；護理站「PCA」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '別人請我換班', count: s.value.swapToRespond ?? 0, hint: '同事想和你換班：到「護理排班」同意或不同意', route: 'nurse-schedule', icon: Droplet, urgent: true },

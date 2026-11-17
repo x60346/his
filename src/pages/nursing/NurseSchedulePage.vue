@@ -11,7 +11,8 @@ import { useUi } from '@/stores/ui'
 import { today } from '@/utils/date'
 
 const ui = useUi()
-const wards = masterApi.staticCodes.wards
+// 加護病房也排班（護病比上限三班同一個，預設 1:2）
+const wards = [...masterApi.staticCodes.wards, masterApi.staticCodes.icuWard]
 const q = reactive({ ward: wards[0], month: today().slice(0, 7) })
 const months = (() => {
   const m = today().slice(0, 7)
@@ -54,14 +55,16 @@ async function copyPrev() {
 // ---------- 護病比上限（管理員） ----------
 const ratioOpen = ref(false)
 const ratio = reactive<Record<ShiftName, number | undefined>>({ 白班: 7, 小夜: 11, 大夜: 15 })
+const icuRatio = ref<number | undefined>(2)
 function openRatio() {
   Object.assign(ratio, data.value?.ratio ?? {})
+  icuRatio.value = data.value?.icuRatio
   ratioAct.fieldErrors.value = {}
   ratioOpen.value = true
 }
 const ratioAct = useAction(staffingApi.saveRatio, { success: '已更新護病比上限' })
 async function submitRatio() {
-  if (await ratioAct.run({ 白班: Number(ratio.白班), 小夜: Number(ratio.小夜), 大夜: Number(ratio.大夜) })) {
+  if (await ratioAct.run({ 白班: Number(ratio.白班), 小夜: Number(ratio.小夜), 大夜: Number(ratio.大夜) }, Number(icuRatio.value))) {
     ratioOpen.value = false
     reload()
   }
@@ -77,7 +80,7 @@ async function submitRatio() {
     <div class="flex flex-wrap items-end gap-3">
       <USelect v-model="q.ward" label="病房" :options="wards.map((w) => ({ label: w, value: w }))" class="w-44" />
       <USelect v-model="q.month" label="月份" :options="months.map((m) => ({ label: m, value: m }))" class="w-32" />
-      <span v-if="data" class="text-xs text-slate-500">護病比上限：{{ SHIFTS.map((s) => `${s} 1:${data!.ratio[s]}`).join('・') }}<template v-if="!data.canEdit">（要改班表請找有「護理排班」權限的人）</template></span>
+      <span v-if="data" class="text-xs text-slate-500">護病比上限：{{ q.ward === masterApi.staticCodes.icuWard ? `加護病房三班 1:${data.icuRatio}` : SHIFTS.map((s) => `${s} 1:${data!.ratio[s]}`).join('・') }}<template v-if="!data.canEdit">（要改班表請找有「護理排班」權限的人）</template></span>
     </div>
     <ShiftRequestsPanel @changed="reload" />
     <UQueryState :loading="loading && !data" :ready="!!data">
@@ -114,7 +117,8 @@ async function submitRatio() {
       <div class="grid grid-cols-3 gap-2">
         <UInput v-for="s in SHIFTS" :key="s" v-model="ratio[s]" type="number" :label="s" :error="ratioAct.fieldErrors.value[s]" />
       </div>
-      <p class="mt-2 text-xs text-slate-500">區域醫院標準：白班 7、小夜 11、大夜 15；醫學中心更嚴（6、9、11）。</p>
+      <div class="mt-2 w-1/3"><UInput v-model="icuRatio" type="number" label="加護病房（三班）" :error="ratioAct.fieldErrors.value.icuRatio" /></div>
+      <p class="mt-2 text-xs text-slate-500">區域醫院標準：白班 7、小夜 11、大夜 15；醫學中心更嚴（6、9、11）。加護病房一般 1:2。</p>
       <template #footer>
         <UButton variant="secondary" @click="ratioOpen = false">取消</UButton>
         <UButton type="submit" :loading="ratioAct.pending.value">儲存</UButton>

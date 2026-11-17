@@ -33,8 +33,9 @@ const doctorName = (id?: string) => doctors.value?.find((d) => d.id === id)?.nam
 const wards = masterApi.staticCodes.wards
 const ward = ref(wards[0])
 // 急診留觀區也看得到（留觀後收住院、還在留觀床上的要在這裡轉床；留觀床不能拿來報到）
+// 加護病房也看得到（轉床進出在這裡；預約住院不能直接報到進加護病房，急診收住院可以）
 const wardTabs = computed(() =>
-  [...wards, masterApi.staticCodes.obsWard].map((w) => {
+  [...wards, masterApi.staticCodes.icuWard, masterApi.staticCodes.obsWard].map((w) => {
     const list = (beds.value ?? []).filter((b) => b.ward === w)
     return { key: w, label: w, count: list.filter((b) => b.status === 'empty').length }
   }),

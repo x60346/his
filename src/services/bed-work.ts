@@ -2,7 +2,7 @@
 // 排床規則（保留、隔離、留觀床只給留觀病人）只有這一份。
 import type { Admission, Bed, BedStatus } from '@/types'
 import { db, nextCounter } from '@/mock/db'
-import { obsWard } from '@/mock/codes'
+import { icuWard, obsWard } from '@/mock/codes'
 import { audit, fail, must } from './http'
 import { find, nameOf } from './views'
 import { placementFor } from './flag-work'
@@ -10,6 +10,8 @@ import { placementFor } from './flag-work'
 export const bedStatusLabel: Record<BedStatus, string> = { empty: '空床', occupied: '使用中', reserved: '保留', cleaning: '清潔中' }
 
 export const isObsBed = (b: Pick<Bed, 'ward'> | undefined) => !!b && b.ward === obsWard
+/** 加護病房的床 */
+export const isIcuBed = (b: Pick<Bed, 'ward'> | undefined) => !!b && b.ward === icuWard
 /** 留觀中（還沒結束）的留觀住院 */
 export const obsOpen = (a: Pick<Admission, 'obs'> | undefined) => !!a?.obs && !a.obs.endAt
 /** 這筆住院人在留觀床上（留觀中、或留觀轉住院還沒轉到病房） */

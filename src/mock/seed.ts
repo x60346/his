@@ -236,6 +236,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule', 'nursing.schedule'] },
     // 排班用的護理師（nurse03–nurse12）：不參與舊的示範資料
     ...['林佳穎', '陳怡君', '黃詩涵', '張雅婷', '吳欣怡', '劉靜宜', '蔡佩珊', '楊淑芬', '許雅雯', '鄭宜蓁'].map((name, i): User => ({ id: `U${203 + i}`, username: `nurse${String(3 + i).padStart(2, '0')}`, password: '1234', name, roles: ['nurse'], active: true, ...(i === 0 ? { grants: ['discharge.plan'] } : {}) })),
+    // 加護病房的護理師（nurse13–nurse16）：只排加護病房
+    ...['謝宛庭', '洪郁婷', '曾雅琪', '賴思妤'].map((name, i): User => ({ id: `U${213 + i}`, username: `nurse${13 + i}`, password: '1234', name, roles: ['nurse'], active: true })),
     { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
     // 第二位藥師：盤點單「清點的人不能自己覆核」，要有另一位藥師可以覆核（小診所沒有的話由管理員覆核）
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
@@ -684,6 +686,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   })
   // 急診留觀區 OB1–OB6（健保床、每床一間：同房隔離規則不會互相牽連；放在最後，舊的「找一張空床」不會挑到它）
   for (let n = 1; n <= codes.OBS_BEDS; n++) beds.push({ id: `BOB${n}`, ward: codes.obsWard, roomNo: `OB${n}`, bedNo: `OB${n}`, bedClass: '健保床', extraFee: 0, status: 'empty' })
+  // 加護病房 ICU1–ICU8（每床一間、健保床；加護病房的病房費、護理費另計）
+  for (let n = 1; n <= codes.ICU_BEDS; n++) beds.push({ id: `BICU${n}`, ward: codes.icuWard, roomNo: `ICU${n}`, bedNo: `ICU${n}`, bedClass: '健保床', extraFee: 0, status: 'empty' })
 
   const admissions: Admission[] = []
   const ipdOrders: IpdOrder[] = []
@@ -713,7 +717,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const adultAt = (i: number) => patientRows[i][2] >= 18
   const ipdPatients = [...patients.slice(24).filter((_, k) => adultAt(24 + k)), patients[4], patients[11], patients[20]]
   const nurseIds = ['U201', 'U202']
-  const bedsByClass = (cls: Bed['bedClass']) => beds.filter((b) => b.bedClass === cls && b.status === 'empty' && b.ward !== codes.obsWard)
+  const bedsByClass = (cls: Bed['bedClass']) => beds.filter((b) => b.bedClass === cls && b.status === 'empty' && b.ward !== codes.obsWard && b.ward !== codes.icuWard)
 
   const recentCut = addMinutes(nowStr, -90)
   const handovers: HandoverNote[] = []
@@ -742,7 +746,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 隔離示範（不抽亂數）：肺炎（疑似肺結核、空氣隔離）住綜合病房的單人房；蜂窩性組織炎（MRSA、接觸隔離）住綜合病房健保床，同房另一床空著
     const cls: Bed['bedClass'] = i === 0 || i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'
     const isoBed = i === 0 ? beds.find((b) => b.ward === codes.wards[2] && b.bedClass === '單人房' && b.status === 'empty') : i === 5 ? beds.find((b) => b.ward === codes.wards[2] && b.bedClass === '健保床' && b.status === 'empty') : undefined
-    const bed = isoBed ?? bedsByClass(cls)[0] ?? bedsByClass('健保床')[0]
+    // 敗血症（血壓偏低、中心靜脈導管）：從急診直接住加護病房
+    const icuBed = sc.dx.startsWith('A41') ? beds.find((b) => b.ward === codes.icuWard && b.status === 'empty') : undefined
+    const bed = icuBed ?? isoBed ?? bedsByClass(cls)[0] ?? bedsByClass('健保床')[0]
     const adm: Admission = {
       id: id('A'), admitNo: `I${admitDate.replace(/-/g, '').slice(2)}${String(next('admitNo')).padStart(3, '0')}`,
       patientId: pt.id, deptId: sc.dept, doctorId: sc.doctor, bedId: bed.id, preferBedClass: cls,
@@ -2158,6 +2164,49 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const ns = codes.drugs.find((d) => d.id === 'M037')!
       ipdOrders.push({ id: 'IO-IV-SEED-1', admissionId: pn.id, type: 'long', category: 'medication', drugId: ns.id, content: `${ns.name} 500 ml @ 80 ml/h`, dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: 500, rateMlH: 80 }, startAt: addMinutes(st, -10), status: 'active', doctorId: pn.doctorId, createdAt: addMinutes(st, -10), ackAt: addMinutes(st, -5), ackBy: 'U201' })
       infusions.push({ id: 'INFU-SEED-1', orderId: 'IO-IV-SEED-1', admissionId: pn.id, bagNo: 1, startAt: st, startBy: 'U201', rateMlH: 80, rateChanges: [], txnIds: [] })
+    }
+  }
+
+  // 加護病房（示範，不抽亂數）：
+  //   - 排班：nurse13–16 每天三班各一人（輪流，每天一位休）；現在這一班的病人分給上班的那位
+  //   - 重症流程表：敗血症病人最近 24 小時（入院之後）每小時一筆，血壓從偏低（MAP <65）慢慢回升；
+  //     最後一筆停在 80 分鐘以前的整點 → 流程表漏記（本班待辦、首頁、看板紅框），記一筆就消失。
+  //     那段時間原本的生命徵象（每天 08、14、20 點，亂數）刪掉，免得和流程表重複算輸入輸出
+  {
+    const pool = ['U213', 'U214', 'U215', 'U216']
+    const first = `${addDays(`${T.slice(0, 7)}-01`, -1).slice(0, 7)}-01`
+    const nextMonth = addDays(`${T.slice(0, 7)}-28`, 7).slice(0, 7)
+    let k = 0
+    for (let d = first; d < `${nextMonth}-01`; d = addDays(d, 1)) {
+      const r = ((diffDays(T, d) % 4) + 4) % 4
+      ;(['大夜', '白班', '小夜'] as const).forEach((shift, i) => nurseShifts.push({ id: `NSH-ICU-${++k}`, ward: codes.icuWard, date: d, shift, nurseId: pool[(i + r) % 4] }))
+    }
+    const cur = { date: nowStr.slice(0, 10), shift: (Number(nowStr.slice(11, 13)) >= 16 ? '小夜' : Number(nowStr.slice(11, 13)) >= 8 ? '白班' : '大夜') as NurseShift['shift'] }
+    const duty = nurseShifts.find((x) => x.ward === codes.icuWard && x.date === cur.date && x.shift === cur.shift)
+    const icuPts = admissions.filter((a) => a.status === 'admitted' && beds.find((b) => b.id === a.bedId)?.ward === codes.icuWard)
+    icuPts.forEach((a, i) => duty && nurseAssignments.push({ id: `NAS-ICU-${i + 1}`, ward: codes.icuWard, date: cur.date, shift: cur.shift, admissionId: a.id, nurseId: duty.nurseId, by: duty.nurseId, at: `${cur.date} ${cur.shift === '白班' ? '08:10' : cur.shift === '小夜' ? '16:10' : '00:10'}` }))
+    const sep = icuPts.find((a) => a.diagnosis.startsWith('A41'))
+    if (sep) {
+      const hourOf = (t: string) => `${t.slice(0, 13)}:00`
+      const lastH = hourOf(addMinutes(nowStr, -80))
+      const firstH = [addMinutes(hourOf(sep.admittedAt!), 60), addMinutes(hourOf(nowStr), -24 * 60)].sort().pop()!
+      const hrs: string[] = []
+      for (let h = firstH; h <= lastH; h = addMinutes(h, 60)) hrs.push(h)
+      // 刪掉流程表那段時間的一般生命徵象
+      for (let j = vitals.length - 1; j >= 0; j--) if (vitals[j].admissionId === sep.id && vitals[j].at >= firstH && vitals[j].at <= addMinutes(lastH, 59)) vitals.splice(j, 1)
+      const n = hrs.length
+      hrs.forEach((at, j) => {
+        const p = n > 1 ? j / (n - 1) : 1 // 0 → 1：從剛住進來到最近
+        const sbp = Math.round(86 + 20 * p)
+        const dbp = Math.round(48 + 12 * p)
+        const nid = nurseShifts.find((x) => x.ward === codes.icuWard && x.date === at.slice(0, 10) && x.shift === (Number(at.slice(11, 13)) >= 16 ? '小夜' : Number(at.slice(11, 13)) >= 8 ? '白班' : '大夜'))?.nurseId ?? 'U213'
+        vitals.push({
+          id: `VS-ICU-${j + 1}`, admissionId: sep.id, at, hourly: true, nurseId: nid,
+          temp: Math.round((38.6 - 0.9 * p) * 10) / 10, pulse: Math.round(118 - 20 * p), resp: Math.round(26 - 6 * p), sbp, dbp, spo2: Math.round(93 + 3 * p),
+          ...(j % 4 === 0 ? { pain: j === 0 ? 3 : 2, gcs: { e: p < 0.5 ? 3 : 4, v: p < 0.3 ? 4 : 5, m: 6 }, pupils: { l: 3, r: 3, lightL: 'brisk' as const, lightR: 'brisk' as const } } : {}),
+          ...(j % 2 === 0 ? { intake: 100 } : {}), output: Math.round(25 + 25 * p),
+        })
+      })
     }
   }
 
