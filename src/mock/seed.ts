@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -781,7 +781,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         vitals.push({
           id: id('VS'), admissionId: adm.id, at,
           temp: Math.round((36.5 + fever) * 10) / 10, pulse: int(72, 96) + Math.round(fever * 8), resp: int(14, 20),
-          sbp: int(110, 140), dbp: int(65, 88), spo2: Math.min(99, int(94, 99) - (i === 0 && k > 1 ? 3 : 0)), pain: int(0, 5),
+          sbp: int(110, 140), dbp: int(65, 88), spo2: Math.min(99, int(94, 99) - (i === 0 && k > 1 ? 3 : 0)), pain: int(0, 3), // 0–3：≥4 要處置與重評，亂數的不放（示範另外放一位）
           intake: int(800, 1600), output: int(700, 1500), nurseId: pick(nurseIds),
         })
       }
@@ -1953,7 +1953,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         }
         for (let h = 0; addMinutes(placed, h * 240) <= nowStr; h++) {
           const vt = addMinutes(placed, h * 240)
-          vitals.push({ id: `VS-ER-OBS-${h}`, admissionId: 'A-ER-OBS', at: vt, temp: h < 3 ? 37.8 : 37.3, pulse: h < 3 ? 100 : 88, resp: 18, sbp: 124, dbp: 76, spo2: 97, pain: h < 3 ? 5 : 3, nurseId: h % 2 ? 'U202' : 'U201' })
+          vitals.push({ id: `VS-ER-OBS-${h}`, admissionId: 'A-ER-OBS', at: vt, temp: h < 3 ? 37.8 : 37.3, pulse: h < 3 ? 100 : 88, resp: 18, sbp: 124, dbp: 76, spo2: 97, pain: h < 3 ? 5 : 3, ...(h < 3 ? { painAction: '協助舒適臥位，禁食中不給口服止痛，通知醫師' } : {}), nurseId: h % 2 ? 'U202' : 'U201' })
         }
         nursingNotes.push({ id: 'NN-ER-OBS', admissionId: 'A-ER-OBS', at: addMinutes(placed, 30), focus: '急性疼痛', data: '病人右下腹痛，疼痛 5 分，噁心。', action: '協助舒適臥位，依醫囑禁食、觀察腹部變化。', response: '病人表示疼痛可忍受。', nurseId: 'U201' })
         // 留觀也做跌倒、壓傷入院評估（打點滴：跌倒中度）
@@ -1962,6 +1962,37 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           riskAssessments.push({ id: `RA-ER-OBS-${scale}`, admissionId: 'A-ER-OBS', scale, at: addMinutes(placed, 40), nurseId: 'U201', answers, score, level: riskLevel(scale, score), reason: 'admission' })
         }
       }
+    }
+  }
+
+  // 管路與疼痛（示範，不抽亂數）：
+  //   - 腦梗塞：導尿管放 9 天（滿 7 天提醒主治；昨天評估還需要、今天還沒評）、鼻胃管
+  //   - 敗血症：右內頸 CVC（入院當天放，今天還沒評估）、周邊留置針
+  //   - 肺炎：周邊留置針放超過 96 小時（提醒更換；住不夠久就放在入院時）
+  //   - 骨折：75 分鐘前疼痛 6 分、給了止痛藥，還沒重評（逾時，本班待辦與首頁）
+  const lines: LineDevice[] = []
+  {
+    const inpt = admissions.filter((a) => a.status === 'admitted' && a.admittedAt && !a.obs)
+    const by = (p: string) => inpt.find((a) => a.diagnosis.startsWith(p))
+    const later = (a: string, b: string) => (a > b ? a : b)
+    const put = (a: Admission | undefined, k: number, l: Omit<LineDevice, 'id' | 'admissionId' | 'recordedBy' | 'recordedAt'>) => {
+      if (!a) return
+      const at = later(l.insertedAt, a.admittedAt!)
+      lines.push({ id: `LN-SEED-${k}`, admissionId: a.id, ...l, insertedAt: at, recordedBy: 'U201', recordedAt: at })
+    }
+    const stroke = by('I63')
+    put(stroke, 1, { kind: 'foley', site: '尿道', size: '16Fr', insertedAt: addMinutes(nowStr, -9 * 24 * 60), placedBy: '周怡萱', needChecks: [{ date: addDays(T, -1), at: `${addDays(T, -1)} 09:00`, by: 'U201', needed: true }] })
+    put(stroke, 2, { kind: 'ngt', site: '右鼻孔', size: '16Fr', insertedAt: addMinutes(nowStr, -20 * 24 * 60), placedBy: '周怡萱' })
+    const sep = by('A41')
+    put(sep, 3, { kind: 'cvc', site: '右內頸靜脈', size: '7Fr 三腔', insertedAt: sep?.admittedAt ?? nowStr, placedBy: '陳映如醫師' })
+    put(sep, 4, { kind: 'pivc', site: '左前臂', size: '20G', insertedAt: sep?.admittedAt ?? nowStr, placedBy: '周怡萱' })
+    put(by('J18'), 5, { kind: 'pivc', site: '右手背', size: '20G', insertedAt: addMinutes(nowStr, -100 * 60), placedBy: '孫佩君' })
+    const frac = by('S52')
+    const painAt = addMinutes(nowStr, -75)
+    if (frac && frac.admittedAt! < painAt) {
+      // 之後的紀錄拿掉（示範：最新一筆就是這次疼痛 6 分）
+      for (let k = vitals.length - 1; k >= 0; k--) if (vitals[k].admissionId === frac.id && vitals[k].at > painAt) vitals.splice(k, 1)
+      vitals.push({ id: 'VS-PAIN-SEED', admissionId: frac.id, at: painAt, temp: 36.8, pulse: 96, resp: 18, sbp: 132, dbp: 82, spo2: 98, pain: 6, painAction: '依醫囑給予止痛藥、患肢抬高冰敷', nurseId: 'U201' })
     }
   }
 
@@ -2045,6 +2076,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     bloodRequests,
     recordCopies: [],
     surgeries,
+    lines,
     vitals,
     nursingNotes,
     progressNotes,

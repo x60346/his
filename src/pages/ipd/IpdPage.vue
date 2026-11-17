@@ -10,6 +10,7 @@ import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, U
 import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
+import LinePanel from '@/components/LinePanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
@@ -167,6 +168,7 @@ const tabs = computed(() => [
   { key: 'blood', label: '輸血', count: blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.filter((r) => !['done', 'cancelled'].includes(r.status)).length || undefined : undefined },
   { key: 'surgery', label: '手術' },
   { key: 'flags', label: '隔離與 DNR' },
+  { key: 'lines', label: '管路' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
 
@@ -422,6 +424,7 @@ async function submitNote() {
         <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
+        <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
           <div class="rounded-md border border-slate-200 px-3 py-2"><CertificatePanel :admission-id="adm.id" /></div>

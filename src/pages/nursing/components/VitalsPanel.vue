@@ -4,9 +4,10 @@
 //   limit  合理範圍，超出就是打錯字（體溫 52 度）→ 服務層擋下，存不進去
 //   normal 正常範圍，超出是「異常」（體溫 38.5 度）→ 照常記錄，但畫面標紅提醒
 // 趨勢圖每個指標各一張（小倍數圖），不把體溫和脈搏擠在同一張雙 Y 軸圖上。
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { UButton, UInput, ULineChart, UQueryState, UTable, type Column, type LinePoint } from '@/components/ui'
-import { isAbnormal, nursingApi, vitalInputProblem, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
+import { isAbnormal, nursingApi, PAIN_ACT_FROM, PAIN_ACTIONS, PAIN_REASSESS_MIN, vitalInputProblem, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
+import { UTextarea } from '@/components/ui'
 import { useAction, useQuery } from '@/composables/useService'
 import type { VitalRecord } from '@/types'
 
@@ -25,11 +26,20 @@ const vitals = computed(() => (data.value?.id === props.admission.id ? data.valu
 const fields: VitalKey[] = ['temp', 'pulse', 'resp', 'sbp', 'dbp', 'spo2', 'pain', 'intake', 'output']
 const blank = () => Object.fromEntries(fields.map((k) => [k, undefined])) as Record<VitalKey, number | undefined>
 const form = reactive(blank())
-watch(() => props.admission.id, () => Object.assign(form, blank()))
+// 疼痛 ≥4 要寫處置（服務層也擋），1 小時內重評：下一次再記疼痛分數就算重評
+const painAction = ref('')
+const needAction = computed(() => form.pain !== undefined && form.pain !== null && (form.pain as unknown) !== '' && Number(form.pain) >= PAIN_ACT_FROM)
+watch(() => props.admission.id, () => {
+  Object.assign(form, blank())
+  painAction.value = ''
+})
 
 const save = useAction(nursingApi.addVitals, { success: '已記錄生命徵象' })
 async function submit() {
-  if (await save.run({ admissionId: props.admission.id, ...form })) Object.assign(form, blank())
+  if (await save.run({ admissionId: props.admission.id, ...form, ...(needAction.value ? { painAction: painAction.value } : {}) })) {
+    Object.assign(form, blank())
+    painAction.value = ''
+  }
 }
 /** 輸入當下就提示「異常」：與服務層、圖表用同一條 isAbnormal 規則 */
 /** 先看「能不能存」（打錯字），再看「正常不正常」（病人異常）——和服務層同一套規則 */
@@ -81,6 +91,10 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
           :class="!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k]) && '!border-red-400 !text-red-700'"
         />
       </div>
+      <div v-if="needAction" class="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2">
+        <UTextarea v-model="painAction" :label="`疼痛 ${form.pain} 分的處置（${PAIN_REASSESS_MIN} 分鐘內重評）`" :rows="2" required :error="save.fieldErrors.value.painAction" />
+        <div class="mt-1 flex flex-wrap gap-1"><button v-for="x in PAIN_ACTIONS" :key="x" type="button" class="rounded border border-amber-300 bg-white px-1.5 text-xs hover:bg-amber-100" @click="painAction = painAction ? `${painAction}；${x}` : x">{{ x }}</button></div>
+      </div>
       <div class="mt-2 text-right"><UButton type="submit" size="sm" :loading="save.pending.value">儲存</UButton></div>
     </form>
 
@@ -107,9 +121,10 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
       <section class="mt-5">
         <h3 class="mb-2 text-sm font-semibold text-slate-700">歷史紀錄</h3>
         <UTable :columns="columns" :rows="history" :row-key="(r) => r.id" dense class="max-h-80">
-          <template v-for="k in fields.slice(0, 7)" :key="k" #[`cell-${k}`]="{ row }">
+          <template v-for="k in fields.slice(0, 6)" :key="k" #[`cell-${k}`]="{ row }">
             <span :class="['tabular', isAbnormal(k, row[k]) && 'font-semibold text-red-600']">{{ row[k] ?? '—' }}</span>
           </template>
+          <template #cell-pain="{ row }"><span :class="['tabular', (row.pain ?? 0) >= PAIN_ACT_FROM && 'font-semibold text-red-600']" :title="row.painAction">{{ row.pain ?? '—' }}<span v-if="row.painAction" class="ml-1 text-xs font-normal text-slate-500">（{{ row.painAction }}）</span></span></template>
           <template #cell-io="{ row }"><span class="tabular">{{ row.intake ?? '—' }} / {{ row.output ?? '—' }}</span></template>
         </UTable>
       </section>

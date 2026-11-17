@@ -11,6 +11,7 @@ import { admissionView, find, nameOf, visitView, type AdmissionView, type VisitV
 import { admitInto, bedStatusLabel, closeOrders, isObsBed, obsOpen, releaseBed, takeBed } from './bed-work'
 import { transfusionOpen } from './blood-work'
 import { surgeryOpen } from './surgery-work'
+import { closeLines } from './line-work'
 
 export interface ObsBedView {
   id: string
@@ -274,6 +275,7 @@ export function endObservation(admissionId: string, input: ObsEndInput): Promise
       mergedDispense(v, t)
     } else {
       closeOrders(a, u.id, t, '結束留觀時未給藥')
+      closeLines(a, u.id, t, input.kind === 'transfer' ? '出院（轉院）' : '出院（急診留觀離院）')
       releaseBed(a.bedId)
       Object.assign(a, { status: 'discharged', dischargedAt: t, dischargeType: input.kind === 'transfer' ? '轉院' : '急診留觀離院' })
     }

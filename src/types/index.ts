@@ -1338,12 +1338,39 @@ export interface VitalRecord {
   sbp?: number
   dbp?: number
   spo2?: number
-  /** 疼痛分數 0-10 */
+  /** 疼痛分數 0-10（數字量表；每班至少一次） */
   pain?: number
+  /** 疼痛 ≥4 的處置（必填）：之後 1 小時內要重評（下一筆有疼痛分數的紀錄就算重評） */
+  painAction?: string
   /** 輸入 / 輸出量 ml */
   intake?: number
   output?: number
   nurseId: string
+}
+
+/** 管路：導尿管、中心靜脈導管、周邊靜脈留置針、鼻胃管 */
+export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt'
+
+/**
+ * 管路（護理師或醫師登錄）：放置時間、部位、尺寸、放置者；導尿管與 CVC 每天評估「還需要嗎」；
+ * 移除要寫原因（出院、結束留觀時自動移除，原因「出院」）。只提醒不擋
+ */
+export interface LineDevice {
+  id: string
+  admissionId: string
+  kind: LineKind
+  site: string
+  size: string
+  insertedAt: string
+  /** 放置者（姓名，可能是醫師或外院）；登錄的人另記 recordedBy */
+  placedBy: string
+  recordedBy: string
+  recordedAt: string
+  /** 每天的「還需要嗎」評估（導尿管、CVC） */
+  needChecks?: { date: string; at: string; by: string; needed: boolean; note?: string }[]
+  removedAt?: string
+  removedBy?: string
+  removeReason?: string
 }
 
 /** 風險評估量表：fall＝跌倒（Morse）、pressure＝壓傷（Braden） */

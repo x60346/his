@@ -7291,6 +7291,132 @@ try {
     ok((await E.erBoard()).items.find((i) => i.visitId === 'V-ER-OBS')?.stage === 'admitted' || !(await E.erBoard()).items.some((i) => i.visitId === 'V-ER-OBS' && i.stage !== 'admitted'), '轉到病房後：已住院')
   }
 
+  // 疼痛與管路：疼痛 ≥4 要處置、1 小時重評（逾時列本班待辦與首頁）、每班要評；管路登錄、每天還需要嗎、滿 7 天提醒主治、
+  // 留置針滿 96 小時、移除要原因、出院自動移除、病房管路日
+  console.log('\n[疼痛與管路]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const L = api.lineApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.painActionProblem(4, '') && !api.painActionProblem(3, '') && !api.painActionProblem(6, '給止痛藥'), '疼痛 ≥4 要寫處置')
+    let ps = api.painState([{ at: '2026-11-17 08:00', pain: 6 }], '2026-11-17 09:01', '2026-11-17 08:00')
+    ok(ps.reassess?.status === 'overdue' && ps.reassess.dueAt === '2026-11-17 09:00' && ps.thisShift, '≥4 一小時後沒重評：逾時')
+    ps = api.painState([{ at: '2026-11-17 08:00', pain: 6 }, { at: '2026-11-17 08:50', pain: 5 }], '2026-11-17 09:01', '2026-11-17 08:00')
+    ok(ps.reassess?.status === 'upcoming' && ps.last.score === 5, '重評還是 ≥4：再等下一次重評（從這次起算）')
+    ps = api.painState([{ at: '2026-11-17 07:00', pain: 2 }], '2026-11-17 09:00', '2026-11-17 08:00')
+    ok(!ps.reassess && !ps.thisShift, '上一班評的：本班還沒評')
+    let s = api.lineState({ kind: 'foley', insertedAt: '2026-11-10 08:00', needChecks: [{ date: '2026-11-16', needed: true }] }, '2026-11-17 09:00')
+    ok(s.attendingAlert && s.needCheckDue && s.day === 8, '導尿管滿 7 天提醒主治、今天還沒評估')
+    s = api.lineState({ kind: 'pivc', insertedAt: '2026-11-13 08:00' }, '2026-11-17 08:00')
+    ok(s.replaceDue && !s.needCheckDue && !s.attendingAlert, '留置針滿 96 小時提醒更換，不用每天評估')
+    ok(api.lineDays({ insertedAt: '2026-11-10 08:00', removedAt: '2026-11-12 10:00' }, '2026-11-11', '2026-11-30') === 2 && api.lineDays({ insertedAt: '2026-11-15 08:00' }, '2026-11-01', '2026-11-17') === 3, '管路日：放置、移除當天都算；只算期間內')
+
+    // 種子
+    await as('nurse01')
+    const frac = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    const stroke = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const ward = (a) => db().beds.find((b) => b.id === a.bedId).ward
+    if (frac && db().vitals.some((v) => v.id === 'VS-PAIN-SEED')) {
+      const wp = (await api.nursingApi.listWardPatients(ward(frac))).find((p) => p.id === frac.id)
+      const tk = (await api.nursingApi.listWardTasks(ward(frac))).find((t) => t.kind === 'pain' && t.admissionId === frac.id)
+      ok(wp.painReassess === 'overdue' && wp.painScore === 6 && tk?.urgency === 'overdue', '種子：骨折疼痛 6 分處置後 75 分鐘沒重評 → 清單標「疼痛重評逾時」、本班待辦逾時')
+      ok((await api.dashboardApi.getDashboard()).painReassessOverdue >= 1, '護理師首頁：疼痛重評逾時')
+    }
+    if (stroke) {
+      const wp = (await api.nursingApi.listWardPatients(ward(stroke))).find((p) => p.id === stroke.id)
+      ok(wp.lines.includes('Foley') && wp.lines.includes('NG') && wp.lineTodo >= 1, `種子：腦梗塞有導尿管、鼻胃管，今天還沒評估（清單 ${wp.lines.join(' ')}）`)
+      await as(db().users.find((u) => u.doctorId === stroke.doctorId).username)
+      ok((await api.dashboardApi.getDashboard()).lineAttending >= 1, '主治首頁：管路滿 7 天')
+      await as('nurse01')
+    }
+
+    // 疼痛：生命徵象 ≥4 沒寫處置擋；寫了之後重評
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.id !== frac?.id)
+    let f = await fieldsOf(() => api.nursingApi.addVitals({ admissionId: a.id, pain: 5 }))
+    ok(f.painAction?.includes('處置'), `疼痛 5 分沒寫處置 → 「${f.painAction}」`)
+    const v = await api.nursingApi.addVitals({ admissionId: a.id, pain: 5, painAction: '依醫囑給予止痛藥' })
+    ok(v.painAction === '依醫囑給予止痛藥', '記下處置')
+    let tk = (await api.nursingApi.listWardTasks(ward(a))).find((t) => t.kind === 'pain' && t.admissionId === a.id)
+    ok(tk?.urgency === 'upcoming', '1 小時內：本班待辦「稍後」重評')
+    await api.nursingApi.addVitals({ admissionId: a.id, pain: 2 })
+    tk = (await api.nursingApi.listWardTasks(ward(a))).find((t) => t.kind === 'pain' && t.admissionId === a.id)
+    ok(!tk, '重評 2 分：待辦消失（本班也算評過）')
+
+    // 管路
+    await as('clerk01')
+    await expectError(() => L.addLine({ admissionId: a.id, kind: 'pivc', site: '右手背', size: '20G', insertedAt: nowStr().slice(0, 16), placedBy: 'x' }), '櫃台登錄管路')
+    await as('nurse01')
+    f = await fieldsOf(() => L.addLine({ admissionId: a.id, kind: 'foley', site: '', size: '', insertedAt: '2099-01-01 00:00', placedBy: '' }))
+    ok(f.site && f.size && f.placedBy && f.insertedAt, '部位、尺寸、放置者、時間（不能晚於現在）一次標出')
+    const at = dateUtil.addMinutes(nowStr(), -3 * 60)
+    const foley = await L.addLine({ admissionId: a.id, kind: 'foley', site: '尿道', size: '16Fr', insertedAt: at, placedBy: '周怡萱' })
+    ok(foley.state.needCheckDue && !foley.state.attendingAlert && foley.label === '導尿管', '登錄導尿管：今天要評估')
+    let msg = await errOf(() => L.addLine({ admissionId: a.id, kind: 'foley', site: '尿道', size: '14Fr', insertedAt: at, placedBy: 'x' }))
+    ok(msg.includes('已經有一條'), `同一種（留置針以外）同時只能一條 → 「${msg}」`)
+    const ivBefore = (await L.listLines(a.id)).active.filter((l) => l.kind === 'pivc').length
+    await L.addLine({ admissionId: a.id, kind: 'pivc', site: '右手背', size: '20G', insertedAt: at, placedBy: 'x' })
+    await L.addLine({ admissionId: a.id, kind: 'pivc', site: '左前臂', size: '22G', insertedAt: at, placedBy: 'x' })
+    ok((await L.listLines(a.id)).active.filter((l) => l.kind === 'pivc').length === ivBefore + 2, '留置針可以多條')
+    f = await fieldsOf(() => L.checkLineNeed(foley.id, false, ''))
+    ok(f.note, '評估可以移除要寫依據')
+    let lv = await L.checkLineNeed(foley.id, true)
+    ok(!lv.state.needCheckDue && !lv.state.removable, '評估還需要：今天不用再評')
+    lv = await L.checkLineNeed(foley.id, false, '已可自解')
+    ok(lv.state.removable && (await api.nursingApi.listWardTasks(ward(a))).some((t) => t.kind === 'line' && t.text.includes('請移除')), '同一天改評估可移除：本班待辦提醒移除')
+    const iv1 = (await L.listLines(a.id)).active.find((l) => l.kind === 'pivc')
+    msg = await errOf(() => L.checkLineNeed(iv1.id, true))
+    ok(msg.includes('不用每天評估'), '留置針不用每天評估')
+    f = await fieldsOf(() => L.removeLine(foley.id, ''))
+    ok(f.reason, '移除要選原因')
+    f = await fieldsOf(() => L.removeLine(foley.id, '其他', ''))
+    ok(f.note, '「其他」要寫說明')
+    lv = await L.removeLine(foley.id, '不需要了')
+    ok(lv.removedAt && lv.removeReason === '不需要了' && (await L.listLines(a.id)).removed.length === 1, '移除：記原因，移到已移除')
+    msg = await errOf(() => L.removeLine(foley.id, '不需要了'))
+    ok(msg.includes('已經移除'), '不能重複移除')
+    // 醫師也能登錄、評估
+    await as(db().users.find((u) => u.doctorId === a.doctorId).username)
+    const cvc = await L.addLine({ admissionId: a.id, kind: 'cvc', site: '右內頸靜脈', size: '7Fr 三腔', insertedAt: at, placedBy: '主治醫師' })
+    ok(cvc.recordedBy && cvc.state.needCheckDue, '醫師可以登錄 CVC')
+
+    // 病房管路日
+    await as('nurse01')
+    const st = await L.wardLineStats(ward(a), 30)
+    const row = (k) => st.rows.find((r) => r.kind === k)
+    ok(row('foley').lineDays >= 1 && row('pivc').active >= 2 && row('foley').removed['不需要了'] >= 1 && st.patientDays > 0, `病房管路日：導尿管 ${row('foley').lineDays}、留置針目前 ${row('pivc').active} 條、移除原因統計`)
+
+    // 出院：還在身上的自動移除
+    // 挑一位單純的病人（沒有轉科、備血、手術、出院帶藥），醫師簽准出院 → 結帳 → 出院
+    const b = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !x.deptTransfers?.some((t) => t.status === 'pending') && !db().bloodRequests.some((r) => r.admissionId === x.id) && !db().surgeries.some((g) => g.admissionId === x.id) && !x.dischargeSummary?.meds?.length && !x.dischargeSummary?.signedAt)
+    if (b) {
+      await as(db().users.find((u) => u.doctorId === b.doctorId).username)
+      await api.ipdApi.saveDischargeSummary(b.id, { diagnosis: b.diagnosis, course: '病況改善', condition: '穩定', followUp: '門診追蹤', dischargeType: '改善出院' }, true)
+      await as('nurse01')
+      await L.addLine({ admissionId: b.id, kind: 'pivc', site: '右手背', size: '20G', insertedAt: at, placedBy: 'x' })
+      await as('clerk01')
+      if (!db().charges.some((c) => c.admissionId === b.id && !c.voided)) await api.ipdChargeApi.payIpd(b.id, { payMethod: 'card', received: 0 })
+      await api.admissionApi.discharge(b.id, { confirmUnfinished: true })
+      ok(db().lines.filter((l) => l.admissionId === b.id).length && db().lines.filter((l) => l.admissionId === b.id).every((l) => l.removedAt && l.removeReason === '出院'), '出院：管路自動記移除（原因「出院」）')
+    }
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

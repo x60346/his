@@ -19,6 +19,8 @@ import { scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
+import { activeLines, lineTodosOf, painStateOf } from './line-work'
+import { painActionProblem } from './line-rules'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -43,6 +45,13 @@ export interface WardPatient extends AdmissionView {
   bloodIssued: number
   bloodTransfusing: number
   bloodUrgency?: 'overdue' | 'due'
+  /** 疼痛：最近分數；≥4 的重評逾時（overdue）或等重評中（upcoming）；本班評過沒有 */
+  painScore?: number
+  painReassess?: 'overdue' | 'upcoming'
+  painThisShift: boolean
+  /** 管路：在身上的條數（種類簡稱）、護理站要處理的（今天還沒評估、評估可移除、留置針滿 96 小時） */
+  lines: string[]
+  lineTodo: number
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -85,6 +94,12 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             const u = bt.some((x) => x.urgency === 'overdue') ? 'overdue' : bt.some((x) => x.urgency === 'due') ? 'due' : undefined
             return { bloodIssued: bt.filter((x) => x.state === 'issued').length, bloodTransfusing: bt.filter((x) => x.state === 'transfusing').length, ...(u ? { bloodUrgency: u as 'overdue' | 'due' } : {}) }
           })(),
+          ...(() => {
+            const ps = painStateOf(a.id, t)
+            return { ...(ps.last ? { painScore: ps.last.score } : {}), ...(ps.reassess ? { painReassess: ps.reassess.status } : {}), painThisShift: ps.thisShift }
+          })(),
+          lines: activeLines(a.id).map((l) => ({ foley: 'Foley', cvc: 'CVC', pivc: 'IV', ngt: 'NG' })[l.kind]),
+          lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
           isolationTodo: activeIsolations(a.patientId).filter((i) => isolationReviewDue(i, a.admittedAt, t)).length + (placementFor(a.patientId, find.bed(a.bedId!)!) ? 1 : 0),
         }
       })
@@ -99,7 +114,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -155,9 +170,16 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       // 輸血：已發血待輸、輸血中該量 15 分鐘生命徵象（和病人清單的標記、首頁「輸血待處理」同一個判斷）
       for (const x of transfusionTasksOf(a.id, t)) tasks.push({ ...base, id: x.id, kind: 'blood', urgency: x.urgency, at: x.at, text: x.text })
       // 這一班還沒量過生命徵象：和病人清單的「本班未量」同一條規則（measuredThisShift）
-      if (!measuredThisShift(latestVitalOf(a.id)?.at, t)) {
-        tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象' })
+      const measured = measuredThisShift(latestVitalOf(a.id)?.at, t)
+      if (!measured) {
+        tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象（含疼痛）' })
       }
+      // 疼痛：≥4 處置後 1 小時重評（逾時、或快到了）；量了生命徵象卻沒評疼痛
+      const ps = painStateOf(a.id, t)
+      if (ps.reassess) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: ps.reassess.status === 'overdue' ? 'overdue' : 'upcoming', at: ps.reassess.dueAt, text: `疼痛 ${ps.last!.score} 分處置後重評` })
+      else if (measured && !ps.thisShift) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: 'todo', text: '本班尚未評估疼痛' })
+      // 管路：今天還沒評估還需要嗎、評估可以移除、留置針滿 96 小時（滿 7 天提醒主治，在醫師首頁）
+      for (const x of lineTodosOf(a.id, t).filter((y) => y.kind !== 'attending')) tasks.push({ ...base, id: x.id, kind: 'line', urgency: x.kind === 'need' ? 'todo' : 'due', text: x.text })
     }
     if (changed) commitIfPossible()
     return tasks.sort((x, y) => URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency] || (x.at ?? '9').localeCompare(y.at ?? '9') || x.bedNo.localeCompare(y.bedNo))
@@ -426,6 +448,10 @@ export function addVitals(input: VitalInput): Promise<VitalRecord> {
     }
     if (v.sbp !== undefined && v.dbp !== undefined && !errs.has('sbp') && v.dbp >= v.sbp) errs.add('dbp', '舒張壓應小於收縮壓')
     errs.done()
+    // 疼痛 ≥4 要寫處置（1 小時內重評：下一筆有疼痛分數的紀錄）
+    const pp = painActionProblem(v.pain, input.painAction)
+    if (pp) failField('painAction', pp)
+    if (v.pain !== undefined && input.painAction?.trim()) v.painAction = input.painAction.trim()
     if (Object.keys(v).length === 4) fail('請至少輸入一項生命徵象')
     db.vitals.push(v)
     audit('生命徵象', a.admitNo)

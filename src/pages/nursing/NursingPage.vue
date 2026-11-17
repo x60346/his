@@ -20,6 +20,8 @@ import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import WardFlagsPanel from './components/WardFlagsPanel.vue'
+import WardLinesPanel from './components/WardLinesPanel.vue'
+import LinePanel from '@/components/LinePanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -73,6 +75,7 @@ const tabs = computed(() =>
         { key: 'stock', label: '常備點班' },
         { key: 'scan', label: '給藥掃描' },
         { key: 'isoward', label: '隔離與 DNR', count: (patients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
+        { key: 'lineward', label: '管路日' },
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -80,6 +83,7 @@ const tabs = computed(() =>
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
+        { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
         { key: 'surgery', label: '手術' },
         { key: 'flags', label: '隔離與 DNR', count: adm.value.isolationTodo || undefined },
@@ -89,7 +93,7 @@ const tabs = computed(() =>
 )
 // 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
 // 停在病房層級的分頁（常備點班、給藥掃描）時點病人，也換到給藥紀錄（以前會落到護理紀錄）
-const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward']
+const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward', 'lineward']
 watch(admissionId, (id) => {
   if (id && WARD_ONLY.includes(tab.value)) tab.value = 'mar'
   else if (!id && tab.value !== 'handover' && !WARD_ONLY.includes(tab.value)) tab.value = 'tasks'
@@ -155,11 +159,13 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="!p.wristband" tone="red" title="腕帶還沒印：給藥掃描要用">未印腕帶</UBadge>
                     <UBadge v-if="p.bloodTransfusing" :tone="p.bloodUrgency ? 'red' : 'purple'" :title="p.bloodUrgency ? '輸血中：該量 15 分鐘生命徵象（或已超過 4 小時）' : '輸血中'">輸血中</UBadge>
                     <UBadge v-else-if="p.bloodIssued" :tone="p.bloodUrgency === 'overdue' ? 'red' : 'yellow'" title="血庫已發血，請床邊雙人核對開始輸血">已發血</UBadge>
+                    <UBadge v-if="p.painReassess === 'overdue'" tone="red" title="疼痛 ≥4 處置後 1 小時沒重評">疼痛重評逾時</UBadge>
+                    <UBadge v-if="p.lineTodo" tone="cyan" title="管路：今天還沒評估還需要嗎、評估可移除、留置針滿 96 小時">管路 {{ p.lineTodo }}</UBadge>
                     <UBadge v-if="p.riskOverdue" tone="red" title="跌倒或壓傷評估過了期限">評估逾時</UBadge>
                     <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
                   </span>
                 </div>
-                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<RiskBadges :levels="p.riskLevels" compact /><PatientFlags :flags="p.flags" compact /></div>
+                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<span v-if="p.lines.length" class="rounded bg-slate-100 px-1 text-slate-600" title="在身上的管路">{{ p.lines.join(' ') }}</span><span v-if="p.painScore !== undefined && p.painScore >= 4" class="font-medium text-red-700">疼痛 {{ p.painScore }}</span><RiskBadges :levels="p.riskLevels" compact /><PatientFlags :flags="p.flags" compact /></div>
                 <div v-if="p.latestVitals" class="tabular mt-0.5 text-xs text-slate-500">
                   <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
                   {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
@@ -199,10 +205,12 @@ const wardTotals = computed(() => ({
           <WardStockPanel v-else-if="!adm && tab === 'stock'" :ward="ward" :clock="clock" />
           <ScanStatsPanel v-else-if="!adm && tab === 'scan'" :ward="ward" />
           <WardFlagsPanel v-else-if="!adm && tab === 'isoward'" :ward="ward" @open="openTask" />
+          <WardLinesPanel v-else-if="!adm && tab === 'lineward'" :ward="ward" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
+          <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

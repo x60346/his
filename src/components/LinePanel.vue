@@ -1,0 +1,143 @@
+<script setup lang="ts">
+// 管路（護理站病人分頁「管路」、住院醫囑分頁「管路」共用）：在身上的管路——放了幾天（幾小時）、部位尺寸放置者、
+// 提醒（今天還沒評估還需要嗎、評估可移除、留置針滿 96 小時、滿 7 天請主治評估）；每天評估、移除寫原因；登錄放置；已移除的紀錄。
+// 提醒只提醒不擋；判斷都在 line-rules（服務層回 state，畫面只顯示）
+import { computed, reactive, ref } from 'vue'
+import { Plus } from 'lucide-vue-next'
+import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
+import { lineApi, LINE_KINDS, LINE_REMOVE_REASONS, lineKind, type LineView } from '@/services'
+import type { LineKind } from '@/types'
+import { useAction, useQuery } from '@/composables/useService'
+import { useAuth } from '@/stores/auth'
+import { now } from '@/utils/date'
+
+const props = defineProps<{ admissionId: string }>()
+const auth = useAuth()
+const { data, loading } = useQuery(async () => ({ id: props.admissionId, v: await lineApi.listLines(props.admissionId) }), [() => props.admissionId])
+const lines = computed(() => (data.value?.id === props.admissionId ? data.value.v : undefined))
+const ageText = (l: LineView) => (l.state.hours < 72 ? `${l.state.hours} 小時` : `第 ${l.state.day} 天`)
+
+// ---------- 登錄放置 ----------
+const addOpen = ref(false)
+const form = reactive({ kind: 'pivc' as LineKind, site: '', size: '', insertedAt: '', placedBy: '' })
+const meta = computed(() => lineKind(form.kind))
+function openAdd() {
+  Object.assign(form, { kind: 'pivc', site: '', size: '', insertedAt: now().slice(0, 16).replace(' ', 'T'), placedBy: auth.user?.name ?? '' })
+  add.fieldErrors.value = {}
+  addOpen.value = true
+}
+const add = useAction(lineApi.addLine, { success: (l) => `已登錄${l.label}（${l.site}）` })
+async function submitAdd() {
+  if (await add.run({ admissionId: props.admissionId, ...form, insertedAt: form.insertedAt.replace('T', ' ') })) addOpen.value = false
+}
+
+// ---------- 每天評估 ----------
+const need = useAction(lineApi.checkLineNeed, { success: (l) => `${l.label}：${l.needChecks.at(-1)?.needed ? '還需要' : '可以移除'}` })
+const notNeed = ref<LineView>()
+const notNeedOpen = computed({ get: () => !!notNeed.value, set: (x) => !x && (notNeed.value = undefined) })
+const notNeedNote = ref('')
+async function submitNotNeed() {
+  if (notNeed.value && (await need.run(notNeed.value.id, false, notNeedNote.value))) notNeed.value = undefined
+}
+
+// ---------- 移除 ----------
+const rm = ref<LineView>()
+const rmOpen = computed({ get: () => !!rm.value, set: (x) => !x && (rm.value = undefined) })
+const rmForm = reactive({ reason: '' as string | number | undefined, note: '' })
+function openRm(l: LineView) {
+  Object.assign(rmForm, { reason: l.state.removable ? '不需要了' : l.state.replaceDue ? '到期更換' : '', note: '' })
+  remove.fieldErrors.value = {}
+  rm.value = l
+}
+const remove = useAction(lineApi.removeLine, { success: (l) => `已移除${l.label}：${l.removeReason}` })
+async function submitRm() {
+  if (rm.value && (await remove.run(rm.value.id, String(rmForm.reason ?? ''), rmForm.note))) rm.value = undefined
+}
+</script>
+
+<template>
+  <div class="space-y-3 p-4 text-sm">
+    <div class="flex items-center justify-between">
+      <span class="font-semibold text-slate-700">管路</span>
+      <UButton size="sm" variant="secondary" :icon="Plus" @click="openAdd">登錄放置</UButton>
+    </div>
+    <UQueryState :loading="loading && !lines" :ready="!!lines" >
+      <template v-if="lines">
+        <p v-if="!lines.active.length" class="rounded-md border border-slate-200 px-3 py-4 text-center text-slate-400">目前沒有管路</p>
+        <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
+          <li v-for="l in lines.active" :key="l.id" class="space-y-1 px-3 py-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <b class="text-slate-800">{{ l.label }}</b>
+              <span class="text-slate-600">{{ l.site }}・{{ l.size }}</span>
+              <span class="tabular text-xs text-slate-500">{{ l.insertedAt.slice(5) }} 放置（{{ l.placedBy }}）・已放 {{ ageText(l) }}</span>
+              <UBadge v-if="l.state.attendingAlert" tone="red">滿 7 天：請主治評估</UBadge>
+              <UBadge v-if="l.state.replaceDue" tone="red">滿 96 小時：請更換</UBadge>
+              <UBadge v-if="l.state.removable" tone="yellow">評估可移除</UBadge>
+              <UBadge v-else-if="l.state.needCheckDue" tone="cyan">今天還沒評估</UBadge>
+            </div>
+            <div v-if="l.needChecks.length" class="text-xs text-slate-500">最近評估：{{ l.needChecks.at(-1)!.at.slice(5) }} {{ l.needChecks.at(-1)!.byName }}・{{ l.needChecks.at(-1)!.needed ? '還需要' : `可以移除（${l.needChecks.at(-1)!.note}）` }}</div>
+            <div class="flex flex-wrap gap-1.5">
+              <template v-if="lineKind(l.kind).dailyNeed">
+                <UButton size="sm" variant="secondary" :loading="need.pending.value" @click="need.run(l.id, true)">還需要</UButton>
+                <UButton size="sm" variant="secondary" @click="(notNeedNote = ''), (notNeed = l)">可以移除</UButton>
+              </template>
+              <UButton size="sm" variant="ghost" @click="openRm(l)">移除</UButton>
+            </div>
+          </li>
+        </ul>
+        <details v-if="lines.removed.length" class="text-xs text-slate-600">
+          <summary class="cursor-pointer">已移除 {{ lines.removed.length }} 條</summary>
+          <ul class="mt-1 space-y-0.5">
+            <li v-for="l in lines.removed" :key="l.id">{{ l.label }} {{ l.site }} {{ l.size }}・{{ l.insertedAt.slice(5) }} → {{ l.removedAt!.slice(5) }}（{{ l.state.day }} 天）・{{ l.removeReason }}・{{ l.removedByName }}</li>
+          </ul>
+        </details>
+        <p class="text-xs text-slate-500">導尿管、中心靜脈導管每天評估還需要嗎，滿 7 天提醒主治；周邊留置針滿 96 小時提醒更換。只提醒，不擋。</p>
+      </template>
+    </UQueryState>
+
+    <UDialog v-model="addOpen" title="登錄管路放置" @submit="submitAdd">
+      <div class="space-y-3 text-sm">
+        <div class="flex flex-wrap gap-2">
+          <label v-for="k in LINE_KINDS" :key="k.kind" :class="['cursor-pointer rounded-md border-2 px-3 py-1', form.kind === k.kind ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
+            <input v-model="form.kind" type="radio" :value="k.kind" class="sr-only" @change="(form.site = ''), (form.size = '')" />{{ k.label }}
+          </label>
+        </div>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <UInput v-model="form.site" label="部位" required :error="add.fieldErrors.value.site" />
+            <div class="mt-1 flex flex-wrap gap-1"><button v-for="s in meta.sites" :key="s" type="button" class="rounded border border-slate-300 px-1.5 text-xs hover:bg-slate-100" @click="form.site = s">{{ s }}</button></div>
+          </div>
+          <div>
+            <UInput v-model="form.size" label="尺寸" required :error="add.fieldErrors.value.size" />
+            <div class="mt-1 flex flex-wrap gap-1"><button v-for="s in meta.sizes" :key="s" type="button" class="rounded border border-slate-300 px-1.5 text-xs hover:bg-slate-100" @click="form.size = s">{{ s }}</button></div>
+          </div>
+          <UInput v-model="form.insertedAt" type="datetime-local" label="放置時間" required :error="add.fieldErrors.value.insertedAt" />
+          <UInput v-model="form.placedBy" label="放置者" required hint="醫師、外院放的寫實際的人或醫院" :error="add.fieldErrors.value.placedBy" />
+        </div>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="addOpen = false">取消</UButton>
+        <UButton type="submit" :loading="add.pending.value">登錄</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="notNeedOpen" :title="`評估可以移除：${notNeed?.label ?? ''}`" size="sm" @submit="submitNotNeed">
+      <UTextarea v-model="notNeedNote" label="依據" :rows="2" required placeholder="例：已可自解、意識清楚可下床" :error="need.fieldErrors.value.note" />
+      <template #footer>
+        <UButton variant="secondary" @click="notNeedOpen = false">取消</UButton>
+        <UButton type="submit" :loading="need.pending.value">送出</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="rmOpen" :title="`移除：${rm?.label ?? ''}（${rm?.site ?? ''}）`" size="sm" @submit="submitRm">
+      <div class="space-y-3">
+        <USelect v-model="rmForm.reason" label="原因" required placeholder="選擇原因" :options="LINE_REMOVE_REASONS.map((r) => ({ label: r, value: r }))" :error="remove.fieldErrors.value.reason" />
+        <UInput v-model="rmForm.note" :label="rmForm.reason === '其他' ? '說明' : '說明（選填）'" :required="rmForm.reason === '其他'" :error="remove.fieldErrors.value.note" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="rmOpen = false">取消</UButton>
+        <UButton type="submit" :loading="remove.pending.value">移除</UButton>
+      </template>
+    </UDialog>
+  </div>
+</template>

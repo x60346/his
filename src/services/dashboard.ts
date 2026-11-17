@@ -20,6 +20,7 @@ import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-wo
 import { surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
+import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -79,6 +80,10 @@ export interface DashboardStats {
   /** 急診留觀：待排留觀床（護理師）、留觀超過 48 小時要決定去向（急診醫師） */
   erObsBed: number
   erObsOverdue?: number
+  /** 疼痛 ≥4 處置後 1 小時沒重評（護理師，全院）；管路待處理（今天未評估、評估可移除、留置針滿 96 小時）；主治的病人管路滿 7 天（醫師） */
+  painReassessOverdue: number
+  lineTodo: number
+  lineAttending?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -215,6 +220,16 @@ export function getDashboard(): Promise<DashboardStats> {
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount(), ...(({ work, urgent }) => ({ bloodWork: work, bloodUrgent: urgent }))(bloodLabCounts()) } : {}),
       transfusionTodo: transfusionTodoCount(now()),
+      ...(() => {
+        const t = now()
+        const inpt = db.admissions.filter((a) => a.status === 'admitted')
+        const me = sessionUser()
+        return {
+          painReassessOverdue: inpt.filter((a) => painStateOf(a.id, t).reassess?.status === 'overdue').length,
+          lineTodo: inpt.reduce((n, a) => n + lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length, 0),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t) } : {}),
+        }
+      })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
       ...(() => {
