@@ -14,6 +14,7 @@ import { surgeryOpen } from './surgery-work'
 import { closeLines } from './line-work'
 import { closeRestraints } from './delirium-work'
 import { openPca } from './pca-work'
+import { closeInfusions } from './infusion-work'
 
 export interface ObsBedView {
   id: string
@@ -280,6 +281,7 @@ export function endObservation(admissionId: string, input: ObsEndInput): Promise
       closeOrders(a, u.id, t, '結束留觀時未給藥')
       closeLines(a, u.id, t, input.kind === 'transfer' ? '出院（轉院）' : '出院（急診留觀離院）')
       closeRestraints(a, u.id, t)
+      closeInfusions(a, u.id, t, '結束留觀')
       releaseBed(a.bedId)
       Object.assign(a, { status: 'discharged', dischargedAt: t, dischargeType: input.kind === 'transfer' ? '轉院' : '急診留觀離院' })
     }

@@ -18,6 +18,7 @@ import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
 import { ABX_DEFAULT_DAYS, ABX_REASON_LABEL, abxText, checkAbxInput } from './abx-rules'
 import { checkTubePlan, DIET_KINDS, dietKindOfText, dietText } from './nutrition-rules'
+import { checkInfusionInput } from './infusion-rules'
 import { activeLines } from './line-work'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 
@@ -30,7 +31,8 @@ function activeAdmission(admissionId: string) {
 /** 補齊某日的給藥排程（只處理有固定時間點的長期給藥醫囑），回傳是否有新增。服務層內部使用 */
 export function ensureMar(admissionId: string, date: string): boolean {
   let added = false
-  const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long')
+  // 點滴（連續輸注）不排給藥時間：由護理師接上、換瓶（infusion.ts）
+  const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long' && !o.infusion)
   for (const o of orders) {
     // 給藥時間依服用時機對齊用餐（drug-rules.marTimes）；時機是開立時存在醫囑上的，不跟著主檔變
     const times = marTimes(o.freq ?? '', find.freq(o.freq ?? '')?.times ?? [], o.timing, o.route)
@@ -104,7 +106,7 @@ export function listOrders(admissionId: string): Promise<OrderView[]> {
   )
 }
 
-export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route' | 'diet'> & {
+export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route' | 'diet' | 'infusion'> & {
   /** 醫師指定的服用時機（空＝照主檔）；開立時會把有效時機存在醫囑上 */
   timing?: DrugTiming | ''
   /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
@@ -142,6 +144,7 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     let rxAlerts: IpdOrder['rxAlerts']
     let abx: IpdOrder['abx']
     let dietValue: IpdOrder['diet']
+    let infusionValue: IpdOrder['infusion']
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
@@ -184,6 +187,15 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       const old = extra.replaces ? db.ipdOrders.find((x) => x.id === extra.replaces) : undefined
       rxAlerts = old ? old.rxAlerts : settleRxAlerts(drugRefs([drug.id]), ipdInUse(a.id, drug.id), input.rxAlertReasons)
       content = content || drug.name
+      // 點滴：長期、注射；每瓶容量、流速、加藥（加藥也要是能開的藥）；內容寫成「NS 500 ml @ 80 ml/h ＋ KCl 20 mEq」
+      if (input.infusion) {
+        if (input.type !== 'long') failField('infusion', '點滴請開長期醫囑')
+        if (drug.category !== '注射') failField('drugId', '點滴要選注射用的輸液')
+        failFields(checkInfusionInput(input.infusion))
+        const adds = (input.infusion.additives ?? []).map((x) => ({ drug: usable.drug(x.drugId), dose: x.dose }))
+        infusionValue = { volumeMl: input.infusion.volumeMl, rateMlH: input.infusion.rateMlH, ...(adds.length ? { additives: adds.map((x) => ({ drugId: x.drug.id, dose: x.dose })) } : {}) }
+        content = `${drug.name} ${infusionValue.volumeMl} ml @ ${infusionValue.rateMlH} ml/h${adds.map((x) => ` ＋ ${x.drug.name} ${x.dose} ${doseUnitOf(x.drug)}`).join('')}`
+      }
       // 服用時機：開立時決定、存在醫囑上（排程依它排）。只有長期、適用的（口服、非睡前／需要時）才有
       const rx = normalizeRxTiming(drug.timing, { timing: input.timing, freq: input.freq, route: input.route ?? '' })
       if (rx === 'invalid') failField('timing', '服用時機不正確')
@@ -216,13 +228,14 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, diet: _diet, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, diet: _diet, infusion: _inf, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
       ...(abx ? { abx } : {}),
       ...(dietValue ? { diet: dietValue } : {}),
+      ...(infusionValue ? { infusion: infusionValue } : {}),
       content,
       id: newId('IO'),
       startAt: t,

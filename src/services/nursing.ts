@@ -28,6 +28,7 @@ import { restraintState } from './delirium-rules'
 import { assignedNurse, nextShift, onDuty, shiftNow } from './staffing-work'
 import { planOf, plannable, planScreenStateOf } from './discharge-plan-work'
 import { openPca, pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
+import { infusedToday, infusionOrders, infusionTodosOf } from './infusion-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -77,6 +78,8 @@ export interface WardPatient extends AdmissionView {
   planEnrolled: boolean
   /** PCA 使用中：紀錄狀態、有沒有未處理的警示 */
   pca?: { status: 'ordered' | 'running'; record: 'ok' | 'due' | 'overdue'; alert: boolean }
+  /** 點滴：有點滴醫囑（或醫囑停了還在滴）；待辦數（待接上、要換瓶、要停止） */
+  infusion?: { todo: number; overdue: boolean }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -126,6 +129,11 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           lines: activeLines(a.id).map((l) => lineKind(l.kind).short),
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
           ...(() => {
+            const it = infusionTodosOf(a.id, t)
+            const has = infusionOrders(a.id).length > 0 || it.length > 0
+            return has ? { infusion: { todo: it.length, overdue: it.some((x) => x.urgency === 'overdue') } } : {}
+          })(),
+          ...(() => {
             const pc = openPca(a.id)
             return pc ? { pca: { status: pc.status as 'ordered' | 'running', record: pc.status === 'running' ? pcaRecordState(pc, t)?.status ?? 'ok' : 'ok', alert: pc.status === 'running' && !!pcaOpenAlert(pc) } } : {}
           })(),
@@ -167,7 +175,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -241,6 +249,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       // 譫妄：65 歲以上、術後 72 小時內每班評一次 CAM
       const ds = deliriumStateOf(a, t)
       if (ds.target && !ds.thisShift) tasks.push({ ...base, id: `dl-${a.id}`, kind: 'delirium', urgency: 'todo', text: `譫妄評估 CAM（${ds.target}，每班）` })
+      // 點滴：待接上、快滴完／已滴完要換瓶、醫囑停了還在滴
+      for (const x of infusionTodosOf(a.id, t)) tasks.push({ ...base, id: `iv-${x.kind}-${x.runId ?? x.orderId}`, kind: 'infusion', urgency: x.urgency, ...(x.at ? { at: x.at } : {}), text: x.text })
       // PCA：每 4 小時紀錄（到期前 30 分鐘「現在」、過了「逾時」）；未處理的警示（醫師處理，護理站也列出來）
       const pc = runningPca(a.id)
       if (pc) {
@@ -636,12 +646,13 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
 }
 
 // ---------- 今日輸入輸出（生命徵象的輸入量＋管灌灌入量；輸出量） ----------
-export function ioToday(admissionId: string): Promise<{ date: string; intake: number; tubeMl: number; output: number }> {
+export function ioToday(admissionId: string): Promise<{ date: string; intake: number; tubeMl: number; ivMl: number; output: number }> {
   return query(() => {
     requireUser('nurse', 'doctor')
     const d = today()
     const vs = db.vitals.filter((v) => v.admissionId === admissionId && v.at.startsWith(d))
     const tubeMl = db.tubeFeeds.filter((r) => r.admissionId === admissionId && r.at.startsWith(d)).reduce((n, r) => n + r.givenMl, 0)
-    return { date: d, intake: vs.reduce((n, v) => n + (v.intake ?? 0), 0) + tubeMl, tubeMl, output: vs.reduce((n, v) => n + (v.output ?? 0), 0) }
+    const ivMl = infusedToday(admissionId, now())
+    return { date: d, intake: vs.reduce((n, v) => n + (v.intake ?? 0), 0) + tubeMl + ivMl, tubeMl, ivMl, output: vs.reduce((n, v) => n + (v.output ?? 0), 0) }
   })
 }

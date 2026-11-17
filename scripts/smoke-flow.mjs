@@ -7891,6 +7891,106 @@ try {
     ok(hv && (hv.receiverName === undefined || hv.receiverName.length > 0), `交班帶出接班的人：${hv?.receiverName ?? '（下一班沒排）'}`)
   }
 
+  // 點滴：醫囑（容量、流速、加藥、只長期注射）、不排給藥時間、接上（留置針、通暢、扣帳進帳單）、流速與換瓶時間、調流速、換瓶（實際量）、
+  // 今日輸入量、醫囑停了還在滴、停止
+  console.log('\n[點滴]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const V = api.infusionApi
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const run = { startAt: '2026-11-17 08:00', rateMlH: 100, rateChanges: [] }
+    ok(api.hoursPerBag(500, 80) === 6.3 && api.expectedEnd(run, 500) === '2026-11-17 13:00' && api.infusedMl(run, 500, '2026-11-17 10:30') === 250, '一瓶滴多久、預計滴完、已滴入')
+    const run2 = { startAt: '2026-11-17 08:00', rateMlH: 50, rateChanges: [{ at: '2026-11-17 10:00', from: 100, to: 50 }] }
+    ok(api.infusedMl(run2, 500, '2026-11-17 12:00') === 300 && api.expectedEnd(run2, 500) === '2026-11-17 16:00', '調流速後：之前 100 ml/h、之後 50 ml/h，重算滴完時間')
+    ok(api.infusedBetween(run, 500, '2026-11-17 09:00', '2026-11-17 10:00', '2026-11-17 12:00') === 100 && api.changeState('2026-11-17 13:00', '2026-11-17 12:40') === 'due' && api.changeState('2026-11-17 13:00', '2026-11-17 13:01') === 'overdue', '一段時間的輸入量；快滴完、已滴完')
+
+    // 種子
+    const badDoc = db().ipdOrders.filter((x) => !db().doctors.some((d) => d.id === x.doctorId))
+    ok(!badDoc.length, `種子：住院醫囑的 doctorId 都是醫師代碼（不是帳號）${badDoc.length ? `：${badDoc.map((x) => x.id).join('、')}` : ''}`)
+    const seedRun = db().infusions.find((r) => r.id === 'INFU-SEED-1')
+    if (seedRun) {
+      await as('nurse01')
+      const ward = db().beds.find((b) => b.id === db().admissions.find((a) => a.id === seedRun.admissionId).bedId).ward
+      ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'infusion' && t.text.includes('快滴完')), '種子：肺炎病人點滴快滴完（本班待辦換瓶）')
+      ok(!db().mar.some((m) => m.orderId === 'IO-IV-SEED-1'), '點滴醫囑不排給藥時間')
+    }
+
+    // 醫囑
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().ipdOrders.some((o) => o.admissionId === x.id && o.infusion))
+    const docU = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(docU)
+    let f = await fieldsOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'medication', drugId: 'M037', content: '', dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: 5000, rateMlH: 2 } }))
+    ok(f.volumeMl && f.rateMlH, '容量、流速範圍')
+    f = await fieldsOf(() => api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'QD', route: 'PO', infusion: { volumeMl: 500, rateMlH: 80 } }))
+    ok(f.drugId?.includes('注射'), '點滴要選注射用的輸液')
+    const o = await api.ipdApi.addOrder({ admissionId: a.id, type: 'long', category: 'medication', drugId: 'M037', content: '', dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: 500, rateMlH: 100, additives: [{ drugId: 'M040', dose: 1 }] }, allowDuplicate: true, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(a.id, 'M037')).map((x) => [x.key, '測試'])) })
+    ok(o.content.includes('500 ml @ 100 ml/h') && o.content.includes('Potassium') && !db().mar.some((m) => m.orderId === o.id), `點滴醫囑「${o.content}」，不排給藥時間`)
+
+    // 接上：要有留置針、要勾通暢
+    await as('nurse01')
+    for (const l of db().lines.filter((x) => x.admissionId === a.id && ['pivc', 'cvc'].includes(x.kind) && !x.removedAt)) l.removedAt = nowStr()
+    let msg = await errOf(() => V.startInfusion(o.id, { patency: true }))
+    ok(msg.includes('留置針'), `沒有留置針不能接 → 「${msg}」`)
+    await api.lineApi.addLine({ admissionId: a.id, kind: 'pivc', site: '右手背', size: '20G', insertedAt: addMinutes(nowStr(), -10), placedBy: 'x' })
+    f = await fieldsOf(() => V.startInfusion(o.id, { patency: false }))
+    ok(f.patency, '要確認通暢')
+    const txBefore = db().stockTxns.length
+    let v = await V.startInfusion(o.id, { patency: true })
+    ok(v.running?.bagNo === 1 && db().stockTxns.length === txBefore + 2, '接上第 1 瓶：扣輸液與加藥')
+    msg = await errOf(() => V.startInfusion(o.id, { patency: true }))
+    ok(msg.includes('換瓶'), '已經在滴：要接下一瓶用換瓶')
+    await as('clerk01')
+    const bill = (await api.ipdChargeApi.getIpdBill(a.id)).bill
+    ok(bill.lines.some((l) => l.name.startsWith('Normal Saline')) && bill.lines.some((l) => l.name.startsWith('Potassium')), '住院帳單有點滴與加藥')
+
+    // 3 小時前接上、1 小時前調慢 → 換瓶時間重算；今日輸入量
+    await as('nurse01')
+    const r0 = db().infusions.find((r) => r.orderId === o.id && !r.endAt)
+    r0.startAt = addMinutes(nowStr(), -180)
+    f = await fieldsOf(() => V.adjustRate(o.id, { rateMlH: 50, reason: '' }))
+    ok(f.reason, '調流速要原因')
+    v = await V.adjustRate(o.id, { rateMlH: 50, reason: '病人心衰竭／水腫，減慢' })
+    ok(v.running.rateMlH === 50 && v.running.changes.length === 1 && v.running.infused === 300, `調流速：已滴入 ${v.running.infused} ml、預計 ${v.running.endAt.slice(11)} 滴完`)
+    const io = await api.nursingApi.ioToday(a.id)
+    ok(io.ivMl >= (nowStr().slice(0, 10) === addMinutes(nowStr(), -180).slice(0, 10) ? 300 : 1) && io.intake >= io.ivMl, `今日輸入量含點滴 ${io.ivMl} ml`)
+    // 換瓶：實際量可修正；新的一瓶沿用調過的流速
+    f = await fieldsOf(() => V.changeBag(o.id, { patency: true, infusedMl: 900 }))
+    ok(f.infusedMl, '實際量不能超過一瓶')
+    v = await V.changeBag(o.id, { patency: true, infusedMl: 320 })
+    ok(v.running.bagNo === 2 && v.running.rateMlH === 50 && v.history[0].infused === 320, '換瓶：第 1 瓶記實際 320 ml、第 2 瓶沿用 50 ml/h')
+
+    // 醫囑停了還在滴 → 待辦 → 停止
+    await as(docU)
+    await api.ipdApi.stopOrder(o.id)
+    await as('nurse01')
+    const ward = db().beds.find((b) => b.id === a.bedId).ward
+    ok((await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'infusion' && t.text.includes('醫囑已停止')), '醫囑停了還在滴：本班待辦請停止')
+    msg = await errOf(() => V.changeBag(o.id, { patency: true }))
+    ok(msg.includes('醫囑已停止'), '醫囑停了不能換瓶')
+    f = await fieldsOf(() => V.stopInfusion(o.id, { reason: '' }))
+    ok(f.reason, '停止要原因')
+    await V.stopInfusion(o.id, { reason: '醫囑停止' })
+    ok(!db().infusions.some((r) => r.orderId === o.id && !r.endAt) && !(await api.nursingApi.listWardTasks(ward)).some((t) => t.kind === 'infusion' && t.admissionId === a.id), '停止後待辦消失')
+  }
+
   // 院內感染：管路相關要放超過 2 天、通報欄位、手術部位要選手術、判定（權限、原因）、隔離提醒、每千管路日感染率
   console.log('\n[院內感染]')
   {

@@ -1169,6 +1169,8 @@ export interface IpdOrder {
   admissionId: string
   /** 飲食醫囑：種類＋備註（content 是給人看的「糖尿病飲食・1800 kcal」）；舊資料沒有，依 content 推斷 */
   diet?: { kind: DietKind; note?: string; tube?: TubeFeedPlan }
+  /** 點滴（連續輸注）：每瓶容量、每小時流速、加藥（例：KCl）；不排給藥時間，由護理師接上、換瓶、停止 */
+  infusion?: { volumeMl: number; rateMlH: number; additives?: { drugId: string; dose: number }[] }
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory
@@ -1804,6 +1806,27 @@ export interface ProgressNote {
 }
 
 /** 交班紀錄 */
+/**
+ * 點滴的一瓶（護理師接上 → 換瓶或停止）：接上時確認留置針通暢、扣一瓶（加藥一起扣）；
+ * 流速調整留紀錄（原因）；輸入量依流速與時間算，結束時可以修正為實際量
+ */
+export interface InfusionRun {
+  id: string
+  orderId: string
+  admissionId: string
+  bagNo: number
+  startAt: string
+  startBy: string
+  rateMlH: number
+  rateChanges: { at: string; by: string; from: number; to: number; reason: string }[]
+  endAt?: string
+  endBy?: string
+  endReason?: string
+  /** 結束時護理師確認的實際輸入量（沒填用流速算） */
+  infusedMl?: number
+  txnIds: string[]
+}
+
 /** 院內感染種類：導尿管相關泌尿道感染、中心靜脈導管相關血流感染、手術部位感染、其他 */
 export type InfectionKind = 'cauti' | 'clabsi' | 'ssi' | 'other'
 

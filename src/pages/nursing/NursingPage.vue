@@ -28,6 +28,7 @@ import SafetyPanel from '@/components/SafetyPanel.vue'
 import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import PcaPanel from '@/components/PcaPanel.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
+import InfusionPanel from '@/components/InfusionPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -125,6 +126,7 @@ const tabs = computed(() =>
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'infection', label: '感染通報' },
         { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
+        ...(adm.value.infusion ? [{ key: 'infusion', label: '點滴', count: adm.value.infusion.todo || undefined }] : []),
         ...(adm.value.pca ? [{ key: 'pca', label: 'PCA', count: (adm.value.pca.status === 'ordered' || adm.value.pca.record !== 'ok' || adm.value.pca.alert ? 1 : 0) || undefined }] : []),
         ...(adm.value.tube ? [{ key: 'tube', label: '管灌', count: adm.value.tube.due + adm.value.tube.overdue || undefined }] : []),
         { key: 'plan', label: '出院準備', count: adm.value.planDue && adm.value.planDue !== 'todo' ? 1 : undefined },
@@ -221,6 +223,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.bloodTransfusing" :tone="p.bloodUrgency ? 'red' : 'purple'" :title="p.bloodUrgency ? '輸血中：該量 15 分鐘生命徵象（或已超過 4 小時）' : '輸血中'">輸血中</UBadge>
                     <UBadge v-else-if="p.bloodIssued" :tone="p.bloodUrgency === 'overdue' ? 'red' : 'yellow'" title="血庫已發血，請床邊雙人核對開始輸血">已發血</UBadge>
                     <UBadge v-if="p.painReassess === 'overdue'" tone="red" title="疼痛 ≥4 處置後 1 小時沒重評">疼痛重評逾時</UBadge>
+                    <UBadge v-if="p.infusion?.todo" :tone="p.infusion.overdue ? 'red' : 'yellow'" title="點滴：待接上、快滴完或已滴完要換瓶、醫囑停了還在滴">點滴 {{ p.infusion.todo }}</UBadge>
                     <UBadge v-if="p.pca" :tone="p.pca.alert || p.pca.record === 'overdue' ? 'red' : 'blue'" :title="p.pca.alert ? 'PCA 警示待醫師處理' : p.pca.status === 'ordered' ? 'PCA 已開，待雙人核對架設' : 'PCA 使用中'">PCA</UBadge>
                     <UBadge v-if="p.restraint" :tone="p.restraint.check === 'overdue' || p.restraint.orderProblem ? 'red' : 'purple'" :title="p.restraint.check === 'overdue' ? '約束查核逾時' : p.restraint.orderProblem ? '約束醫囑待補或到期' : '約束中'">約束中</UBadge>
                     <UBadge v-if="p.deliriumPositive" tone="red" title="最近一次 CAM 陽性">譫妄</UBadge>
@@ -284,6 +287,7 @@ const wardTotals = computed(() => ({
           <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
           <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
           <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
+          <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />

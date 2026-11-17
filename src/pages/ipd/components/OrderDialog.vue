@@ -6,8 +6,8 @@
 // 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
-import { UBadge, UButton, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { DIET_KINDS, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { UBadge, UButton, UCheckbox, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
+import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -27,6 +27,9 @@ const categories: { key: IpdOrderCategory; label: string }[] = [
 ]
 // 飲食選種類（伙食費、送餐清單、術前禁食都看種類），細節寫在備註（例：糖尿病 1800 kcal）
 const dietKind = ref<DietKind | ''>('')
+// 點滴（長期、注射）：每瓶容量（從規格帶入）、每小時流速、加藥一種（例：KCl）；不排給藥時間，護理師接上換瓶
+const iv = reactive({ on: false, volumeMl: 500 as number | undefined, rateMlH: 80 as number | undefined, add: null as Drug | null, addDose: 1 as number | undefined })
+const canIv = computed(() => form.type === 'long' && form.drug?.category === '注射' && !form.drug.pca)
 // 管灌：配方、每天總量、分次（幾餐）或連續（每小時 ml）；熱量蛋白質即時算（和服務層同一份 tubeNutrients）
 const tube = reactive({ formulaId: '' as string | number | undefined, totalMl: 1500 as number | undefined, mode: 'bolus' as 'bolus' | 'continuous', feeds: 6 as number | undefined, rateMlH: 60 as number | undefined })
 const { data: formulas } = useQuery(() => tubeApi.listTubeFormulas())
@@ -53,6 +56,7 @@ watch(open, (v) => {
     Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
     Object.assign(abx, { reason: '', site: '', organism: '', note: '' })
     dietKind.value = ''
+    Object.assign(iv, { on: false, volumeMl: 500, rateMlH: 80, add: null, addDose: 1 })
     Object.assign(tube, { formulaId: '', totalMl: 1500, mode: 'bolus', feeds: 6, rateMlH: 60 })
     save.fieldErrors.value = {}
   }
@@ -89,6 +93,7 @@ const schedulePreview = computed(() => {
 
 function pickDrug(d: Drug) {
   form.drug = d
+  iv.volumeMl = Number(/([0-9]+) *ml/i.exec(d.spec)?.[1] ?? 500)
   form.dose = d.defaultDose
   form.route = d.defaultRoute
   form.timing = ''
@@ -106,6 +111,7 @@ function buildInput(): OrderInput | string {
       return {
         ...base, content: '', drugId: form.drug.id, dose: form.dose, freq: String(form.freq), route: String(form.route), ...(showTiming.value && form.timing ? { timing: String(form.timing) as DrugTiming } : {}),
         ...(form.drug.restrictedAbx ? { abx: { reason: abx.reason as AbxReason, site: String(abx.site ?? ''), organism: abx.organism, note: abx.note } } : {}),
+        ...(canIv.value && iv.on ? { dose: 1, freq: 'QD', route: 'IV', timing: undefined, infusion: { volumeMl: Number(iv.volumeMl), rateMlH: Number(iv.rateMlH), ...(iv.add ? { additives: [{ drugId: iv.add.id, dose: Number(iv.addDose) }] } : {}) } } : {}),
       }
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
@@ -133,7 +139,7 @@ const { data: rxAlerts } = useQuery(
 )
 const rxConfirm = ref<InstanceType<typeof RxAlertConfirm>>()
 
-const save = useAction(ipdApi.addOrder, { success: (o) => `已開立：${o.content}${o.type === 'long' && o.category === 'medication' ? '（已產生給藥排程）' : ''}` })
+const save = useAction(ipdApi.addOrder, { success: (o) => `已開立：${o.content}${o.infusion ? '（點滴：護理站接上、換瓶）' : o.type === 'long' && o.category === 'medication' ? '（已產生給藥排程）' : ''}` })
 
 async function submit() {
   const input = buildInput()
@@ -220,6 +226,18 @@ ${doseNote(drug, input.dose ?? 0)}。
           已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge><UBadge v-if="form.drug.restrictedAbx" tone="yellow">管制性抗生素</UBadge>
         </div>
         <RxAlertList :alerts="rxAlerts ?? []" />
+        <section v-if="canIv" class="space-y-2 rounded-md border border-sky-200 bg-sky-50/50 px-3 py-2 text-sm">
+          <UCheckbox v-model="iv.on" label="點滴（連續輸注：護理師接上、換瓶，不排給藥時間）" />
+          <template v-if="iv.on">
+            <div class="grid grid-cols-2 gap-3">
+              <UInput v-model="iv.volumeMl" type="number" label="每瓶容量 ml" :error="save.fieldErrors.value.volumeMl" />
+              <UInput v-model="iv.rateMlH" type="number" label="流速 ml/小時" :error="save.fieldErrors.value.rateMlH" :hint="iv.volumeMl && iv.rateMlH ? `一瓶約 ${hoursPerBag(Number(iv.volumeMl), Number(iv.rateMlH))} 小時` : undefined" />
+            </div>
+            <USearchSelect label="加藥（選填）" placeholder="例：KCl" :search="(kw) => masterApi.listDrugs({ keyword: kw }).then((ds) => ds.filter((d) => d.category === '注射' && !d.pca))" :item-key="(d) => d.id" :item-label="(d) => `${d.name}　${d.nameZh}`" :clear-on-select="false" @select="(d: Drug) => (iv.add = d)" />
+            <div v-if="iv.add" class="flex items-end gap-2"><span>加 <b>{{ iv.add.name }}</b></span><UInput v-model="iv.addDose" type="number" :label="`劑量（${doseUnitOf(iv.add)}）`" class="w-32" /><UButton size="sm" variant="ghost" @click="iv.add = null">不加</UButton></div>
+            <p v-if="save.fieldErrors.value.additives" class="text-xs text-red-600">{{ save.fieldErrors.value.additives }}</p>
+          </template>
+        </section>
         <!-- 管制性抗生素：先用後審（第一劑照常給），感染科 48 小時內審核 -->
         <section v-if="form.drug?.restrictedAbx" class="space-y-2 rounded-md border border-amber-300 bg-amber-50/50 px-3 py-2">
           <div class="text-sm font-medium text-amber-900">管制性抗生素：請填使用理由（開立後照常給藥，感染科 {{ ABX_REVIEW_HOURS }} 小時內審核）</div>
@@ -235,7 +253,8 @@ ${doseNote(drug, input.dose ?? 0)}。
           </div>
           <UInput v-model="abx.note" label="說明（選填，例：敗血性休克、先前 Ceftriaxone 治療 3 天無效）" />
         </section>
-        <div class="grid grid-cols-3 gap-3">
+        <!-- 點滴：劑量（一瓶）、頻率、給藥排程都不用填（護理師接上、換瓶） -->
+        <div v-if="!(canIv && iv.on)" class="grid grid-cols-3 gap-3">
           <UInput
             v-model="form.dose"
             label="每次劑量"
@@ -248,10 +267,10 @@ ${doseNote(drug, input.dose ?? 0)}。
           <USelect v-model="form.freq" label="頻率" :options="freqOptions" />
           <USelect v-model="form.route" label="途徑" :options="routeOptions" />
         </div>
-        <div v-if="showTiming" class="grid grid-cols-3 gap-3">
+        <div v-if="showTiming && !(canIv && iv.on)" class="grid grid-cols-3 gap-3">
           <USelect v-model="form.timing" label="服用時機" :options="timingOptions" :error="save.fieldErrors.value.timing" />
         </div>
-        <p v-if="form.type === 'long' && form.freq !== 'PRN'" class="text-xs text-slate-500">
+        <p v-if="form.type === 'long' && form.freq !== 'PRN' && !(canIv && iv.on)" class="text-xs text-slate-500">
           長期給藥醫囑開立後，系統會依頻率產生今天與明天的給藥排程，護理站即可看到。
           <template v-if="schedulePreview.length"><br />每天給藥時間：<b class="tabular text-slate-700">{{ schedulePreview.join('、') }}</b><template v-if="showTiming">（依服用時機對齊病房用餐時間）</template></template>
         </p>

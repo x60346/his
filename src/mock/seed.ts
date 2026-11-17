@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -1978,7 +1978,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           wristband: { printedAt: placed, printedBy: 'U201', reprints: [] },
         })
         for (const [k, content, category] of [[1, '禁食', 'diet'], [2, 'Vital signs Q4H', 'nursing'], [3, '每 4 小時腹部理學檢查，疼痛加劇通知醫師', 'nursing']] as const) {
-          ipdOrders.push({ id: `IO-ER-OBS-${k}`, admissionId: 'A-ER-OBS', type: 'long', category, content, ...(category === 'diet' ? { diet: { kind: 'npo' as const } } : {}), startAt: placed, status: 'active', doctorId: docUser, createdAt: placed, ackAt: addMinutes(placed, 5), ackBy: 'U201' })
+          ipdOrders.push({ id: `IO-ER-OBS-${k}`, admissionId: 'A-ER-OBS', type: 'long', category, content, ...(category === 'diet' ? { diet: { kind: 'npo' as const } } : {}), startAt: placed, status: 'active', doctorId: erDoc.id, createdAt: placed, ackAt: addMinutes(placed, 5), ackBy: 'U201' })
         }
         for (let h = 0; addMinutes(placed, h * 240) <= nowStr; h++) {
           const vt = addMinutes(placed, h * 240)
@@ -2148,6 +2148,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 點滴（示範，不抽亂數）：肺炎病人（有周邊留置針）主治開「Normal Saline 500 ml @ 80 ml/h」，6 小時前接上第 1 瓶——約 15 分鐘後滴完（本班待辦「快滴完：換瓶」）。
+  // 種子的這瓶沒有扣帳異動（展示用；之後接的瓶照常扣帳、進帳單）
+  const infusions: InfusionRun[] = []
+  {
+    const pn = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -7 * 60))
+    if (pn) {
+      const st = addMinutes(nowStr, -6 * 60)
+      const ns = codes.drugs.find((d) => d.id === 'M037')!
+      ipdOrders.push({ id: 'IO-IV-SEED-1', admissionId: pn.id, type: 'long', category: 'medication', drugId: ns.id, content: `${ns.name} 500 ml @ 80 ml/h`, dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: 500, rateMlH: 80 }, startAt: addMinutes(st, -10), status: 'active', doctorId: pn.doctorId, createdAt: addMinutes(st, -10), ackAt: addMinutes(st, -5), ackBy: 'U201' })
+      infusions.push({ id: 'INFU-SEED-1', orderId: 'IO-IV-SEED-1', admissionId: pn.id, bagNo: 1, startAt: st, startBy: 'U201', rateMlH: 80, rateChanges: [], txnIds: [] })
+    }
+  }
+
   // 院內感染（示範，不抽亂數）：腦梗塞病人的導尿管（放 9 天）昨天發燒、尿液培養 E. coli ≥10⁵，護理師今天早上通報，等感染管制（dr11）判定
   const infectionCases: InfectionCase[] = []
   {
@@ -2251,6 +2264,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     shiftRequests,
     pcas,
     infectionCases,
+    infusions,
     dischargePlans,
     vitals,
     nursingNotes,
