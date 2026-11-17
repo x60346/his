@@ -206,6 +206,8 @@ export interface Patient {
   phone: string
   address: string
   bloodType: 'A' | 'B' | 'O' | 'AB' | ''
+  /** 本院血庫驗過的血型（備血時驗；病人自述的 bloodType 不能拿來配血） */
+  bloodTypings?: BloodTyping[]
   /** 藥物過敏 */
   allergies: string[]
   /** 家族病史 */
@@ -738,6 +740,8 @@ export interface Procedure {
   labItems?: LabItemDef[]
   /** 住院每日計費的項目（病房費、護理費、住院診察費）：出院結帳依住院天數自動帶入，門診與醫囑都不能開 */
   dailyFee?: boolean
+  /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
+  blood?: BloodProduct | 'crossmatch'
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
   imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
   active: boolean
@@ -1302,6 +1306,110 @@ export interface RiskSettings {
   pressureHigh: number
   /** Braden ≤ 這個分數＝中度 */
   pressureModerate: number
+}
+
+// ---------- 輸血備血 ----------
+
+/** 血品：紅血球濃厚液、新鮮冷凍血漿、血小板（分離術） */
+export type BloodProduct = 'rbc' | 'ffp' | 'plt'
+export type Abo = 'A' | 'B' | 'O' | 'AB'
+export type Rh = '+' | '-'
+
+/** 本院血庫驗的血型（每張備血單重新抽血驗一次；和上次不同＝可能抽錯人的血，擋下來重抽） */
+export interface BloodTyping {
+  abo: Abo
+  rh: Rh
+  by: string
+  at: string
+  requestId: string
+}
+
+/** 血袋（血庫自己的存量，不進藥品庫存帳）：入庫時給血袋號，條碼＝血袋號 */
+export interface BloodUnit {
+  id: string
+  unitNo: string
+  product: BloodProduct
+  abo: Abo
+  rh: Rh
+  /** ml */
+  volume: number
+  /** 效期（這天以後不能用） */
+  expiresOn: string
+  receivedAt: string
+  receivedBy: string
+  /** available 可用、reserved 已配給某張備血單、issued 已發出（輸血中或待輸）、transfused 輸完（含因反應停止）、scrapped 報廢 */
+  status: 'available' | 'reserved' | 'issued' | 'transfused' | 'scrapped'
+  requestId?: string
+  scrapped?: { at: string; by: string; reason: string }
+}
+
+/** 輸血時的生命徵象：輸血前、開始後 15 分鐘、結束 */
+export interface TransfusionVitals {
+  at: string
+  kind: 'pre' | '15min' | 'end'
+  temp: number
+  pulse: number
+  sbp: number
+  dbp: number
+  by: string
+}
+
+/** 輸血反應（護理師通報，立刻停止輸血）：主治（或開立醫師）要按已知悉並寫處置 */
+export interface TransfusionReaction {
+  at: string
+  by: string
+  symptoms: string[]
+  note: string
+  ackBy?: string
+  ackAt?: string
+  ackNote?: string
+}
+
+/** 一次發血（同一袋 30 分鐘內退回血庫，再發是新的一筆）＋床邊輸血紀錄 */
+export interface BloodIssue {
+  unitId: string
+  issuedAt: string
+  issuedBy: string
+  returned?: { at: string; by: string; reason: string }
+  transfusion?: {
+    startAt: string
+    nurseId: string
+    /** 床邊雙人核對的第二人 */
+    witnessId: string
+    scan?: MarRecord['scan']
+    vitals: TransfusionVitals[]
+    endAt?: string
+    /** 實際輸入的量（ml） */
+    volume?: number
+    reaction?: TransfusionReaction
+  }
+}
+
+/**
+ * 備血單（醫師開立）→ 血庫驗血型、交叉試驗配血 → 發血 → 床邊雙人核對輸血。
+ * 狀態大多由內容推算（blood-rules.requestStatus）；只有取消是存下來的
+ */
+export interface BloodRequest {
+  id: string
+  /** 備血單號 */
+  no: string
+  admissionId: string
+  patientId: string
+  doctorId: string
+  product: BloodProduct
+  units: number
+  indication: string
+  urgent: boolean
+  /** 開立時參考的檢驗值（紅血球看 Hb、血小板看 PLT）：最近一次、有就存下來 */
+  lab?: { code: string; value: string; at: string }
+  /** 高於輸血門檻（或沒有近期檢驗）時要寫的理由 */
+  overReason?: string
+  orderedAt: string
+  typing?: { abo: Abo; rh: Rh; by: string; at: string }
+  /** 交叉試驗配好的血袋（釋出的留著：交叉試驗做過了，照樣計費） */
+  crossmatch: { unitId: string; by: string; at: string; released?: { at: string; by: string; reason: string } }[]
+  issues: BloodIssue[]
+  cancelled?: { at: string; by: string; reason: string }
 }
 
 /** 隔離類別：接觸、飛沫、空氣（空氣隔離只能住單人房） */

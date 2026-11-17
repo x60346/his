@@ -16,6 +16,7 @@ import * as scan from './scan'
 import * as risk from './risk'
 import * as flag from './flag'
 import * as abx from './abx'
+import * as blood from './blood'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -53,6 +54,7 @@ export const scanApi = overNetwork(scan)
 export const riskApi = overNetwork(risk)
 export const flagApi = overNetwork(flag)
 export const abxApi = overNetwork(abx)
+export const bloodApi = overNetwork(blood)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -115,6 +117,7 @@ export * from './scan-rules'
 export * from './risk-rules'
 export * from './flag-rules'
 export * from './abx-rules'
+export * from './blood-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
 export * from './interaction-rules'
@@ -146,6 +149,8 @@ export type { IsolationView, DnrView, PatientFlagsDetail, IsolationInput, DnrInp
 export type { PatientFlags } from './flag-work'
 export type { AbxReviewItem } from './abx'
 export type { AbxInfo } from './abx-work'
+export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, BloodScanDemo, BloodScanInput, StartTransfusionInput, TransfusionVitalsInput } from './blood'
+export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { RoomRow } from './schedule'
 export type { SessionView, WeeklySlotView, SessionImpact, AffectedVisit, NoticeRow, SlotResult } from './schedule'
 export type { UserRow, UserInput, DepartmentRow, DoctorRow, DoctorImpact, AuditRow, DiscountInput } from './admin'

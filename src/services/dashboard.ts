@@ -16,6 +16,7 @@ import { imagingAckCount, imagingWorkCount } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
+import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 
 export interface DashboardStats {
   date: string
@@ -58,6 +59,11 @@ export interface DashboardStats {
   abxRejected?: number
   abxExtend?: number
   consultUrgent?: number
+  /** 血庫：待驗血型或交叉試驗沒配滿的備血單（其中急件）；護理站：已發血待輸、輸血中該量 15 分鐘生命徵象的（全院）；醫師：我的病人輸血反應待確認 */
+  bloodWork?: number
+  bloodUrgent?: number
+  transfusionTodo: number
+  bloodReactions?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   udReturns: number
@@ -165,6 +171,7 @@ export function getDashboard(): Promise<DashboardStats> {
           orderQueries: db.ipdOrders.filter((o) => mine.has(o.admissionId) && !!openQuery(o)).length,
           referralReplies: pendingReplyVisits(me.doctorId).length,
           labAcks: labAckCount(me.doctorId),
+          bloodReactions: reactionsToAck(me.doctorId).length,
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
           ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue }))(abxPendingCounts(now())) : {}),
@@ -188,7 +195,8 @@ export function getDashboard(): Promise<DashboardStats> {
         }
       })(),
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
-      ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount() } : {}),
+      ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount(), ...(({ work, urgent }) => ({ bloodWork: work, bloodUrgent: urgent }))(bloodLabCounts()) } : {}),
+      transfusionTodo: transfusionTodoCount(now()),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {
             transferRequested: db.transfers.filter((x) => x.status === 'requested' && x.kind !== 'return').length,

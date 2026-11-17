@@ -2,7 +2,7 @@
 // 服務層（src/services）是唯一可以讀寫這裡的程式；頁面一律透過服務層存取。
 import { ref } from 'vue'
 import type {
-  DnrRecord, Isolation,
+  DnrRecord, Isolation, BloodUnit, BloodRequest,
   Admission,
   AuditLog,
   Bed,
@@ -112,6 +112,10 @@ export interface Database {
   isolations: Isolation[]
   /** DNR／預立醫療決定 */
   dnrRecords: DnrRecord[]
+  /** 血庫的血袋 */
+  bloodUnits: BloodUnit[]
+  /** 備血單 */
+  bloodRequests: BloodRequest[]
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
@@ -159,7 +163,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 78
+export const SCHEMA_VERSION = 79
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

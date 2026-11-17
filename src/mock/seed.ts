@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -1672,6 +1672,84 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 血庫與備血（示範，不抽亂數、不用流水號）----------
+  // 血袋：三天前入庫（各血品、血型；一袋 A Rh+ 紅血球昨天過期待報廢、一袋 O Rh+ 兩天後到期、血小板效期短）。
+  // 示範一：血色素 6.8 的那位住院病人，主治昨天早上開紅血球 2 單位，血庫驗血型、配好 2 袋，
+  //   第一袋昨天上午輸完（雙人核對、15 分鐘生命徵象都有），第二袋配好還在血庫（今天血庫按「發血」、護理站床邊核對輸血）。
+  // 示範二：敗血症病人今天上午開新鮮冷凍血漿 2 單位（侵入性處置前矯正凝血功能），血庫還沒驗血型
+  const bloodUnits: BloodUnit[] = []
+  const bloodRequests: BloodRequest[] = []
+  {
+    const recvDay = addDays(T, -3)
+    let seq = 0
+    const put = (product: BloodProduct, abo: Abo, rh: '+' | '-', expDays: number[]) => {
+      for (const e of expDays) {
+        seq++
+        bloodUnits.push({
+          id: `BU-SEED-${seq}`, unitNo: `TB${recvDay.slice(2).replace(/-/g, '')}${String(seq).padStart(4, '0')}`, product, abo, rh,
+          volume: product === 'ffp' ? 200 : 250, expiresOn: addDays(T, e), receivedAt: `${recvDay} 10:00`, receivedBy: 'U601', status: 'available',
+        })
+      }
+    }
+    put('rbc', 'O', '+', [2, 9, 12, 15, 18, 21, 24, 27])
+    put('rbc', 'A', '+', [-1, 8, 11, 14, 17, 20, 23])
+    put('rbc', 'B', '+', [10, 13, 16, 19])
+    put('rbc', 'AB', '+', [12, 22])
+    put('rbc', 'O', '-', [14, 25])
+    put('rbc', 'A', '-', [19])
+    put('ffp', 'A', '+', [300, 310, 320, 330])
+    put('ffp', 'B', '+', [300, 310, 320])
+    put('ffp', 'O', '+', [300, 310, 320, 330])
+    put('ffp', 'AB', '+', [300, 330])
+    put('plt', 'A', '+', [2])
+    put('plt', 'O', '+', [2, 3])
+    put('plt', 'B', '+', [3])
+
+    const y = addDays(T, -1)
+    const typeOf = (patientId: string): Abo => (patients.find((x) => x.id === patientId)?.bloodType || 'O') as Abo
+    const adm = admissions.find((a) => a.status === 'admitted')
+    if (adm?.admittedAt && adm.admittedAt <= `${y} 06:00`) {
+      const abo = typeOf(adm.patientId)
+      const pt = patients.find((x) => x.id === adm.patientId)!
+      const units = bloodUnits.filter((u) => u.product === 'rbc' && u.abo === abo && u.rh === '+' && u.expiresOn > T).slice(0, 2)
+      const reqId = 'BR-SEED-1'
+      for (const u of units) Object.assign(u, { status: 'reserved', requestId: reqId })
+      const vit = (at: string, kind: 'pre' | '15min' | 'end', temp: number, pulse: number, sbp: number, dbp: number) => {
+        vitals.push({ id: `VS-BLD-${kind}`, admissionId: adm.id, at, temp, pulse, sbp, dbp, nurseId: 'U201' })
+        return { at, kind, temp, pulse, sbp, dbp, by: 'U201' }
+      }
+      const r: BloodRequest = {
+        id: reqId, no: `BR${y.replace(/-/g, '')}001`, admissionId: adm.id, patientId: adm.patientId, doctorId: adm.doctorId, product: 'rbc', units: 2,
+        indication: '貧血，Hb < 8 g/dL', urgent: false, lab: { code: 'Hb', value: '6.8', at: `${y} 07:05` }, orderedAt: `${y} 08:10`,
+        typing: { abo, rh: '+', by: 'U601', at: `${y} 08:40` },
+        crossmatch: units.map((u) => ({ unitId: u.id, by: 'U601', at: `${y} 09:10` })),
+        issues: [],
+      }
+      pt.bloodTypings = [{ abo, rh: '+', by: 'U601', at: `${y} 08:40`, requestId: reqId }]
+      if (units[0]) {
+        units[0].status = 'transfused'
+        r.issues.push({
+          unitId: units[0].id, issuedAt: `${y} 10:00`, issuedBy: 'U601',
+          transfusion: {
+            startAt: `${y} 10:15`, nurseId: 'U201', witnessId: 'U202', scan: { mode: 'scanned' }, endAt: `${y} 12:30`, volume: 250,
+            vitals: [vit(`${y} 10:15`, 'pre', 36.8, 92, 108, 64), vit(`${y} 10:30`, '15min', 36.9, 90, 110, 66), vit(`${y} 12:30`, 'end', 37.0, 86, 116, 70)],
+          },
+        })
+      }
+      bloodRequests.push(r)
+      counters[`blood:${y}`] = 1
+    }
+    const sepsis = admissions.find((a) => a.status === 'admitted' && a !== adm && a.diagnosis.startsWith('A41') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -180))
+    if (sepsis) {
+      const orderedAt = notFuture(sepsis.admittedAt! > `${T} 07:30` ? addMinutes(sepsis.admittedAt!, 120) : `${T} 09:30`, 30)
+      bloodRequests.push({
+        id: 'BR-SEED-2', no: `BR${T.replace(/-/g, '')}001`, admissionId: sepsis.id, patientId: sepsis.patientId, doctorId: sepsis.doctorId, product: 'ffp', units: 2,
+        indication: '侵入性處置前矯正凝血功能', urgent: false, orderedAt, crossmatch: [], issues: [],
+      })
+      counters[`blood:${T}`] = 1
+    }
+  }
+
   // ---------- 影像報告（同檢驗：不抽亂數、不用流水號；今天以前的都已判讀）----------
   // 放射科 DR10 判讀 X 光、超音波、電腦斷層；心電圖由開立醫師判讀。大多正常，少數有發現（依 id 雜湊決定）。
   // 示範重要發現：第二位住院病人昨天下午的胸部 X 光「左側氣胸」，主治還沒確認
@@ -1819,6 +1897,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     riskAssessments,
     isolations,
     dnrRecords,
+    bloodUnits,
+    bloodRequests,
     vitals,
     nursingNotes,
     progressNotes,

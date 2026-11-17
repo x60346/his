@@ -427,6 +427,11 @@ const procedureBase: Procedure[] = [
   // 住院每日計費（出院結帳依天數帶入；門診、醫囑都不能開）。點數為展示用近似值
   { id: 'P029', code: '03005B', name: '病房費（急性一般病床，每日）', category: '處置', points: 1230, selfPrice: 1800, dailyFee: true, active: true },
   { id: 'P030', code: '03026B', name: '護理費（急性一般病床，每日）', category: '處置', points: 620, selfPrice: 900, dailyFee: true, active: true },
+  // 輸血（備血單由血庫配血、發血；住院帳單依血庫紀錄帶入，門診、醫囑都不能開）。點數為展示用近似值
+  { id: 'P031', code: '11003C', name: '交叉配合試驗（每單位）', category: '檢驗', points: 260, selfPrice: 400, blood: 'crossmatch', active: true },
+  { id: 'P032', code: '93001B', name: '減除白血球紅血球濃厚液（每單位）', category: '處置', points: 1350, selfPrice: 1800, blood: 'rbc', active: true },
+  { id: 'P033', code: '93005B', name: '新鮮冷凍血漿（每單位）', category: '處置', points: 600, selfPrice: 900, blood: 'ffp', active: true },
+  { id: 'P034', code: '93010B', name: '分離術血小板（每單位）', category: '處置', points: 8500, selfPrice: 11000, blood: 'plt', active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

@@ -17,6 +17,7 @@ import RiskPanel from './components/RiskPanel.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlags from '@/components/PatientFlags.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
+import BloodPanel from '@/components/blood/BloodPanel.vue'
 import WardFlagsPanel from './components/WardFlagsPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
@@ -25,7 +26,7 @@ import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
 import WardStockPanel from './components/WardStockPanel.vue'
-import { masterApi, nursingApi } from '@/services'
+import { bloodApi, masterApi, nursingApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
 
@@ -59,6 +60,9 @@ watch(patients, (list) => {
 // 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
 // 首頁待辦可以直接帶到某個病房層級的分頁（例：本班未點班 → 常備點班）
 const tab = ref(['stock', 'handover'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
+// 輸血：已發血待輸、輸血中（分頁上的數字）
+const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
+const bloodTodo = computed(() => (blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.reduce((n, r) => n + r.rows.filter((x) => x.state === 'issued' || x.state === 'transfusing').length, 0) : 0))
 const tabs = computed(() =>
   !adm.value
     ? [
@@ -73,6 +77,7 @@ const tabs = computed(() =>
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
+        { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
         { key: 'flags', label: '隔離與 DNR', count: adm.value.isolationTodo || undefined },
         { key: 'notes', label: '護理紀錄' },
         { key: 'handover', label: '交班' },
@@ -190,6 +195,7 @@ const wardTotals = computed(() => ({
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
+          <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />

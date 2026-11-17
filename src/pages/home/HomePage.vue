@@ -3,6 +3,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  Droplet,
   AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, ShieldAlert, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
 import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
@@ -47,6 +48,9 @@ const todos = computed<Todo[]>(() => {
   if (!s.value) return []
   const role = auth.user?.role
   const list: (Todo & { roles: string[] })[] = [
+    { roles: ['lab'], label: '備血待處理', count: s.value.bloodWork ?? 0, hint: s.value.bloodUrgent ? `其中急件 ${s.value.bloodUrgent} 張` : '待驗血型、交叉試驗還沒配滿的備血單', route: 'blood', icon: Droplet, urgent: !!s.value.bloodUrgent },
+    { roles: ['doctor'], label: '輸血反應待確認', count: s.value.bloodReactions ?? 0, hint: '我的病人輸血時發生反應、已停止輸血：請在住院醫囑「輸血」分頁寫處置', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '輸血待處理', count: s.value.transfusionTodo, hint: '已發血待床邊核對輸血、輸血中該量 15 分鐘生命徵象（全院）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['lab'], label: '待檢驗', count: s.value.labWork ?? 0, hint: '門診已批價、住院已採檢的，登打後發報告', route: 'lab', icon: FlaskConical, urgent: true },
     { roles: ['doctor'], label: '待確認報告', count: (s.value.labAcks ?? 0) + (s.value.imagingAcks ?? 0), hint: '檢驗危急值、影像重要發現或更正補充過的報告，在上方清單按「已知悉」', route: 'home', icon: FlaskConical, urgent: true },
     { roles: ['doctor'], label: '待判讀影像', count: s.value.imagingWork ?? 0, hint: '放射科：X 光、超音波、電腦斷層；其他醫師：自己開的心電圖', route: 'imaging', icon: ScanLine },

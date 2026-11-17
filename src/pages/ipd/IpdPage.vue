@@ -4,11 +4,12 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
+import { ArrowRightLeft, Droplet, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
+import BloodPanel from '@/components/blood/BloodPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
 import LabReportList from '@/components/LabReportList.vue'
@@ -24,7 +25,7 @@ import RequestTransferDialog from './components/RequestTransferDialog.vue'
 import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
 import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
-import { consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
+import { bloodApi, consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
 import { abxApi, admissionApi, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
@@ -160,6 +161,7 @@ const tabs = computed(() => [
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
+  { key: 'blood', label: '輸血', count: blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.filter((r) => !['done', 'cancelled'].includes(r.status)).length || undefined : undefined },
   { key: 'flags', label: '隔離與 DNR' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -167,6 +169,8 @@ const tabs = computed(() => [
 // 檢驗報告：分頁數量、上方「待確認」紅條（危急值或更正過）
 const { data: labs } = useQuery(async () => (adm.value ? labApi.patientLabs(adm.value.patientId) : undefined), [() => adm.value?.patientId])
 const labAlerts = computed(() => (labs.value?.reports ?? []).filter((r) => r.needsAck))
+const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
+const bloodReactions = computed(() => (blood.value && blood.value.admissionId === admissionId.value ? blood.value.reactionsUnacked : 0))
 const { data: imgs } = useQuery(async () => (adm.value ? imagingApi.patientImaging(adm.value.patientId) : undefined), [() => adm.value?.patientId])
 const imgAlerts = computed(() => (imgs.value?.reports ?? []).filter((r) => r.needsAck))
 
@@ -300,6 +304,11 @@ async function submitNote() {
         <span class="min-w-0 flex-1"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
       </div>
+      <div v-if="bloodReactions" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
+        <Droplet class="h-4 w-4 shrink-0" />
+        <span class="min-w-0 flex-1"><b>輸血反應待確認：</b>{{ bloodReactions }} 筆，已停止輸血，請寫處置</span>
+        <UButton size="sm" variant="danger" @click="tab = 'blood'">查看</UButton>
+      </div>
       <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <ScanLine class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-1"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
@@ -406,6 +415,7 @@ async function submitNote() {
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
+        <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->

@@ -2,7 +2,7 @@
 import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import {
-  Activity, BedDouble, Bug, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
+  Activity, BedDouble, Bug, Droplet, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
   UserPlus, Users,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
@@ -39,6 +39,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'nursing', name: 'nursing', component: () => import('@/pages/nursing/NursingPage.vue'), meta: { title: '護理站', icon: HeartPulse, group: '住院', roles: ['nurse'] } },
 
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
+  { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },
   { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '其他', roles: ['doctor'] } },
   { path: 'abx', name: 'abx', component: () => import('@/pages/abx/AbxReviewPage.vue'), meta: { title: '抗生素審核', icon: Bug, group: '其他', roles: ['doctor'] } },
   { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },

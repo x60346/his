@@ -5120,7 +5120,8 @@ try {
 
     // 種子
     ok(db().users.find((u) => u.username === 'lab01')?.roles.join() === 'lab', '種子：醫檢師帳號 lab01')
-    ok(db().procedures.filter((p) => p.category === '檢驗').every((p) => p.labItems?.length), '每個檢驗醫令都有檢驗項目')
+    // 交叉試驗（輸血計費項目）由血庫做、不經檢驗工作清單
+    ok(db().procedures.filter((p) => p.category === '檢驗' && !p.blood).every((p) => p.labItems?.length), '每個檢驗醫令都有檢驗項目（交叉試驗除外）')
     const pastLab = db().encounters.filter((e) => e.status === 'completed' && e.date < T && ['charged', 'dispensed'].includes(db().visits.find((v) => v.id === e.visitId)?.status)).flatMap((e) => e.procedures.filter((x) => proc(x.procId)?.labItems && !x.notDone).map((x) => ({ e, x })))
     ok(pastLab.length > 0 && pastLab.every(({ e, x }) => db().labReports.some((r) => r.encounterId === e.id && r.procId === x.procId)), `種子：以前已批價的門診檢驗都有報告（${pastLab.length} 份）`)
     const pastIpd = db().ipdOrders.filter((o) => o.type === 'stat' && o.status === 'done' && proc(o.procId ?? '')?.labItems && o.stopAt.slice(0, 10) < T)
@@ -6254,6 +6255,280 @@ try {
     Object.assign(db().admissions.find((a) => a.id === frac.id), { deptId: 'D10', doctorId: 'DR11' })
     const o4 = await I.addOrder(await withRxOk({ ...base, admissionId: frac.id, drugId: 'M042', freq: 'Q12H', abx: { reason: 'prophylaxis', site: '手術部位' } }))
     ok(o4.abx.status === 'approved' && o4.abx.approvedDays === 7 && o4.abx.steps.at(-1).text.includes('免審'), '感染科醫師自己開的：直接核准 7 天')
+  }
+
+  // 輸血備血：相容規則、輸血門檻、驗血型（和上次不同擋下）、交叉試驗配血、發血與 30 分鐘退回、床邊掃描與雙人核對、
+  // 15 分鐘生命徵象、結束、輸血反應與醫師確認、取消、出院把關、住院帳單、入庫報廢、首頁待辦
+  console.log('\n[輸血備血]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const B = api.bloodApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const { addMinutes } = dateUtil
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const V = { temp: 36.8, pulse: 88, sbp: 120, dbp: 70 }
+
+    // 規則
+    const C = (prod, p, u) => api.bloodCompatible(prod, { abo: p[0], rh: p[1] }, { abo: u[0], rh: u[1] }).ok
+    ok(C('rbc', ['A', '+'], ['O', '+']) && !C('rbc', ['O', '+'], ['A', '+']) && C('rbc', ['AB', '+'], ['B', '+']) && !C('rbc', ['B', '+'], ['AB', '+']), '紅血球：O 給所有人、AB 只給 AB')
+    ok(!C('rbc', ['O', '-'], ['O', '+']) && C('rbc', ['O', '+'], ['O', '-']), '紅血球：Rh 陰性的病人只能輸 Rh 陰性')
+    ok(C('ffp', ['O', '+'], ['AB', '+']) && !C('ffp', ['A', '+'], ['O', '+']) && C('ffp', ['O', '+'], ['A', '+']) && C('plt', ['O', '-'], ['O', '+']), '血漿、血小板反過來：AB 給所有人、O 只給 O；Rh 不限')
+    const t0 = '2026-11-17 10:00'
+    ok(api.thresholdProblem('rbc', { value: '6.8', at: '2026-11-17 07:00' }, t0) === '' && api.thresholdProblem('rbc', { value: '9.1', at: '2026-11-17 07:00' }, t0).includes('高於輸血門檻 8'), '紅血球：Hb ≤ 8 不用寫理由、> 8 要寫')
+    ok(api.thresholdProblem('rbc', undefined, t0).includes('72 小時') && api.thresholdProblem('plt', { value: '20', at: '2026-11-13 09:00' }, t0).includes('72 小時') && api.thresholdProblem('ffp', undefined, t0) === '', '沒有 72 小時內的檢驗也要寫理由；血漿沒有檢驗門檻')
+
+    // 種子
+    ok(db().bloodUnits.length >= 40 && db().bloodUnits.some((u) => u.product === 'rbc' && u.expiresOn < T && u.status === 'available'), `種子：${db().bloodUnits.length} 袋血，有一袋過期待報廢`)
+    ok(db().procedures.filter((p) => p.blood).map((p) => p.blood).sort().join() === 'crossmatch,ffp,plt,rbc', '主檔：交叉試驗與三種血品的計費項目')
+    const s1 = db().bloodRequests.find((r) => r.id === 'BR-SEED-1')
+    if (s1) {
+      const v = await (await as(userOf(s1.doctorId)), B.patientBlood(s1.admissionId))
+      const r = v.requests.find((x) => x.id === s1.id)
+      ok(r.status === 'ready' && r.rows.length === 2 && r.rows.filter((x) => x.state === 'done').length === 1 && r.rows.some((x) => x.state === 'reserved'), '種子一：紅血球 2 單位，一袋昨天輸完、一袋配好待發血')
+      const done = r.rows.find((x) => x.state === 'done')
+      ok(done.issue.transfusion.vitals.map((x) => x.kind).join() === 'pre,15min,end' && done.issue.witnessName && v.typingText, '種子一：雙人核對、三次生命徵象、本院血型都有')
+    }
+    const s2 = db().bloodRequests.find((r) => r.id === 'BR-SEED-2')
+    if (s2) ok(s2.product === 'ffp' && !s2.typing && s2.orderedAt <= nowStr(), '種子二：新鮮冷凍血漿待驗血型')
+
+    // 不能當一般醫令開
+    ok(!(await api.masterApi.listProcedures({})).some((p) => p.blood), '開立選單沒有輸血計費項目')
+
+    // 情境：找一位住院病人、主治開備血單
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().bloodRequests.some((r) => r.admissionId === a.id))
+    const pt = () => db().patients.find((p) => p.id === adm.patientId)
+    db().patients.find((p) => p.id === adm.patientId).bloodType = 'A'
+    db().labReports = db().labReports.filter((r) => r.patientId !== adm.patientId)
+    const attending = userOf(adm.doctorId)
+    await as(attending)
+    await expectError(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P032', content: '' }), '血品不能當醫令開')
+    await as('nurse01')
+    await expectError(() => B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 2, indication: '貧血' }), '護理師不能開備血單')
+    const other = db().doctors.find((d) => d.deptId !== adm.deptId && db().users.some((u) => u.doctorId === d.id))
+    await as(userOf(other.id))
+    let msg = await errOf(() => B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 2, indication: '貧血' }))
+    ok(msg.includes('醫師'), `別科醫師不能開：「${msg}」`)
+    await as(attending)
+    let f = await fieldsOf(() => B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 5, indication: ' ' }))
+    ok(f.units && f.indication && f.overReason?.includes('72 小時'), `欄位一次標出：單位數「${f.units}」、適應症、沒有近期 Hb「${f.overReason}」`)
+    // 補一份 Hb 7.2 的檢驗
+    const tmpl = db().labReports.find((r) => r.values.some((v) => v.code === 'Hb'))
+    db().labReports.push({ ...structuredClone(tmpl), id: 'LR-T-BLD', patientId: adm.patientId, reportedAt: addMinutes(nowStr(), -60), values: tmpl.values.map((v) => (v.code === 'Hb' ? { ...v, value: '7.2' } : v)) })
+    const r1 = await B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 2, indication: '貧血，Hb < 8 g/dL' })
+    ok(r1.status === 'typing' && r1.labText.startsWith('Hb 7.2') && !r1.overReason && /^BR\d{8}\d{3}$/.test(r1.no), `開立：${r1.no} 待驗血型，記下開立時 ${r1.labText}`)
+    db().labReports.find((r) => r.id === 'LR-T-BLD').values.find((v) => v.code === 'Hb').value = '9.4'
+    f = await fieldsOf(() => B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 1, indication: '貧血' }))
+    ok(f.overReason?.includes('9.4'), `Hb 9.4 沒寫理由 → 「${f.overReason}」`)
+    const rOver = await B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 1, indication: '心肺疾病病人 Hb < 10 g/dL', overReason: '急性心肌梗塞' })
+    ok(rOver.overReason === '急性心肌梗塞', '寫了理由就能開（只提醒不擋），理由存在單上')
+
+    // 血庫
+    await as('lab01')
+    const dash0 = await api.dashboardApi.getDashboard()
+    ok(dash0.bloodWork >= 2, `首頁血庫待辦 ${dash0.bloodWork}`)
+    ok((await B.bloodCandidates(r1.id)).length === 0, '還沒驗血型：沒有可配的血袋')
+    msg = await errOf(() => B.crossmatchBlood(r1.id, [db().bloodUnits[0].id]))
+    ok(msg.includes('請先驗血型'), '沒驗血型不能配血')
+    f = await fieldsOf(() => B.recordBloodTyping(r1.id, { abo: 'X', rh: '' }))
+    ok(f.abo && f.rh, '血型欄位檢查')
+    const typed = await B.recordBloodTyping(r1.id, { abo: 'A', rh: '+' })
+    ok(typed.typingText === 'A Rh+' && !typed.warning && pt().bloodTypings.length === 1, '驗血型 A Rh+，記到病人身上（本院第一次）')
+    msg = await errOf(() => B.recordBloodTyping(r1.id, { abo: 'A', rh: '+' }))
+    ok(msg.includes('已經驗過'), '同一張單不能驗兩次')
+    // 同一位病人另一張單驗出不同血型 → 擋下（可能抽錯人）
+    f = await fieldsOf(() => B.recordBloodTyping(rOver.id, { abo: 'B', rh: '+' }))
+    ok(f.abo?.includes('抽錯人') && pt().bloodTypings.length === 1, `和上次不同：「${f.abo}」，不登錄`)
+    await B.recordBloodTyping(rOver.id, { abo: 'A', rh: '+' })
+    const cands = await B.bloodCandidates(r1.id)
+    const today0 = T
+    ok(cands.length > 0 && cands.every((u) => u.product === 'rbc' && !u.expired && api.bloodCompatible('rbc', { abo: 'A', rh: '+' }, u).ok) && cands[0].typeText === 'A Rh+', `候選 ${cands.length} 袋：都相容、沒過期，同型在前`)
+    ok(cands.filter((u) => u.typeText === 'A Rh+').every((u, i, a) => i === 0 || a[i - 1].expiresOn <= u.expiresOn), '同型的先到期的在前')
+    const expired = db().bloodUnits.find((u) => u.product === 'rbc' && u.expiresOn < today0 && u.status === 'available')
+    const bad = db().bloodUnits.find((u) => u.product === 'rbc' && u.abo === 'B' && u.status === 'available')
+    msg = await errOf(() => B.crossmatchBlood(r1.id, [bad.id]))
+    ok(msg.includes('ABO 不相容'), `配 B 型給 A 型病人：「${msg}」`)
+    if (expired) {
+      msg = await errOf(() => B.crossmatchBlood(r1.id, [expired.id]))
+      ok(msg.includes('過期'), '過期的血袋不能配')
+    }
+    f = await fieldsOf(() => B.crossmatchBlood(r1.id, cands.slice(0, 3).map((u) => u.id)))
+    ok(f.units?.includes('還差 2'), `選太多：「${f.units}」`)
+    const m1 = await B.crossmatchBlood(r1.id, cands.slice(0, 2).map((u) => u.id))
+    const [u1, u2] = m1.rows.map((x) => x.unit.id)
+    ok(m1.status === 'ready' && [u1, u2].every((id) => db().bloodUnits.find((u) => u.id === id).status === 'reserved'), '配好 2 袋：可發血，血袋標已配血')
+    msg = await errOf(() => B.crossmatchBlood(r1.id, [cands[2].id]))
+    ok(msg.includes('配滿'), '配滿了不能再配')
+
+    // 發血、退回
+    let v1 = await B.issueBlood(r1.id, u1)
+    ok(v1.status === 'transfusing' && v1.rows.find((x) => x.unit.id === u1).state === 'issued' && v1.rows.find((x) => x.unit.id === u1).canReturn, '發血：這袋已發血待輸、30 分鐘內可退回')
+    msg = await errOf(() => B.issueBlood(r1.id, u1))
+    ok(msg.includes('已經發出'), '不能重複發血')
+    v1 = await B.returnBlood(r1.id, u1, '病人外出檢查')
+    ok(v1.status === 'ready' && db().bloodUnits.find((u) => u.id === u1).status === 'reserved', '退回血庫：回到已配血（仍配給這位病人）')
+    await B.issueBlood(r1.id, u1)
+    const iss = () => db().bloodRequests.find((r) => r.id === r1.id).issues.filter((i) => i.unitId === u1).at(-1)
+    iss().issuedAt = addMinutes(nowStr(), -31)
+    msg = await errOf(() => B.returnBlood(r1.id, u1, '不輸了'))
+    ok(msg.includes('超過 30 分鐘'), `發血超過 30 分鐘不能退回：「${msg}」`)
+    iss().issuedAt = addMinutes(nowStr(), -5)
+
+    // 護理師：床邊核對
+    await as('nurse01')
+    const nurseDash = await api.dashboardApi.getDashboard()
+    ok(nurseDash.transfusionTodo >= 1, `護理站首頁：輸血待處理 ${nurseDash.transfusionTodo}`)
+    msg = await errOf(() => B.startTransfusion(r1.id, u1, { vitals: V }))
+    ok(msg.includes('另一位護理師或醫師'), `沒有第二人核對不能開始：「${msg}」`)
+    const W = (username, unitId = u1) => api.witnessApi.approveWitness({ purpose: 'transfusion', requestId: r1.id, unitId, username, password: '1234' })
+    ok((await W('nurse01')).ok === false, '核對人不能是自己')
+    ok((await W('clerk01')).ok === false, '核對人要是護理師或醫師')
+    const wrongUnitToken = (await (async () => { try { return await W('nurse02', u2) } catch { return { ok: false } } })())
+    ok(wrongUnitToken.ok === false, '還沒發血的那袋不能核對')
+    let w = await W('nurse02')
+    ok(w.ok && w.witnessName, `核對：${w.witnessName}`)
+    f = await fieldsOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: { temp: 36.5 } }))
+    ok(f.pulse && f.sbp && f.dbp, '輸血前生命徵象四項必填')
+    // 掃描（打開設定）
+    db().securitySettings = { ...db().securitySettings, requireScan: true }
+    msg = await errOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V }))
+    ok(msg.includes('掃描'), '掃描設定開著：沒掃不能開始')
+    const otherAdm = db().admissions.find((a) => a.status === 'admitted' && a.id !== adm.id)
+    msg = await errOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V, scan: { patientCode: otherAdm.admitNo, unitCode: db().bloodUnits.find((u) => u.id === u1).unitNo } }))
+    ok(msg.includes('病人不對'), `腕帶掃到別人：「${msg}」`)
+    const unitNo2 = db().bloodUnits.find((u) => u.id === u2).unitNo
+    const sc = await B.bloodScanCheck({ requestId: r1.id, unitId: u1, kind: 'unit', code: unitNo2 })
+    ok(!sc.ok && sc.message.includes('配給') && db().auditLogs.some((l) => l.action === '輸血掃描不符'), `血袋掃到別袋：「${sc.message}」，記稽核`)
+    msg = await errOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V, scan: { patientCode: adm.admitNo, unitCode: unitNo2 } }))
+    ok(msg.includes('血袋不對'), '服務層開始時再核對血袋')
+    const vitalsBefore = db().vitals.length
+    let s = await B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V, scan: { patientCode: ` ${adm.admitNo.toLowerCase()} `, unitCode: db().bloodUnits.find((u) => u.id === u1).unitNo } })
+    let row = s.rows.find((x) => x.unit.id === u1)
+    ok(row.state === 'transfusing' && row.issue.witnessName === w.witnessName && row.issue.transfusion.scan.mode === 'scanned' && db().vitals.length === vitalsBefore + 1, '開始輸血：記核對人、已掃描，生命徵象也寫進病人的紀錄')
+    db().securitySettings = { ...db().securitySettings, requireScan: false }
+    msg = await errOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V }))
+    ok(msg.includes('已經開始'), '不能重複開始')
+
+    // 15 分鐘、結束
+    const tr = () => db().bloodRequests.find((r) => r.id === r1.id).issues.filter((i) => i.unitId === u1).at(-1).transfusion
+    ok(!row.todo.check, '剛開始：還不用量')
+    tr().startAt = addMinutes(nowStr(), -16)
+    let pb = await B.patientBlood(adm.id)
+    ok(pb.requests.find((r) => r.id === r1.id).rows.find((x) => x.unit.id === u1).todo.check === 'due' && (await api.dashboardApi.getDashboard()).transfusionTodo >= 1, '開始 15 分鐘：該量生命徵象（首頁也算）')
+    tr().startAt = addMinutes(nowStr(), -31)
+    pb = await B.patientBlood(adm.id)
+    ok(pb.requests.find((r) => r.id === r1.id).rows.find((x) => x.unit.id === u1).todo.check === 'overdue', '超過 30 分鐘還沒量：逾時')
+    msg = await errOf(() => B.endTransfusion(r1.id, u1, { volume: 250, vitals: V }))
+    ok(msg.includes('15 分鐘'), '沒量 15 分鐘的不能結束')
+    await B.recordTransfusionCheck(r1.id, u1, V)
+    msg = await errOf(() => B.recordTransfusionCheck(r1.id, u1, V))
+    ok(msg.includes('記過'), '15 分鐘只記一次')
+    f = await fieldsOf(() => B.endTransfusion(r1.id, u1, { volume: 0, vitals: V }))
+    ok(f.volume, '輸入量要大於 0')
+    s = await B.endTransfusion(r1.id, u1, { volume: 240, vitals: V })
+    ok(s.rows.find((x) => x.unit.id === u1).state === 'done' && db().bloodUnits.find((u) => u.id === u1).status === 'transfused', '結束輸血：這袋已輸完')
+
+    // 第二袋：輸血反應
+    await as('lab01')
+    await B.issueBlood(r1.id, u2)
+    await as('nurse01')
+    w = await W('nurse02', u2)
+    await B.startTransfusion(r1.id, u2, { witness: w.token, vitals: V })
+    f = await fieldsOf(() => B.reportTransfusionReaction(r1.id, u2, { symptoms: [] }))
+    ok(f.symptoms, '輸血反應要勾症狀')
+    s = await B.reportTransfusionReaction(r1.id, u2, { symptoms: ['發燒（上升 ≥ 1°C）', '畏寒、發抖'], note: '體溫 38.6', volume: 80 })
+    row = s.rows.find((x) => x.unit.id === u2)
+    ok(row.state === 'stopped' && row.reactionUnacked && s.status === 'done', '輸血反應：立刻停止，待醫師確認（這張單沒有要輸的了）')
+    await as(attending)
+    ok((await api.dashboardApi.getDashboard()).bloodReactions >= 1 && (await B.patientBlood(adm.id)).reactionsUnacked === 1, '主治首頁與病人頁：輸血反應待確認')
+    await as(userOf(other.id))
+    msg = await errOf(() => B.ackTransfusionReaction(r1.id, u2, '已處理'))
+    ok(msg.includes('醫師'), '別科醫師不能確認')
+    await as(attending)
+    f = await fieldsOf(() => B.ackTransfusionReaction(r1.id, u2, ' '))
+    ok(f.note, '確認要寫處置')
+    s = await B.ackTransfusionReaction(r1.id, u2, '送輸血反應檢查，給退燒藥')
+    ok(!s.rows.find((x) => x.unit.id === u2).reactionUnacked && (await B.patientBlood(adm.id)).reactionsUnacked === 0, '確認後不再提醒')
+
+    // 取消
+    const rC = await B.orderBlood({ admissionId: adm.id, product: 'ffp', units: 2, indication: '侵入性處置前矯正凝血功能' })
+    await as('lab01')
+    await B.recordBloodTyping(rC.id, { abo: 'A', rh: '+' })
+    const ffp = await B.bloodCandidates(rC.id)
+    ok(ffp.every((u) => ['A', 'AB'].includes(u.abo)), '血漿：A 型病人只列 A、AB 型')
+    await B.crossmatchBlood(rC.id, [ffp[0].id])
+    await B.issueBlood(rC.id, ffp[0].id)
+    await as(attending)
+    msg = await errOf(() => B.cancelBloodRequest(rC.id, '不需要了'))
+    ok(msg.includes('已發出'), '有血袋發出了不能取消')
+    // 出院把關：已發血還沒輸完不能辦出院
+    db().admissions.find((a) => a.id === adm.id).dischargeSummary = { ...(db().admissions.find((a) => a.id === adm.id).dischargeSummary ?? {}), signedAt: nowStr(), dischargeType: '改善出院' }
+    await as('nurse01')
+    msg = await errOf(() => api.admissionApi.discharge(adm.id))
+    ok(msg.includes('血袋已發出'), `出院前要輸完或退回：「${msg}」`)
+    delete db().admissions.find((a) => a.id === adm.id).dischargeSummary.signedAt
+    await as('lab01')
+    await B.returnBlood(rC.id, ffp[0].id, '醫師改變治療計畫')
+    await as(attending)
+    f = await fieldsOf(() => B.cancelBloodRequest(rC.id, ' '))
+    ok(f.reason, '取消要原因')
+    s = await B.cancelBloodRequest(rC.id, '病情改善，不需輸血')
+    ok(s.status === 'cancelled' && db().bloodUnits.find((u) => u.id === ffp[0].id).status === 'available' && s.released.length === 1, '取消：配好的血袋釋出回可用（留釋出紀錄）')
+
+    // 住院帳單：交叉試驗每袋（含釋出的）、血品發出才算（退回的不算）
+    await as('clerk01')
+    const bill = (await api.ipdChargeApi.getIpdBill(adm.id)).bill
+    const qtyOf = (name) => bill.lines.filter((l) => l.name.startsWith(name)).reduce((n, l) => n + l.qty, 0)
+    ok(qtyOf('交叉配合試驗') === 3 && qtyOf('減除白血球紅血球濃厚液') === 2 && qtyOf('新鮮冷凍血漿') === 0, `帳單：交叉試驗 ${qtyOf('交叉配合試驗')}、紅血球 ${qtyOf('減除白血球紅血球濃厚液')}（退回的那次不算）、血漿 ${qtyOf('新鮮冷凍血漿')}（退回後取消）`)
+
+    // 自述血型和檢驗不同：提醒
+    const adm2 = db().admissions.find((a) => a.status === 'admitted' && a.id !== adm.id && !db().bloodRequests.some((r) => r.admissionId === a.id) && !db().patients.find((p) => p.id === a.patientId).bloodTypings?.length)
+    if (adm2) {
+      db().patients.find((p) => p.id === adm2.patientId).bloodType = 'B'
+      await as(userOf(adm2.doctorId))
+      const rr = await B.orderBlood({ admissionId: adm2.id, product: 'ffp', units: 1, indication: '大量輸血' })
+      await as('lab01')
+      const tw = await B.recordBloodTyping(rr.id, { abo: 'AB', rh: '-' })
+      ok(tw.warning?.includes('自述'), `自述 B 型、驗出 AB 型：提醒「${tw.warning}」`)
+      const abFfp = await B.bloodCandidates(rr.id)
+      ok(abFfp.length > 0 && abFfp.every((u) => u.abo === 'AB'), '血漿：AB 型病人只能輸 AB 型血漿（Rh 陰性也可輸 Rh 陽性的血漿）')
+    }
+
+    // 入庫、報廢
+    await as('lab01')
+    f = await fieldsOf(() => B.receiveBloodUnits({ product: 'plt', abo: 'A', rh: '+', count: 0, expiresOn: addDaysT(-1) }))
+    ok(f.count && f.expiresOn, '入庫：袋數、已過期的不能入')
+    const got = await B.receiveBloodUnits({ product: 'plt', abo: 'A', rh: '+', count: 3, expiresOn: addDaysT(5) })
+    ok(got.length === 3 && new Set(got.map((u) => u.unitNo)).size === 3 && got.every((u) => u.unitNo.startsWith('TB') && u.volume === 250), `入庫 3 袋：${got.map((u) => u.unitNo).join('、')}`)
+    if (expired) {
+      const sv = await B.scrapBloodUnit(expired.id, '過期')
+      ok(sv.status === 'scrapped' && !(await B.listBloodWork()).units.some((u) => u.id === expired.id), '過期血袋報廢，不再列在庫存')
+    }
+    msg = await errOf(() => B.scrapBloodUnit(u1, '過期'))
+    ok(msg.includes('用掉'), '輸過的不能報廢')
+    const work = await B.listBloodWork()
+    ok(work.stock.some((x) => x.product === 'plt' && x.abo === 'A' && x.available >= 3) && !work.requests.some((r) => r.id === rC.id), '庫存表：可用量；取消的單不在待處理')
+
+    // 規則只在服務層
+    const fs = await import('node:fs')
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]))
+    const ui = [...walk('src/pages'), ...walk('src/components')].filter((p) => p.endsWith('.vue'))
+    ok(ui.every((p) => !/Rh 陰性|ABO 不相容|includes\('A'\)/.test(fs.readFileSync(p, 'utf8'))), '頁面沒有自己判斷血型相容（只在 blood-rules）')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

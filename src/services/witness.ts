@@ -6,7 +6,8 @@ import { today } from '@/utils/date'
 import { fail, must, mutate, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { residualOf } from './drug-rules'
-import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, returnScrapRef, type WitnessResult } from './witness-core'
+import { expiredScrapRef, grantWitness, hasRole, quarantineScrapRef, returnScrapRef, transfusionRef, type WitnessResult } from './witness-core'
+import { BLOOD_PRODUCT_LABEL, bloodTypeText, issueState, latestIssue } from './blood-rules'
 
 export type WitnessTarget =
   /** 病房點班（含管制藥）：另一位護理師見證 */
@@ -19,6 +20,8 @@ export type WitnessTarget =
   | { purpose: 'scrapReturn'; dispenseId: string; items: string }
   /** 管制藥殘餘量銷毀（給不是整數的劑量，整支扣、剩下的當場銷毀）：另一位護理師見證 */
   | { purpose: 'residual'; orderId: string }
+  /** 床邊輸血雙人核對（病人、血型、血袋號、效期）：另一位護理師或醫師 */
+  | { purpose: 'transfusion'; requestId: string; unitId: string }
 
 export type { WitnessResult }
 
@@ -56,6 +59,20 @@ export function approveWitness(input: WitnessTarget & { username: string; passwo
         qualifies: (w) => (hasRole(w, ['nurse']) ? null : `${w.name} 不是護理師，不能見證殘餘量銷毀`),
         auditAction: '管制藥殘餘量見證', verb: '見證',
         what: `${nameOf.patient(find.admission(o.admissionId)?.patientId)} ${drug.name} 給 ${o.dose} ${drug.unit}、殘餘 ${r!.residual} ${drug.unit} 銷毀（給藥 ${u.name}）`,
+      })
+    }
+    if (input.purpose === 'transfusion') {
+      const u = requireUser('nurse')
+      const r = must(db.bloodRequests.find((x) => x.id === input.requestId), '備血單')
+      const unit = must(db.bloodUnits.find((x) => x.id === input.unitId), '血袋')
+      const i = latestIssue(r, unit.id)
+      if (!i || issueState(i) !== 'issued') fail('這袋不是「已發血、待輸血」，不用核對', 'CONFLICT')
+      return grantWitness({
+        purpose: 'transfusion', refId: transfusionRef(r.id, unit.id), actor: u, ...cred, who: '核對人',
+        selfMessage: '輸血要兩個人核對，請另一位護理師或醫師核對',
+        qualifies: (w) => (hasRole(w, ['nurse', 'doctor']) ? null : `${w.name} 不是護理師或醫師，不能核對輸血`),
+        auditAction: '輸血雙人核對', verb: '核對',
+        what: `${nameOf.patient(r.patientId)} ${r.no} 血袋 ${unit.unitNo} ${BLOOD_PRODUCT_LABEL[unit.product]} ${bloodTypeText(unit)}（輸血 ${u.name}）`,
       })
     }
     const u = requireUser('pharmacist')

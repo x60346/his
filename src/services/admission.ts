@@ -6,6 +6,7 @@ import { db, nextCounter, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
+import { releaseAll, transfusionOpen } from './blood-work'
 import { activeIpdChargeOf, ipdBillOf } from './ipd-bill'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
@@ -271,6 +272,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
     if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
+    if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完（或請血庫退回）才能辦理出院', 'CONFLICT')
     const t = now()
     const check = dischargeCheckOf(a, t)
     const unfinished = check.overdueMar.length + check.pendingStat.length
@@ -293,6 +295,8 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
       Object.assign(m, { status: 'held', note: '出院時未給藥', executedAt: t, nurseId: u.id })
     }
     db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
+    // 配好還在血庫的血袋：釋出給別人用（備血單照留，交叉試驗照樣計費）
+    for (const r of db.bloodRequests.filter((x) => x.admissionId === a.id && !x.cancelled)) releaseAll(r, u.id, '病人出院', t)
     releaseBed(a.bedId)
     Object.assign(a, { status: 'discharged', dischargedAt: t, dischargeType: ds!.dischargeType })
     audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${ds!.dischargeType}）${unfinished ? `；未執行：逾時給藥 ${check.overdueMar.length}、臨時醫囑 ${check.pendingStat.length}` : ''}`)

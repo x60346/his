@@ -10,7 +10,7 @@ import type { User } from '@/types'
 import { db, newId } from '@/mock/db'
 import { audit, fieldErrors } from './http'
 
-export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual'
+export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion'
 export const WITNESS_MIN = 10
 
 export interface WitnessGrant {
@@ -85,6 +85,8 @@ export const expiredScrapRef = (drugId: string, locationId: string) => `E|${drug
 export const quarantineScrapRef = (lotId: string) => `Q|${lotId}`
 /** 門診退藥不可再用、退回後直接報廢：綁那張調劑單 */
 export const returnScrapRef = (dispenseId: string) => `R|${dispenseId}`
+/** 床邊輸血雙人核對：綁那張備血單的那一袋 */
+export const transfusionRef = (requestId: string, unitId: string) => `T|${requestId}|${unitId}`
 
 /** 資格：帳號任一角色符合（第二人用的是帳號，不是某個分頁的作業角色） */
 export const hasRole = (u: User, roles: User['roles'][number][]) => u.roles.some((r) => roles.includes(r))
