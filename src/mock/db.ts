@@ -2,6 +2,7 @@
 // 服務層（src/services）是唯一可以讀寫這裡的程式；頁面一律透過服務層存取。
 import { ref } from 'vue'
 import type {
+  DnrRecord, Isolation,
   Admission,
   AuditLog,
   Bed,
@@ -107,6 +108,10 @@ export interface Database {
   riskAssessments: RiskAssessment[]
   /** 風險評估切點（選用：沒有就用預設） */
   riskSettings?: RiskSettings
+  /** 隔離（病人層級） */
+  isolations: Isolation[]
+  /** DNR／預立醫療決定 */
+  dnrRecords: DnrRecord[]
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
@@ -154,7 +159,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 76
+export const SCHEMA_VERSION = 77
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

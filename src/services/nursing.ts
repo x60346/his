@@ -13,6 +13,8 @@ import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
 import { udStage } from './ud-work'
 import { riskStateOf } from './risk-work'
 import { RISK_REASON_LABEL, RISK_SCALE_NAME } from './risk-rules'
+import { activeIsolations, placementFor } from './flag-work'
+import { ISOLATION_REVIEW_TEXT, isolationReviewDue, isoText } from './flag-rules'
 import { scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalInputProblem, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
@@ -34,6 +36,8 @@ export interface WardPatient extends AdmissionView {
   /** 風險評估：逾時、該評了（到期前 2 小時內）的份數（跌倒、壓傷各算一份） */
   riskOverdue: number
   riskDue: number
+  /** 隔離要處理的事：要檢討（前次就醫開的、滿 14 天）、和目前的床不合 */
+  isolationTodo: number
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -71,6 +75,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             const st = [rs.fall.due.status, rs.pressure.due.status]
             return { riskOverdue: st.filter((s) => s === 'overdue').length, riskDue: st.filter((s) => s === 'due').length }
           })(),
+          isolationTodo: activeIsolations(a.patientId).filter((i) => isolationReviewDue(i, a.admittedAt, t)).length + (placementFor(a.patientId, find.bed(a.bedId!)!) ? 1 : 0),
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
@@ -84,7 +89,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -130,6 +135,13 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
         if (d.status === 'ok') continue
         tasks.push({ ...base, id: `risk-${scale}-${a.id}`, kind: 'risk', urgency: d.status === 'overdue' ? 'overdue' : 'due', at: d.dueAt, text: `${RISK_SCALE_NAME[scale]}（${RISK_REASON_LABEL[d.reason]}）` })
       }
+      // 隔離：前次就醫開的（這次住院要確認是否延續）、滿 14 天沒檢討；住進來之後才開的隔離和目前的床不合（請安排轉床）
+      for (const iso of activeIsolations(a.patientId)) {
+        const r = isolationReviewDue(iso, a.admittedAt, t)
+        if (r) tasks.push({ ...base, id: `iso-${iso.id}`, kind: 'isolation', urgency: 'todo', text: `${isoText([iso])}：${ISOLATION_REVIEW_TEXT[r]}` })
+      }
+      const misplaced = placementFor(a.patientId, find.bed(a.bedId!)!)
+      if (misplaced) tasks.push({ ...base, id: `isobed-${a.id}`, kind: 'isolation', urgency: 'due', text: `請安排轉床：${misplaced}` })
       // 這一班還沒量過生命徵象：和病人清單的「本班未量」同一條規則（measuredThisShift）
       if (!measuredThisShift(latestVitalOf(a.id)?.at, t)) {
         tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象' })

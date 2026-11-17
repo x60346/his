@@ -87,7 +87,8 @@ export interface IpdBillMeta {
   from: string
   to: string
   days: number
-  beds: { bedNo: string; bedClass: string; days: number; extraFee: number }[]
+  /** waivedDays：隔離期間住單人房，差額免收的天數 */
+  beds: { bedNo: string; bedClass: string; days: number; extraFee: number; waivedDays?: number }[]
   copay: { fromDay: number; toDay: number; rate: number; amount: number }[]
   /** 部分負擔超過每次住院上限，被截掉多少 */
   capped?: number
@@ -1268,6 +1269,59 @@ export interface RiskSettings {
   pressureHigh: number
   /** Braden ≤ 這個分數＝中度 */
   pressureModerate: number
+}
+
+/** 隔離類別：接觸、飛沫、空氣（空氣隔離只能住單人房） */
+export type IsolationKind = 'contact' | 'droplet' | 'airborne'
+
+/**
+ * 隔離（掛在病人身上，跨住院）：醫師或護理師開、醫師解除（要原因）。MRSA、CRE 這類帶菌者出院不自動解除，
+ * 下次住院要確認是否延續；開了 14 天沒檢討，護理站待辦提醒
+ */
+export interface Isolation {
+  id: string
+  patientId: string
+  kind: IsolationKind
+  /** 原因或菌種（例：MRSA、疑似肺結核、流感） */
+  organism: string
+  note?: string
+  startedAt: string
+  startedBy: string
+  /** 開的時候在哪一次住院（門診開的沒有） */
+  admissionId?: string
+  /** 最近一次檢討（確認延續） */
+  reviewedAt?: string
+  reviewedBy?: string
+  ended?: { at: string; by: string; reason: string }
+}
+
+/** DNR 文件：本人意願書、最近親屬同意書、預立醫療決定書（病人自主權利法） */
+export type DnrDoc = 'self' | 'family' | 'ad'
+/** 不施行的項目（安寧緩和醫療條例的心肺復甦術內容；預立醫療決定可再加人工營養及流體餵養） */
+export type DnrItem = 'compress' | 'intubation' | 'defib' | 'drugs' | 'pacing' | 'ventilation' | 'feeding'
+
+/** DNR／預立醫療決定（醫師登錄）：同一時間只有一份有效；登新的就取代舊的，撤回要原因，紀錄都留著 */
+export interface DnrRecord {
+  id: string
+  patientId: string
+  doc: DnrDoc
+  /** 簽署日期 */
+  signedAt: string
+  /** 家屬同意書：簽署人與關係 */
+  signerName?: string
+  relation?: string
+  /** 見證人（本人意願書、預立醫療決定書：2 位） */
+  witnesses?: string[]
+  /** 家屬同意書：兩位專科醫師確認為末期病人 */
+  doctorIds?: string[]
+  /** 預立醫療決定：預立醫療照護諮商日期 */
+  acpDate?: string
+  withhold: DnrItem[]
+  /** 已註記健保卡（示範只是勾選） */
+  nhiCard: boolean
+  recordedBy: string
+  recordedAt: string
+  revoked?: { at: string; by: string; reason: string }
 }
 
 export interface NursingNote {

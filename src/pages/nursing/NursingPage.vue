@@ -15,6 +15,9 @@ import WristbandDialog from '@/components/WristbandDialog.vue'
 import ScanStatsPanel from './components/ScanStatsPanel.vue'
 import RiskPanel from './components/RiskPanel.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
+import PatientFlags from '@/components/PatientFlags.vue'
+import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
+import WardFlagsPanel from './components/WardFlagsPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
@@ -62,6 +65,7 @@ const tabs = computed(() =>
         { key: 'tasks', label: '本班待辦' },
         { key: 'stock', label: '常備點班' },
         { key: 'scan', label: '給藥掃描' },
+        { key: 'isoward', label: '隔離與 DNR', count: (patients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -69,13 +73,14 @@ const tabs = computed(() =>
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
+        { key: 'flags', label: '隔離與 DNR', count: adm.value.isolationTodo || undefined },
         { key: 'notes', label: '護理紀錄' },
         { key: 'handover', label: '交班' },
       ],
 )
 // 兩組之間切換：選了病人（從待辦切過來）→ 給藥紀錄；病人取消選取 → 本班待辦。交班兩組都有，保留不動
 // 停在病房層級的分頁（常備點班、給藥掃描）時點病人，也換到給藥紀錄（以前會落到護理紀錄）
-const WARD_ONLY = ['tasks', 'stock', 'scan']
+const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward']
 watch(admissionId, (id) => {
   if (id && WARD_ONLY.includes(tab.value)) tab.value = 'mar'
   else if (!id && tab.value !== 'handover' && !WARD_ONLY.includes(tab.value)) tab.value = 'tasks'
@@ -143,7 +148,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-else-if="p.riskDue" tone="yellow" title="跌倒或壓傷評估快到期">待評估</UBadge>
                   </span>
                 </div>
-                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<RiskBadges :levels="p.riskLevels" compact /></div>
+                <div class="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">{{ p.diagnosis }}・第 {{ p.days }} 天<RiskBadges :levels="p.riskLevels" compact /><PatientFlags :flags="p.flags" compact /></div>
                 <div v-if="p.latestVitals" class="tabular mt-0.5 text-xs text-slate-500">
                   <!-- 不是今天量的要帶日期：以前只顯示時分，昨天 20:00 和今天 20:00 看起來一樣 -->
                   {{ p.latestVitals.at.slice(0, 10) === clock.slice(0, 10) ? p.latestVitals.at.slice(11) : `${p.latestVitals.at.slice(5, 10).replace('-', '/')} ${p.latestVitals.at.slice(11)}` }}　T {{ p.latestVitals.temp ?? '—' }}・P {{ p.latestVitals.pulse ?? '—' }}・BP {{ p.latestVitals.sbp ?? '—' }}/{{ p.latestVitals.dbp ?? '—' }}・SpO2 {{ p.latestVitals.spo2 ?? '—' }}
@@ -180,10 +185,12 @@ const wardTotals = computed(() => ({
           <!-- 沒選病人時顯示全病房的本班待辦（以前是空白的「請選擇病人」）；點一列跳到該病人的對應分頁 -->
           <WardStockPanel v-else-if="!adm && tab === 'stock'" :ward="ward" :clock="clock" />
           <ScanStatsPanel v-else-if="!adm && tab === 'scan'" :ward="ward" />
+          <WardFlagsPanel v-else-if="!adm && tab === 'isoward'" :ward="ward" @open="openTask" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" @open="openTask" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
+          <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />
         </UCard>

@@ -1,6 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
+  DnrRecord, Isolation,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -729,8 +730,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const rolled = int(1, 6)
     const daysIn = i === 4 ? 32 : rolled
     const admitDate = addDays(T, -daysIn)
-    const cls: Bed['bedClass'] = i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'
-    const bed = bedsByClass(cls)[0] ?? bedsByClass('健保床')[0]
+    // 隔離示範（不抽亂數）：肺炎（疑似肺結核、空氣隔離）住綜合病房的單人房；蜂窩性組織炎（MRSA、接觸隔離）住綜合病房健保床，同房另一床空著
+    const cls: Bed['bedClass'] = i === 0 || i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'
+    const isoBed = i === 0 ? beds.find((b) => b.ward === codes.wards[2] && b.bedClass === '單人房' && b.status === 'empty') : i === 5 ? beds.find((b) => b.ward === codes.wards[2] && b.bedClass === '健保床' && b.status === 'empty') : undefined
+    const bed = isoBed ?? bedsByClass(cls)[0] ?? bedsByClass('健保床')[0]
     const adm: Admission = {
       id: id('A'), admitNo: `I${admitDate.replace(/-/g, '').slice(2)}${String(next('admitNo')).padStart(3, '0')}`,
       patientId: pt.id, deptId: sc.dept, doctorId: sc.doctor, bedId: bed.id, preferBedClass: cls,
@@ -1006,8 +1009,39 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })
   })
 
-  // 兩床清潔中
-  beds.filter((b) => b.status === 'empty').slice(0, 2).forEach((b) => (b.status = 'cleaning'))
+  // 隔離與 DNR（示範，不抽亂數）：
+  //   - 肺炎：疑似肺結核，入院就空氣隔離（單人房，差額免收）
+  //   - 蜂窩性組織炎：入院 3 小時後傷口培養 MRSA，接觸隔離（同房另一床空著，沒隔離的病人排不進來）
+  //   - 待報到的膝關節置換病人：40 天前門診驗出 CRE 帶菌，接觸隔離沒解除——報到時排床照隔離規則，住進來後待辦要確認是否延續
+  //   - 敗血症：家屬簽的部分 DNR（不按壓、不插管、不電擊；急救藥物照常）
+  const isolations: Isolation[] = []
+  const dnrRecords: DnrRecord[] = []
+  {
+    const inpt = admissions.filter((a) => a.status === 'admitted')
+    const pneu = inpt.find((a) => a.diagnosis.startsWith('J18'))
+    const cell = inpt.find((a) => a.diagnosis.startsWith('L03'))
+    const sepsis = inpt.find((a) => a.diagnosis.startsWith('A41'))
+    const carrier = admissions.find((a) => a.status === 'reserved' && a.diagnosis.startsWith('M17'))
+    if (pneu) isolations.push({ id: id('ISO'), patientId: pneu.patientId, kind: 'airborne', organism: '疑似肺結核（待痰液抗酸菌報告）', note: '胸部 X 光右上肺葉空洞', startedAt: notFuture(addMinutes(pneu.admittedAt!, 30), 5), startedBy: doctorUser(pneu.doctorId), admissionId: pneu.id })
+    if (cell) isolations.push({ id: id('ISO'), patientId: cell.patientId, kind: 'contact', organism: 'MRSA', note: '傷口培養', startedAt: notFuture(addMinutes(cell.admittedAt!, 180), 5), startedBy: 'U201', admissionId: cell.id })
+    if (carrier) isolations.push({ id: id('ISO'), patientId: carrier.patientId, kind: 'contact', organism: 'CRE', note: '門診尿液培養', startedAt: `${addDays(T, -40)} 10:20`, startedBy: doctorUser(carrier.doctorId) })
+    if (sepsis) {
+      const p = patients.find((x) => x.id === sepsis.patientId)!
+      dnrRecords.push({
+        id: id('DNR'), patientId: p.id, doc: 'family', signedAt: sepsis.admittedAt!.slice(0, 10), signerName: `${p.name[0]}志明`, relation: '成年子女',
+        doctorIds: [sepsis.doctorId, sepsis.doctorId === 'DR02' ? 'DR03' : 'DR02'], withhold: ['compress', 'intubation', 'defib'], nhiCard: false,
+        recordedBy: doctorUser(sepsis.doctorId), recordedAt: notFuture(addMinutes(sepsis.admittedAt!, 120), 5),
+      })
+    }
+  }
+
+  // 兩床清潔中：MRSA 病人同房的那一床（病人剛轉出、終期消毒中——清潔完成後只有同類隔離的病人能排進來），和第一張空床
+  {
+    const cellBed = beds.find((b) => b.admissionId && admissions.find((a) => a.id === b.admissionId)?.diagnosis.startsWith('L03'))
+    const mate = cellBed && beds.find((b) => b.id !== cellBed.id && b.ward === cellBed.ward && b.roomNo === cellBed.roomNo && b.status === 'empty')
+    if (mate) mate.status = 'cleaning'
+    beds.filter((b) => b.status === 'empty').slice(0, mate ? 1 : 2).forEach((b) => (b.status = 'cleaning'))
+  }
 
   void doctorUser
 
@@ -1692,6 +1726,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     mar,
     scanMismatches: [],
     riskAssessments,
+    isolations,
+    dnrRecords,
     vitals,
     nursingNotes,
     progressNotes,

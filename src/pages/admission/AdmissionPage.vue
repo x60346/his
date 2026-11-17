@@ -12,6 +12,7 @@ import ReserveDialog from './components/ReserveDialog.vue'
 import DischargeDialog from './components/DischargeDialog.vue'
 import ChangeAttendingDialog from './components/ChangeAttendingDialog.vue'
 import WristbandDialog from '@/components/WristbandDialog.vue'
+import PatientFlags from '@/components/PatientFlags.vue'
 import { admissionApi, masterApi, type AdmissionView } from '@/services'
 import type { BedView } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
@@ -63,7 +64,10 @@ const selectedBed = computed(() => beds.value?.find((b) => b.id === selectedBedI
 const picking = computed(() => mode.value !== 'idle')
 // 可選的床：空床；報到時還有「保留給這位病人」的床（保留就是為了這一刻——以前保留床不能選，要先取消保留才能報到）
 const reservedForTarget = (b: BedView) => mode.value === 'checkin' && b.status === 'reserved' && b.reservedFor === target.value?.id
-const isPickable = (b: BedView) => picking.value && (b.status === 'empty' || reservedForTarget(b))
+// 隔離：依服務層的排床規則標出不能排的床（空氣隔離只排單人房、同房隔離要一樣）——和報到、轉床時的把關同一個判斷
+const { data: blocksData } = useQuery(async () => (target.value && picking.value ? { id: target.value.id, map: await admissionApi.bedBlocks(target.value.id) } : undefined), [() => target.value?.id, picking])
+const blocks = computed(() => (blocksData.value && blocksData.value.id === target.value?.id ? blocksData.value.map : {}))
+const isPickable = (b: BedView) => picking.value && (b.status === 'empty' || reservedForTarget(b)) && !blocks.value[b.id]
 const isPreferred = (b: BedView) => mode.value === 'checkin' && (reservedForTarget(b) || b.bedClass === target.value?.preferBedClass)
 
 function startCheckIn(a: AdmissionView) {
@@ -90,6 +94,7 @@ const confirmOpen = ref(false)
 const pendingBed = ref<BedView>()
 function onBedClick(b: BedView) {
   if (picking.value) {
+    if (blocks.value[b.id] && (b.status === 'empty' || reservedForTarget(b))) return ui.toast.warning(`${b.bedNo} 不能排：${blocks.value[b.id]}`)
     if (!isPickable(b)) {
       return ui.toast.warning(b.status === 'reserved' && b.reservedForName ? `${b.bedNo} 已保留給 ${b.reservedForName}，請選擇其他床位` : `${b.bedNo} 目前${bedStatus[b.status].label}，請選擇空床`)
     }
@@ -169,6 +174,7 @@ const reserveOpen = ref(false)
           <template v-if="mode === 'checkin'">・希望 {{ target.preferBedClass }}（亮綠框為符合床等的空床）</template>
           <template v-else>・目前 {{ target.bed?.bedNo }}</template>
           ，請點選一張空床
+          <span v-if="target.flags.isolations.length" class="mt-1 flex flex-wrap items-center gap-1"><PatientFlags :flags="{ isolations: target.flags.isolations }" />依隔離不能排的床已淡化（滑過去看原因）</span>
         </span>
         <UButton class="ml-auto" size="sm" variant="ghost" :icon="X" @click="cancelMode">結束選床</UButton>
       </div>
@@ -189,6 +195,7 @@ const reserveOpen = ref(false)
                 :pickable="isPickable(b)"
                 :preferred="isPreferred(b)"
                 :dimmed="picking && !isPickable(b)"
+                :blocked="picking ? blocks[b.id] : undefined"
                 @click="onBedClick(b)"
               />
             </div>
@@ -209,6 +216,7 @@ const reserveOpen = ref(false)
               <div class="flex gap-2"><dt class="w-16 text-slate-500">主治</dt><dd>{{ occupied.deptName }}・{{ occupied.doctorName }}</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">入院</dt><dd class="tabular">{{ occupied.admittedAt }}（第 {{ occupied.days }} 天）</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">出院</dt><dd :class="occupied.dischargeReady ? 'font-medium text-emerald-700' : 'text-slate-500'">{{ occupied.dischargeReady ? `醫師已准予出院（${occupied.dischargeSummary?.dischargeType}）` : '醫師尚未准予出院' }}</dd></div>
+              <div v-if="occupied.flags.isolations.length || occupied.flags.dnr" class="flex gap-2"><dt class="w-16 text-slate-500">標記</dt><dd><PatientFlags :flags="occupied.flags" /></dd></div>
               <div v-if="occupied.allergies.length" class="flex gap-2"><dt class="w-16 text-slate-500">過敏</dt><dd class="font-medium text-red-600">{{ occupied.allergies.join('、') }}</dd></div>
             </dl>
             <div class="mt-4 flex gap-2">
@@ -247,6 +255,8 @@ const reserveOpen = ref(false)
                 <span class="font-semibold text-slate-800">{{ a.patientName }}</span>
                 <span class="tabular text-xs text-slate-500">{{ a.chartNo }}</span>
                 <UBadge v-if="a.fromVisitId" tone="purple">門診轉入</UBadge>
+                <!-- 帶菌者（例：CRE）預約住院：報到前就看得到要排單人房或同類隔離的房間 -->
+                <PatientFlags :flags="a.flags" compact />
                 <UBadge :tone="dueBadge(a.expectedDate).tone" class="ml-auto">{{ dueBadge(a.expectedDate).text }}</UBadge>
               </div>
               <div class="mt-0.5 text-xs text-slate-600">{{ a.diagnosis }}</div>

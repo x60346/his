@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 病人資訊列：看診、批價、藥局、住院畫面頂端共用。過敏一律以紅色醒目顯示——這是病人安全的底線。
+// 隔離、DNR 也放這裡（每個畫面都看得到）：隔離提醒穿戴防護，DNR 急救時要知道不做哪些
 import { AlertTriangle } from 'lucide-vue-next'
+import PatientFlags from './PatientFlags.vue'
 import type { PatientBrief } from '@/services'
 import { ageText } from '@/utils/date'
 import { genderLabel } from '@/utils/labels'
@@ -17,6 +19,7 @@ defineProps<{ patient: PatientBrief; showDebt?: boolean }>()
     </div>
     <div class="text-sm text-slate-600">病歷號 <span class="tabular font-medium text-slate-800">{{ patient.chartNo }}</span></div>
     <div class="text-sm text-slate-600">生日 <span class="tabular">{{ patient.birthDate }}</span></div>
+    <PatientFlags :flags="patient.flags" />
     <slot />
     <span v-if="showDebt && patient.debt > 0" class="tabular rounded bg-amber-100 px-2 py-0.5 text-sm font-semibold text-amber-900 ring-1 ring-inset ring-amber-600/30">欠款 ${{ patient.debt.toLocaleString() }}</span>
     <div

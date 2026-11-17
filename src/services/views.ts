@@ -12,6 +12,7 @@ import { normalizeRxTiming } from './drug-rules'
 import { prepayAvailable } from './money'
 import { afterDischargeCopayEligible } from './followup-rules'
 import { latestRisk } from './risk-work'
+import { flagsOf, type PatientFlags } from './flag-work'
 
 export const find = {
   patient: (id: string) => db.patients.find((p) => p.id === id),
@@ -177,6 +178,8 @@ export interface PatientBrief {
   allergies: string[]
   /** 尚欠金額（所有未作廢收據的欠款 − 已收回）；0 = 沒欠。掛號、批價時提醒櫃台收回 */
   debt: number
+  /** 重要標記：隔離中、DNR（病人資訊列、清單、床位圖都顯示） */
+  flags: PatientFlags
 }
 
 /** 病人目前尚欠多少（跨所有就醫） */
@@ -194,6 +197,7 @@ export function patientBrief(patientId: string): PatientBrief {
     age: p ? ageOf(p.birthDate) : 0,
     allergies: p?.allergies ?? [],
     debt: debtOf(patientId),
+    flags: flagsOf(patientId),
   }
 }
 

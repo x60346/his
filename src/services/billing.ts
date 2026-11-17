@@ -277,7 +277,7 @@ export interface IpdBillInput {
   from: string
   to: string
   /** 各床位住了幾天（加總＝住院天數）；差額床費依 extraFee */
-  beds: { bedNo: string; bedClass: string; days: number; extraFee: number }[]
+  beds: { bedNo: string; bedClass: string; days: number; extraFee: number; waivedDays?: number }[]
   /** 每日計費項目（病房費、護理費、住院診察費），依住院天數 */
   daily: Procedure[]
   /** 藥：實際扣帳的量（調劑扣的減退回的，加病房常備給藥扣的），date 用來查當天的藥價 */
@@ -321,7 +321,11 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
   }
   for (let i = lines.length - 1; i >= 0; i--) if ((lines[i].kind === 'drug' || lines[i].kind === 'self') && lines[i].qty <= 0) lines.splice(i, 1)
   for (const b of input.beds) {
-    if (b.extraFee > 0 && b.days > 0) lines.push({ kind: 'self', name: `差額床費（${b.bedClass} ${b.bedNo}）`, qty: b.days, unitPrice: b.extraFee, amount: b.extraFee * b.days, patientPay: true })
+    // 隔離期間住單人房是病情需要：那幾天差額免收（列一行 0 元，看得出為什麼沒收）
+    const waived = Math.min(b.days, b.waivedDays ?? 0)
+    const charged = b.days - waived
+    if (b.extraFee > 0 && charged > 0) lines.push({ kind: 'self', name: `差額床費（${b.bedClass} ${b.bedNo}）`, qty: charged, unitPrice: b.extraFee, amount: b.extraFee * charged, patientPay: true })
+    if (b.extraFee > 0 && waived > 0) lines.push({ kind: 'self', name: `差額床費（${b.bedClass} ${b.bedNo}，隔離期間免收）`, qty: waived, unitPrice: 0, amount: 0, patientPay: true })
   }
   const nhiTotal = lines.filter((l) => !l.patientPay).reduce((n, l) => n + l.amount, 0)
   const cp = self || input.identity.copayExempt ? { amount: 0, tiers: [] as IpdBillMeta['copay'] } : ipdCopay(nhiTotal, days, input.copay)

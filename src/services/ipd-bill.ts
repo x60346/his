@@ -7,8 +7,12 @@ import { nextRefundNo } from './money'
 import { calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEFAULT, summarize, type IpdBillInput } from './billing'
 import { find } from './views'
 import { certFeeLines, certsOfAdmission } from './certificate-fee'
+import { isolatedDays } from './flag-work'
 
-/** 床位分段：每張床住了幾天（加總＝住院天數）。舊資料沒有床位紀錄，視為整段住目前的床 */
+/**
+ * 床位分段：每張床住了幾天（加總＝住院天數）。舊資料沒有床位紀錄，視為整段住目前的床。
+ * 單人房那幾天如果在隔離中（病情需要），記 waivedDays：差額免收
+ */
 function bedSegments(a: Admission, from: string, to: string, days: number): IpdBillInput['beds'] {
   const hist = a.bedHistory?.length ? a.bedHistory : a.bedId ? [{ bedId: a.bedId, from: a.admittedAt ?? from }] : []
   if (!hist.length) return [{ bedNo: '—', bedClass: '健保床', days, extraFee: 0 }]
@@ -16,17 +20,21 @@ function bedSegments(a: Admission, from: string, to: string, days: number): IpdB
     const start = (i === 0 ? from : h.from).slice(0, 10)
     const end = (hist[i + 1]?.from ?? to).slice(0, 10)
     const bed = find.bed(h.bedId)
-    return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0 }
+    return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0, start, waivedDays: 0 }
   })
   // 當天入院當天出院、或同一天轉床：天數至少 1，算給最後住的那張床
   const counted = segs.reduce((n, s) => n + s.days, 0)
   if (counted < days) segs[segs.length - 1].days += days - counted
+  for (const s of segs) if (s.bedClass === '單人房' && s.extraFee > 0) s.waivedDays = isolatedDays(a.patientId, s.start, s.days)
   // 同一張床（轉出又轉回）合併
   const merged: IpdBillInput['beds'] = []
   for (const s of segs) {
     const same = merged.find((m) => m.bedNo === s.bedNo)
-    if (same) same.days += s.days
-    else if (s.days > 0) merged.push({ ...s })
+    const { start: _s, waivedDays, ...seg } = s
+    if (same) {
+      same.days += s.days
+      if (waivedDays) same.waivedDays = (same.waivedDays ?? 0) + waivedDays
+    } else if (s.days > 0) merged.push({ ...seg, ...(waivedDays ? { waivedDays } : {}) })
   }
   return merged
 }

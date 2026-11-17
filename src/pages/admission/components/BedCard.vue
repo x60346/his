@@ -5,6 +5,7 @@ import { BedDouble, Sparkles, User } from 'lucide-vue-next'
 import type { BedView } from '@/services/admission'
 import { ageText, diffDays, today } from '@/utils/date'
 import { bedStatus } from '@/utils/labels'
+import PatientFlags from '@/components/PatientFlags.vue'
 
 const props = defineProps<{
   bed: BedView
@@ -16,6 +17,8 @@ const props = defineProps<{
   preferred?: boolean
   /** 選床模式中，不可選的床淡化 */
   dimmed?: boolean
+  /** 選床模式：依隔離不能排的原因 */
+  blocked?: string
 }>()
 
 const tone = {
@@ -38,13 +41,14 @@ const days = computed(() => (props.bed.admission?.admittedAt ? diffDays(props.be
       pickable && preferred && 'ring-2 ring-emerald-500 ring-offset-1',
       dimmed && 'opacity-35',
     ]"
+    :title="blocked ? `不能排：${blocked}` : undefined"
   >
     <div class="flex items-center justify-between">
       <span class="tabular text-sm font-bold">{{ bed.bedNo }}</span>
       <span class="text-[10px] opacity-80">{{ bed.bedClass }}</span>
     </div>
     <template v-if="bed.status === 'occupied' && bed.patient">
-      <div class="mt-1 flex items-center gap-1 text-sm font-semibold"><User class="h-3.5 w-3.5" />{{ bed.patient.patientName }}</div>
+      <div class="mt-1 flex items-center gap-1 text-sm font-semibold"><User class="h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ bed.patient.patientName }}</span><PatientFlags :flags="bed.patient.flags" compact class="ml-auto shrink-0" /></div>
       <div class="opacity-80">{{ bed.patient.gender === 'M' ? '男' : '女' }} {{ ageText(bed.patient.birthDate) }}・第 {{ days }} 天</div>
       <div class="flex items-center gap-1 truncate opacity-70">
         <span class="truncate">{{ doctorName }}</span>
@@ -56,7 +60,8 @@ const days = computed(() => (props.bed.admission?.admittedAt ? diffDays(props.be
       <Sparkles v-if="bed.status === 'cleaning'" class="h-3.5 w-3.5" />
       <BedDouble v-else class="h-3.5 w-3.5" />
       {{ bedStatus[bed.status].label }}<template v-if="bed.status === 'reserved' && bed.reservedForName">：{{ bed.reservedForName }}</template>
-      <span v-if="pickable && bed.status === 'reserved'" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">保留給此病人</span>
+      <span v-if="blocked" class="ml-auto rounded bg-red-600 px-1 text-[10px] text-white">隔離不可排</span>
+      <span v-else-if="pickable && bed.status === 'reserved'" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">保留給此病人</span>
       <span v-else-if="pickable && preferred" class="ml-auto rounded bg-emerald-600 px-1 text-[10px] text-white">符合床等</span>
     </div>
   </button>

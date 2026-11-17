@@ -8,6 +8,7 @@ import { ArrowRightLeft, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, S
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
+import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
 import LabReportList from '@/components/LabReportList.vue'
@@ -147,6 +148,7 @@ const tabs = computed(() => [
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
+  { key: 'flags', label: '隔離與 DNR' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
 
@@ -382,6 +384,7 @@ async function submitNote() {
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
+        <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 診斷證明書（住院期間自動帶入）：費用進住院帳單，出院結帳後才能印 -->
           <div class="rounded-md border border-slate-200 px-3 py-2"><CertificatePanel :admission-id="adm.id" /></div>

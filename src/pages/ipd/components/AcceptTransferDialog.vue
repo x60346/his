@@ -29,9 +29,14 @@ watch(open, (v) => {
 
 const wards = masterApi.staticCodes.wards
 const { data: beds } = useQuery(async () => (bed.ward ? admissionApi.listBeds(String(bed.ward)) : []), [() => bed.ward])
+// 依隔離不能排的床（服務層 bedBlocks，和接受時的把關同一個判斷）：列出來但不能選，寫出原因
+const { data: blocks } = useQuery(async () => (open.value && props.item ? admissionApi.bedBlocks(props.item.admission.id) : ({} as Record<string, string>)), [open, () => props.item?.admission.id])
 const bedOptions = computed(() => [
   { label: '留在原床（之後可再轉床）', value: '' },
-  ...(beds.value ?? []).filter((b) => b.status === 'empty').map((b) => ({ label: `${b.bedNo}（${b.bedClass}）`, value: b.id })),
+  ...(beds.value ?? []).filter((b) => b.status === 'empty').map((b) => {
+    const why = blocks.value?.[b.id]
+    return { label: `${b.bedNo}（${b.bedClass}）${why ? `－不能排：${why}` : ''}`, value: b.id, disabled: !!why }
+  }),
 ])
 function onWard(v: string | number | undefined) {
   bed.ward = v

@@ -10,6 +10,7 @@ import { activeIpdChargeOf, ipdBillOf } from './ipd-bill'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
 import { stopOrderRecord, addChartNote } from './order-ops'
+import { placementFor } from './flag-work'
 
 export function listAdmissions(q: { status?: AdmissionStatus[]; ward?: string; patientId?: string } = {}): Promise<AdmissionView[]> {
   return query(() =>
@@ -44,6 +45,24 @@ export function listBeds(ward?: string): Promise<BedView[]> {
         return { ...b, admission: adm, patient: adm ? patientBrief(adm.patientId) : undefined, reservedForName: forAdm ? nameOf.patient(forAdm.patientId) : undefined }
       }),
   )
+}
+
+/**
+ * 選床畫面用：這筆住院（報到、轉床、轉科）哪些空床不能排、為什麼（依隔離；和 takeBed 同一個判斷）。
+ * 只列空床與保留給這筆住院的床
+ */
+export function bedBlocks(admissionId: string): Promise<Record<string, string>> {
+  return query(() => {
+    requireUser()
+    const a = must(find.admission(admissionId), '住院紀錄')
+    const out: Record<string, string> = {}
+    for (const b of db.beds) {
+      if (b.status !== 'empty' && !(b.status === 'reserved' && b.reservedFor === a.id)) continue
+      const p = placementFor(a.patientId, b)
+      if (p) out[b.id] = p
+    }
+    return out
+  })
 }
 
 export type ReserveInput = Pick<Admission, 'patientId' | 'deptId' | 'doctorId' | 'preferBedClass' | 'reason' | 'diagnosis' | 'expectedDate' | 'fromVisitId'>
@@ -86,6 +105,10 @@ function takeBed(bedId: string, admissionId: string): Bed {
     fail(`${bed.bedNo} 已保留給${forAdm ? ` ${nameOf.patient(forAdm.patientId)}` : '其他病人'}`, 'CONFLICT')
   }
   if (bed.status !== 'empty' && !mine) fail(`${bed.bedNo} 目前無法使用（${bedStatusLabel[bed.status]}）`, 'CONFLICT')
+  // 隔離：空氣隔離只排單人房；同房的人隔離要完全一樣（報到、轉床、轉科選床都走這裡）
+  const pid = find.admission(admissionId)?.patientId
+  const problem = pid ? placementFor(pid, bed) : undefined
+  if (problem) fail(`${bed.bedNo} 不能排：${problem}`, 'CONFLICT')
   bed.status = 'occupied'
   bed.admissionId = admissionId
   delete bed.reservedFor
@@ -291,6 +314,8 @@ export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied
       if (!reservedFor) failField('reservedFor', '請選擇要保留給哪一位待報到的病人')
       const a = must(find.admission(reservedFor!), '住院預約')
       if (a.status !== 'reserved') fail('只能保留給待報到的病人', 'CONFLICT')
+      const problem = placementFor(a.patientId, bed)
+      if (problem) fail(`${bed.bedNo} 不能保留給 ${nameOf.patient(a.patientId)}：${problem}`, 'CONFLICT')
       bed.reservedFor = a.id
       audit('保留床位', `${bed.bedNo} → ${nameOf.patient(a.patientId)}`)
     } else {

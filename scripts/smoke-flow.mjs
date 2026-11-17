@@ -2327,8 +2327,10 @@ try {
     await M.saveDrug({ ...row, nhiPrice: now0, priceFrom: addDays(T, 1) })
     await M.saveDrug({ ...row, nhiPrice: now0 })
     const restored = dbm.db.drugs.find((d) => d.id === drug.id)
-    ok(R.drugPriceOn(restored, T).nhiPrice === now0 && !R.nextPriceChange(restored, T) && (restored.priceChanges ?? []).every((c) => c.from < T),
-      '改回原價：今天與明天的調價都取消，不留多餘紀錄')
+    // 原本就排好的調價（例：Metformin 下個月）要留著：只看今天、明天的有沒有取消（以前寫「之後都沒有調價」，抽到 Metformin 的那天會失敗）
+    const keptLater = (row.priceChanges ?? []).filter((c) => c.from > addDays(T, 1))
+    ok(R.drugPriceOn(restored, T).nhiPrice === now0 && (restored.priceChanges ?? []).every((c) => c.from < T || c.from > addDays(T, 1)) && keptLater.every((c) => restored.priceChanges.some((x) => x.from === c.from && x.nhiPrice === c.nhiPrice)),
+      '改回原價：今天與明天的調價都取消，不留多餘紀錄（原本排好的之後的調價留著）')
     const nd = await M.saveDrug({ name: '調價測試新藥 1mg', generic: '', nhiCode: '', spec: '', category: '外用', unit: 'TUB', doseUnit: '', nhiPrice: 9, selfPrice: 20, safetyStock: 0, defaultDose: 1, defaultFreq: 'QD', defaultRoute: 'EXT', highAlert: false, indication: '測試', warning: '測試', timing: 'ANY', nameZh: '測試', active: true, priceFrom: addDays(T, 5) })
     ok(nd.nhiPrice === 9 && !nd.priceChanges, '新增藥品：價格就是原價（生效日不適用）')
     await as('clerk01')
@@ -5593,7 +5595,7 @@ try {
     ok((await IC.getIpdBill(ready.id)).charge.canVoid?.includes('出院') && (await IC.listIpdBilling()).some((x) => x.admissionId === ready.id && x.status === 'discharged' && x.receiptNo === ch2.receiptNo), '今天出院的仍在清單（看收據、重印）')
 
     // 轉床：差額床費依住的天數
-    const tb = db().admissions.find((a) => a.status === 'admitted')
+    const tb = db().admissions.find((a) => a.status === 'admitted' && !db().isolations.some((i) => i.patientId === a.patientId && !i.ended)) // 隔離中的排床另有規則（空氣隔離只排單人房）
     const dbl = db().beds.find((b) => b.status === 'empty' && b.extraFee > 0)
     await api.admissionApi.transferBed(tb.id, dbl.id)
     const a2 = db().admissions.find((a) => a.id === tb.id)
@@ -5744,11 +5746,13 @@ try {
     }
     ok(FR.refillFollowUpDays(28, 3) === 81 && FR.refillFollowUpDays(28, 0) === undefined && FR.refillFollowUpDays(0, 2) === undefined && FR.FOLLOW_UP_PICKS.map((p) => p.days).join() === '7,14,28', '建議：1／2／4 週；慢性病連續處方 28 天 × 3 次 → 用完前 3 天（81 天後）')
     // 掛一位今天的病人
-    const newVisit = async (caseType = '01') => {
+    // avoidDrug：這位病人以前沒開過這個藥（不然開藥時會跳「重複用藥」要確認；哪位病人有吃什麼藥隨日期抽，不能碰運氣）
+    const newVisit = async (caseType = '01', avoidDrug = '') => {
       await as('clerk01')
       const ss = await api.scheduleApi.listSessions({ date: T })
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
-      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date >= T && v.patientId === x.id))
+      const usedDrug = (pid) => !!avoidDrug && db().encounters.some((e) => db().visits.find((v) => v.id === e.visitId)?.patientId === pid && e.medications.some((m) => m.drugId === avoidDrug))
+      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date >= T && v.patientId === x.id) && !usedDrug(x.id))
       const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: pt.defaultIdentity, caseType })
       return { vv, sess, pt, drUser: db().users.find((u) => u.doctorId === sess.doctorId).username }
     }
@@ -5793,7 +5797,7 @@ try {
     const lst = await api.bookingApi.listVisits({ date: v1.date })
     ok(lst.some((x) => x.id === v1.id && x.followUpByName), '櫃台掛號清單：這筆標「醫師預約」')
     // 慢性病連續處方：依處方建議回診日
-    const B = await newVisit('04')
+    const B = await newVisit('04', 'M012')
     await as(B.drUser)
     const eb = await api.opdApi.startConsult(B.vv.id, { allowParallel: true, allowNotCheckedIn: true })
     await api.opdApi.completeEncounter(eb.id, { subjective: '血壓追蹤', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'I10', name: '本態性高血壓', primary: true }], medications: [{ drugId: 'M012', dose: 1, freq: 'QD', route: 'PO', days: 28, qty: 28, selfPay: false }], procedures: [], refillTimes: 3, admissionRequested: false })
@@ -5899,7 +5903,10 @@ try {
     ok(msg.includes('不能作廢'), '前幾天的評估不能作廢（請再評一次）')
     // 轉床後要重評
     await as('clerk01')
-    const empty = db().beds.find((b) => b.status === 'empty' && b.ward === db().beds.find((x) => x.id === missP.bedId).ward) ?? db().beds.find((b) => b.status === 'empty')
+    // 依隔離能排的空床（漏評的這位可能在隔離中：空氣隔離只排單人房）
+    const blk = await api.admissionApi.bedBlocks(missP.id)
+    const okBed = (b) => b.status === 'empty' && !blk[b.id]
+    const empty = db().beds.find((b) => okBed(b) && b.ward === db().beds.find((x) => x.id === missP.bedId).ward) ?? db().beds.find(okBed)
     await api.admissionApi.transferBed(missP.id, empty.id)
     await as('nurse01')
     const ovT = await R.getRiskOverview(missP.id)
@@ -5914,6 +5921,198 @@ try {
     await as('nurse01')
     const r3 = await R.saveRiskAssessment({ admissionId: missP.id, scale: 'fall', answers: fall({ history: 25, iv: 20 }) })
     ok(r3.score === 45 && r3.level === 'moderate' && db().riskAssessments.find((r) => r.id === r2.id).level === 'moderate', '新切點：45 分變中度；舊紀錄的等級不變')
+  }
+
+  // 病人重要標記：隔離（類別、排床規則、檢討、解除、差額免收）與 DNR／預立醫療決定（文件要件、部分 DNR、取代、撤回）
+  console.log('\n[隔離與 DNR]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const F = api.flagApi
+    const A = api.admissionApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    // 規則
+    const C = (o) => ({ kind: 'contact', organism: o })
+    ok(api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '健保床', roommates: [] })?.includes('只能排單人房') && !api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '單人房', roommates: [] }), '空氣隔離只能排單人房')
+    ok(!api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [] }) && !api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [C(' mrsa ')] }] }), '接觸隔離：同房沒人可以；同類同原因可以同房（大小寫、空白不計）')
+    ok(api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: '601-2', name: '甲', isolations: [] }] })?.includes('沒有隔離') && api.placementProblem({ isolations: [], bedClass: '健保床', roommates: [{ bedNo: '601-1', name: '乙', isolations: [C('MRSA')] }] })?.includes('沒有隔離的病人不能同房'), '隔離病人不能和沒隔離的同房，反過來也一樣')
+    ok(!!api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [C('VRE')] }] }) && !!api.placementProblem({ isolations: [C('流感')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [{ kind: 'droplet', organism: '流感' }] }] }), '不同菌種、不同類別都不能同房')
+    ok(api.isolationReviewDue({ startedAt: '2026-10-01 10:00' }, '2026-11-01 09:00', '2026-11-01 10:00') === 'carried' && !api.isolationReviewDue({ startedAt: '2026-10-01 10:00', reviewedAt: '2026-11-01 11:00' }, '2026-11-01 09:00', '2026-11-02 10:00'), '這次入院前開的要確認延續；確認過就不再提醒')
+    ok(api.isolationReviewDue({ startedAt: '2026-11-01 10:00' }, '2026-11-01 08:00', '2026-11-15 10:00') === 'long' && !api.isolationReviewDue({ startedAt: '2026-11-01 10:00' }, '2026-11-01 08:00', '2026-11-15 09:59'), '滿 14 天要檢討')
+    ok(api.dnrText(api.DNR_CPR_ITEMS).label === 'DNR' && api.dnrText(['intubation', 'defib']).label === 'DNR（不插管、不電擊）' && api.dnrText(['intubation']).title.includes('照常施行：胸外按壓'), '完整 DNR 顯示「DNR」；部分 DNR 寫出不做哪些、照常施行哪些')
+    let ce = api.checkDnrInput({ doc: 'self', signedAt: addDaysT(1), witnesses: ['王', '王'], withhold: [] }, T)
+    ok(ce.signedAt && ce.witnesses && ce.withhold, '本人：未來日期、見證人重複、沒勾項目都擋')
+    ce = api.checkDnrInput({ doc: 'family', signedAt: T, withhold: ['feeding'], doctorIds: ['DR02', 'DR02'] }, T)
+    ok(ce.signerName && ce.relation && ce.doctorIds && ce.withhold?.includes('只有預立醫療決定書'), '家屬：要簽署人、關係、兩位不同醫師；人工營養只有預立醫療決定可選')
+    ce = api.checkDnrInput({ doc: 'ad', signedAt: T, acpDate: addDaysT(1), witnesses: ['甲', '乙'], withhold: ['feeding'] }, T)
+    ok(ce.acpDate?.includes('之前') && !ce.withhold && !Object.keys(api.checkDnrInput({ doc: 'ad', signedAt: T, acpDate: addDaysT(-7), witnesses: ['甲', '乙'], withhold: ['feeding', 'intubation'] }, T)).length, '預立醫療決定：諮商要在簽署之前；齊全就通過')
+
+    // 種子
+    const inpt = db().admissions.filter((a) => a.status === 'admitted')
+    const pneu = inpt.find((a) => a.diagnosis.startsWith('J18'))
+    const cell = inpt.find((a) => a.diagnosis.startsWith('L03'))
+    const sepsis = inpt.find((a) => a.diagnosis.startsWith('A41'))
+    const stroke = inpt.find((a) => a.diagnosis.startsWith('I63'))
+    const carrier = db().admissions.find((a) => a.status === 'reserved' && a.diagnosis.startsWith('M17'))
+    const bedOf = (a) => db().beds.find((b) => b.id === db().admissions.find((x) => x.id === a.id).bedId)
+    const pv = await A.getAdmission(pneu.id)
+    ok(bedOf(pneu).bedClass === '單人房' && pv.flags.isolations[0]?.kind === 'airborne', `種子：肺炎（疑似肺結核）空氣隔離、住單人房 ${bedOf(pneu).bedNo}`)
+    const cellBed = bedOf(cell)
+    const mate = db().beds.find((b) => b.id !== cellBed.id && b.roomNo === cellBed.roomNo && b.ward === cellBed.ward)
+    ok((await A.getAdmission(cell.id)).flags.isolations[0]?.organism === 'MRSA' && cellBed.bedClass === '健保床' && mate.status === 'cleaning', `種子：蜂窩性組織炎 MRSA 接觸隔離，同房 ${mate.bedNo} 清潔中`)
+    ok((await A.getAdmission(sepsis.id)).flags.dnr?.label === 'DNR（不按壓、不插管、不電擊）' && (await A.getAdmission(sepsis.id)).flags.dnr.title.includes('照常施行：急救藥物'), '種子：敗血症家屬簽的部分 DNR（急救藥物照常）')
+    ok(db().isolations.some((i) => i.patientId === carrier.patientId && i.organism === 'CRE' && !i.admissionId && !i.ended), '種子：待報到的膝關節置換病人是 CRE 帶菌者（門診驗出、沒解除）')
+    // 差額床費：隔離期間的單人房免收
+    await as('clerk01')
+    let bill = (await api.ipdChargeApi.getIpdBill(pneu.id)).bill
+    const waived = bill.lines.find((l) => l.name.includes('隔離期間免收'))
+    ok(waived && waived.amount === 0 && waived.qty === bill.meta.days && !bill.lines.some((l) => l.name.startsWith('差額床費') && l.amount > 0) && bill.meta.beds[0].waivedDays === bill.meta.days, `肺炎住單人房 ${bill.meta.days} 天都在隔離中：差額床費免收（列 0 元一行）`)
+
+    // 開隔離
+    await expectError(() => F.startIsolation({ patientId: stroke.patientId, kind: 'contact', organism: 'MRSA' }), '櫃台開隔離')
+    await as('nurse01')
+    let f = await fieldsOf(() => F.startIsolation({ patientId: stroke.patientId, kind: 'contact', organism: ' ' }))
+    ok(!!f.organism, '沒寫原因或菌種 → 擋')
+    let msg = await errOf(() => F.startIsolation({ patientId: cell.patientId, kind: 'contact', organism: 'mrsa' }))
+    ok(msg.includes('已經在接觸隔離'), `同類同原因重複開 → 「${msg}」`)
+    // 腦梗塞住雙人房，同房另一床：保留或住人時才算同房；先找一位沒隔離的住院病人和他同房
+    const strokeBed = bedOf(stroke)
+    const r1 = await F.startIsolation({ patientId: stroke.patientId, kind: 'contact', organism: 'VRE', note: '肛門拭子' })
+    ok(r1.isolation.startedByName && r1.isolation.admissionId === stroke.id && db().auditLogs[0].action === '開始隔離', '護理師開接觸隔離（VRE）：記在這次住院、寫稽核')
+    ok((await A.getAdmission(stroke.id)).flags.isolations.some((i) => i.organism === 'VRE'), '病人資訊列帶隔離標記')
+    // 同房有沒隔離的人：找同房的床讓別人住進去（直接改資料模擬已經同房）
+    const strokeMate = db().beds.find((b) => b.id !== strokeBed.id && b.roomNo === strokeBed.roomNo && b.ward === strokeBed.ward)
+    const other = inpt.find((a) => a !== stroke && !db().isolations.some((i) => i.patientId === a.patientId && !i.ended))
+    const otherOld = other.bedId
+    Object.assign(db().beds.find((b) => b.id === otherOld), { status: 'empty', admissionId: undefined })
+    Object.assign(strokeMate, { status: 'occupied', admissionId: other.id })
+    db().admissions.find((a) => a.id === other.id).bedId = strokeMate.id
+    const det = await F.getPatientFlags(stroke.patientId)
+    ok(det.placementWarning?.includes('沒有隔離'), `住進來之後才開的隔離、同房有沒隔離的人 → 提醒「${det.placementWarning}」`)
+    const ward = strokeBed.ward
+    let tasks = await api.nursingApi.listWardTasks(ward)
+    ok(tasks.some((t) => t.kind === 'isolation' && t.admissionId === stroke.id && t.text.startsWith('請安排轉床')) && tasks.some((t) => t.kind === 'isolation' && t.admissionId === other.id), '本班待辦：兩位都列「請安排轉床」')
+    const wf = await F.wardFlags(ward)
+    ok(wf.some((r) => r.admissionId === stroke.id && r.placementWarning) && (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === stroke.id).isolationTodo === 1, '病房總覽標出床不合；病人清單隔離待處理 1')
+    // 轉床：沒隔離的那位轉回健保床（服務層 takeBed 檢查）
+    await as('clerk01')
+    const blkO = await A.bedBlocks(other.id)
+    const freeFor = (blk) => db().beds.find((b) => b.status === 'empty' && !blk[b.id] && b.bedClass === '健保床')
+    await A.transferBed(other.id, freeFor(blkO).id)
+    await as('nurse01')
+    ok(!(await F.getPatientFlags(stroke.patientId)).placementWarning, '轉走後提醒消失')
+
+    // 排床：MRSA 同房那一床清潔完成後，沒隔離的病人排不進去
+    await as('clerk01')
+    await A.setBedStatus(mate.id, 'empty')
+    const resv = db().admissions.find((a) => a.status === 'reserved' && a.id !== carrier.id)
+    const blkR = await A.bedBlocks(resv.id)
+    ok(blkR[mate.id]?.includes('MRSA') && !blkR[db().beds.find((b) => b.status === 'empty' && b.bedClass === '單人房').id], `選床畫面：${mate.bedNo} 標不能排（同房 MRSA）、單人房可以`)
+    msg = await errOf(() => A.checkIn(resv.id, mate.id))
+    ok(msg.includes('不能排') && msg.includes('MRSA'), `沒隔離的病人報到在 MRSA 同房 → 「${msg}」`)
+    msg = await errOf(() => A.setBedStatus(mate.id, 'reserved', resv.id))
+    ok(msg.includes('不能保留'), `保留給他也擋 → 「${msg}」`)
+    // 帶菌者（CRE）：有沒隔離病人的房間、MRSA 同房都不行；整間空的、單人房可以
+    const blkC = await A.bedBlocks(carrier.id)
+    const occupiedRoom = (b) => db().beds.some((x) => x.id !== b.id && x.ward === b.ward && x.roomNo === b.roomNo && x.status === 'occupied')
+    const emptyMulti = db().beds.filter((b) => b.status === 'empty' && b.bedClass !== '單人房')
+    ok(blkC[mate.id]?.includes('MRSA') && emptyMulti.every((b) => !!blkC[b.id] === occupiedRoom(b)), 'CRE 帶菌者：有人住的房間（沒隔離或不同菌種）都不能排，整間空的可以')
+    const single = db().beds.find((b) => b.status === 'empty' && b.bedClass === '單人房')
+    await A.checkIn(carrier.id, single.id)
+    await as('nurse01')
+    tasks = await api.nursingApi.listWardTasks(single.ward)
+    const carriedTask = tasks.find((t) => t.kind === 'isolation' && t.admissionId === carrier.id)
+    ok(carriedTask?.text.includes('前次就醫開的隔離'), `帶菌者住院：待辦「${carriedTask?.text}」`)
+    const ci = (await F.getPatientFlags(carrier.patientId)).isolations[0]
+    ok(ci.review === 'carried', '隔離標「這次住院請確認是否延續」')
+    await F.reviewIsolation(ci.id, '仍為帶菌者，延續接觸隔離')
+    const ci2 = (await F.getPatientFlags(carrier.patientId)).isolations[0]
+    ok(!ci2.review && ci2.reviewedByName && ci2.note.includes('延續') && !(await api.nursingApi.listWardTasks(single.ward)).some((t) => t.id === `iso-${ci.id}`), '確認延續：待辦消失、記下誰檢討')
+    // 單人房差額：帶菌者隔離中，免收
+    await as('clerk01')
+    bill = (await api.ipdChargeApi.getIpdBill(carrier.id)).bill
+    ok(bill.lines.some((l) => l.name.includes('隔離期間免收')) && !bill.lines.some((l) => l.name.startsWith('差額床費') && l.amount > 0), '帶菌者住單人房：差額免收')
+    // 集中照護：另一位 MRSA 可以排進 MRSA 同房
+    await as('nurse01')
+    const third = db().admissions.find((a) => a.status === 'admitted' && !db().isolations.some((i) => i.patientId === a.patientId && !i.ended) && db().beds.find((b) => b.id === a.bedId).bedClass === '健保床')
+    const r3 = await F.startIsolation({ patientId: third.patientId, kind: 'contact', organism: 'MRSA' })
+    await as('clerk01')
+    const blk3 = await A.bedBlocks(third.id)
+    ok(!blk3[mate.id], `另一位 MRSA：可以排到 ${mate.bedNo}（同類同原因，集中照護）`)
+    await A.transferBed(third.id, mate.id)
+    ok(!(await F.wardFlags(mate.ward)).some((r) => r.placementWarning), 'MRSA 同房：沒有床不合的提醒')
+    // 空氣隔離不能轉到健保床
+    const ward0Free = db().beds.find((b) => b.status === 'empty' && b.bedClass === '健保床')
+    msg = await errOf(() => A.transferBed(pneu.id, ward0Free.id))
+    ok(msg.includes('只能排單人房'), `空氣隔離轉到健保床 → 「${msg}」`)
+    // 轉科接受時選床也檢查（腦梗塞現在 VRE 隔離；復健科醫師接受轉科、選 MRSA 同房的床）
+    await as('dr09')
+    const inc = (await A.listIncomingTransfers()).find((x) => x.admission.id === stroke.id)
+    // 剛轉出的床（清潔中）旁邊住著沒隔離的病人：當作清潔完成，給新科選
+    const isoP = (pid) => db().isolations.some((i) => i.patientId === pid && !i.ended)
+    const halfRoom = db().beds.find((b) => b.status === 'cleaning' && db().beds.some((x) => x.id !== b.id && x.ward === b.ward && x.roomNo === b.roomNo && x.status === 'occupied' && !isoP(db().admissions.find((a) => a.id === x.admissionId).patientId)))
+    halfRoom.status = 'empty'
+    const blkS = await A.bedBlocks(stroke.id)
+    const badBed = db().beds.find((b) => b.status === 'empty' && blkS[b.id]?.includes('沒有隔離'))
+    msg = await errOf(() => A.acceptDeptTransfer(stroke.id, { shownOrderIds: inc.orders.map((o) => o.id), stopOrderIds: [], bedId: badBed.id, acceptNote: '接手復健' }))
+    ok(msg.includes('不能排') && msg.includes('VRE'), `接受轉科選了沒隔離病人的房間 → 「${msg}」`)
+
+    // 解除
+    await as('nurse01')
+    await expectError(() => F.endIsolation(r3.isolation.id, '培養陰性'), '護理師解除隔離')
+    await as(userOf(pneu.doctorId))
+    f = await fieldsOf(() => F.endIsolation(pv.flags.isolations.length && db().isolations.find((i) => i.patientId === pneu.patientId).id, ' '))
+    ok(!!f.reason, '解除要寫原因')
+    const pIso = db().isolations.find((i) => i.patientId === pneu.patientId)
+    await F.endIsolation(pIso.id, '痰液抗酸菌塗片三套陰性')
+    const pd = await F.getPatientFlags(pneu.patientId)
+    ok(!pd.isolations.length && pd.ended[0]?.ended.reason.includes('三套陰性') && pd.ended[0].endedByName && !(await A.getAdmission(pneu.id)).flags.isolations.length, '醫師解除：紀錄留在「已解除」、病人資訊列不再標')
+    msg = await errOf(() => F.endIsolation(pIso.id, '再一次'))
+    ok(msg.includes('已經解除'), '已解除的不能再解除')
+    // 解除後還住單人房：解除那天起收差額（把解除時間改成昨天來看）
+    db().isolations.find((i) => i.id === pIso.id).ended.at = `${addDaysT(-1)} 10:00`
+    await as('clerk01')
+    bill = (await api.ipdChargeApi.getIpdBill(pneu.id)).bill
+    const charged = bill.lines.find((l) => l.name.startsWith('差額床費') && l.amount > 0)
+    const free = bill.lines.find((l) => l.name.includes('隔離期間免收'))
+    if (bill.meta.days >= 2) ok(charged?.qty === 1 && charged.amount === bedOf(pneu).extraFee && free?.qty === bill.meta.days - 1, `昨天解除隔離、還住單人房：昨天起收差額（1 天 ${charged?.amount} 元），之前 ${free?.qty} 天免收`)
+    else ok(charged?.qty === 1 && !free, '昨天解除隔離（住 1 天）：收差額')
+
+    // DNR
+    await as('nurse01')
+    await expectError(() => F.saveDnr({ patientId: stroke.patientId, doc: 'self', signedAt: T, witnesses: ['甲', '乙'], withhold: ['intubation'] }), '護理師登錄 DNR')
+    await as(userOf(stroke.doctorId))
+    f = await fieldsOf(() => F.saveDnr({ patientId: stroke.patientId, doc: 'family', signedAt: T, withhold: [] }))
+    ok(f.signerName && f.relation && f.doctorIds && f.withhold, '家屬同意書：要件一次標出')
+    const d1 = await F.saveDnr({ patientId: stroke.patientId, doc: 'self', signedAt: T, witnesses: ['陳小美', '林大同'], withhold: api.DNR_CPR_ITEMS, nhiCard: true })
+    ok(d1.label === 'DNR' && (await A.getAdmission(stroke.id)).flags.dnr?.label === 'DNR' && db().auditLogs[0].action === '登錄 DNR', '本人意願書（完整 DNR）：病人資訊列標「DNR」、寫稽核')
+    const d2 = await F.saveDnr({ patientId: stroke.patientId, doc: 'ad', signedAt: T, acpDate: addDaysT(-3), witnesses: ['陳小美', '林大同'], withhold: [...api.DNR_CPR_ITEMS, 'feeding'] })
+    const sd = await F.getPatientFlags(stroke.patientId)
+    ok(sd.dnr.id === d2.id && sd.dnr.label.includes('不管灌') && sd.dnrHistory[0].id === d1.id && sd.dnrHistory[0].revoked.reason === '新文件取代' && db().auditLogs[0].action === '更新 DNR', '登錄預立醫療決定：取代舊的（舊的記「新文件取代」，留著）')
+    f = await fieldsOf(() => F.revokeDnr(d2.id, ''))
+    ok(!!f.reason, '撤回要寫原因')
+    await F.revokeDnr(d2.id, '病人本人撤回意願')
+    ok(!(await A.getAdmission(stroke.id)).flags.dnr && (await F.getPatientFlags(stroke.patientId)).dnrHistory.length === 2, '撤回：病人資訊列不再標 DNR，兩份紀錄都留著')
+    msg = await errOf(() => F.revokeDnr(d2.id, '再一次'))
+    ok(msg.includes('已經撤回'), '撤回過的不能再撤回')
+    // 出院不會解除隔離（帶菌者下次住院要確認）
+    ok(db().isolations.filter((i) => i.patientId === carrier.patientId && !i.ended).length === 1, '隔離掛在病人身上（不是這次住院）')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
@@ -6454,7 +6653,8 @@ try {
     }
 
     // 轉出
-    const s2 = sess.find((x) => x.id !== s1.id && x.deptId === s1.deptId) ?? sess.find((x) => x.id !== s1.id)
+    // 要「別的醫師」看的診（下面測別的醫師不能開）：同一位醫師一天有兩個診時，以前會抽到他自己的另一診
+    const s2 = sess.find((x) => x.doctorId !== s1.doctorId && x.deptId === s1.deptId) ?? sess.find((x) => x.doctorId !== s1.doctorId)
     const pt2 = db().patients.find((x) => x.id !== pt.id && !db().visits.some((v) => v.patientId === x.id && v.date >= T))
     const v2 = await api.bookingApi.register({ patientId: pt2.id, sessionId: s2.id, identityCode: '01', caseType: '01' })
     const dr2 = db().users.find((u) => u.doctorId === s2.doctorId).username
