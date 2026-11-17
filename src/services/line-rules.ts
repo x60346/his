@@ -45,6 +45,8 @@ export const LINE_KINDS: { kind: LineKind; label: string; short: string; dailyNe
   { kind: 'pivc', label: '周邊靜脈留置針', short: 'IV', dailyNeed: false, sites: ['右手背', '左手背', '右前臂', '左前臂', '右肘前', '左肘前'], sizes: ['18G', '20G', '22G', '24G'] },
   { kind: 'ngt', label: '鼻胃管', short: 'NG', dailyNeed: false, sites: ['右鼻孔', '左鼻孔'], sizes: ['14Fr', '16Fr', '18Fr'] },
   { kind: 'peg', label: '胃造口', short: 'PEG', dailyNeed: false, sites: ['左上腹'], sizes: ['20Fr', '24Fr'] },
+  // 氣管內管（醫師插管）：每天評估改由「每日脫離評估」（SAT／SBT）；管路日＝呼吸器日（VAP 的分母）
+  { kind: 'ett', label: '氣管內管', short: 'ETT', dailyNeed: false, sites: ['經口', '經鼻', '氣切'], sizes: ['7.0', '7.5', '8.0', '8.5'] },
 ]
 export const lineKind = (k: LineKind) => LINE_KINDS.find((x) => x.kind === k)!
 /** 導尿管、CVC 放滿幾天提醒主治（感染風險：每天評估還需不需要） */

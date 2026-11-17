@@ -18,9 +18,11 @@ export const mapLow = (map?: number) => map !== undefined && map < MAP_LOW
 /** GCS：睜眼 E 1–4、言語 V 1–5、運動 M 1–6，總分 3–15 */
 export const GCS_MAX = { e: 4, v: 5, m: 6 } as const
 export const GCS_LABEL = { e: '睜眼 E', v: '言語 V', m: '運動 M' } as const
-export const gcsTotal = (g?: VitalRecord['gcs']) => (g ? g.e + g.v + g.m : undefined)
-/** GCS ≤8：昏迷（通常要保護呼吸道） */
-export const gcsLow = (g?: VitalRecord['gcs']) => (gcsTotal(g) ?? 15) <= 8
+export const gcsTotal = (g?: VitalRecord['gcs']) => (g ? g.e + (g.vt ? 1 : g.v) + g.m : undefined)
+/** 顯示：插管的言語記 T（總分後面加 T：10T、E3VTM6） */
+export const gcsText = (g: NonNullable<VitalRecord['gcs']>) => `${gcsTotal(g)}${g.vt ? 'T' : ''} E${g.e}V${g.vt ? 'T' : g.v}M${g.m}`
+/** GCS ≤8（插管的不判斷：言語不能評，總分本來就低） */
+export const gcsLow = (g?: VitalRecord['gcs']) => !g?.vt && (gcsTotal(g) ?? 15) <= 8
 
 export const PUPIL_LIGHT_LABEL: Record<PupilLight, string> = { brisk: '靈敏', sluggish: '遲鈍', none: '無反應' }
 export const PUPIL_LIGHT_SHORT: Record<PupilLight, string> = { brisk: '+', sluggish: '±', none: '−' }
@@ -32,12 +34,12 @@ export const pupilUnequal = (p?: VitalRecord['pupils']) => !!p && Math.abs(p.l -
  * GCS、瞳孔的輸入檢查（欄位名 gcsE、gcsV、gcsM、pupilL、pupilR、lightL、lightR）：
  * GCS 三項要一起記（只記一項算不出總分）；瞳孔兩側大小與光反射要一起記
  */
-export function checkNeuro(x: { gcs?: Partial<Record<'e' | 'v' | 'm', number>>; pupils?: Partial<{ l: number; r: number; lightL: string; lightR: string }> }): Record<string, string> {
+export function checkNeuro(x: { gcs?: Partial<Record<'e' | 'v' | 'm', number>> & { vt?: boolean }; pupils?: Partial<{ l: number; r: number; lightL: string; lightR: string }> }): Record<string, string> {
   const e: Record<string, string> = {}
   const g = x.gcs
-  if (g && (['e', 'v', 'm'] as const).some((k) => g[k] !== undefined && g[k] !== null)) {
+  if (g && ((['e', 'v', 'm'] as const).some((k) => g[k] !== undefined && g[k] !== null) || g.vt)) {
     for (const k of ['e', 'v', 'm'] as const) {
-      const v = g[k]
+      const v = k === 'v' && g.vt ? 1 : g[k]
       const key = `gcs${k.toUpperCase()}`
       if (v === undefined || v === null || Number.isNaN(v)) e[key] = 'GCS 三項要一起記'
       else if (!Number.isInteger(v) || v < 1 || v > GCS_MAX[k]) e[key] = `1–${GCS_MAX[k]}`

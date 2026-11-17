@@ -28,6 +28,7 @@ import { pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusionTodosOf } from './infusion-work'
 import { woundStallCount } from './wound-work'
 import { icuHourly } from './icu-work'
+import { rassOutCount, weanDueCount } from './vent-work'
 import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { isObsBed, obsOpen } from './bed-work'
@@ -119,6 +120,9 @@ export interface DashboardStats {
   woundStall?: number
   /** 加護病房重症流程表超過 75 分鐘沒記的病人（護理師，我的病人範圍） */
   icuHourlyLate?: number
+  /** 主治：加護病房病人最近一次 RASS 超出鎮靜目標、插管接呼吸器今天還沒做脫離評估 */
+  rassOut?: number
+  weanDue?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
@@ -273,7 +277,7 @@ export function getDashboard(): Promise<DashboardStats> {
           } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length } : {}),
-          ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t) } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length } : {}),
           infusionOverdue: inpt.reduce((n, a) => n + infusionTodosOf(a.id, t).filter((x) => x.urgency === 'overdue').length, 0),
           pcaRecordOverdue: inpt.reduce((n, a) => { const p = runningPca(a.id); return n + (p && pcaRecordState(p, t)?.status === 'overdue' ? 1 : 0) }, 0),

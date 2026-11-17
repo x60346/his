@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -53,6 +53,7 @@ import { addDays, addMinutes, ageOf, diffDays, now, parseDate, toDateStr, today 
 import { autoQty, calcChargeLines, calcIpdChargeLines, ipdDays, IPD_COPAY_DEFAULT, summarize } from '@/services/billing'
 import { checkAllergies } from '@/services/allergy'
 import { checkEligibility, withDerivedFields } from '@/services/prevent-rules'
+import { ventText } from '@/services/vent-rules'
 import { allocateFefo, suggestRestockQty, usableQty } from '@/services/stock-rules'
 import { udPerDose } from '@/services/ud-rules'
 import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
@@ -1044,7 +1045,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const p = patients.find((x) => x.id === sepsis.patientId)!
       dnrRecords.push({
         id: id('DNR'), patientId: p.id, doc: 'family', signedAt: sepsis.admittedAt!.slice(0, 10), signerName: `${p.name[0]}志明`, relation: '成年子女',
-        doctorIds: [sepsis.doctorId, sepsis.doctorId === 'DR02' ? 'DR03' : 'DR02'], withhold: ['compress', 'intubation', 'defib'], nhiCard: false,
+        doctorIds: [sepsis.doctorId, sepsis.doctorId === 'DR02' ? 'DR03' : 'DR02'], withhold: ['compress', 'defib'], nhiCard: false,
         recordedBy: doctorUser(sepsis.doctorId), recordedAt: notFuture(addMinutes(sepsis.admittedAt!, 120), 5),
       })
     }
@@ -2083,6 +2084,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 護理排班（示範，不抽亂數）：上個月 1 號到這個月底，3 個一般病房每天 10 個班位（5A 白班 2 人），12 位護理師輪流（每天 2 位休）；
   // 今天 5A 白班是 nurse01、nurse02。明天 6B 小夜故意沒排（班表標紅）。現在這一班 5A 的病人依床號分給上班的護理師
   const nurseShifts: NurseShift[] = []
+  const weanTrials: WeanTrial[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2187,6 +2189,22 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     icuPts.forEach((a, i) => duty && nurseAssignments.push({ id: `NAS-ICU-${i + 1}`, ward: codes.icuWard, date: cur.date, shift: cur.shift, admissionId: a.id, nurseId: duty.nurseId, by: duty.nurseId, at: `${cur.date} ${cur.shift === '白班' ? '08:10' : cur.shift === '小夜' ? '16:10' : '00:10'}` }))
     const sep = icuPts.find((a) => a.diagnosis.startsWith('A41'))
     if (sep) {
+      const later = (a: string, b: string) => (a > b ? a : b)
+      const docU = users.find((u) => u.doctorId === sep.doctorId)!.id
+      // 住進加護病房 1 小時後插管（經口 7.5），接呼吸器 AC/VC FiO2 60%；昨天（或插管 6 小時後）血氧穩定降到 40%
+      const ettAt = addMinutes(sep.admittedAt!, 60)
+      lines.push({ id: 'LN-SEED-ETT', admissionId: sep.id, kind: 'ett', site: '經口', size: '7.5', insertedAt: ettAt, placedBy: '陳映如醫師', recordedBy: docU, recordedAt: ettAt })
+      const chAt = later(`${addDays(T, -1)} 10:00`, addMinutes(ettAt, 6 * 60))
+      const vo = (id: string, at: string, vent: IpdOrder['vent'], stopAt?: string): IpdOrder => ({
+        id, admissionId: sep.id, type: 'long', category: 'nursing', content: `呼吸器 ${ventText(vent!)}`, vent, startAt: at, status: stopAt ? 'stopped' : 'active', ...(stopAt ? { stopAt, stopAckAt: addMinutes(stopAt, 20), stopAckBy: 'U213' } : {}),
+        doctorId: sep.doctorId, createdAt: at, ackAt: addMinutes(at, 15), ackBy: 'U213',
+      })
+      ipdOrders.push(vo('IO-VENT-1', ettAt, { mode: 'AC/VC', fio2: 60, peep: 10, vt: 420, rr: 18 }, chAt))
+      ipdOrders.push(vo('IO-VENT-2', chAt, { mode: 'AC/VC', fio2: 40, peep: 8, vt: 420, rr: 16, changeReason: '血氧穩定，降氧（脫離）' }))
+      // 鎮靜目標 RASS −2～0；最近一次 −3（太深）→ 主治首頁「鎮靜超出目標」
+      sep.rassTarget = { min: -2, max: 0, by: docU, at: addMinutes(ettAt, 30) }
+      // 昨天的脫離評估：SAT 沒過（停鎮靜後躁動、血氧掉）；今天還沒做 → 主治首頁「今日脫離評估」
+      if (addDays(T, -1) >= ettAt.slice(0, 10)) weanTrials.push({ id: 'WN-SEED-1', admissionId: sep.id, date: addDays(T, -1), at: later(`${addDays(T, -1)} 09:30`, addMinutes(ettAt, 30)), by: docU, sat: 'fail', sbt: 'na', note: '停鎮靜 20 分鐘後躁動、拉扯管路，SpO2 掉到 88%，恢復鎮靜' })
       const hourOf = (t: string) => `${t.slice(0, 13)}:00`
       const lastH = hourOf(addMinutes(nowStr, -80))
       const firstH = [addMinutes(hourOf(sep.admittedAt!), 60), addMinutes(hourOf(nowStr), -24 * 60)].sort().pop()!
@@ -2203,7 +2221,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         vitals.push({
           id: `VS-ICU-${j + 1}`, admissionId: sep.id, at, hourly: true, nurseId: nid,
           temp: Math.round((38.6 - 0.9 * p) * 10) / 10, pulse: Math.round(118 - 20 * p), resp: Math.round(26 - 6 * p), sbp, dbp, spo2: Math.round(93 + 3 * p),
-          ...(j % 4 === 0 ? { pain: j === 0 ? 3 : 2, gcs: { e: p < 0.5 ? 3 : 4, v: p < 0.3 ? 4 : 5, m: 6 }, pupils: { l: 3, r: 3, lightL: 'brisk' as const, lightR: 'brisk' as const } } : {}),
+          // 每 4 小時（從最後一筆往回數）：疼痛、GCS（插管後言語記 T）、瞳孔、RASS、呼吸器實測
+          ...((n - 1 - j) % 4 === 0 ? {
+            pain: j === 0 ? 3 : 2, pupils: { l: 3, r: 3, lightL: 'brisk' as const, lightR: 'brisk' as const },
+            gcs: at >= ettAt ? { e: p < 0.5 ? 2 : 3, v: 1, m: 6, vt: true } : { e: 3, v: 4, m: 6 },
+            ...(at >= ettAt ? { rass: p < 0.5 ? -4 : -3, vent: { ppeak: Math.round(30 - 4 * p), vt: 410 + (j % 3) * 10, rr: 18 } } : {}),
+          } : {}),
           ...(j % 2 === 0 ? { intake: 100 } : {}), output: Math.round(25 + 25 * p),
         })
       })
@@ -2330,6 +2353,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     infectionCases,
     infusions,
     wounds,
+    weanTrials,
     dischargePlans,
     vitals,
     nursingNotes,

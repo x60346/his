@@ -5982,7 +5982,7 @@ try {
     const cellBed = bedOf(cell)
     const mate = db().beds.find((b) => b.id !== cellBed.id && b.roomNo === cellBed.roomNo && b.ward === cellBed.ward)
     ok((await A.getAdmission(cell.id)).flags.isolations[0]?.organism === 'MRSA' && cellBed.bedClass === '健保床' && mate.status === 'cleaning', `種子：蜂窩性組織炎 MRSA 接觸隔離，同房 ${mate.bedNo} 清潔中`)
-    ok((await A.getAdmission(sepsis.id)).flags.dnr?.label === 'DNR（不按壓、不插管、不電擊）' && (await A.getAdmission(sepsis.id)).flags.dnr.title.includes('照常施行：急救藥物'), '種子：敗血症家屬簽的部分 DNR（急救藥物照常）')
+    ok((await A.getAdmission(sepsis.id)).flags.dnr?.label === 'DNR（不按壓、不電擊）' && (await A.getAdmission(sepsis.id)).flags.dnr.title.includes('氣管內插管') && (await A.getAdmission(sepsis.id)).flags.dnr.title.includes('急救藥物'), '種子：敗血症家屬簽的部分 DNR（同意插管、呼吸器；急救藥物照常）')
     ok(db().isolations.some((i) => i.patientId === carrier.patientId && i.organism === 'CRE' && !i.admissionId && !i.ended), '種子：待報到的膝關節置換病人是 CRE 帶菌者（門診驗出、沒解除）')
     // 差額床費：隔離期間的單人房免收
     await as('clerk01')
@@ -8639,6 +8639,168 @@ try {
     await as('clerk01')
     const st = await api.ipdChargeApi.getIpdStatement(sep.id)
     ok(st.bill.lines.some((l) => l.name === '病房費（加護病床，每日）') && !st.bill.lines.some((l) => l.name === '病房費（急性一般病床，每日）') && st.bill.lines.some((l) => l.name === '住院診察費（每日）'), '敗血症病人（一直住加護病房）的費用明細：只有加護病床的病房費、護理費，住院診察費照收')
+  }
+
+  // 呼吸器與鎮靜：呼吸器醫囑（模式欄位、要插管、限加護病房、DNR 擋）、改設定要原因（停舊開新、護理師核對）、停止可一起拔管、
+  // 實測與 RASS 記在流程表（每 4 小時待辦）、鎮靜目標（超出列主治首頁）、每日脫離評估 SAT → SBT、GCS 插管記 T、CAM-ICU、VAP 與呼吸器日
+  console.log('\n[呼吸器與鎮靜]')
+  {
+    dbm.resetDatabase('small') // 要用種子的分床
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const V = api.ventApi
+    const I = api.icuApi
+    const ICU = '3I 加護病房'
+    const { addMinutes } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    let e = api.checkVentSetting({ mode: 'AC/VC', fio2: 20, peep: 8 })
+    ok(e.fio2 && e.vt && e.rr && !e.peep, 'AC/VC 要潮氣量、呼吸次數；FiO2 21–100')
+    e = api.checkVentSetting({ mode: 'PSV', fio2: 35, peep: 5 })
+    ok(e.ps && !e.vt && !e.rr && !Object.keys(api.checkVentSetting({ mode: 'CPAP', fio2: 30, peep: 5 })).length && api.checkVentSetting({}).mode, 'PSV 要壓力支持；CPAP 只要 FiO2、PEEP；沒選模式')
+    ok(api.checkVentSetting({ mode: 'AC/VC', fio2: 40.5, peep: 8, vt: 420, rr: 16 }).fio2, '設定要整數')
+    const cl = api.cleanVentSetting({ mode: 'AC/VC', fio2: 40, peep: 8, vt: 420, rr: 16, ps: 10, pinsp: 20 })
+    ok(cl.ps === undefined && cl.pinsp === undefined && api.ventText(cl) === 'AC/VC FiO2 40% PEEP 8 VT 420 RR 16', `只留這個模式的欄位：${api.ventText(cl)}`)
+    ok(api.checkRassTarget(1, -1).max && !Object.keys(api.checkRassTarget(-2, 0)).length && api.checkRassTarget(-6, 0).min, 'RASS 目標：−5～+4、上限不能比下限低')
+    ok(api.rassVsTarget(-3, { min: -2, max: 0 }) === 'deep' && api.rassVsTarget(1, { min: -2, max: 0 }) === 'light' && api.rassVsTarget(-1, { min: -2, max: 0 }) === 'in', 'RASS 比目標：太深、太淺、範圍內')
+    const ev = (t) => api.everyHours('2026-11-17 08:00', '2026-11-17 06:00', 4, t).status
+    ok(ev('2026-11-17 11:29') === 'ok' && ev('2026-11-17 11:30') === 'due' && ev('2026-11-17 12:01') === 'overdue', '每 4 小時：到期前 30 分鐘「現在」、過了「逾時」')
+    ok(api.checkWean({ sat: 'fail', sbt: 'pass', note: 'x' }).sbt && api.checkWean({ sat: 'fail', sbt: 'na' }).note && !Object.keys(api.checkWean({ sat: 'pass', sbt: 'pass' })).length, 'SAT 沒過不做 SBT；沒過或不適合要寫原因')
+    ok(api.intubationDnrProblem(['intubation']) && !api.intubationDnrProblem(['compress']) && api.ventDnrProblem(['ventilation']) && !api.ventDnrProblem(['intubation']), 'DNR：不插管擋氣管內管、不施行人工呼吸擋呼吸器')
+    e = api.checkVentMeasure({ ppeak: 28 })
+    ok(e.ventVt && e.ventRr && !e.ventPpeak && api.checkVentMeasure({ ppeak: 90, vt: 420, rr: 16 }).ventPpeak, '呼吸器實測三項一起記、範圍')
+    ok(api.gcsText({ e: 3, v: 1, m: 6, vt: true }) === '10T E3VTM6' && !api.gcsLow({ e: 1, v: 1, m: 4, vt: true }), 'GCS 插管記 T（10T），插管的不判斷 ≤8')
+
+    // 種子
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const docUser = db().users.find((u) => u.doctorId === sep.doctorId).username
+    const dutyUser = db().users.find((u) => u.id === db().nurseAssignments.find((x) => x.admissionId === sep.id)?.nurseId)
+    const ett = db().lines.find((l) => l.admissionId === sep.id && l.kind === 'ett' && !l.removedAt)
+    const vos = db().ipdOrders.filter((o) => o.admissionId === sep.id && o.vent)
+    ok(ett && vos.length === 2 && vos.filter((o) => o.status === 'active').length === 1 && vos.find((o) => o.status === 'active').vent.changeReason, '種子：敗血症插管（經口 7.5）、呼吸器兩筆（第二筆降氧、有原因）')
+    ok(db().vitals.some((v) => v.admissionId === sep.id && v.hourly && v.gcs?.vt) && db().vitals.some((v) => v.admissionId === sep.id && v.rass !== undefined && v.vent), '種子：流程表插管後 GCS 記 T、有 RASS 與呼吸器實測')
+    await as(docUser)
+    let pv = await V.patientVent(sep.id)
+    ok(pv.order?.text === 'AC/VC FiO2 40% PEEP 8 VT 420 RR 16' && pv.history.length === 1 && pv.intubation?.text === '經口 7.5' && pv.rass?.target?.min === -2 && pv.rass.last?.score === -3 && pv.rass.vs === 'deep' && pv.canDoctor, `呼吸器與鎮靜：${pv.order?.text}、RASS ${pv.rass?.last?.score} 比目標深`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.rassOut === 1 && dash.weanDue === 1, '主治首頁：鎮靜超出目標 1、今日脫離評估 1')
+    ok(pv.wean.due && pv.wean.recent.length <= 1, '今天還沒做脫離評估（昨天 SAT 沒過的紀錄留著）')
+    await as(dutyUser.username)
+    let safety = await api.deliriumApi.patientSafety(sep.id)
+    ok(safety.target === '加護病房（CAM-ICU）', '加護病房的病人每班評 CAM-ICU（RASS −3 可以評）')
+    let board = (await I.icuBoard()).find((b) => b.admissionId === sep.id)
+    ok(board.vent === pv.order.text && board.rass?.score === -3 && board.rass.out && board.neuro?.gcs?.text.includes('T'), `看板：呼吸器設定、RASS 超出目標、GCS ${board.neuro?.gcs?.text}`)
+
+    // 護理師：流程表記實測與 RASS
+    let f = await fieldsOf(() => I.addFlowsheetEntry({ admissionId: sep.id, rass: 5, vent: { ppeak: 28 } }))
+    ok(f.rass && f.ventVt && f.ventRr, 'RASS −5～+4、呼吸器三項一起記：一次標出')
+    const c = await I.addFlowsheetEntry({ admissionId: sep.id, pulse: 96, sbp: 110, dbp: 62, rass: -4, vent: { ppeak: 38, vt: 410, rr: 18 }, gcs: { e: 2, vt: true, m: 5 } })
+    ok(c.abnormal.includes('RASS') && c.abnormal.includes('尖峰壓') && c.gcsText === '8T E2VTM5' && !c.abnormal.includes('GCS'), '記一筆：RASS 超出目標、尖峰壓 >35 標異常；GCS 8T 不判斷 ≤8')
+    safety = await api.deliriumApi.patientSafety(sep.id)
+    ok(!safety.target && safety.rassSkip?.includes('−4'), `RASS −4：這一班先不評 CAM（${safety.rassSkip}）`)
+    pv = await V.patientVent(sep.id)
+    ok(pv.check?.status === 'ok' && pv.check.last?.ppeak === 38 && pv.rass?.status === 'ok' && pv.rass.last?.score === -4, '記了之後：實測、RASS 下次 4 小時後')
+    ok(!pv.canDoctor && pv.canNurse, '護理師看得到、不能開醫囑')
+    await expectError(() => V.orderVent(sep.id, { mode: 'AC/VC', fio2: 35, peep: 8, vt: 420, rr: 16 }), '護理師開呼吸器')
+    // 拔管前要先停呼吸器（自拔照實記）
+    let msg = await errOf(() => api.lineApi.removeLine(ett.id, '不需要了'))
+    ok(msg.includes('還接著呼吸器'), `接著呼吸器移除氣管內管 → 「${msg}」`)
+
+    // 醫師：改設定、鎮靜目標、脫離評估、停止
+    await as(docUser)
+    msg = await errOf(() => V.orderVent(sep.id, { mode: 'AC/VC', fio2: 40, peep: 8, vt: 420, rr: 16 }))
+    ok(msg.includes('沒有要改'), `設定一樣 → 「${msg}」`)
+    f = await fieldsOf(() => V.orderVent(sep.id, { mode: 'AC/VC', fio2: 35, peep: 8, vt: 420, rr: 16 }))
+    ok(f.changeReason, '改設定要原因')
+    f = await fieldsOf(() => V.orderVent(sep.id, { mode: 'PSV', fio2: 35, peep: 5, changeReason: '改脫離模式' }))
+    ok(f.ps, '改 PSV 沒填壓力支持：欄位標出')
+    const o2 = await V.orderVent(sep.id, { mode: 'AC/VC', fio2: 35, peep: 8, vt: 420, rr: 16, changeReason: '血氧穩定，降氧（脫離）' })
+    const old = db().ipdOrders.find((o) => o.admissionId === sep.id && o.vent && o.status === 'stopped' && o.stopAt >= addMinutes(nowStr(), -1))
+    ok(o2.text.includes('FiO2 35%') && !o2.acked && old && db().ipdOrders.filter((o) => o.admissionId === sep.id && o.vent && o.status === 'active').length === 1 && db().ipdOrders.find((o) => o.id === o2.id).doctorId === sep.doctorId, '改設定：舊的停止、開新的（醫師代碼），等護理師核對')
+    await as(dutyUser.username)
+    ok((await api.nursingApi.listWardPatients(ICU)).find((p) => p.id === sep.id).unackedCount >= 2, '護理站：新開與停止的呼吸器醫囑都要核對')
+    await as(docUser)
+    f = await fieldsOf(() => V.setRassTarget(sep.id, 0, -2))
+    ok(f.max, '目標上限比下限低')
+    pv = await V.setRassTarget(sep.id, -4, -1)
+    ok(pv.rass.vs === 'in' && (await api.dashboardApi.getDashboard()).rassOut === 0, '目標改 −4～−1：RASS −4 在範圍內，首頁提醒消失')
+    f = await fieldsOf(() => V.recordWean(sep.id, { sat: 'fail', sbt: 'pass' }))
+    ok(f.sbt && f.note, 'SAT 沒過還做 SBT、沒寫原因：一次標出')
+    pv = await V.recordWean(sep.id, { sat: 'pass', sbt: 'pass', note: '30 分鐘 PS 5 / PEEP 5，RR 18、SpO2 96%' })
+    ok(!pv.wean.due && pv.wean.today?.text === 'SAT 通過・SBT 通過' && (await api.dashboardApi.getDashboard()).weanDue === 0, '記了脫離評估：今天不再提醒')
+    f = await fieldsOf(() => V.stopVent(sep.id, { reason: '', extubate: true }))
+    ok(f.reason, '停止要原因')
+    pv = await V.stopVent(sep.id, { reason: 'SBT 通過，拔管改鼻導管 3 L/min', extubate: true })
+    const ettAfter = db().lines.find((l) => l.id === ett.id)
+    ok(!pv.order && !pv.intubation && ettAfter.removedAt && ettAfter.removeReason.includes('拔管') && !pv.wean.due, '停止呼吸器並拔管：氣管內管記移除（拔管）、不再要脫離評估')
+    msg = await errOf(() => V.recordWean(sep.id, { sat: 'pass', sbt: 'pass' }))
+    ok(msg.includes('沒有插管'), '拔管後不用脫離評估')
+    await as(dutyUser.username)
+    msg = await errOf(() => I.addFlowsheetEntry({ admissionId: sep.id, vent: { ppeak: 20, vt: 400, rr: 16 } }))
+    ok(msg.includes('沒有使用中的呼吸器'), '停了呼吸器：不能再記呼吸器實測')
+    f = await fieldsOf(() => I.addFlowsheetEntry({ admissionId: sep.id, gcs: { e: 4, vt: true, m: 6 } }))
+    ok(f.gcsV?.includes('沒有插管'), '拔管後 GCS 言語不能記 T')
+
+    // 開呼吸器的條件：限加護病房、要插管、DNR
+    const gen = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !db().isolations.some((i) => i.patientId === a.patientId) && !db().dnrRecords.some((d) => d.patientId === a.patientId) && db().beds.find((b) => b.id === a.bedId)?.ward !== ICU && db().beds.find((b) => b.id === a.bedId)?.ward !== '急診留觀區')
+    const genDoc = db().users.find((u) => u.doctorId === gen.doctorId).username
+    await as(genDoc)
+    msg = await errOf(() => V.orderVent(gen.id, { mode: 'AC/VC', fio2: 50, peep: 8, vt: 420, rr: 16 }))
+    ok(msg.includes('限加護病房'), `一般病房 → 「${msg}」`)
+    await as('clerk01')
+    await api.admissionApi.transferBed(gen.id, db().beds.find((b) => b.ward === ICU && b.status === 'empty').id)
+    await as(genDoc)
+    msg = await errOf(() => V.orderVent(gen.id, { mode: 'AC/VC', fio2: 50, peep: 8, vt: 420, rr: 16 }))
+    ok(msg.includes('沒有氣管內管'), `沒插管 → 「${msg}」`)
+    // DNR 不插管、不施行人工呼吸
+    db().dnrRecords.push({ id: 'DNR-T-VENT', patientId: gen.patientId, doc: 'self', signedAt: nowStr().slice(0, 10), witnesses: ['甲', '乙'], withhold: ['intubation', 'ventilation'], nhiCard: false, recordedBy: db().users.find((u) => u.username === genDoc).id, recordedAt: nowStr() })
+    msg = await errOf(() => api.lineApi.addLine({ admissionId: gen.id, kind: 'ett', site: '經口', size: '7.5', insertedAt: nowStr(), placedBy: '醫師' }))
+    ok(msg.includes('DNR 不施行氣管內插管'), `DNR 不插管 → 「${msg}」`)
+    msg = await errOf(() => V.orderVent(gen.id, { mode: 'AC/VC', fio2: 50, peep: 8, vt: 420, rr: 16 }))
+    ok(msg.includes('DNR 不施行人工呼吸'), `DNR 不施行人工呼吸 → 「${msg}」`)
+    ok((await V.patientVent(gen.id)).dnrProblem, '分頁上先講 DNR')
+    db().dnrRecords = db().dnrRecords.filter((d) => d.id !== 'DNR-T-VENT')
+    await api.lineApi.addLine({ admissionId: gen.id, kind: 'ett', site: '經口', size: '7.5', insertedAt: nowStr(), placedBy: '醫師' })
+    const og = await V.orderVent(gen.id, { mode: 'SIMV', fio2: 50, peep: 8, vt: 450, rr: 12, ps: 10, pinsp: 25 })
+    ok(og.text === 'SIMV FiO2 50% PEEP 8 VT 450 RR 12 PS 10', `插管後開 SIMV（不要的吸氣壓力不收）：${og.text}`)
+    // 每 4 小時待辦：轉入 5 小時前、開醫囑 5 小時前 → RASS、呼吸器實測都逾時
+    const g = db().admissions.find((a) => a.id === gen.id)
+    g.bedHistory.at(-1).from = addMinutes(nowStr(), -300)
+    db().ipdOrders.find((o) => o.id === og.id).startAt = addMinutes(nowStr(), -300)
+    await as(dutyUser.username)
+    const tasks = (await api.nursingApi.listWardTasks(ICU)).filter((t) => t.admissionId === gen.id && t.kind === 'vent')
+    ok(tasks.length === 2 && tasks.every((t) => t.urgency === 'overdue') && tasks.some((t) => t.text.includes('RASS')) && tasks.some((t) => t.text.includes('呼吸器實測')), '本班待辦：呼吸器實測、RASS 逾時（點了到流程表）')
+    const wp = (await api.nursingApi.listWardPatients(ICU)).find((p) => p.id === gen.id)
+    ok(wp.vent?.on && wp.vent.todo === 2 && wp.vent.overdue, '病人清單：呼吸器、實測／RASS 2')
+    await I.addFlowsheetEntry({ admissionId: gen.id, rass: 0, vent: { ppeak: 24, vt: 440, rr: 14 } })
+    ok(!(await api.nursingApi.listWardTasks(ICU)).some((t) => t.admissionId === gen.id && t.kind === 'vent'), '記了就消失')
+
+    // VAP：氣管內管放超過 2 天才算；品質指標的氣管內管管路日＝呼吸器日
+    const ettG = db().lines.find((l) => l.admissionId === gen.id && l.kind === 'ett')
+    ettG.insertedAt = addMinutes(nowStr(), -4 * 24 * 60)
+    const vap = await api.infectionApi.reportInfection(gen.id, { kind: 'vap', lineId: ettG.id, onsetAt: nowStr().slice(0, 10), symptoms: '發燒 38.6、膿痰增加、FiO2 需求上升', culture: '痰液培養：Klebsiella pneumoniae' })
+    ok(vap.lineText?.includes('氣管內管') && vap.lineText.includes('第 5 天'), `通報 VAP：${vap.lineText}`)
+    await as('dr11')
+    await api.infectionApi.decideInfection(vap.id, true, '符合 VAP 定義')
+    await as(dutyUser.username)
+    const st = await api.lineApi.wardLineStats(ICU, 30)
+    const row = st.rows.find((r) => r.kind === 'ett')
+    ok(row && row.lineDays >= 5 && row.infections === 1 && row.infectionRate === api.per1000(1, row.lineDays), `品質指標：氣管內管（呼吸器日）${row?.lineDays} 天、VAP ${row?.infections} 例、每千 ${row?.infectionRate}`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

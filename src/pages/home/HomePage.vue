@@ -64,6 +64,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'PCA 警示待處理', count: s.value.pcaAlerts ?? 0, hint: 'PCA 使用中的病人鎮靜過深或呼吸過慢：請處理（住院醫囑「PCA」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['doctor'], label: '鎮靜超出目標', count: s.value.rassOut ?? 0, hint: '你的加護病房病人最近一次 RASS 超出你設的鎮靜目標：調整鎮靜藥或目標（住院醫囑「呼吸器與鎮靜」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['doctor'], label: '今日脫離評估', count: s.value.weanDue ?? 0, hint: '插管接呼吸器的病人今天還沒做 SAT（停鎮靜）／SBT（自發呼吸）：做完記結果（住院醫囑「呼吸器與鎮靜」分頁）', route: 'ipd', icon: Droplet },
     { roles: ['doctor'], label: '傷口 2 週沒變小', count: s.value.woundStall ?? 0, hint: '你的住院病人傷口連續 2 週面積沒變小：評估換敷料、會診整形外科、營養（住院醫囑「傷口」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '重症流程表漏記', count: s.value.icuHourlyLate ?? 0, hint: '加護病房病人超過 75 分鐘沒記流程表（每小時一筆；護理站「重症流程表」分頁）', route: 'nursing', query: { ward: masterApi.staticCodes.icuWard }, icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '點滴已滴完未換', count: s.value.infusionOverdue, hint: '點滴已滴完還沒換瓶、或醫囑停了還在滴（護理站「點滴」分頁）', route: 'nursing', icon: Droplet, urgent: true },

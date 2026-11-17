@@ -7,6 +7,9 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { find, nameOf } from './views'
 import { INFECTION_KINDS, per1000 } from './infection-rules'
 import { checkLineInput, LINE_KINDS, LINE_REMOVE_REASONS, lineDays, lineKind, lineState, type LineState } from './line-rules'
+import { intubationDnrProblem } from './vent-rules'
+import { activeDnr } from './flag-work'
+import { activeVent } from './vent-work'
 
 export interface LineView extends LineDevice {
   label: string
@@ -59,6 +62,9 @@ export function addLine(input: LineInput): Promise<LineView> {
     const t = now()
     failFields(checkLineInput(input, t))
     if (a.admittedAt && input.insertedAt < addDays(a.admittedAt.slice(0, 10), -30)) failField('insertedAt', '放置時間太早（入院前 30 天以上）')
+    // 氣管內管：DNR 不施行氣管內插管的病人不能放
+    const dnr = input.kind === 'ett' ? intubationDnrProblem(activeDnr(a.patientId)?.withhold) : undefined
+    if (dnr) fail(dnr, 'CONFLICT')
     if (input.kind !== 'pivc' && db.lines.some((l) => l.admissionId === a.id && l.kind === input.kind && !l.removedAt)) fail(`已經有一條${lineKind(input.kind).label}，要換新的請先移除舊的（原因「到期更換」）`, 'CONFLICT')
     const l: LineDevice = { id: newId('LN'), admissionId: a.id, kind: input.kind, site: input.site.trim(), size: input.size.trim(), insertedAt: input.insertedAt, placedBy: input.placedBy.trim(), recordedBy: u.id, recordedAt: t }
     db.lines.push(l)
@@ -90,6 +96,8 @@ export function removeLine(lineId: string, reason: string, note = ''): Promise<L
     const l = must(db.lines.find((x) => x.id === lineId), '管路')
     if (l.removedAt) fail('已經移除了', 'CONFLICT')
     if (!LINE_REMOVE_REASONS.includes(reason)) failField('reason', '請選移除原因')
+    // 拔管前要先停呼吸器（醫師在「呼吸器與鎮靜」停止時可以一起拔管）；自拔、滑脫照實記，呼吸器醫囑留給醫師處理
+    if (l.kind === 'ett' && activeVent(l.admissionId) && !['病人自拔', '滑脫'].includes(reason)) fail('還接著呼吸器：請醫師先在「呼吸器與鎮靜」停止呼吸器（可以一起拔管）', 'CONFLICT')
     if (reason === '其他' && !note.trim()) failField('note', '請寫說明')
     const t = now()
     Object.assign(l, { removedAt: t, removedBy: u.id, removeReason: reason === '其他' ? `其他：${note.trim()}` : note.trim() ? `${reason}（${note.trim()}）` : reason })

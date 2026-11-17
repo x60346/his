@@ -962,6 +962,8 @@ export interface Admission {
   dischargeRx?: { dispensedBy: string; dispensedAt: string; txnIds: string[] }
   /** 床位紀錄（報到、轉床、轉科換床各記一筆）：差額床費依住了幾天算。舊資料沒有，視為整段住目前的床 */
   bedHistory?: { bedId: string; from: string }[]
+  /** 鎮靜目標（RASS 範圍，加護病房主治設定）：護理師每 4 小時評，超出範圍列主治首頁 */
+  rassTarget?: { min: number; max: number; by: string; at: string }
   /**
    * 急診留觀：特別的住院（急診科、急診醫師、急診留觀區的床），沿用住院醫囑、給藥、生命徵象、護理紀錄、腕帶。
    * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院
@@ -1174,6 +1176,8 @@ export interface IpdOrder {
   diet?: { kind: DietKind; note?: string; tube?: TubeFeedPlan }
   /** 點滴（連續輸注）：每瓶容量、每小時流速、加藥（例：KCl）；不排給藥時間，由護理師接上、換瓶、停止 */
   infusion?: { volumeMl: number; rateMlH: number; additives?: { drugId: string; dose: number }[] }
+  /** 呼吸器醫囑（長期、護理類）：模式與設定；改設定＝停掉舊的、開新的（changeReason 寫為什麼改） */
+  vent?: VentSetting
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory
@@ -1434,15 +1438,53 @@ export interface VitalRecord {
   nurseId: string
   /** 加護病房重症流程表（每小時一筆）：意識 GCS 三項、瞳孔大小（mm）與光反射 */
   hourly?: boolean
-  gcs?: { e: number; v: number; m: number }
+  /** GCS：插管的病人言語記「T」（vt: true，v 以 1 計，顯示 10T） */
+  gcs?: { e: number; v: number; m: number; vt?: boolean }
   pupils?: { l: number; r: number; lightL: PupilLight; lightR: PupilLight }
+  /** 鎮靜程度 RASS（−5 昏迷 … 0 清醒平靜 … +4 攻擊） */
+  rass?: number
+  /** 呼吸器實測（每 4 小時）：尖峰壓 cmH2O、實際潮氣量 ml、實際呼吸次數 */
+  vent?: { ppeak: number; vt: number; rr: number }
 }
 
 /** 瞳孔光反射：靈敏、遲鈍、無反應 */
 export type PupilLight = 'brisk' | 'sluggish' | 'none'
 
 /** 管路：導尿管、中心靜脈導管、周邊靜脈留置針、鼻胃管 */
-export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg'
+export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg' | 'ett'
+
+/** 呼吸器模式：容積控制、壓力控制、同步間歇強制換氣、壓力支持、持續正壓 */
+export type VentMode = 'AC/VC' | 'AC/PC' | 'SIMV' | 'PSV' | 'CPAP'
+export interface VentSetting {
+  mode: VentMode
+  /** 氧氣濃度 21–100 % */
+  fio2: number
+  /** 吐氣末正壓 cmH2O */
+  peep: number
+  /** 設定潮氣量 ml（AC/VC、SIMV） */
+  vt?: number
+  /** 吸氣壓力 cmH2O（AC/PC） */
+  pinsp?: number
+  /** 設定呼吸次數（AC/VC、AC/PC、SIMV） */
+  rr?: number
+  /** 壓力支持 cmH2O（PSV；SIMV 可加） */
+  ps?: number
+  /** 改設定的原因（第一次開不用） */
+  changeReason?: string
+}
+
+/** 每日脫離評估：自發性甦醒試驗（停鎮靜，SAT）→ 通過才做自發性呼吸試驗（SBT）；不適合要寫原因 */
+export type WeanResult = 'pass' | 'fail' | 'na'
+export interface WeanTrial {
+  id: string
+  admissionId: string
+  date: string
+  at: string
+  by: string
+  sat: WeanResult
+  sbt: WeanResult
+  note?: string
+}
 
 /**
  * 管路（護理師或醫師登錄）：放置時間、部位、尺寸、放置者；導尿管與 CVC 每天評估「還需要嗎」；
@@ -1873,7 +1915,7 @@ export interface InfusionRun {
 }
 
 /** 院內感染種類：導尿管相關泌尿道感染、中心靜脈導管相關血流感染、手術部位感染、其他 */
-export type InfectionKind = 'cauti' | 'clabsi' | 'ssi' | 'other'
+export type InfectionKind = 'cauti' | 'clabsi' | 'vap' | 'ssi' | 'other'
 
 /**
  * 院內感染個案：醫師或護理師通報（症狀、培養）→ 感染管制（權限「感染管制」）判定成立或不成立。

@@ -40,6 +40,8 @@ export interface PatientSafety {
   admissionId: string
   /** 為什麼要每班評譫妄（不用評沒有）；這一班評了沒 */
   target?: string
+  /** 加護病房 RASS ≤ −4：這一班先不評 CAM（說明） */
+  rassSkip?: string
   thisShift: boolean
   assessments: DeliriumView[]
   active: RestraintView[]
@@ -58,7 +60,7 @@ export function patientSafety(admissionId: string): Promise<PatientSafety> {
     const rs = db.restraints.filter((r) => r.admissionId === a.id)
     const role = u.role === 'doctor' ? careRoleOf(u.doctorId, a) : undefined
     return {
-      admissionId: a.id, ...(ds.target ? { target: ds.target } : {}), thisShift: ds.thisShift,
+      admissionId: a.id, ...(ds.target ? { target: ds.target } : {}), ...(ds.rassSkip ? { rassSkip: ds.rassSkip } : {}), thisShift: ds.thisShift,
       assessments: db.deliriumAssessments.filter((x) => x.admissionId === a.id).sort((x, y) => y.at.localeCompare(x.at)).slice(0, 12).map(dView),
       active: rs.filter((r) => !r.endedAt).map((r) => rView(r, t)), ended: rs.filter((r) => r.endedAt).sort((x, y) => y.endedAt!.localeCompare(x.endedAt!)).map((r) => rView(r, t)),
       canAssess: u.role === 'nurse' && a.status === 'admitted', canOrder: !!role && role.kind !== 'consult' && a.status === 'admitted',

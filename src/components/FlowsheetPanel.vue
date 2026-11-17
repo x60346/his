@@ -6,7 +6,7 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { UBadge, UButton, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { GCS_LABEL, GCS_MAX, HOURLY_LATE_MIN, icuApi, isAbnormal, MAP_LOW, PAIN_ACT_FROM, PAIN_ACTIONS, PUPIL_LIGHT_LABEL, PUPIL_LIGHT_SHORT, vitalInputProblem, vitalSpecs, type FlowCell, type VitalKey } from '@/services'
+import { GCS_LABEL, GCS_MAX, HOURLY_LATE_MIN, icuApi, PPEAK_HIGH, RASS_LEVELS, rassLabel, isAbnormal, MAP_LOW, PAIN_ACT_FROM, PAIN_ACTIONS, PUPIL_LIGHT_LABEL, PUPIL_LIGHT_SHORT, vitalInputProblem, vitalSpecs, type FlowCell, type VitalKey } from '@/services'
 import type { PupilLight } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useNow } from '@/composables/useNow'
@@ -37,6 +37,7 @@ const blank = () => ({
   e: undefined as number | string | undefined, vv: undefined as number | string | undefined, m: undefined as number | string | undefined,
   l: undefined as number | undefined, r: undefined as number | undefined, lightL: '' as PupilLight | '', lightR: '' as PupilLight | '',
   painAction: '',
+  rass: '' as number | string, ppeak: undefined as number | undefined, vvt: undefined as number | undefined, vrr: undefined as number | undefined,
 })
 const form = reactive(blank())
 watch(() => props.admissionId, () => Object.assign(form, blank()))
@@ -44,18 +45,21 @@ const needAction = computed(() => form.v.pain !== undefined && Number(form.v.pai
 const save = useAction(icuApi.addFlowsheetEntry, { success: '已記錄流程表' })
 const num = (x: number | string | undefined) => (x === undefined || x === '' ? undefined : Number(x))
 const liveMap = computed(() => (form.v.sbp !== undefined && form.v.dbp !== undefined ? Math.round((Number(form.v.sbp) + 2 * Number(form.v.dbp)) / 3) : undefined))
-const liveGcs = computed(() => (num(form.e) && num(form.vv) && num(form.m) ? num(form.e)! + num(form.vv)! + num(form.m)! : undefined))
+// 插管的病人言語記 T（以 1 計，顯示 10T）
+const liveGcs = computed(() => (num(form.e) && (form.vv === 'T' || num(form.vv)) && num(form.m) ? `${num(form.e)! + (form.vv === 'T' ? 1 : num(form.vv)!) + num(form.m)!}${form.vv === 'T' ? 'T' : ''}` : undefined))
 async function submit() {
-  const g = { e: num(form.e), v: num(form.vv), m: num(form.m) }
+  const g = form.vv === 'T' ? { e: num(form.e), vt: true, m: num(form.m) } : { e: num(form.e), v: num(form.vv), m: num(form.m) }
   const p = { l: form.l, r: form.r, lightL: form.lightL, lightR: form.lightR }
-  if (await save.run({ admissionId: props.admissionId, ...form.v, ...(needAction.value ? { painAction: form.painAction } : {}), gcs: g, pupils: p })) {
+  const vent = { ppeak: form.ppeak, vt: form.vvt, rr: form.vrr }
+  if (await save.run({ admissionId: props.admissionId, ...form.v, ...(needAction.value ? { painAction: form.painAction } : {}), gcs: g, pupils: p, ...(form.rass !== '' ? { rass: Number(form.rass) } : {}), vent })) {
     Object.assign(form, blank())
     date.value = today()
     reload()
   }
 }
 const errorOf = (k: VitalKey) => vitalInputProblem(k, form.v[k]) ?? save.fieldErrors.value[k]
-const gcsOpts = (k: 'e' | 'v' | 'm') => [{ label: '—', value: '' }, ...Array.from({ length: GCS_MAX[k] }, (_, i) => ({ label: String(GCS_MAX[k] - i), value: GCS_MAX[k] - i }))]
+const gcsOpts = (k: 'e' | 'v' | 'm') => [{ label: '—', value: '' }, ...(k === 'v' && fs.value?.intubated ? [{ label: 'T（插管）', value: 'T' }] : []), ...Array.from({ length: GCS_MAX[k] }, (_, i) => ({ label: String(GCS_MAX[k] - i), value: GCS_MAX[k] - i }))]
+const rassOpts = [{ label: '—', value: '' }, ...RASS_LEVELS.map((x) => ({ label: rassLabel(x.score), value: x.score }))]
 const lightOpts = [{ label: '—', value: '' }, ...Object.entries(PUPIL_LIGHT_LABEL).map(([value, label]) => ({ label, value }))]
 
 // ---------- 表格 ----------
@@ -68,7 +72,11 @@ const rows: Row[] = [
   { key: 'map', label: 'MAP', show: (c) => c.map, bad: (c) => c.abnormal.includes('MAP') },
   { key: 'spo2', label: '血氧', show: (c) => c.spo2, bad: (c) => isAbnormal('spo2', c.spo2) },
   { key: 'pain', label: '疼痛', show: (c) => c.pain, bad: (c) => isAbnormal('pain', c.pain) },
-  { key: 'gcs', label: 'GCS', show: (c) => (c.gcs ? `${c.gcsSum} E${c.gcs.e}V${c.gcs.v}M${c.gcs.m}` : undefined), bad: (c) => c.abnormal.includes('GCS') },
+  { key: 'gcs', label: 'GCS', show: (c) => c.gcsText, bad: (c) => c.abnormal.includes('GCS') },
+  { key: 'rass', label: 'RASS', show: (c) => (c.rass === undefined ? undefined : `${c.rass > 0 ? '+' : ''}${c.rass}`), bad: (c) => c.abnormal.includes('RASS') },
+  { key: 'ppeak', label: '尖峰壓', show: (c) => c.vent?.ppeak, bad: (c) => c.abnormal.includes('尖峰壓') },
+  { key: 'vvt', label: '潮氣量', show: (c) => c.vent?.vt },
+  { key: 'vrr', label: '呼吸器 RR', show: (c) => c.vent?.rr },
   { key: 'pupil', label: '瞳孔 左/右', show: (c) => (c.pupils ? `${c.pupils.l}${PUPIL_LIGHT_SHORT[c.pupils.lightL]}/${c.pupils.r}${PUPIL_LIGHT_SHORT[c.pupils.lightR]}` : undefined), bad: (c) => c.abnormal.includes('瞳孔不等大') },
   { key: 'by', label: '記錄', show: (c) => c.nurseName },
 ]
@@ -93,6 +101,10 @@ const sign = (n: number) => (n > 0 ? `+${n}` : String(n))
           </span>
         </div>
         <p v-if="!fs.inIcu" class="rounded-md bg-slate-50 px-3 py-1.5 text-xs text-slate-600">病人目前不在加護病房：流程表只能看，不能再記（一般病房請記生命徵象）</p>
+        <div v-if="fs.vent || fs.rassTarget" class="flex flex-wrap gap-x-4 text-xs text-slate-600">
+          <span v-if="fs.vent">呼吸器：<span class="tabular font-medium text-slate-800">{{ fs.vent.text }}</span></span>
+          <span v-if="fs.rassTarget">鎮靜目標 RASS {{ fs.rassTarget.min }}～{{ fs.rassTarget.max }}</span>
+        </div>
 
         <form v-if="fs.canRecord" class="rounded-md border border-slate-200 bg-slate-50 p-3" @submit.prevent="submit">
           <div class="mb-2 flex flex-wrap items-baseline gap-x-3">
@@ -110,6 +122,13 @@ const sign = (n: number) => (n > 0 ? `+${n}` : String(n))
             <div><USelect v-model="form.lightL" label="左光反射" :options="lightOpts" :error="save.fieldErrors.value.lightL" /></div>
             <UInput v-model="form.r" type="number" step="0.5" label="右瞳孔 mm" :error="save.fieldErrors.value.pupilR" />
             <div><USelect v-model="form.lightR" label="右光反射" :options="lightOpts" :error="save.fieldErrors.value.lightR" /></div>
+            <div><USelect v-model="form.rass" label="RASS" :options="rassOpts" :error="save.fieldErrors.value.rass" :hint="fs.rassTarget ? `目標 ${fs.rassTarget.min}～${fs.rassTarget.max}` : '每 4 小時'" /></div>
+          </div>
+          <!-- 呼吸器實測：有使用中的呼吸器醫囑才出現（每 4 小時） -->
+          <div v-if="fs.vent" class="mt-2 grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-x-3 gap-y-2">
+            <UInput v-model="form.ppeak" type="number" label="尖峰壓" :error="save.fieldErrors.value.ventPpeak" hint="cmH2O" :class="(form.ppeak ?? 0) > PPEAK_HIGH && '!border-red-400 !text-red-700'" />
+            <UInput v-model="form.vvt" type="number" label="實際潮氣量" :error="save.fieldErrors.value.ventVt" hint="ml" />
+            <UInput v-model="form.vrr" type="number" label="實際呼吸次數" :error="save.fieldErrors.value.ventRr" hint="次/分" />
           </div>
           <div v-if="needAction" class="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2">
             <UTextarea v-model="form.painAction" :label="`疼痛 ${form.v.pain} 分的處置`" :rows="2" required :error="save.fieldErrors.value.painAction" />
@@ -160,7 +179,7 @@ const sign = (n: number) => (n > 0 ? `+${n}` : String(n))
             <dd class="tabular">入 {{ fs.day.intake }}・出 {{ fs.day.output }}・<span :class="['font-semibold', fs.day.balance > 0 ? 'text-sky-700' : fs.day.balance < 0 ? 'text-amber-700' : '']">{{ sign(fs.day.balance) }}</span></dd>
           </div>
         </dl>
-        <p class="text-xs text-slate-500">紅字：超出正常範圍、MAP &lt;{{ MAP_LOW }}、GCS ≤8、瞳孔不等大（差 ≥1 mm）。瞳孔光反射 + 靈敏、± 遲鈍、− 無反應。</p>
+        <p class="text-xs text-slate-500">紅字：超出正常範圍、MAP &lt;{{ MAP_LOW }}、GCS ≤8（插管的 T 不判斷）、瞳孔不等大（差 ≥1 mm）、RASS 超出鎮靜目標、尖峰壓 &gt;{{ PPEAK_HIGH }}。瞳孔光反射 + 靈敏、± 遲鈍、− 無反應。</p>
       </template>
     </UQueryState>
   </div>

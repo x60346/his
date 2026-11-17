@@ -76,6 +76,7 @@ async function submitEnd() {
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <span class="font-semibold text-slate-700">譫妄評估（CAM）</span>
             <UBadge v-if="v.target" :tone="v.thisShift ? 'green' : 'cyan'">{{ v.target }}：每班評・{{ v.thisShift ? '本班已評' : '本班還沒評' }}</UBadge>
+            <UBadge v-else-if="v.rassSkip" tone="gray">{{ v.rassSkip }}</UBadge>
             <UButton v-if="v.canAssess" class="ml-auto" size="sm" variant="secondary" @click="openCam">評估</UButton>
           </div>
           <p v-if="!v.assessments.length" class="text-xs text-slate-500">還沒有評估。</p>

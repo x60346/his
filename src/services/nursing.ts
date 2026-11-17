@@ -32,6 +32,7 @@ import { infusedToday, infusionOrders, infusionTodosOf } from './infusion-work'
 import { openWounds, woundTodosOf } from './wound-work'
 import { buildVital, type VitalInput } from './vital-work'
 import { icuHourly, icuTodosOf } from './icu-work'
+import { activeVent, rassStateOf, ventTodosOf } from './vent-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -88,6 +89,8 @@ export interface WardPatient extends AdmissionView {
   woundTodo: number
   /** 加護病房：重症流程表多久沒記、是否漏記（超過 75 分鐘） */
   icu?: { minutes: number; late: boolean }
+  /** 呼吸器使用中；RASS 最近一次超出鎮靜目標；呼吸器實測、RASS 該做（現在、逾時）的數目 */
+  vent?: { on: boolean; rassOut: boolean; todo: number; overdue: boolean }
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -138,7 +141,10 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           lineTodo: lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length,
           ...(() => {
             const h = icuHourly(a, t)
-            return h ? { icu: { minutes: h.minutes, late: h.late } } : {}
+            if (!h) return {}
+            const vt = ventTodosOf(a, t)
+            const rs = rassStateOf(a, t)
+            return { icu: { minutes: h.minutes, late: h.late }, vent: { on: !!activeVent(a.id), rassOut: !!rs?.vs && rs.vs !== 'in', todo: vt.length, overdue: vt.some((x) => x.urgency === 'overdue') } }
           })(),
           wounds: openWounds(a.id).length,
           woundTodo: woundTodosOf(a, t).length,
@@ -189,7 +195,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu' | 'vent'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -267,6 +273,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       for (const x of woundTodosOf(a, t)) tasks.push({ ...base, id: `wd-${x.kind}-${x.woundId}`, kind: 'wound', urgency: 'todo', text: x.text })
       // 加護病房：重症流程表每小時一筆，超過 75 分鐘沒記列逾時
       for (const x of icuTodosOf(a, t)) tasks.push({ ...base, id: `icu-${a.id}`, kind: 'icu', urgency: 'overdue', at: x.at, text: x.text })
+      // 呼吸器實測、RASS：每 4 小時（記在重症流程表）
+      for (const x of ventTodosOf(a, t)) tasks.push({ ...base, id: `${x.kind}-${a.id}`, kind: 'vent', urgency: x.urgency, at: x.at, text: x.text })
       // 點滴：待接上、快滴完／已滴完要換瓶、醫囑停了還在滴
       for (const x of infusionTodosOf(a.id, t)) tasks.push({ ...base, id: `iv-${x.kind}-${x.runId ?? x.orderId}`, kind: 'infusion', urgency: x.urgency, ...(x.at ? { at: x.at } : {}), text: x.text })
       // PCA：每 4 小時紀錄（到期前 30 分鐘「現在」、過了「逾時」）；未處理的警示（醫師處理，護理站也列出來）

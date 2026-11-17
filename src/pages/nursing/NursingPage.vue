@@ -31,6 +31,7 @@ import InfectionPanel from '@/components/InfectionPanel.vue'
 import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
+import VentPanel from '@/components/VentPanel.vue'
 import IcuBoardPanel from './components/IcuBoardPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
@@ -125,7 +126,7 @@ const tabs = computed(() =>
         { key: 'handover', label: '交班' },
       ]
     : [
-        ...(adm.value.icu ? [{ key: 'flowsheet', label: '重症流程表', count: adm.value.icu.late ? 1 : undefined }] : []),
+        ...(adm.value.icu ? [{ key: 'flowsheet', label: '重症流程表', count: (adm.value.icu.late ? 1 : 0) + (adm.value.vent?.todo ?? 0) || undefined }, { key: 'vent', label: '呼吸器與鎮靜' }] : []),
         { key: 'mar', label: '給藥紀錄', count: adm.value.overdueCount + adm.value.dueCount || undefined },
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
@@ -223,6 +224,9 @@ const wardTotals = computed(() => ({
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
                   <span class="ml-auto flex flex-wrap justify-end gap-1">
                     <UBadge v-if="p.icu?.late" tone="red" title="重症流程表超過 75 分鐘沒記">流程表 {{ p.icu.minutes }} 分</UBadge>
+                    <UBadge v-if="p.vent?.on" tone="blue" title="使用呼吸器">呼吸器</UBadge>
+                    <UBadge v-if="p.vent?.todo" :tone="p.vent.overdue ? 'red' : 'yellow'" title="呼吸器實測、RASS 每 4 小時（記在重症流程表）">實測／RASS {{ p.vent.todo }}</UBadge>
+                    <UBadge v-if="p.vent?.rassOut" tone="red" title="最近一次 RASS 超出鎮靜目標">RASS 超出目標</UBadge>
                     <UBadge v-if="p.overdueCount" tone="red">逾時 {{ p.overdueCount }}</UBadge>
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
                     <UBadge v-if="p.pendingStatCount" tone="blue">臨時 {{ p.pendingStatCount }}</UBadge>
@@ -288,6 +292,7 @@ const wardTotals = computed(() => ({
           <IcuBoardPanel v-else-if="!adm && tab === 'icuboard' && ward === icuWard" @open="openTask" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" :only="taskScope" @open="openTask" />
           <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
+          <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" @open-flowsheet="tab = 'flowsheet'" />
           <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />

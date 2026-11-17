@@ -12,7 +12,7 @@ export type VitalInput = Omit<VitalRecord, 'id' | 'nurseId' | 'at'>
  * 依輸入建一筆生命徵象（不寫進 db）：只收已知欄位、逐項檢查合理範圍（輸入錯誤擋下；「異常但合理」照常記錄），
  * 所有錯誤一次標出；疼痛 ≥4 要寫處置。extra 是加護病房多記的欄位（GCS、瞳孔），由呼叫端檢查過再帶進來
  */
-export function buildVital(input: VitalInput, nurseId: string, t: string, extra: Partial<Pick<VitalRecord, 'hourly' | 'gcs' | 'pupils'>> = {}, extraErrors: Record<string, string> = {}): VitalRecord {
+export function buildVital(input: VitalInput, nurseId: string, t: string, extra: Partial<Pick<VitalRecord, 'hourly' | 'gcs' | 'pupils' | 'rass' | 'vent'>> = {}, extraErrors: Record<string, string> = {}): VitalRecord {
   const v: VitalRecord = { admissionId: input.admissionId, id: newId('VS'), at: t, nurseId }
   const errs = fieldErrors()
   for (const [k, m] of Object.entries(extraErrors)) errs.add(k, m)
@@ -29,7 +29,7 @@ export function buildVital(input: VitalInput, nurseId: string, t: string, extra:
   const pp = painActionProblem(v.pain, input.painAction)
   if (pp) failField('painAction', pp)
   if (v.pain !== undefined && input.painAction?.trim()) v.painAction = input.painAction.trim()
-  const hasNeuro = !!extra.gcs || !!extra.pupils
+  const hasNeuro = !!extra.gcs || !!extra.pupils || extra.rass !== undefined || !!extra.vent
   if (Object.keys(v).length === 4 && !hasNeuro) fail('請至少輸入一項生命徵象')
-  return { ...v, ...(extra.hourly ? { hourly: true } : {}), ...(extra.gcs ? { gcs: extra.gcs } : {}), ...(extra.pupils ? { pupils: extra.pupils } : {}) }
+  return { ...v, ...(extra.hourly ? { hourly: true } : {}), ...(extra.gcs ? { gcs: extra.gcs } : {}), ...(extra.pupils ? { pupils: extra.pupils } : {}), ...(extra.rass !== undefined ? { rass: extra.rass } : {}), ...(extra.vent ? { vent: extra.vent } : {}) }
 }

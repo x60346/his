@@ -5,6 +5,7 @@ import type { InfectionKind, LineKind } from '@/types'
 export const INFECTION_KINDS: { kind: InfectionKind; label: string; short: string; line?: LineKind; hint: string }[] = [
   { kind: 'cauti', label: '導尿管相關泌尿道感染', short: 'CAUTI', line: 'foley', hint: '發燒、恥骨上壓痛；尿液培養 ≥10⁵ CFU/ml' },
   { kind: 'clabsi', label: '中心靜脈導管相關血流感染', short: 'CLABSI', line: 'cvc', hint: '發燒、寒顫；血液培養陽性且找不到其他感染源' },
+  { kind: 'vap', label: '呼吸器相關肺炎', short: 'VAP', line: 'ett', hint: '插管 2 天後新的肺浸潤、發燒、膿痰、氧合變差；痰液培養' },
   { kind: 'ssi', label: '手術部位感染', short: 'SSI', hint: '術後 30 天內傷口紅腫熱痛、化膿或培養陽性' },
   { kind: 'other', label: '其他院內感染', short: '其他', hint: '肺炎、腸胃道等（入院 48 小時後發生）' },
 ]

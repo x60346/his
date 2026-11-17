@@ -40,7 +40,7 @@ const { data, loading } = useQuery(async () => ({ ward: props.ward, s: await lin
           <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">院內壓傷（每千住院人日）</dt><dd class="tabular text-lg font-semibold">{{ data.p.hapi }}<span class="text-sm font-normal text-slate-500">（{{ data.p.rate ?? '—' }}‰）</span></dd></div>
           <div class="rounded-md border border-slate-200 px-3 py-2"><dt class="text-xs text-slate-500">CAM 陽性率</dt><dd class="tabular text-lg font-semibold">{{ data.q.camRate === null ? '—' : `${Math.round(data.q.camRate * 100)}%` }}<span class="text-sm font-normal text-slate-500">（{{ data.q.camPositive }}／{{ data.q.camCount }}）</span></dd></div>
         </dl>
-        <p class="mt-2 text-xs text-slate-500">管路日：每條管路在身上的日數（放置、移除當天都算）。依病人目前住的病房統計。</p>
+        <p class="mt-2 text-xs text-slate-500">管路日：每條管路在身上的日數（放置、移除當天都算）。氣管內管的管路日就是呼吸器日（呼吸器相關肺炎 VAP 的分母）。依病人目前住的病房統計。</p>
       </template>
     </UQueryState>
   </div>

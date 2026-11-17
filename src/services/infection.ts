@@ -54,7 +54,7 @@ export function patientInfections(admissionId: string): Promise<PatientInfection
     return {
       admissionId: a.id,
       cases: db.infectionCases.filter((c) => c.admissionId === a.id).sort((x, y) => y.reportedAt.localeCompare(x.reportedAt)).map(view),
-      lines: db.lines.filter((l) => l.admissionId === a.id && (l.kind === 'foley' || l.kind === 'cvc')).map((l) => ({ id: l.id, kind: l.kind, text: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10)} 放置${l.removedAt ? `、${l.removedAt.slice(5, 10)} 移除` : ''}）`, insertedAt: l.insertedAt, ...(l.removedAt ? { removedAt: l.removedAt } : {}) })),
+      lines: db.lines.filter((l) => l.admissionId === a.id && INFECTION_KINDS.some((k) => k.line === l.kind)).map((l) => ({ id: l.id, kind: l.kind, text: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10)} 放置${l.removedAt ? `、${l.removedAt.slice(5, 10)} 移除` : ''}）`, insertedAt: l.insertedAt, ...(l.removedAt ? { removedAt: l.removedAt } : {}) })),
       surgeries: db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').map((s) => ({ id: s.id, text: `${find.procedure(s.procId)?.name ?? '手術'}（${(s.endAt ?? '').slice(5, 10)}）` })),
       canReport: (u.role === 'nurse' || u.role === 'doctor') && a.status === 'admitted', canDecide: permissionsOf(u).includes('infection.control'),
     }

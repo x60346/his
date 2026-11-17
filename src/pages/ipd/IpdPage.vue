@@ -18,6 +18,7 @@ import InfectionPanel from '@/components/InfectionPanel.vue'
 import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
+import VentPanel from '@/components/VentPanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -171,7 +172,7 @@ const ds = computed(() => adm.value?.dischargeSummary)
 const tabs = computed(() => [
   { key: 'orders', label: '醫囑', count: orders.value?.filter((o) => o.status === 'active').length },
   // 加護病房的病人（或住過）：醫師看重症流程表（唯讀）
-  ...(adm.value?.bed?.ward === masterApi.staticCodes.icuWard ? [{ key: 'flowsheet', label: '重症流程表' }] : []),
+  ...(adm.value?.bed?.ward === masterApi.staticCodes.icuWard ? [{ key: 'flowsheet', label: '重症流程表' }, { key: 'vent', label: '呼吸器與鎮靜' }] : []),
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
@@ -450,6 +451,7 @@ async function submitNote() {
         <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
         <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" />
         <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
+        <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->

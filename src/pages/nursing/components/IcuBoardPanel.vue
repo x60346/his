@@ -33,6 +33,11 @@ const bad = (r: { last?: { abnormal: string[] } }, k: string) => !!r.last?.abnor
               <span class="ml-auto text-xs text-slate-500">{{ b.nurseName ?? '未分床' }}</span>
             </div>
             <div class="mt-0.5 truncate text-xs text-slate-500">{{ b.diagnosis }}・{{ b.doctorName }}</div>
+            <!-- 呼吸器設定、RASS（超出鎮靜目標紅字） -->
+            <div v-if="b.vent || b.rass?.score !== undefined" class="tabular mt-1 flex flex-wrap gap-x-3 text-xs">
+              <span v-if="b.vent" class="rounded bg-sky-50 px-1 text-sky-800">{{ b.vent }}</span>
+              <span v-if="b.rass?.score !== undefined"><span class="text-slate-500">RASS </span><span :class="b.rass.out && 'font-semibold text-red-600'">{{ b.rass.score > 0 ? '+' : '' }}{{ b.rass.score }}</span><span v-if="b.rass.target" class="text-slate-400">（目標 {{ b.rass.target.min }}～{{ b.rass.target.max }}）</span></span>
+            </div>
             <dl v-if="b.last" class="tabular mt-2 grid grid-cols-3 gap-x-2 gap-y-0.5 text-xs">
               <div><dt class="inline text-slate-500">HR </dt><dd :class="['inline', bad(b, '脈搏') && 'font-semibold text-red-600']">{{ b.last.pulse ?? '—' }}</dd></div>
               <div class="col-span-2"><dt class="inline text-slate-500">BP </dt><dd :class="['inline', (bad(b, '收縮壓') || bad(b, '舒張壓')) && 'font-semibold text-red-600']">{{ b.last.sbp ?? '—' }}/{{ b.last.dbp ?? '—' }}</dd><span :class="['ml-1', bad(b, 'MAP') ? 'font-semibold text-red-600' : 'text-slate-500']">（MAP {{ b.last.map ?? '—' }}）</span></div>
@@ -42,7 +47,7 @@ const bad = (r: { last?: { abnormal: string[] } }, k: string) => !!r.last?.abnor
             </dl>
             <!-- 意識、瞳孔不一定每小時評：顯示最近一次（附時間） -->
             <div v-if="b.admissionId" class="tabular mt-0.5 flex flex-wrap gap-x-3 text-xs">
-              <span><span class="text-slate-500">GCS </span><span :class="b.neuro?.gcs?.low && 'font-semibold text-red-600'">{{ b.neuro?.gcs ? `${b.neuro.gcs.sum}（E${b.neuro.gcs.e}V${b.neuro.gcs.v}M${b.neuro.gcs.m}）` : '—' }}</span><span v-if="b.neuro?.gcs" class="text-slate-400"> {{ b.neuro.gcs.at.slice(11) }}</span></span>
+              <span><span class="text-slate-500">GCS </span><span :class="b.neuro?.gcs?.low && 'font-semibold text-red-600'">{{ b.neuro?.gcs?.text ?? '—' }}</span><span v-if="b.neuro?.gcs" class="text-slate-400"> {{ b.neuro.gcs.at.slice(11) }}</span></span>
               <span><span class="text-slate-500">瞳孔 </span><span :class="b.neuro?.pupils?.unequal && 'font-semibold text-red-600'">{{ b.neuro?.pupils ? `${b.neuro.pupils.l}${PUPIL_LIGHT_SHORT[b.neuro.pupils.lightL]}/${b.neuro.pupils.r}${PUPIL_LIGHT_SHORT[b.neuro.pupils.lightR]}` : '—' }}</span><span v-if="b.neuro?.pupils" class="text-slate-400"> {{ b.neuro.pupils.at.slice(11) }}</span></span>
             </div>
             <div class="mt-2 flex items-center gap-2 text-xs">
