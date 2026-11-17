@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -230,7 +230,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
-    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital'] },
+    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule'] },
     { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
     // 第二位藥師：盤點單「清點的人不能自己覆核」，要有另一位藥師可以覆核（小診所沒有的話由管理員覆核）
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
@@ -1842,6 +1842,46 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 手術（示範，不抽亂數、固定 id）----------
+  // 一：骨折病人明天 09:00 OR1 開放性復位術（右側，全身麻醉），術前準備做一半（同意書、備血不需要；禁食、部位標記、抗生素還沒）
+  // 二：闌尾炎病人 OR2 腹腔鏡闌尾切除術（今天 15:00；重建時已過 13:00 改明天 13:00），術前準備都好了——護理站送手術室、手術室走完三段查核
+  const surgeries: Surgery[] = []
+  {
+    const tomorrow = addDays(T, 1)
+    const later = (a: string, b: string) => (a > b ? a : b)
+    const created = (a: Admission) => notFuture(later(addMinutes(a.admittedAt!, 120), `${addDays(T, -1)} 16:00`), 30)
+    const mark = (by: string, at: string, extra: Partial<SurgeryPrepMark> = {}): SurgeryPrepMark => ({ by, at, ...extra })
+    const frac = admissions.find((a) => a.status === 'admitted' && a.admittedAt && a.diagnosis.startsWith('S52'))
+    if (frac) {
+      const at = created(frac)
+      surgeries.push({
+        id: 'SG-SEED-1', no: `OR${T.replace(/-/g, '')}001`, admissionId: frac.id, patientId: frac.patientId, doctorId: frac.doctorId, procId: 'P037', side: 'right', anesthesia: 'general',
+        diagnosis: frac.diagnosis, requestedDate: tomorrow, estMinutes: 120, status: 'scheduled', createdAt: at,
+        schedule: { room: 'OR1', start: `${tomorrow} 09:00`, by: 'U202', at: notFuture(addMinutes(at, 60), 20) },
+        prep: { consent: mark('U201', notFuture(addMinutes(at, 90), 10)), blood: mark('U201', notFuture(addMinutes(at, 90), 10), { notNeeded: '開放性復位術出血少，主刀表示不需備血' }) },
+        checks: {},
+      })
+    }
+    const appx = admissions.find((a) => a.status === 'admitted' && a.admittedAt && a.diagnosis.startsWith('K35'))
+    if (appx) {
+      const at = created(appx)
+      const start = nowStr < `${T} 13:00` ? `${T} 15:00` : `${tomorrow} 13:00`
+      const prepAt = notFuture(addMinutes(at, 120), 5)
+      const abx = ipdOrders.find((o) => o.admissionId === appx.id && o.category === 'medication' && o.status === 'active' && (codes.drugs.find((d) => d.id === o.drugId)?.indication.includes('抗生素') || codes.drugs.find((d) => d.id === o.drugId)?.restrictedAbx))
+      surgeries.push({
+        id: 'SG-SEED-2', no: `OR${T.replace(/-/g, '')}002`, admissionId: appx.id, patientId: appx.patientId, doctorId: appx.doctorId, procId: 'P038', side: 'na', anesthesia: 'general',
+        diagnosis: appx.diagnosis, requestedDate: start.slice(0, 10), estMinutes: 90, status: 'scheduled', createdAt: at,
+        schedule: { room: 'OR2', start, by: 'U202', at: notFuture(addMinutes(at, 60), 20) },
+        prep: {
+          consent: mark('U201', prepAt), npo: mark('U201', prepAt), siteMark: mark('U201', prepAt, { notNeeded: '腹腔鏡手術，不分側' }), blood: mark('U201', prepAt, { notNeeded: '預估失血少' }),
+          abx: abx ? mark('U201', prepAt, { refId: abx.id }) : mark('U201', prepAt, { notNeeded: '手術室劃刀前給 Cefazolin（麻醉科醫囑）' }),
+        },
+        checks: {},
+      })
+    }
+    counters[`surgery:${T}`] = surgeries.length
+  }
+
   // 初診（示範，不抽亂數）：亂數產生的病人都是幾年前建檔的舊病人，月報、看診清單、掛號單的「初診」都是 0。
   // 挑「第一次掛號在最近 60 天內」、之前沒住過院的病人，第一次掛號標初診（今天最多 3 位、之前每週最多 2 位），
   // 建檔日改成那天（有更早的預防保健紀錄就改成那天：預防保健不用掛號）。和櫃台掛號時 booking.register 的判斷一樣（之前沒有任何掛號＝初診）
@@ -1921,6 +1961,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     bloodUnits,
     bloodRequests,
     recordCopies: [],
+    surgeries,
     vitals,
     nursingNotes,
     progressNotes,

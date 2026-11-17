@@ -1,0 +1,287 @@
+// 手術排程與術前核對：主治申請 → 手術室排程（權限「手術排程」，同房不能撞）→ 病房術前準備（同意書、禁食、部位標記、備血、預防性抗生素）
+// → 送手術室（準備沒完成擋）→ 麻醉前查核 → 劃刀前暫停確認 → 開始（沒暫停確認擋）→ 離開前查核＋紗布器械計數 → 完成（不符要原因、主刀看得到）
+// → 主刀寫手術紀錄。做完的手術與麻醉費列入住院帳單（surgery-work.surgeryFeeItems）。規則在 surgery-rules
+import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide } from '@/types'
+import { db, newId, nextCounter } from '@/mock/db'
+import { addMinutes, now, today } from '@/utils/date'
+import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL } from './surgery-rules'
+import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
+import { careRoleOf, requireCare } from './care-team'
+import { isAntibiotic } from './abx-work'
+import { find, nameOf } from './views'
+import { requestStatus } from './blood-rules'
+
+const audText = (s: Surgery) => `${s.no} ${nameOf.patient(s.patientId)} ${find.procedure(s.procId)?.name ?? ''}（${SIDE_LABEL[s.side]}）`
+
+/** 可以申請的術式（主檔 Procedure.surgery、啟用中） */
+export function surgeryOptions(): Promise<{ procs: { id: string; name: string; minutes: number }[]; rooms: string[] }> {
+  return query(() => {
+    requireUser()
+    return { procs: db.procedures.filter((p) => p.surgery && p.active).map((p) => ({ id: p.id, name: p.name, minutes: p.surgery!.minutes })), rooms: OR_ROOMS }
+  })
+}
+
+export interface PatientSurgeries {
+  admissionId: string
+  patientName: string
+  /** 醫師：可以申請（本科醫師，會診醫師不行） */
+  canRequest: boolean
+  list: SurgeryView[]
+  /** 術前準備可以連的：這次住院的備血單、抗生素醫囑 */
+  bloodOptions: { id: string; text: string }[]
+  abxOptions: { id: string; text: string }[]
+}
+
+export function patientSurgeries(admissionId: string): Promise<PatientSurgeries> {
+  return query(() => {
+    const u = requireUser('doctor', 'nurse', 'admin')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    return {
+      admissionId: a.id, patientName: nameOf.patient(a.patientId),
+      canRequest: u.role === 'doctor' && a.status === 'admitted' && careRoleOf(u.doctorId, a)?.kind === 'team',
+      list: db.surgeries.filter((s) => s.admissionId === a.id).sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map(surgeryView),
+      bloodOptions: db.bloodRequests.filter((r) => r.admissionId === a.id && !r.cancelled).map((r) => ({ id: r.id, text: `${r.no}（${requestStatus(r) === 'done' ? '已輸完' : '有效'}）` })),
+      abxOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'medication' && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? ''))).map((o) => ({ id: o.id, text: `${o.content} ${o.dose ?? ''} ${o.freq ?? ''}`.trim() })),
+    }
+  })
+}
+
+// ---------- 醫師：申請、取消、手術紀錄 ----------
+
+export interface SurgeryInput {
+  admissionId: string
+  procId: string
+  side: SurgerySide
+  anesthesia: AnesthesiaType
+  requestedDate: string
+  estMinutes: number
+  diagnosis: string
+  note?: string
+}
+
+export function requestSurgery(input: SurgeryInput): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const a = must(find.admission(input.admissionId), '住院紀錄')
+    if (a.status !== 'admitted') fail('只有住院中的病人可以申請手術', 'CONFLICT')
+    requireCare(u.doctorId, a, '申請手術', { consult: false })
+    const t = now()
+    const est = Number(input.estMinutes)
+    const e = checkSurgeryInput({ ...input, estMinutes: est }, t.slice(0, 10))
+    const proc = input.procId ? find.procedure(input.procId) : undefined
+    if (input.procId && (!proc?.surgery || !proc.active)) e.procId = '這不是可以申請的術式'
+    failFields(e)
+    const d = t.slice(0, 10)
+    const s: Surgery = {
+      id: newId('SG'), no: `OR${d.replace(/-/g, '')}${String(nextCounter(`surgery:${d}`)).padStart(3, '0')}`,
+      admissionId: a.id, patientId: a.patientId, doctorId: u.doctorId!, procId: proc!.id, side: input.side, anesthesia: input.anesthesia,
+      diagnosis: input.diagnosis.trim(), requestedDate: input.requestedDate, estMinutes: est, ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      status: 'requested', createdAt: t, prep: {}, checks: {},
+    }
+    db.surgeries.push(s)
+    audit('申請手術', `${audText(s)}，${ANESTHESIA_LABEL[s.anesthesia]}，預計 ${s.requestedDate}`)
+    return surgeryView(s)
+  })
+}
+
+/** 取消：進手術室前（待排程、已排程）；本科醫師、要原因 */
+export function cancelSurgery(id: string, reason: string): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const s = must(surgeryOf(id), '手術')
+    requireCare(u.doctorId, must(find.admission(s.admissionId), '住院紀錄'), '取消手術', { consult: false })
+    if (s.status !== 'requested' && s.status !== 'scheduled') fail(`${s.status === 'cancelled' ? '已經取消了' : '病人已經送手術室，不能取消'}`, 'CONFLICT')
+    if (!reason?.trim()) failField('reason', '請寫取消原因')
+    s.status = 'cancelled'
+    s.cancelled = { by: u.id, at: now(), reason: reason.trim() }
+    audit('取消手術', `${audText(s)}：${reason.trim()}`)
+    return surgeryView(s)
+  })
+}
+
+export interface OpRecordInput {
+  performed: string
+  findings: string
+  bloodLoss: number
+  complications: string
+  specimen: string
+}
+
+/** 手術紀錄：做完之後，主刀或本科醫師寫（只寫一次） */
+export function writeOpRecord(id: string, input: OpRecordInput): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const s = must(surgeryOf(id), '手術')
+    if (s.doctorId !== u.doctorId) requireCare(u.doctorId, must(find.admission(s.admissionId), '住院紀錄'), '寫手術紀錄', { consult: false })
+    if (s.status !== 'done') fail('手術完成後才能寫手術紀錄', 'CONFLICT')
+    if (s.record) fail('手術紀錄已經寫過了', 'CONFLICT')
+    const f = fieldErrors()
+    if (!input.performed?.trim()) f.add('performed', '請寫實際執行的術式')
+    if (!input.findings?.trim()) f.add('findings', '請寫術中發現')
+    const bl = Number(input.bloodLoss)
+    if (!Number.isInteger(bl) || bl < 0 || bl > 20000) f.add('bloodLoss', '失血量是 0–20000 ml 的整數')
+    f.done()
+    s.record = { performed: input.performed.trim(), findings: input.findings.trim(), bloodLoss: bl, complications: input.complications?.trim() || '無', specimen: input.specimen?.trim() || '無', by: u.id, at: now() }
+    audit('手術紀錄', `${audText(s)}：失血 ${bl} ml、併發症 ${s.record.complications}`)
+    return surgeryView(s)
+  })
+}
+
+// ---------- 手術室排程 ----------
+
+export interface OrBoard {
+  date: string
+  rooms: string[]
+  /** 目前的人可以排程（權限「手術排程」） */
+  canSchedule: boolean
+  /** 這天排在各房的（取消的不列） */
+  cases: SurgeryView[]
+  /** 待排程（不分日期） */
+  requested: SurgeryView[]
+}
+
+export function orBoard(date: string): Promise<OrBoard> {
+  return query(() => {
+    const u = requireUser('nurse', 'doctor', 'admin')
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date : today()
+    const liveAdm = (s: Surgery) => find.admission(s.admissionId)?.status === 'admitted' || s.status === 'done'
+    return {
+      date: d, rooms: OR_ROOMS, canSchedule: permissionsOf(u).includes('surgery.schedule'),
+      cases: db.surgeries.filter((s) => s.schedule?.start.startsWith(d) && s.status !== 'cancelled' && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
+      requested: db.surgeries.filter((s) => s.status === 'requested' && find.admission(s.admissionId)?.status === 'admitted').sort((x, y) => x.requestedDate.localeCompare(y.requestedDate)).map(surgeryView),
+    }
+  })
+}
+
+/** 排程（或改期）：還沒送手術室；同一間房時段不能重疊；在手術房開放時段內、不能排在過去 */
+export function scheduleSurgery(id: string, input: { room: string; start: string }): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requirePermission('surgery.schedule')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'requested' && s.status !== 'scheduled') fail('已經送手術室或取消，不能再排程', 'CONFLICT')
+    const f = fieldErrors()
+    if (!OR_ROOMS.includes(input.room)) f.add('room', '請選擇手術房')
+    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(input.start ?? '')) f.add('start', '請選擇日期與時間')
+    f.done()
+    const t = now()
+    if (input.start < t) failField('start', '不能排在過去的時間')
+    const hm = input.start.slice(11)
+    const end = addMinutes(input.start, s.estMinutes)
+    if (hm < OR_DAY.start || end.slice(11) > OR_DAY.end || end.slice(0, 10) !== input.start.slice(0, 10)) failField('start', `手術房開放 ${OR_DAY.start}–${OR_DAY.end}（預估 ${s.estMinutes} 分鐘，會超過）`)
+    const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === input.room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, input.start, s.estMinutes))
+    if (clash) failField('start', `${input.room} 這段時間已排 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起 ${clash.estMinutes} 分鐘）`, 'CONFLICT')
+    const old = s.schedule
+    s.schedule = { room: input.room, start: input.start, by: u.id, at: t }
+    s.status = 'scheduled'
+    audit(old ? '手術改期' : '手術排程', `${audText(s)}：${old ? `${old.room} ${old.start} → ` : ''}${input.room} ${input.start}`)
+    return surgeryView(s)
+  })
+}
+
+// ---------- 病房：術前準備、送手術室 ----------
+
+/**
+ * 勾術前準備：完成，或「不需要」（寫原因；同意書不能不需要）。
+ * 備血要連這次住院的備血單、抗生素要連這次住院的抗生素醫囑（或寫不需要）
+ */
+export function markPrep(id: string, key: SurgeryPrepKey, input: { notNeeded?: string; refId?: string } = {}): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'requested' && s.status !== 'scheduled') fail('已經送手術室，術前準備不能再改', 'CONFLICT')
+    const def = PREP_ITEMS.find((x) => x.key === key)
+    if (!def) fail('沒有這個項目')
+    const notNeeded = input.notNeeded?.trim()
+    if (input.notNeeded !== undefined && !notNeeded) failField('notNeeded', '請寫不需要的原因')
+    if (notNeeded && !def!.optional) fail(`${def!.label}一定要有`)
+    if (!notNeeded && (key === 'blood' || key === 'abx')) {
+      if (!input.refId) failField('refId', key === 'blood' ? '請選這次住院的備血單（不需要備血請寫原因）' : '請選這次住院的抗生素醫囑（不需要請寫原因）')
+      if (key === 'blood' && !db.bloodRequests.some((r) => r.id === input.refId && r.admissionId === s.admissionId && !r.cancelled)) failField('refId', '備血單不是這次住院的（或已取消）')
+      if (key === 'abx' && !db.ipdOrders.some((o) => o.id === input.refId && o.admissionId === s.admissionId && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? '')))) failField('refId', '這不是這次住院有效的抗生素醫囑')
+    }
+    s.prep[key] = { by: u.id, at: now(), ...(notNeeded ? { notNeeded } : {}), ...(!notNeeded && input.refId ? { refId: input.refId } : {}) }
+    audit('術前準備', `${audText(s)}：${def!.label}${notNeeded ? `不需要（${notNeeded}）` : '完成'}`)
+    return surgeryView(s)
+  })
+}
+
+export function unmarkPrep(id: string, key: SurgeryPrepKey): Promise<SurgeryView> {
+  return mutate(() => {
+    requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'requested' && s.status !== 'scheduled') fail('已經送手術室，術前準備不能再改', 'CONFLICT')
+    delete s.prep[key]
+    audit('術前準備取消勾選', `${audText(s)}：${PREP_ITEMS.find((x) => x.key === key)?.label ?? key}`)
+    return surgeryView(s)
+  })
+}
+
+/** 送手術室：已排程、術前準備全部完成（沒完成的列出來） */
+export function sendToOr(id: string): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'scheduled') fail(s.status === 'requested' ? '手術室還沒排程' : '這台不是「已排程」，不能送', 'CONFLICT')
+    const miss = prepMissing(s)
+    if (miss.length) fail(`術前準備還沒完成：${miss.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label).join('、')}`, 'CONFLICT')
+    const t = now()
+    Object.assign(s, { status: 'sent', sentAt: t, sentBy: u.id })
+    audit('送手術室', audText(s))
+    return surgeryView(s)
+  })
+}
+
+// ---------- 手術室：三段查核、開始、完成 ----------
+
+/** 麻醉前、劃刀前暫停確認：項目要全部勾（送來的要和規定的一樣） */
+export function recordCheck(id: string, stage: Exclude<SurgeryCheckStage, 'signOut'>, items: string[]): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (stage === 'signIn' && s.status !== 'sent') fail('病人送到手術室後才能做麻醉前查核', 'CONFLICT')
+    if (stage === 'timeOut' && (!s.checks.signIn || s.status !== 'sent')) fail(s.checks.signIn ? '已經開始手術了' : '請先完成麻醉前查核', 'CONFLICT')
+    if (s.checks[stage]) fail('這段已經查核過了', 'CONFLICT')
+    const need = CHECK_ITEMS[stage].items
+    const miss = need.filter((x) => !(items ?? []).includes(x))
+    if (miss.length) failField('items', `還有 ${miss.length} 項沒確認：${miss.join('、')}`)
+    s.checks[stage] = { by: u.id, at: now() }
+    audit(stage === 'signIn' ? '麻醉前查核' : '劃刀前暫停確認', audText(s))
+    return surgeryView(s)
+  })
+}
+
+/** 開始手術（劃刀）：劃刀前暫停確認沒做完擋 */
+export function startSurgery(id: string): Promise<SurgeryView> {
+  return mutate(() => {
+    requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'sent') fail('這台不是「已送手術室」', 'CONFLICT')
+    if (!s.checks.timeOut) fail('劃刀前暫停確認（Time Out）還沒完成，不能開始手術', 'CONFLICT', 'timeOut')
+    Object.assign(s, { status: 'in-progress', startAt: now() })
+    audit('開始手術', audText(s))
+    return surgeryView(s)
+  })
+}
+
+/** 完成：離開前查核（項目全勾）＋紗布器械計數；不符要寫原因（主刀的待辦會看到） */
+export function finishSurgery(id: string, input: { items: string[]; spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string }): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'in-progress') fail('手術還沒開始（或已經完成）', 'CONFLICT')
+    const miss = CHECK_ITEMS.signOut.items.filter((x) => !(input.items ?? []).includes(x))
+    const c = { spongeBefore: Number(input.spongeBefore), spongeAfter: Number(input.spongeAfter), instrumentBefore: Number(input.instrumentBefore), instrumentAfter: Number(input.instrumentAfter) }
+    const { fields, mismatch } = countsProblem(c)
+    if (miss.length) fields.items = `還有 ${miss.length} 項沒確認：${miss.join('、')}`
+    const reason = input.mismatchReason?.trim()
+    if (mismatch.length && !reason) fields.mismatchReason = `計數不符（${mismatch.join('；')}）：請寫原因與處理（例：已照 X 光確認無遺留），並告知主刀`
+    failFields(fields)
+    const t = now()
+    s.checks.signOut = { by: u.id, at: t }
+    s.counts = { ...c, ...(mismatch.length ? { mismatchReason: `${mismatch.join('；')}：${reason}` } : {}) }
+    Object.assign(s, { status: 'done', endAt: t })
+    audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}`)
+    return surgeryView(s)
+  })
+}

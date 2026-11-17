@@ -9,6 +9,7 @@ import { find } from './views'
 import { certFeeLines, certsOfAdmission } from './certificate-fee'
 import { isolatedDays } from './flag-work'
 import { bloodFeeItems } from './blood-work'
+import { surgeryFeeItems } from './surgery-work'
 
 /**
  * 床位分段：每張床住了幾天（加總＝住院天數）。舊資料沒有床位紀錄，視為整段住目前的床。
@@ -67,7 +68,7 @@ function drugsOf(a: Admission): IpdBillInput['drugs'] {
 
 /** 已執行的檢驗、處置、影像（臨時醫囑做完的）；住院每日計費項目不算（另外依天數）。加上輸血：交叉試驗、發出的血品（依血庫紀錄） */
 function proceduresOf(a: Admission): IpdBillInput['procedures'] {
-  return [...ordersDone(a), ...bloodFeeItems(a.id)]
+  return [...ordersDone(a), ...bloodFeeItems(a.id), ...surgeryFeeItems(a.id)]
 }
 
 function ordersDone(a: Admission): IpdBillInput['procedures'] {

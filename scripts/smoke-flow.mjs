@@ -6809,6 +6809,187 @@ try {
     ok(dlg.includes('defineExpose({ markSaved })') && /saved\.value = r\s*\n\s*dlg\.value\?\.markSaved\(\)/.test(rr), '轉診回覆單存好切到預覽後清掉「改過」狀態（Esc、× 可以直接關）')
   }
 
+  // 手術排程與術前核對：規則、種子、申請、排程（權限、撞期、時段）、術前準備（不需要要原因、備血與抗生素要連這次住院的）、
+  // 送手術室把關、三段查核順序（沒暫停確認不能開始）、計數不符要原因、出院把關、帳單、手術紀錄、首頁待辦
+  console.log('\n[手術排程與術前核對]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const tomorrow = addDaysT(1)
+
+    // 規則
+    ok(api.overlaps('2026-11-18 09:00', 120, '2026-11-18 10:30', 60) && !api.overlaps('2026-11-18 09:00', 90, '2026-11-18 10:30', 60), '同房時段：重疊的擋，接著排的可以')
+    ok(api.prepMissing({ prep: { consent: {} } }).length === 4, '術前準備：還差幾項')
+    const cp = api.countsProblem({ spongeBefore: 10, spongeAfter: 9, instrumentBefore: 30, instrumentAfter: 30 })
+    ok(cp.mismatch.length === 1 && cp.mismatch[0].includes('紗布') && Object.keys(api.countsProblem({ spongeBefore: 10 }).fields).length === 3, '計數：紗布不符；沒填的一次標出')
+    const ce = api.checkSurgeryInput({ requestedDate: addDaysT(-1), estMinutes: 5 }, T)
+    ok(ce.procId && ce.side && ce.anesthesia && ce.requestedDate && ce.estMinutes && ce.diagnosis, '申請欄位一次標出（日期不能早於今天、時間 15–720 分）')
+    ok(!(await api.masterApi.listProcedures({})).some((p) => p.surgery || p.anesthesiaFee), '開立選單沒有手術與麻醉費')
+
+    // 種子
+    const sg1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    if (sg1) ok(sg1.status === 'scheduled' && sg1.schedule.room === 'OR1' && sg1.schedule.start === `${tomorrow} 09:00` && api.prepMissing(sg1).length === 3, '種子一：骨折明天 09:00 OR1，術前準備還差 3 項')
+    const sg2 = db().surgeries.find((s) => s.id === 'SG-SEED-2')
+    if (sg2) ok(sg2.status === 'scheduled' && !api.prepMissing(sg2).length && sg2.schedule.start > nowStr(), `種子二：闌尾炎 ${sg2.schedule.start} OR2，術前準備都好了`)
+    ok(db().users.find((u) => u.username === 'nurse02').grants.includes('surgery.schedule'), '種子：nurse02 被指定手術排程')
+
+    // 申請
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const doc = userOf(adm.doctorId)
+    const input = { admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'spinal', requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' }
+    await as('nurse01')
+    await expectError(() => S.requestSurgery(input), '護理師不能申請手術')
+    await as(userOf(db().doctors.find((d) => d.deptId !== adm.deptId).id))
+    let msg = await errOf(() => S.requestSurgery(input))
+    ok(msg.includes('醫師'), `別科不能申請：「${msg}」`)
+    await as(doc)
+    let f = await fieldsOf(() => S.requestSurgery({ ...input, procId: 'P003' }))
+    ok(f.procId, '檢驗醫令不是術式')
+    await expectError(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P039', content: '' }), '術式不能當醫令開')
+    const s1 = await S.requestSurgery(input)
+    ok(s1.status === 'requested' && /^OR\d{11}$/.test(s1.no) && s1.prepMissing.length === 5, `申請 ${s1.no}：待排程，術前準備 5 項都還沒`)
+
+    // 排程
+    await as('clerk01')
+    await expectError(() => S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 09:00` }), '櫃台不能排程')
+    await as('nurse01')
+    const board = await S.orBoard(tomorrow)
+    ok(board.canSchedule && board.requested.some((x) => x.id === s1.id), '護理師（預設有排程權限）看得到待排程')
+    ok((await api.dashboardApi.getDashboard()).surgeryToSchedule >= 1, '首頁：手術待排程')
+    f = await fieldsOf(() => S.scheduleSurgery(s1.id, { room: 'OR3', start: `${addDaysT(-1)} 09:00` }))
+    ok(f.start?.includes('過去'), '不能排在過去')
+    f = await fieldsOf(() => S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 19:30` }))
+    ok(f.start?.includes('20:00'), `超過開放時段：「${f.start}」`)
+    if (sg1) {
+      f = await fieldsOf(() => S.scheduleSurgery(s1.id, { room: 'OR1', start: `${tomorrow} 10:30` }))
+      ok(f.start?.includes(sg1.no), `和種子一撞期：「${f.start}」`)
+    }
+    let v = await S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+    ok(v.status === 'scheduled' && v.scheduleText === `OR3 ${tomorrow.slice(5)} 09:00–10:00`, `排程：${v.scheduleText}`)
+    v = await S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 10:00` })
+    ok(v.schedule.start.endsWith('10:00') && db().auditLogs[0].action === '手術改期', '改期寫稽核')
+    // 只交給手術室護理長
+    await as('admin')
+    await api.permissionApi.savePermissionRoles('surgery.schedule', { roles: [], reason: '只給手術室護理長', confirm: true })
+    await as('nurse01')
+    ok(!(await S.orBoard(tomorrow)).canSchedule && (await errOf(() => S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 10:00` }))).includes('權限'), '取消角色後一般護理師不能排程')
+    await as('nurse02')
+    ok((await S.orBoard(tomorrow)).canSchedule, '被指定的 nurse02 可以')
+    await as('admin')
+    await api.permissionApi.savePermissionRoles('surgery.schedule', { roles: ['nurse'], reason: '恢復', confirm: true })
+
+    // 術前準備
+    await as('nurse01')
+    msg = await errOf(() => S.sendToOr(s1.id))
+    ok(msg.includes('術前準備還沒完成') && msg.includes('同意書'), `準備沒完成不能送：「${msg}」`)
+    msg = await errOf(() => S.markPrep(s1.id, 'consent', { notNeeded: '急' }))
+    ok(msg.includes('一定要有'), '同意書不能「不需要」')
+    f = await fieldsOf(() => S.markPrep(s1.id, 'npo', { notNeeded: ' ' }))
+    ok(f.notNeeded, '不需要要寫原因')
+    f = await fieldsOf(() => S.markPrep(s1.id, 'blood', {}))
+    ok(f.refId?.includes('備血單'), '備血要選備血單')
+    const otherBlood = db().bloodRequests.find((r) => r.admissionId !== adm.id)
+    if (otherBlood) {
+      f = await fieldsOf(() => S.markPrep(s1.id, 'blood', { refId: otherBlood.id }))
+      ok(f.refId?.includes('不是這次住院'), '別人的備血單不行')
+    }
+    const nonAbx = db().ipdOrders.find((o) => o.admissionId === adm.id && o.category === 'medication' && o.status === 'active' && !db().drugs.find((d) => d.id === o.drugId)?.indication.includes('抗生素') && !db().drugs.find((d) => d.id === o.drugId)?.restrictedAbx)
+    if (nonAbx) {
+      f = await fieldsOf(() => S.markPrep(s1.id, 'abx', { refId: nonAbx.id }))
+      ok(f.refId?.includes('抗生素'), '不是抗生素的醫囑不行')
+    }
+    await S.markPrep(s1.id, 'consent')
+    await S.markPrep(s1.id, 'npo')
+    await S.markPrep(s1.id, 'siteMark')
+    await S.markPrep(s1.id, 'blood', { notNeeded: '疝氣修補出血少' })
+    v = await S.markPrep(s1.id, 'abx', { notNeeded: '乾淨手術不需預防性抗生素' })
+    ok(!v.prepMissing.length && v.prepRows.find((r) => r.key === 'blood').text.startsWith('不需要'), '術前準備完成（備血、抗生素寫不需要的原因）')
+    v = await S.unmarkPrep(s1.id, 'npo')
+    ok(v.prepMissing.includes('禁食'), '可以取消勾選')
+    await S.markPrep(s1.id, 'npo')
+    // 檢查順序
+    msg = await errOf(() => S.recordCheck(s1.id, 'signIn', api.CHECK_ITEMS.signIn.items))
+    ok(msg.includes('送到手術室後'), '還沒送來不能查核')
+    v = await S.sendToOr(s1.id)
+    ok(v.status === 'sent', '送手術室')
+    msg = await errOf(() => S.markPrep(s1.id, 'npo'))
+    ok(msg.includes('已經送手術室'), '送了之後術前準備不能再改')
+    await as(doc)
+    msg = await errOf(() => S.cancelSurgery(s1.id, '不開了'))
+    ok(msg.includes('送手術室'), '送了之後不能取消')
+    // 出院把關
+    db().admissions.find((a) => a.id === adm.id).dischargeSummary = { ...(db().admissions.find((a) => a.id === adm.id).dischargeSummary ?? {}), signedAt: nowStr(), dischargeType: '改善出院' }
+    await as('nurse01')
+    msg = await errOf(() => api.admissionApi.discharge(adm.id))
+    ok(msg.includes('手術室'), `在手術室不能出院：「${msg}」`)
+    delete db().admissions.find((a) => a.id === adm.id).dischargeSummary.signedAt
+
+    msg = await errOf(() => S.recordCheck(s1.id, 'timeOut', api.CHECK_ITEMS.timeOut.items))
+    ok(msg.includes('麻醉前'), '先麻醉前查核')
+    f = await fieldsOf(() => S.recordCheck(s1.id, 'signIn', api.CHECK_ITEMS.signIn.items.slice(1)))
+    ok(f.items?.includes('1 項'), `少勾一項：「${f.items}」`)
+    await S.recordCheck(s1.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    msg = await errOf(() => S.startSurgery(s1.id))
+    ok(msg.includes('暫停確認'), `沒做劃刀前暫停確認不能開始：「${msg}」`)
+    await S.recordCheck(s1.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    v = await S.startSurgery(s1.id)
+    ok(v.status === 'in-progress' && v.startAt, '開始手術')
+    const counts = { spongeBefore: 20, spongeAfter: 19, instrumentBefore: 35, instrumentAfter: 35 }
+    f = await fieldsOf(() => S.finishSurgery(s1.id, { items: api.CHECK_ITEMS.signOut.items.slice(2), ...counts }))
+    ok(f.items && f.mismatchReason?.includes('紗布'), '離開前：項目沒勾完、紗布不符沒寫原因，一次標出')
+    v = await S.finishSurgery(s1.id, { items: api.CHECK_ITEMS.signOut.items, ...counts, mismatchReason: '已照 X 光確認無遺留，已告知主刀' })
+    ok(v.status === 'done' && v.countMismatch && v.counts.mismatchReason.includes('紗布 術前 20、術後 19'), '完成：計數不符留紀錄（主刀看得到）')
+
+    // 帳單
+    await as('clerk01')
+    const bill = (await api.ipdChargeApi.getIpdBill(adm.id)).bill
+    ok(bill.lines.some((l) => l.name.startsWith('腹股溝疝氣修補術')) && bill.lines.some((l) => l.name.startsWith('脊髓麻醉費')), '住院帳單：術式＋麻醉費（依麻醉方式）')
+
+    // 手術紀錄
+    await as('nurse01')
+    await expectError(() => S.writeOpRecord(s1.id, { performed: 'x', findings: 'x', bloodLoss: 10, complications: '', specimen: '' }), '護理師不能寫手術紀錄')
+    await as(doc)
+    ok((await api.dashboardApi.getDashboard()).opRecordsDue >= 1, '主刀首頁：手術紀錄待寫')
+    f = await fieldsOf(() => S.writeOpRecord(s1.id, { performed: '', findings: '', bloodLoss: -1, complications: '', specimen: '' }))
+    ok(f.performed && f.findings && f.bloodLoss, '手術紀錄欄位一次標出')
+    v = await S.writeOpRecord(s1.id, { performed: '左側腹股溝疝氣修補術（無張力補片）', findings: '間接型疝氣，疝囊約 3 cm', bloodLoss: 20, complications: '', specimen: '' })
+    ok(v.record.complications === '無' && (await api.dashboardApi.getDashboard()).opRecordsDue === 0, '寫好後不再提醒')
+    msg = await errOf(() => S.writeOpRecord(s1.id, { performed: 'x', findings: 'x', bloodLoss: 0, complications: '', specimen: '' }))
+    ok(msg.includes('寫過'), '只寫一次')
+
+    // 取消、出院自動取消
+    const s2 = await S.requestSurgery({ ...input, procId: 'P040', side: 'na', anesthesia: 'local', diagnosis: '傷口感染', estMinutes: 45 })
+    f = await fieldsOf(() => S.cancelSurgery(s2.id, ' '))
+    ok(f.reason, '取消要原因')
+    ok((await S.cancelSurgery(s2.id, '改保守治療')).status === 'cancelled', '進手術室前可以取消')
+    if (sg1) {
+      await as('nurse01')
+      ok((await api.dashboardApi.getDashboard()).surgeryPrepDue >= 1, '首頁：明天要開、術前準備沒完成')
+    }
+    // 頁面不自己判斷
+    const fs = await import('node:fs')
+    const ui = ['src/components/surgery/SurgeryPanel.vue', 'src/pages/or/OrPage.vue'].map((p) => fs.readFileSync(p, 'utf8')).join('\n')
+    ok(!/overlaps\(|countsProblem\(|prepMissing\(/.test(ui), '頁面不自己判斷撞期、計數、準備（服務層算好）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

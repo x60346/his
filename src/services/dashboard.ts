@@ -3,7 +3,7 @@ import { db } from '@/mock/db'
 import { riskStateOf } from './risk-work'
 import { isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today } from '@/utils/date'
-import { query, sessionRole, sessionUser } from './http'
+import { permissionsOf, query, sessionRole, sessionUser } from './http'
 import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
 import { nameOf, openDeptTransfer, stockLoc } from './views'
 import { usableQty } from './stock-rules'
@@ -17,6 +17,7 @@ import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
+import { surgeryCounts } from './surgery-work'
 
 export interface DashboardStats {
   date: string
@@ -64,6 +65,10 @@ export interface DashboardStats {
   bloodUrgent?: number
   transfusionTodo: number
   bloodReactions?: number
+  /** 手術：待排程（有手術排程權限的人）、今明兩天要開但術前準備沒完成（護理站）、我是主刀手術紀錄待寫 */
+  surgeryToSchedule?: number
+  surgeryPrepDue: number
+  opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   udReturns: number
@@ -172,6 +177,7 @@ export function getDashboard(): Promise<DashboardStats> {
           referralReplies: pendingReplyVisits(me.doctorId).length,
           labAcks: labAckCount(me.doctorId),
           bloodReactions: reactionsToAck(me.doctorId).length,
+          opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
           ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue }))(abxPendingCounts(now())) : {}),
@@ -197,6 +203,12 @@ export function getDashboard(): Promise<DashboardStats> {
       purchaseOrdered: db.purchaseOrders.filter((p) => p.status === 'ordered').length,
       ...(['lab', 'admin'].includes(sessionRole() ?? '') ? { labWork: labWorkCount(), ...(({ work, urgent }) => ({ bloodWork: work, bloodUrgent: urgent }))(bloodLabCounts()) } : {}),
       transfusionTodo: transfusionTodoCount(now()),
+      surgeryPrepDue: surgeryCounts(now()).prepDue,
+      ...(() => {
+        const me = sessionUser()
+        const role = sessionRole()
+        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule } : {}
+      })(),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {
             transferRequested: db.transfers.filter((x) => x.status === 'requested' && x.kind !== 'return').length,

@@ -18,6 +18,7 @@ import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlags from '@/components/PatientFlags.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
+import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import WardFlagsPanel from './components/WardFlagsPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
@@ -78,6 +79,7 @@ const tabs = computed(() =>
         { key: 'vitals', label: '生命徵象' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'blood', label: '輸血', count: bloodTodo.value || undefined },
+        { key: 'surgery', label: '手術' },
         { key: 'flags', label: '隔離與 DNR', count: adm.value.isolationTodo || undefined },
         { key: 'notes', label: '護理紀錄' },
         { key: 'handover', label: '交班' },
@@ -198,6 +200,7 @@ const wardTotals = computed(() => ({
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
+          <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <NursingNotesPanel v-else :admission="adm" />

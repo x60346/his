@@ -7,6 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { admissionView, deptTransferView, find, nameOf, openDeptTransfer, patientBrief, type AdmissionView, type DeptTransferView, type PatientBrief } from './views'
 import { releaseAll, transfusionOpen } from './blood-work'
+import { surgeryOpen } from './surgery-work'
 import { activeIpdChargeOf, ipdBillOf } from './ipd-bill'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
@@ -272,6 +273,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
     if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
+    if (surgeryOpen(a)) fail('病人在手術室（已送或手術中），手術完成後才能辦理出院', 'CONFLICT')
     if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完（或請血庫退回）才能辦理出院', 'CONFLICT')
     const t = now()
     const check = dischargeCheckOf(a, t)
@@ -297,6 +299,8 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
     // 配好還在血庫的血袋：釋出給別人用（備血單照留，交叉試驗照樣計費）
     for (const r of db.bloodRequests.filter((x) => x.admissionId === a.id && !x.cancelled)) releaseAll(r, u.id, '病人出院', t)
+    // 還沒進手術室的手術（待排程、已排程）：取消，手術房的時段空出來
+    for (const sg of db.surgeries.filter((x) => x.admissionId === a.id && (x.status === 'requested' || x.status === 'scheduled'))) Object.assign(sg, { status: 'cancelled', cancelled: { by: u.id, at: t, reason: '病人出院' } })
     releaseBed(a.bedId)
     Object.assign(a, { status: 'discharged', dischargedAt: t, dischargeType: ds!.dischargeType })
     audit('出院', `${a.admitNo} ${find.patient(a.patientId)?.name}（${ds!.dischargeType}）${unfinished ? `；未執行：逾時給藥 ${check.overdueMar.length}、臨時醫囑 ${check.pendingStat.length}` : ''}`)

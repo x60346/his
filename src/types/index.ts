@@ -746,6 +746,10 @@ export interface Procedure {
   blood?: BloodProduct | 'crossmatch'
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
   recordCopy?: 'base' | 'page'
+  /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
+  surgery?: { minutes: number }
+  /** 麻醉費：哪一種麻醉（手術做完依麻醉方式帶入；局部麻醉不另收） */
+  anesthesiaFee?: AnesthesiaType
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
   imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
   active: boolean
@@ -1310,6 +1314,62 @@ export interface RiskSettings {
   pressureHigh: number
   /** Braden ≤ 這個分數＝中度 */
   pressureModerate: number
+}
+
+// ---------- 手術排程與術前核對 ----------
+
+export type SurgerySide = 'left' | 'right' | 'bilateral' | 'na'
+export type AnesthesiaType = 'general' | 'spinal' | 'regional' | 'local'
+/** 術前準備（病房護理師）：同意書、禁食、部位標記、備血、預防性抗生素 */
+export type SurgeryPrepKey = 'consent' | 'npo' | 'siteMark' | 'blood' | 'abx'
+/** 手術安全查核三階段：麻醉前（sign in）、劃刀前暫停確認（time out）、離開手術室前（sign out） */
+export type SurgeryCheckStage = 'signIn' | 'timeOut' | 'signOut'
+export type SurgeryStatus = 'requested' | 'scheduled' | 'sent' | 'in-progress' | 'done' | 'cancelled'
+
+export interface SurgeryPrepMark {
+  by: string
+  at: string
+  /** 不需要（例：小手術不用備血）：要寫原因 */
+  notNeeded?: string
+  /** 備血：連到哪張備血單；抗生素：連到哪筆醫囑 */
+  refId?: string
+}
+
+/**
+ * 手術（住院病人的排程手術）：主治申請 → 手術室排程（房間、時間）→ 病房術前準備 → 送手術室
+ * → 三段安全查核（麻醉前、劃刀前暫停確認、離開前含紗布器械計數）→ 手術紀錄。
+ * 做完自動把術式與麻醉費列入住院帳單
+ */
+export interface Surgery {
+  id: string
+  /** 手術單號 */
+  no: string
+  admissionId: string
+  patientId: string
+  /** 主刀（申請的醫師） */
+  doctorId: string
+  /** 術式（主檔 Procedure.surgery） */
+  procId: string
+  side: SurgerySide
+  anesthesia: AnesthesiaType
+  diagnosis: string
+  /** 希望的日期 */
+  requestedDate: string
+  estMinutes: number
+  note?: string
+  status: SurgeryStatus
+  createdAt: string
+  schedule?: { room: string; start: string; by: string; at: string }
+  prep: Partial<Record<SurgeryPrepKey, SurgeryPrepMark>>
+  sentAt?: string
+  sentBy?: string
+  checks: Partial<Record<SurgeryCheckStage, { by: string; at: string }>>
+  startAt?: string
+  endAt?: string
+  counts?: { spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string }
+  /** 手術紀錄（主刀或本科醫師） */
+  record?: { performed: string; findings: string; bloodLoss: number; complications: string; specimen: string; by: string; at: string }
+  cancelled?: { by: string; at: string; reason: string }
 }
 
 // ---------- 病歷影本申請 ----------

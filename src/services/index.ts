@@ -19,6 +19,7 @@ import * as abx from './abx'
 import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
+import * as surgery from './surgery'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -59,6 +60,7 @@ export const abxApi = overNetwork(abx)
 export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
+export const surgeryApi = overNetwork(surgery)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -124,6 +126,7 @@ export * from './abx-rules'
 export * from './blood-rules'
 export * from './copy-rules'
 export * from './management-rules'
+export * from './surgery-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
 export * from './interaction-rules'
@@ -158,6 +161,8 @@ export type { AbxInfo } from './abx-work'
 export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, BloodScanDemo, BloodScanInput, StartTransfusionInput, TransfusionVitalsInput } from './blood'
 export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { ManagementReport, MonthMetrics } from './management'
+export type { PatientSurgeries, SurgeryInput, OpRecordInput, OrBoard } from './surgery'
+export type { SurgeryView } from './surgery-work'
 export type { CopySource, CopySources, RecordCopyView, RecordCopyInput, CopyPage, CopyPrint } from './copy'
 export type { RoomRow } from './schedule'
 export type { SessionView, WeeklySlotView, SessionImpact, AffectedVisit, NoticeRow, SlotResult } from './schedule'
