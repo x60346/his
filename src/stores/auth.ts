@@ -2,7 +2,7 @@
 // 真正的權限檢查在服務層的 requireUser()，這裡只負責「體驗」。
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
-import { authApi, dbVersion, type LoginResult, type SessionUser } from '@/services'
+import { authApi, dbVersion, type LoginResult, type PermKey, type SessionUser } from '@/services'
 import type { Role } from '@/types'
 
 export const useAuth = defineStore('auth', () => {
@@ -71,8 +71,10 @@ export const useAuth = defineStore('auth', () => {
     await authApi.logout().catch(() => undefined)
   }
 
-  function canAccess(roles?: Role[]) {
+  /** permission：受權限目錄管的頁面（例：經營月報），還要有這個權限（登入資料的 can，服務層算好的） */
+  function canAccess(roles?: Role[], permission?: PermKey) {
     if (!user.value) return false
+    if (permission && !user.value.can?.includes(permission)) return false
     if (!roles?.length || user.value.role === 'admin') return true
     return roles.includes(user.value.role)
   }

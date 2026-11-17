@@ -3,6 +3,8 @@
 //   管制藥簿冊：一張，抬頭在上、逐筆收支結存、合計在下（和紙本簿冊同一個樣子）
 import type { DailyReport } from './charge'
 import type { ControlledLedger, ControlledReport } from './controlled'
+import type { ManagementReport } from './management'
+import { MGMT_KPIS, mgmtChangeText } from './management-rules'
 import { controlledLedgerFileName, controlledLedgerTable, controlledReportFileName, controlledReportTable, dailyReportTable, reportFileName } from './report-csv'
 import { buildXlsx, type XlsxSheet } from './xlsx'
 
@@ -32,3 +34,26 @@ export function controlledReportXlsx(r: ControlledReport): Uint8Array {
 }
 
 export const controlledReportXlsxFileName = (r: Pick<ControlledReport, 'from' | 'to'>) => controlledReportFileName(r).replace(/\.csv$/, '.xlsx')
+
+/**
+ * 經營月報：「摘要」（指標 × 本月、上月、去年同月、增減）、「門診科別」「門診醫師」「住院科別」「近 12 個月」。
+ * 沒有資料的格子留空（不是 0，免得被當成真的是零）
+ */
+export function managementXlsx(r: ManagementReport): Uint8Array {
+  const cell = (v: number | null | undefined) => (v === null || v === undefined ? '' : v)
+  const sum = [
+    ['經營月報', `${r.month}${r.partial ? `（算到 ${r.to}）` : ''}`, `病床 ${r.beds} 床`],
+    [],
+    ['分類', '指標', '單位', r.month, `上月 ${r.prev.month}`, `去年同月 ${r.lastYear.month}`, '比上月', '比去年同月'],
+    ...MGMT_KPIS.map((k) => [k.group, k.label, k.unit, cell(r.current[k.key]), cell(r.prev[k.key]), cell(r.lastYear[k.key]), mgmtChangeText(r.current[k.key], r.prev[k.key], k.unit), mgmtChangeText(r.current[k.key], r.lastYear[k.key], k.unit)]),
+  ]
+  return buildXlsx([
+    { name: '摘要', rows: sum, bold: [0, 2], freeze: 3 },
+    { name: '門診科別', rows: [['科別', '人次', '初診', '占比 %'], ...r.opdByDept.map((d) => [d.deptName, d.visits, d.first, d.share])], bold: [0], freeze: 1 },
+    { name: '門診醫師', rows: [['醫師', '科別', '人次'], ...r.opdByDoctor.map((d) => [d.doctorName, d.deptName, d.visits])], bold: [0], freeze: 1 },
+    { name: '住院科別', rows: [['科別', '入院', '出院', '住院人日'], ...r.ipdByDept.map((d) => [d.deptName, d.admissions, d.discharges, d.patientDays])], bold: [0], freeze: 1 },
+    { name: '近12個月', rows: [['月份', '門診人次', '實收', '佔床率 %'], ...r.trend.map((x) => [x.month, cell(x.opdVisits), cell(x.collected), cell(x.occupancy)])], bold: [0], freeze: 1 },
+  ])
+}
+
+export const managementXlsxFileName = (r: Pick<ManagementReport, 'month'>) => `經營月報_${r.month}.xlsx`

@@ -6658,6 +6658,83 @@ try {
     ok((await C.listRecordCopies(pt.id)).length === 2, '被指定的櫃台（病歷組）可以')
   }
 
+  // 經營月報：月份期間、比較文字、權限、和日結同一份收入、門診住院數字對得起來、沒有資料顯示 null、Excel
+  console.log('\n[經營月報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const M = api.managementApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    ok(JSON.stringify(api.monthRange('2028-02', '2028-11-17')) === JSON.stringify({ from: '2028-02-01', to: '2028-02-29', partial: false }) && api.monthRange('2026-11', '2026-11-17').to === '2026-11-17' && api.monthRange('2026-11', '2026-11-17').partial, '月份期間：閏年二月到 29 日；本月只算到今天')
+    ok(api.shiftMonth('2026-01', -1) === '2025-12' && api.shiftMonth('2026-11', -12) === '2025-11' && api.shiftMonth('2026-12', 1) === '2027-01', '前後月份跨年')
+    ok(api.mgmtChangeText(110, 100, '人次') === '+10.0%' && api.mgmtChangeText(90, 100, '元') === '−10.0%' && api.mgmtChangeText(72.5, 70, '%') === '+2.5 百分點' && api.mgmtChangeText(5, 0, '人') === '+5' && api.mgmtChangeText(5, null, '人') === '—', '比較：一般用 %、比率用百分點、基準 0 寫差多少、沒資料「—」')
+    ok(api.mgmtValueText(null, '元') === '—' && api.mgmtValueText(1234567, '元') === '1,234,567' && api.mgmtValueText(72.456, '%') === '72.5%', '數值顯示')
+
+    // 權限
+    const month = T.slice(0, 7)
+    await as('clerk01')
+    let msg = await errOf(() => M.managementReport(month))
+    ok(msg.includes('權限'), `櫃台預設不能看：「${msg}」`)
+    await as('admin')
+    msg = await errOf(() => M.managementReport(api.shiftMonth(month, 1)))
+    ok(msg.includes('還沒到'), '未來的月份擋')
+    msg = await errOf(() => M.managementReport('2026-13'))
+    ok(msg.includes('月份'), '月份格式')
+    const r = await M.managementReport(month)
+    const c = r.current
+    ok(r.partial && r.to === T && c.hasData, `本月（算到 ${r.to}）有資料`)
+
+    // 收入和日結同一份
+    const rep = await api.chargeApi.dailyReport(r.from, r.to)
+    ok(c.collected === rep.collected && c.nhiPoints === rep.nhiPoints && c.revenueOpd + c.revenueIpd + c.revenueOther === rep.patientTotal, `實收 ${c.collected}＝日結；門診 ${c.revenueOpd}＋住院 ${c.revenueIpd}＋其他 ${c.revenueOther}＝應收 ${rep.patientTotal}`)
+    ok(c.drugShare === null || (c.drugShare > 0 && c.drugShare < 100), `藥費占比 ${c.drugShare}%`)
+
+    // 門診、住院
+    const seen = db().visits.filter((v) => v.date >= r.from && v.date <= r.to && ['consulted', 'charged', 'dispensed'].includes(v.status))
+    ok(c.opdVisits === seen.length && c.opdFirst + c.opdRevisit === c.opdVisits, `門診 ${c.opdVisits} 人次（初診 ${c.opdFirst}、複診 ${c.opdRevisit}）：只算看過診的`)
+    ok(r.opdByDept.reduce((n, d) => n + d.visits, 0) === c.opdVisits && r.opdByDoctor.reduce((n, d) => n + d.visits, 0) === c.opdVisits && r.opdByDept.every((d, i, a) => i === 0 || a[i - 1].visits >= d.visits), '科別、醫師加總＝門診人次，多的在前')
+    const days = dateUtil.diffDays(r.from, r.to) + 1
+    ok(c.occupancy === Math.round((c.patientDays / (r.beds * days)) * 1000) / 10 && r.ipdByDept.reduce((n, d) => n + d.patientDays, 0) === c.patientDays, `佔床率 ${c.occupancy}%＝住院人日 ${c.patientDays}÷（${r.beds} 床 × ${days} 天）；科別加總一致`)
+    const todayCensus = db().admissions.filter((a) => a.status === 'admitted' && a.admittedAt && a.admittedAt.slice(0, 10) <= T).length
+    ok(c.patientDays >= todayCensus, `今天在院 ${todayCensus} 人有算進住院人日`)
+    ok(c.labReports === db().labReports.filter((x) => x.reportedAt.slice(0, 10) >= r.from && x.reportedAt.slice(0, 10) <= r.to).length, `檢驗報告 ${c.labReports} 份、影像 ${c.imagingReports} 份、門診處方 ${c.prescriptions} 張`)
+
+    // 新的收入會反映：病歷影本算「其他」
+    await as('clerk01')
+    const pt = db().patients.find((p) => db().labReports.some((x) => x.patientId === p.id))
+    const src = await api.copyApi.copySources(pt.id)
+    await api.copyApi.createRecordCopy({ patientId: pt.id, applicant: { kind: 'self', name: pt.name, idNo: pt.idNo }, purpose: '個人保存', items: [{ kind: src.sources[0].kind, refId: src.sources[0].refId }], payMethod: 'card' })
+    await as('admin')
+    const r2 = await M.managementReport(month)
+    ok(r2.current.revenueOther === c.revenueOther + 110 && r2.current.collected === c.collected + 110, '病歷影本 110 元算進「其他收入」與實收')
+
+    // 沒有資料的月份
+    const old = api.shiftMonth(month, -24)
+    const r3 = await M.managementReport(old)
+    ok(!r3.current.hasData && r3.current.opdVisits === null && r3.current.collected === null && api.mgmtChangeText(r3.current.opdVisits, r3.prev.opdVisits, '人次') === '—', `${old} 沒有資料：值是 null（畫面「—」），不是 0`)
+    ok(r.trend.length === 12 && r.trend[11].month === month && r.trend[0].month === api.shiftMonth(month, -11) && r.trend.some((x) => !x.hasData && x.opdVisits === null), '近 12 個月：舊的在前，沒資料的月份是 null')
+    ok(r.lastYear.month === api.shiftMonth(month, -12) && !r.lastYear.hasData, '去年同月（示範資料沒有）')
+
+    // 指定給個人
+    await api.permissionApi.setPermissionGrant('report.management', db().users.find((u) => u.username === 'dr02').id, { on: true, reason: '院長' })
+    await as('dr02')
+    ok((await M.managementReport(month)).current.hasData, '指定給院長（dr02）就能看')
+    await as('dr01')
+    ok((await errOf(() => M.managementReport(month))).includes('權限'), '其他醫師不行')
+
+    // Excel
+    const bytes = api.managementXlsx(r)
+    ok(bytes[0] === 0x50 && bytes[1] === 0x4b && api.managementXlsxFileName(r) === `經營月報_${month}.xlsx`, `匯出 Excel（${bytes.length} bytes，${api.managementXlsxFileName(r)}）`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

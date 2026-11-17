@@ -17,7 +17,7 @@ router.beforeEach((to) => {
     return to.name === 'login' && auth.isLoggedIn ? safeRedirect(to.query.redirect) : true
   }
   if (!auth.isLoggedIn) return { name: 'login', query: { redirect: to.fullPath } }
-  if (!auth.canAccess(to.meta.roles)) return { name: 'forbidden', query: { from: to.fullPath } }
+  if (!auth.canAccess(to.meta.roles, to.meta.permission)) return { name: 'forbidden', query: { from: to.fullPath } }
   return true
 })
 

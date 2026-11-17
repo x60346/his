@@ -2,10 +2,11 @@
 import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import {
-  Activity, BedDouble, Bug, Droplet, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
+  Activity, BarChart3, BedDouble, Bug, Droplet, ClipboardList, FlaskConical, HeartPulse, ScanLine, LayoutDashboard, Palette, Pill, PillBottle, Receipt, Settings, ShieldCheck, Stethoscope,
   UserPlus, Users,
 } from 'lucide-vue-next'
 import type { Role } from '@/types'
+import type { PermKey } from '@/services/permission-rules'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -17,6 +18,8 @@ declare module 'vue-router' {
     group?: MenuGroup
     /** 不需登入 */
     public?: boolean
+    /** 受權限目錄管的頁面：還要有這個權限才看得到、進得去（服務層一樣會擋） */
+    permission?: PermKey
   }
 }
 
@@ -45,6 +48,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },
   { path: 'drugs', name: 'drugs', component: () => import('@/pages/drugs/DrugsPage.vue'), meta: { title: '藥品庫存', icon: Activity, group: '其他', roles: ['pharmacist'] } },
 
+  { path: 'management', name: 'management', component: () => import('@/pages/management/ManagementPage.vue'), meta: { title: '經營月報', icon: BarChart3, group: '系統', permission: 'report.management' } },
   { path: 'admin', name: 'admin', component: () => import('@/pages/admin/AdminPage.vue'), meta: { title: '系統管理', icon: Settings, group: '系統', roles: ['admin'] } },
   { path: 'dev/ui', name: 'ui-gallery', component: () => import('@/pages/dev/UiGallery.vue'), meta: { title: 'UI 元件展示', icon: Palette, group: '系統', roles: ['admin'] } },
 

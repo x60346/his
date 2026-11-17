@@ -29,7 +29,7 @@ const menu = computed(() =>
   menuGroups
     .map((group) => ({
       group,
-      items: appRoutes.filter((r) => r.meta?.group === group && auth.canAccess(r.meta.roles)),
+      items: appRoutes.filter((r) => r.meta?.group === group && auth.canAccess(r.meta.roles, r.meta.permission)),
     }))
     .filter((g) => g.items.length),
 )
