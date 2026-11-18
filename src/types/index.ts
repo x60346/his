@@ -201,6 +201,8 @@ export interface ClinicSession {
 
 export interface Patient {
   id: string
+  /** 死亡（住院中宣告死亡時記下）：之後不能再掛號、預約住院 */
+  deceasedAt?: string
   /** 病歷號 */
   chartNo: string
   name: string
@@ -980,6 +982,8 @@ export interface Admission {
    * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院
    */
   obs?: { visitId: string; endAt?: string; outcome?: ErObsEnd['kind'] }
+  /** 死亡：宣告（醫師）→ 遺體護理檢核（護理師）→ 死亡證明書 → 送太平間（出院，床位釋放；帳單之後由家屬結） */
+  death?: DeathRecord
   /** 預約希望床等 */
   preferBedClass: Bed['bedClass']
   reason: string
@@ -1534,6 +1538,32 @@ export interface CodeBlue {
   outcome?: 'rosc' | 'death' | 'dnr'
   /** 急救後申請轉加護病房 */
   icuRequestId?: string
+}
+
+/** 死亡方式（死亡證明書）：自然死、意外、自殺、他殺、未確定（待司法相驗） */
+export type DeathManner = 'natural' | 'accident' | 'suicide' | 'homicide' | 'pending'
+/** 遺體護理檢核項目 */
+export type BodyCareKey = 'lines' | 'clean' | 'family' | 'valuables' | 'tag'
+export interface DeathRecord {
+  declaredAt: string
+  /** 宣告的醫師（使用者 id） */
+  declaredBy: string
+  /** 急救後宣告的：那次急救 */
+  codeBlueId?: string
+  /** 預期死亡（有 DNR、或安寧收案）：死亡病例審查用 */
+  expected: boolean
+  /** 死因（死亡證明書格式）：甲 直接引起死亡的疾病 → 乙 → 丙 → 丁 原始死因；other 其他對死亡有影響的疾病 */
+  causes: string[]
+  other?: string
+  manner: DeathManner
+  /** 住院經過（簡述，帶入出院病摘） */
+  course: string
+  /** 遺體護理（護理師檢核） */
+  care?: { items: BodyCareKey[]; valuables: string; by: string; at: string }
+  /** 死亡證明書（不收費，開了就能印：家屬辦後事要用） */
+  cert?: { no: string; copies: number; issuedAt: string; by: string; printed?: { at: string; by: string }[] }
+  morgueAt?: string
+  morgueBy?: string
 }
 
 /** 瞳孔光反射：靈敏、遲鈍、無反應 */

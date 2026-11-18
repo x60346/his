@@ -14,7 +14,7 @@ import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
-import { activeIpdChargeOf, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
+import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { surgeryCounts } from './surgery-work'
@@ -213,7 +213,7 @@ export function getDashboard(): Promise<DashboardStats> {
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
-      ipdToBill: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)).length,
+      ipdToBill: db.admissions.filter((a) => (a.status === 'admitted' && !a.death && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)) || deathToBill(a)).length,
       riskOverdue: db.admissions.filter((a) => a.status === 'admitted' && (sessionRole() !== 'nurse' || !myScope(sessionUser()?.id, now()) || myScope(sessionUser()?.id, now())!.has(a.id))).reduce((n, a) => {
         const rs = riskStateOf(a, now())
         return n + Number(rs.fall.due.status === 'overdue') + Number(rs.pressure.due.status === 'overdue')

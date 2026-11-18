@@ -211,7 +211,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu' | 'vent' | 'news'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu' | 'vent' | 'news' | 'death'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -271,6 +271,8 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       if (!measured) {
         tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象（含疼痛）' })
       }
+      // 死亡：遺體護理、送太平間（死亡證明書等醫師）
+      if (a.death) tasks.push({ ...base, id: `death-${a.id}`, kind: 'death', urgency: a.death.care ? 'todo' : 'due', at: a.death.declaredAt, text: !a.death.care ? '已宣告死亡：遺體護理' : a.death.cert || a.death.manner !== 'natural' ? '遺體護理完成：送太平間' : '遺體護理完成：等醫師開死亡證明書後送太平間' })
       // NEWS2：中、高 1 小時內再量；快速反應小組呼叫了還沒到
       const ns = newsStateOf(a, t)
       if (ns?.recheck) tasks.push({ ...base, id: `news-${a.id}`, kind: 'news', urgency: ns.recheck.status === 'overdue' ? 'overdue' : 'due', at: ns.recheck.dueAt, text: `NEWS2 ${ns.last.news.total} 分：1 小時內再量生命徵象（含給氧、意識）` })

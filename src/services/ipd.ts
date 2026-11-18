@@ -484,6 +484,8 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     const a = activeAdmission(admissionId)
     requireCare(user.doctorId, a, '寫出院病摘、准予出院', { consult: false })
     if (a.obs && !a.obs.endAt) fail('急診留觀不寫出院病摘：在「急診」看板結束留觀（離院、收住院、轉院）', 'CONFLICT')
+    if (a.death) fail('已宣告死亡：出院病摘由死亡紀錄帶入', 'CONFLICT')
+    if (input.dischargeType === '死亡') fail('出院類別「死亡」：請在「死亡」分頁宣告死亡（死因、死亡方式），病摘會自動帶入', 'CONFLICT')
     if (a.dischargeSummary?.signedAt) fail('已准予出院，要修改病摘請先取消准予出院', 'CONFLICT')
     if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
@@ -534,6 +536,7 @@ export function cancelDischargeOrder(admissionId: string, reason: string): Promi
     const user = requireUser('doctor')
     const a = activeAdmission(admissionId)
     requireCare(user.doctorId, a, '取消准予出院', { consult: false })
+    if (a.death) fail('已宣告死亡：不能取消（死亡出院）', 'CONFLICT')
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('病人尚未准予出院', 'CONFLICT')
     if (a.dischargeRx) fail('出院帶藥已經調劑：請住院藥局先「退回」，才能取消准予出院、修改處方', 'CONFLICT')

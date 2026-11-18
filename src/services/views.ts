@@ -325,7 +325,7 @@ export function admissionView(a: Admission): AdmissionView {
     deptName: nameOf.dept(a.deptId),
     bed: a.bedId ? find.bed(a.bedId) : undefined,
     days: a.admittedAt ? diffDays(a.admittedAt, end) + 1 : 0,
-    dischargeReady: a.status === 'admitted' && !!a.dischargeSummary?.signedAt,
+    dischargeReady: a.status === 'admitted' && !a.death && !!a.dischargeSummary?.signedAt,
     fromEr: !!(a.fromVisitId && find.visit(a.fromVisitId)?.er),
     ...(a.obs && !a.obs.endAt ? { obsStage: 'open' as const } : a.obs?.outcome === 'admit' && a.status === 'admitted' && find.bed(a.bedId ?? '')?.ward === obsWard ? { obsStage: 'waiting-bed' as const } : {}),
     ...(planUnreferred(db.dischargePlans.find((p) => p.admissionId === a.id)) ? { planUnreferred: true } : {}),

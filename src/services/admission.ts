@@ -87,6 +87,7 @@ export function reserve(input: ReserveInput): Promise<Admission> {
   return mutate(() => {
     requireUser('clerk', 'doctor', 'nurse')
     const p = must(find.patient(input.patientId), '病患')
+    if (p.deceasedAt) fail(`病人已於 ${p.deceasedAt.slice(0, 10)} 死亡，不能預約住院`, 'CONFLICT')
     must(find.doctor(input.doctorId), '主治醫師')
     if (!input.diagnosis.trim()) fail('請輸入入院診斷')
     if (input.expectedDate < today()) fail('預計入院日不可早於今天')
@@ -249,6 +250,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const u = requireUser('nurse', 'clerk')
     const a = must(find.admission(admissionId), '住院紀錄')
     if (a.status !== 'admitted') fail('只有住院中的病人可以辦理出院', 'CONFLICT')
+    if (a.death) fail('病人已宣告死亡：請護理師在「死亡」分頁完成遺體護理後送太平間（帳單之後由家屬結）', 'CONFLICT')
     if (obsOpen(a)) fail('急診留觀中：請急診醫師在「急診」看板結束留觀（離院、收住院、轉院）', 'CONFLICT')
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')

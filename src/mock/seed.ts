@@ -2423,6 +2423,42 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (todays[4]) todays[4].scan = { mode: 'skipped', reason: 'wristband', note: '腕帶弄濕讀不到，已請櫃台重印' }
   }
 
+  // 死亡出院（示範，不抽亂數）：肺癌末期、家屬簽 DNR（預期死亡），9 小時前宣告死亡 → 遺體護理、死亡證明書（已印一次）→ 送太平間；
+  // 帳單還沒結，等家屬到櫃台（住院結帳清單「死亡出院」）。病人挑沒住過院、之後沒有掛號的（死亡後不能掛號）裡最年長的
+  {
+    const busy = new Set([...admissions.map((a) => a.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
+    const pt = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate))[0] // 最年長的
+    const bed = beds.find((b) => b.ward === codes.wards[0] && b.status !== 'occupied')
+    if (pt && bed) {
+      const doc = users.find((u) => u.doctorId === 'DR03')!.id
+      const adAt = `${addDays(T, -5)} 10:30`
+      const died = addMinutes(nowStr, -9 * 60)
+      const m = (k: number) => addMinutes(died, k)
+      const id = 'A-DEATH-1'
+      const causes = ['呼吸衰竭', '肺癌末期併肺轉移']
+      dnrRecords.push({ id: 'DNR-DEATH-1', patientId: pt.id, doc: 'family', signedAt: addDays(T, -4), signerName: '林志明', relation: '成年子女', doctorIds: ['DR03', 'DR02'], withhold: ['compress', 'intubation', 'defib', 'drugs', 'ventilation'], nhiCard: true, recordedBy: doc, recordedAt: `${addDays(T, -4)} 15:00` })
+      ipdOrders.push(
+        { id: 'IO-DEATH-1', admissionId: id, type: 'long', category: 'nursing', content: 'Vital signs Q8H；呼吸困難時抬高床頭、給氧', startAt: adAt, stopAt: died, status: 'stopped', doctorId: 'DR03', createdAt: adAt, ackAt: addMinutes(adAt, 10), ackBy: 'U201', stopAckAt: m(5), stopAckBy: 'U201' },
+      )
+      vitals.push({ id: 'VS-DEATH-1', admissionId: id, at: addMinutes(died, -6 * 60), temp: 37.4, pulse: 118, resp: 28, sbp: 92, dbp: 58, spo2: 86, o2: 6, avpu: 'V', pain: 3, nurseId: 'U202' })
+      const roc = Number(T.slice(0, 4)) - 1911
+      admissions.push({
+        id, admitNo: `I${adAt.slice(2, 10).replace(/-/g, '')}${String(next('admitNo')).padStart(3, '0')}`, patientId: pt.id, deptId: 'D02', doctorId: 'DR03',
+        bedId: bed.id, bedHistory: [{ bedId: bed.id, from: adAt }], preferBedClass: '健保床', reason: '呼吸困難加劇', diagnosis: 'C34.90 肺癌末期',
+        status: 'discharged', reservedAt: `${addDays(T, -6)} 16:00`, expectedDate: addDays(T, -5), admittedAt: adAt, dischargedAt: m(110), dischargeType: '死亡',
+        wristband: { printedAt: adAt, printedBy: 'U201', reprints: [] },
+        dischargeSummary: { diagnosis: `${causes[0]}（原始死因：${causes[1]}）`, course: '肺癌末期，入院後呼吸困難逐漸加重；家屬簽署 DNR，給予氧氣與症狀緩解，家屬陪伴下心跳停止。', condition: `${died} 宣告死亡（病死或自然死）`, followUp: '', dischargeType: '死亡', doctorId: 'DR03', writtenAt: m(15), signedAt: m(15) },
+        death: {
+          declaredAt: died, declaredBy: doc, expected: true, causes, manner: 'natural', course: '肺癌末期，入院後呼吸困難逐漸加重；家屬簽署 DNR，給予氧氣與症狀緩解，家屬陪伴下心跳停止。',
+          care: { items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '手機、眼鏡、現金 860 元，交長子林志明', by: 'U201', at: m(50) },
+          cert: { no: `${roc} 死字第 ${String(next(`death:${roc}`)).padStart(6, '0')} 號`, copies: 3, issuedAt: m(70), by: doc, printed: [{ at: m(75), by: 'U201' }] },
+          morgueAt: m(110), morgueBy: 'U201',
+        },
+      })
+      pt.deceasedAt = died
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,

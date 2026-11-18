@@ -21,6 +21,7 @@ import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
 import VentPanel from '@/components/VentPanel.vue'
 import IcuCarePanel from '@/components/IcuCarePanel.vue'
 import CodeBluePanel from '@/components/CodeBluePanel.vue'
+import DeathPanel from '@/components/DeathPanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -191,6 +192,7 @@ const tabs = computed(() => [
   { key: 'wounds', label: '傷口' },
   { key: 'icu', label: '加護病房' },
   { key: 'code', label: '急救' },
+  { key: 'death', label: adm.value?.death ? '死亡・已宣告' : '死亡' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -459,6 +461,7 @@ async function submitNote() {
         <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" />
         <IcuCarePanel v-else-if="tab === 'icu'" :admission-id="adm.id" />
         <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
+        <DeathPanel v-else-if="tab === 'death'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->

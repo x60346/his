@@ -67,6 +67,7 @@ export interface RegisterInput {
  */
 function createVisit(input: RegisterInput): Visit {
   const patient = must(find.patient(input.patientId), '病患')
+  if (patient.deceasedAt) fail(`病人已於 ${patient.deceasedAt.slice(0, 10)} 死亡，不能掛號`, 'CONFLICT')
   const date = input.sessionId.slice(1, 9).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
   ensureSessions(date)
   const session = must(find.session(input.sessionId), '診次')

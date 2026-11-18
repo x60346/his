@@ -37,6 +37,7 @@ import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
 import CodeBluePanel from '@/components/CodeBluePanel.vue'
+import DeathPanel from '@/components/DeathPanel.vue'
 import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
@@ -132,6 +133,7 @@ const tabs = computed(() =>
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
         { key: 'code', label: '急救' },
+        ...(adm.value.death ? [{ key: 'death', label: '死亡・遺體護理', count: adm.value.death.care ? undefined : 1 }] : []),
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'wounds', label: '傷口', count: adm.value.woundTodo || undefined },
@@ -225,6 +227,7 @@ const wardTotals = computed(() => ({
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
                   <span class="ml-auto flex flex-wrap justify-end gap-1">
+                    <UBadge v-if="p.death" tone="gray" title="已宣告死亡：遺體護理、送太平間">已宣告死亡</UBadge>
                     <UBadge v-if="p.rrtPending" tone="red" title="已呼叫快速反應小組，等到場評估">快速反應</UBadge>
                     <UBadge v-if="p.news && p.news.level !== 'low'" :tone="p.news.level === 'high' || p.news.recheck === 'overdue' ? 'red' : 'yellow'" :title="`NEWS2 ${p.news.score} 分（${p.news.at.slice(11)}）：${p.news.recheck === 'overdue' ? '1 小時內再量已逾時' : '1 小時內再量'}`">NEWS {{ p.news.score }}</UBadge>
                     <UBadge v-if="p.icu?.late" tone="red" title="重症流程表超過 75 分鐘沒記">流程表 {{ p.icu.minutes }} 分</UBadge>
@@ -314,6 +317,7 @@ const wardTotals = computed(() => ({
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
+          <DeathPanel v-else-if="tab === 'death'" :admission-id="adm.id" @changed="reload" />
           <NursingNotesPanel v-else :admission="adm" />
         </UCard>
       </div>

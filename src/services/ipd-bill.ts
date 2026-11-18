@@ -153,6 +153,11 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
   return { lines, meta, ...summarize(lines), identityCode: identity.code, identityName: identity.name }
 }
 
+/** 帳單算到哪一天：出院了算到出院那天（死亡出院：送太平間後才結帳） */
+export const billEndOf = (a: Admission) => (a.status === 'discharged' && a.dischargedAt ? a.dischargedAt.slice(0, 10) : today())
+/** 死亡出院、還沒結帳：家屬之後來結（住院結帳清單、櫃台待辦） */
+export const deathToBill = (a: Admission) => a.status === 'discharged' && a.dischargeType === '死亡' && !!a.death && !activeIpdChargeOf(a.id)
+
 /** 這次住院目前有效的住院收據（沒作廢、沒退費） */
 export const activeIpdChargeOf = (admissionId: string): Charge | undefined => db.charges.find((c) => c.admissionId === admissionId && !c.voided)
 

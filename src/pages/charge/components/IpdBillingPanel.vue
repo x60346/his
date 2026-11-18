@@ -112,7 +112,8 @@ async function openStatement() {
                 <span class="block font-medium text-slate-800">{{ x.patientName }} <span class="tabular text-xs font-normal text-slate-500">{{ x.chartNo }}</span></span>
                 <span class="block text-xs text-slate-500">{{ x.bedNo }}・{{ x.deptName }}・住院第 {{ x.days }} 天<template v-if="x.interimPaid && !x.receiptNo">・期中已繳 {{ x.interimPaid.toLocaleString() }}</template></span>
               </span>
-              <UBadge v-if="x.status === 'discharged'" tone="gray">已出院</UBadge>
+              <UBadge v-if="x.death && !x.receiptNo" tone="gray" :title="x.status === 'discharged' ? '已送太平間：家屬來結帳' : '送太平間後由家屬結帳'">{{ x.status === 'discharged' ? '死亡出院・待家屬結帳' : '已宣告死亡' }}</UBadge>
+              <UBadge v-else-if="x.status === 'discharged'" tone="gray">已出院</UBadge>
               <UBadge v-else-if="x.receiptNo" tone="green">已結帳</UBadge>
               <UBadge v-else-if="x.dischargeReady" tone="yellow">准出院・待結帳</UBadge>
               <UBadge v-else-if="x.suggestInterim" tone="blue" :title="x.suggestInterim">建議期中繳款</UBadge>

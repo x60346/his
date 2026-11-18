@@ -5523,7 +5523,8 @@ try {
     ok(r9.lines.every((x) => x.patientPay) && B.summarize(r9.lines).nhiPoints === 0, '自費身分：全部自費價、不申報健保')
 
     // 種子
-    const disc = db().admissions.filter((a) => a.status === 'discharged')
+    // 死亡出院的帳單之後由家屬結（不在出院前結帳）：另外測
+    const disc = db().admissions.filter((a) => a.status === 'discharged' && a.dischargeType !== '死亡')
     const ipdCharges = db().charges.filter((c) => c.admissionId)
     ok(disc.length > 0 && disc.every((a) => ipdCharges.some((c) => c.admissionId === a.id && !c.voided && c.ipd.days === B.ipdDays(a.admittedAt, a.dischargedAt) && c.paidAt < a.dischargedAt)), `種子：已出院的 ${disc.length} 位都有住院收據（出院前結帳、天數正確）`)
     const nos = db().charges.map((c) => c.receiptNo)
@@ -5539,8 +5540,8 @@ try {
     await expectError(() => IC.listIpdBilling(), '護理師看住院結帳')
     await as('clerk01')
     const lst = await IC.listIpdBilling()
-    ok(lst[0].admissionId === ready.id && lst[0].dischargeReady && lst.some((x) => x.admissionId === notReady.id && !x.dischargeReady), '住院結帳清單：准出院的排最前面')
-    ok((await api.dashboardApi.getDashboard()).ipdToBill === db().admissions.filter((x) => x.status === 'admitted' && x.dischargeSummary?.signedAt).length, '櫃台首頁「住院待結帳」＝准出院還沒結帳的人數')
+    ok(lst.filter((x) => !x.death)[0].admissionId === ready.id && lst.filter((x) => !x.death)[0].dischargeReady && lst.some((x) => x.admissionId === notReady.id && !x.dischargeReady), '住院結帳清單：准出院的排最前面（死亡出院待家屬結帳的另外標）')
+    ok((await api.dashboardApi.getDashboard()).ipdToBill === db().admissions.filter((x) => (x.status === 'admitted' && x.dischargeSummary?.signedAt) || (x.dischargeType === '死亡' && !db().charges.some((c) => c.admissionId === x.id && !c.voided))).length, '櫃台首頁「住院待結帳」＝准出院還沒結帳＋死亡出院待家屬結帳的人數')
     const nv = await IC.getIpdBill(notReady.id)
     ok(nv.bill && nv.blocked?.includes('簽准出院'), '還沒准出院：可看試算、標出不能結帳')
     msg = await errOf(() => IC.payIpd(notReady.id, { payMethod: 'card', received: 0 }))
@@ -9353,6 +9354,136 @@ try {
     await as('nurse01')
     inf = await api.infusionApi.patientInfusions(sep.id)
     ok(inf.orphans.some((x) => x.order.id === 'IO-VASO-SEED-1'), '護理站：醫囑停了還在滴，請停止點滴')
+  }
+
+  // 死亡出院：宣告（死因、死亡方式、權限、急救中不能宣告、急救後帶入時間）→ 醫囑停止、病摘帶入 → 遺體護理 → 死亡證明書
+  // （非自然死不開）→ 送太平間（出院、床位釋放）→ 家屬結帳；死亡後不能掛號、預約住院；一般出院流程擋
+  console.log('\n[死亡出院]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const D = api.deathApi
+    const { now } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const t0 = '2026-11-18 10:00'
+    let e = api.checkDeathInput({}, '2026-11-10 10:00', t0)
+    ok(e.cause0 && e.manner && e.course, '宣告：死因甲、死亡方式、住院經過')
+    e = api.checkDeathInput({ causes: ['a', '', 'c'], manner: 'natural', course: 'x' }, '2026-11-10 10:00', t0)
+    ok(e.cause1 && !e.cause0, '死因不能跳層（甲、丙有寫，乙空白）')
+    e = api.checkDeathInput({ causes: ['a'], manner: 'natural', course: 'x', declaredAt: '2026-11-09 10:00' }, '2026-11-10 10:00', t0)
+    ok(e.declaredAt?.includes('早於入院') && api.checkDeathInput({ causes: ['a'], manner: 'natural', course: 'x', declaredAt: '2026-11-19 10:00' }, '2026-11-10 10:00', t0).declaredAt?.includes('未來'), '死亡時間：不能早於入院、不能是未來')
+    ok(api.needsProsecutor('accident') && api.needsProsecutor('pending') && !api.needsProsecutor('natural'), '非自然死要報請檢察官相驗')
+    e = api.checkBodyCare({ items: ['lines', 'clean'] })
+    ok(e.items?.includes('家屬告別') && e.valuables && !Object.keys(api.checkBodyCare({ items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '無' })).length, '遺體護理：五項都要勾、寫點交物品')
+    ok(api.isExpectedDeath(['compress'], false) && !api.isExpectedDeath(['feeding'], false) && !api.isExpectedDeath(undefined, false) && api.isExpectedDeath(undefined, true), '預期死亡：有 DNR（不施行心肺復甦術的項目）或安寧收案')
+    ok(api.morgueProblem({ manner: 'natural' })?.includes('遺體護理') && api.morgueProblem({ care: {}, manner: 'natural' })?.includes('死亡證明書') && !api.morgueProblem({ care: {}, manner: 'accident' }), '送太平間前：遺體護理、死亡證明書（非自然死不用）')
+
+    // 種子
+    const dead = db().admissions.find((a) => a.id === 'A-DEATH-1')
+    const dp = db().patients.find((p) => p.id === dead?.patientId)
+    ok(dead?.status === 'discharged' && dead.dischargeType === '死亡' && dead.death.expected && dead.death.cert && dead.death.morgueAt && dp.deceasedAt && db().beds.every((b) => b.admissionId !== dead.id), '種子：肺癌末期 DNR 病人預期死亡、遺體護理、死亡證明書、已送太平間（床位釋放）')
+    await as('clerk01')
+    let list = await api.ipdChargeApi.listIpdBilling()
+    const di = list.find((x) => x.admissionId === dead.id)
+    ok(di?.death && di.dischargeReady && !di.receiptNo && (await api.dashboardApi.getDashboard()).ipdToBill >= 1, '住院結帳清單：死亡出院、可結帳（櫃台待辦）')
+    let bill = await api.ipdChargeApi.getIpdBill(dead.id)
+    ok(bill.bill && !bill.blocked && bill.bill.meta.to === dead.dischargedAt.slice(0, 10), `死亡出院帳單算到出院那天（${bill.bill?.meta.days} 天，自付 ${bill.bill?.patientTotal} 元）`)
+    let msg = await errOf(() => api.bookingApi.register({ patientId: dp.id, sessionId: db().sessions.find((s) => s.date > dateUtil.today() && s.period !== 'ER').id, identityCode: dp.defaultIdentity, caseType: '01' }))
+    ok(msg.includes('死亡'), `死亡的病人掛號 → 「${msg}」`)
+    const ch = await api.ipdChargeApi.payIpd(dead.id, { payMethod: 'card', received: 0 })
+    ok(ch.receiptNo && !(await api.ipdChargeApi.listIpdBilling()).some((x) => x.admissionId === dead.id && !x.receiptNo), `家屬結帳：${ch.receiptNo}（${ch.patientTotal} 元）`)
+    await as('nurse01')
+    const pdv = await D.printDeathCertificate(dead.id)
+    ok(pdv.cert.printed.length === 2 && pdv.print.name === dp.name && pdv.causesText[0].text === '呼吸衰竭', '家屬來拿：再印一次死亡證明書')
+
+    // 宣告（蜂窩性組織炎病人：沒有 DNR → 非預期）
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const cellBed = cell.bedId
+    await as('nurse01')
+    await expectError(() => D.declareDeath(cell.id, { causes: ['x'], manner: 'natural', course: 'x' }), '護理師宣告死亡')
+    let pd = await D.patientDeath(cell.id)
+    ok(!pd.expected && !pd.canDeclare && !pd.death, '護理師看：非預期（沒有 DNR）、不能宣告')
+    await as('dr02')
+    msg = await errOf(() => D.declareDeath(cell.id, { causes: ['x'], manner: 'natural', course: 'x' }))
+    ok(msg.includes('只有') && msg.includes('醫師'), `別科醫師宣告 → 「${msg}」`)
+    // 急救中不能宣告；急救以宣告死亡結束 → 帶入時間、帶領醫師可以宣告
+    await as('nurse01')
+    const cb = await api.codeApi.startCode(cell.id)
+    await as('dr02')
+    await api.codeApi.leadCode(cb.id)
+    msg = await errOf(() => D.declareDeath(cell.id, { causes: ['x'], manner: 'natural', course: 'x' }))
+    ok(msg.includes('急救進行中'), `急救中宣告 → 「${msg}」`)
+    await api.codeApi.addCodeEvent(cb.id, { kind: 'cpr' })
+    await api.codeApi.endCode(cb.id, { outcome: 'death' })
+    pd = await D.patientDeath(cell.id)
+    ok(pd.fromCode?.id === cb.id && pd.canDeclare, '急救以宣告死亡結束：帶入那次急救（帶領的醫師可以宣告）')
+    let f = await fieldsOf(() => D.declareDeath(cell.id, { causes: ['', 'b'], manner: '', course: '', codeBlueId: cb.id }))
+    ok(f.cause0 && f.manner && f.course, '欄位錯誤一次標出')
+    const ds0 = db().ipdOrders.filter((o) => o.admissionId === cell.id && o.status === 'active').length
+    let dv = await D.declareDeath(cell.id, { causes: ['敗血性休克', '壞死性筋膜炎', '右下肢蜂窩性組織炎'], manner: 'natural', course: '蜂窩性組織炎惡化為壞死性筋膜炎，敗血性休克，急救無效', codeBlueId: cb.id })
+    const ca = db().admissions.find((a) => a.id === cell.id)
+    ok(dv.declaredAt === db().codeBlues.find((c) => c.id === cb.id).endedAt && dv.codeBlueId === cb.id && !dv.expected && ds0 > 0 && !db().ipdOrders.some((o) => o.admissionId === cell.id && o.status === 'active') && ca.dischargeSummary.dischargeType === '死亡' && ca.dischargeSummary.signedAt && ca.dischargeSummary.diagnosis.includes('原始死因：右下肢蜂窩性組織炎') && db().patients.find((p) => p.id === cell.patientId).deceasedAt, '帶領急救的醫師宣告：時間＝急救結束、非預期、醫囑全部停止、病摘帶入（死亡、原始死因）、病人標死亡')
+    msg = await errOf(() => D.declareDeath(cell.id, { causes: ['x'], manner: 'natural', course: 'x' }))
+    ok(msg.includes('已經宣告'), '不能重複宣告')
+    // 一般出院、病摘、結帳都擋
+    await as('clerk01')
+    msg = await errOf(() => api.admissionApi.discharge(cell.id, { confirmUnfinished: true }))
+    ok(msg.includes('送太平間'), `一般辦理出院 → 「${msg}」`)
+    msg = await errOf(() => api.ipdChargeApi.payIpd(cell.id, { payMethod: 'card', received: 0 }))
+    ok(msg.includes('送太平間後'), `送太平間前結帳 → 「${msg}」`)
+    await as(db().users.find((u) => u.doctorId === cell.doctorId).username)
+    msg = await errOf(() => api.ipdApi.cancelDischargeOrder(cell.id, 'x'))
+    ok(msg.includes('死亡'), '不能取消准予出院')
+    // 送太平間前要遺體護理、死亡證明書
+    await as('nurse01')
+    pd = await D.patientDeath(cell.id)
+    ok(!pd.canMorgue && pd.morgueBlocked?.includes('遺體護理') && pd.canCare, '還沒遺體護理：不能送太平間')
+    f = await fieldsOf(() => D.recordBodyCare(cell.id, { items: ['lines'], valuables: '' }))
+    ok(f.items && f.valuables, '遺體護理：沒勾完、沒寫點交，一次標出')
+    await D.recordBodyCare(cell.id, { items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '手機、皮夾，交配偶' })
+    msg = await errOf(() => D.sendToMorgue(cell.id))
+    ok(msg.includes('死亡證明書'), `沒開死亡證明書送太平間 → 「${msg}」`)
+    await as(db().users.find((u) => u.doctorId === cell.doctorId).username)
+    dv = await D.issueDeathCertificate(cell.id, { copies: 3 })
+    ok(/死字第 \d{6} 號/.test(dv.cert.no) && dv.cert.copies === 3, `本科醫師開死亡證明書：${dv.cert.no}`)
+    msg = await errOf(() => D.issueDeathCertificate(cell.id, { copies: 1 }))
+    ok(msg.includes('已經開了'), '不能重複開')
+    await as('nurse01')
+    dv = await D.sendToMorgue(cell.id)
+    const cb2 = db().admissions.find((a) => a.id === cell.id)
+    await as('clerk01')
+    ok(cb2.status === 'discharged' && cb2.dischargeType === '死亡' && dv.morgueAt && db().beds.find((b) => b.id === cellBed).admissionId !== cell.id && !db().lines.some((l) => l.admissionId === cell.id && !l.removedAt), '送太平間：死亡出院、床位釋放、管路記移除')
+    ok((await api.ipdChargeApi.getIpdBill(cell.id)).bill, '帳單：等家屬結帳')
+    // 非自然死：不開證明書、不用證明書就能送
+    const frac = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    await as(db().users.find((u) => u.doctorId === frac.doctorId).username)
+    dv = await D.declareDeath(frac.id, { causes: ['頭部外傷'], manner: 'accident', course: '病房內跌倒頭部外傷' })
+    msg = await errOf(() => D.issueDeathCertificate(frac.id, { copies: 1 }))
+    ok(msg.includes('檢察官'), `意外死開死亡證明書 → 「${msg}」`)
+    await as('nurse01')
+    await D.recordBodyCare(frac.id, { items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '無' })
+    ok((await D.patientDeath(frac.id)).canMorgue, '非自然死：遺體護理完成就能送（相驗由檢察官）')
+    // 死亡後不能預約住院
+    await as('clerk01')
+    msg = await errOf(() => api.admissionApi.reserve({ patientId: cell.patientId, deptId: cell.deptId, doctorId: cell.doctorId, diagnosis: 'x', reason: 'x', expectedDate: dateUtil.today(), preferBedClass: '健保床' }))
+    ok(msg.includes('死亡'), `死亡的病人預約住院 → 「${msg}」`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
