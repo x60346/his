@@ -175,6 +175,8 @@ export interface DashboardStats {
   medRecToBuildLate?: number
   medRecToDecide?: number
   medRecLate?: number
+  /** 醫師：我的病人的藥師建議（藥事照護）待回覆 */
+  pharmCareToReply?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -291,6 +293,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           abxAdvice: openAdvice(me.doctorId).length,
           tdmAlerts: tdmAlerts(me.doctorId).length,
+          pharmCareToReply: db.pharmCareNotes.filter((x) => x.status === 'sent' && db.admissions.some((a) => a.id === x.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId)).length,
           ...(() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId && a.medRec && !a.medRec.completedAt); return { medRecToDecide: xs.length, medRecLate: xs.filter((a) => medRecState(a.medRec, a.admittedAt ?? now(), now()).overdue).length } })(),
           pharmQueries: pharmQueried(me.doctorId).length,
           prophylaxisDue: prophylaxisOverdue(now(), me.doctorId).length,

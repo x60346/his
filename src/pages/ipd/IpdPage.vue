@@ -28,6 +28,7 @@ import BloodPanel from '@/components/blood/BloodPanel.vue'
 import AbxTimeline from '@/components/AbxTimeline.vue'
 import AdrPanel from '@/components/AdrPanel.vue'
 import MedRecPanel from '@/components/MedRecPanel.vue'
+import PharmCareList from '@/components/PharmCareList.vue'
 import DischargeMedListPrint from '@/components/DischargeMedListPrint.vue'
 import type { DischargeMedList } from '@/services'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -216,6 +217,7 @@ const tabs = computed(() => [
   { key: 'abx', label: '抗生素' },
   { key: 'adr', label: '不良反應' },
   { key: 'medrec', label: '用藥整合' },
+  { key: 'pharmcare', label: '藥事照護' },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
   { key: 'blood', label: '輸血', count: blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.filter((r) => !['done', 'cancelled'].includes(r.status)).length || undefined : undefined },
   { key: 'surgery', label: '手術' },
@@ -529,6 +531,7 @@ async function submitNote() {
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
+        <div v-else-if="tab === 'pharmcare'" class="p-4"><PharmCareList :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" @order="(p) => { orderPreset = p; orderOpen = true }" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
         <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />

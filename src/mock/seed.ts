@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2877,6 +2877,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 藥事照護紀錄（示範，不抽亂數）：敗血症建議監測腎功能（主治已接受）；骨折建議停用一種 NSAID（等主治回覆）
+  const pharmCareNotes: PharmCareNote[] = []
+  {
+    const by = (dx: string) => admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith(dx))
+    const sep = by('A41')
+    const fr = by('S52')
+    if (sep) {
+      const at = notFuture(addMinutes(sep.admittedAt!, 8 * 60), 300)
+      pharmCareNotes.push({ id: 'PC-SEED-1', admissionId: sep.id, patientId: sep.patientId, kind: 'monitor', text: '敗血性休克合併急性腎損傷（肌酸酐 2.1），抗生素依腎功能調整：建議每 48 小時追蹤肌酸酐，Meropenem 劑量隨 CrCl 調整', by: 'U301', at, status: 'accepted', reply: { by: users.find((u) => u.doctorId === sep.doctorId)!.id, at: addMinutes(at, 90), text: '已開每 48 小時肌酸酐' } })
+    }
+    if (fr) pharmCareNotes.push({ id: 'PC-SEED-2', admissionId: fr.id, patientId: fr.patientId, kind: 'deprescribe', text: '病人已有 Celecoxib，又加開 Ibuprofen：兩種 NSAID 併用增加腸胃出血與腎損傷風險，建議擇一（保留 Celecoxib）', by: 'U301', at: addMinutes(nowStr, -90), status: 'sent' })
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -2966,6 +2979,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     notifiableReports,
     abxInterventions,
     adrReports,
+    pharmCareNotes,
     dischargePlans,
     vitals,
     nursingNotes,

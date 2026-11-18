@@ -23,6 +23,7 @@ import * as abxTimeline from './abx-timeline'
 import * as pharm from './pharm'
 import * as adr from './adr'
 import * as medrec from './medrec'
+import * as pharmcare from './pharmcare'
 import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
@@ -94,6 +95,7 @@ export const abxTimelineApi = overNetwork(abxTimeline)
 export const pharmApi = overNetwork(pharm)
 export const adrApi = overNetwork(adr)
 export const medrecApi = overNetwork(medrec)
+export const pharmCareApi = overNetwork(pharmcare)
 export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
@@ -192,6 +194,7 @@ export * from './abx-timeline-rules'
 export * from './pharm-rules'
 export * from './adr-rules'
 export * from './medrec-rules'
+export * from './pharmcare-rules'
 export * from './blood-rules'
 export * from './copy-rules'
 export * from './management-rules'
@@ -258,6 +261,7 @@ export type { PharmItem } from './pharm'
 export type { PharmIssue } from './pharm-work'
 export type { AdrView, AdrStats, AdrInput } from './adr'
 export type { MedRecView, HomeMedView, HomeMedInput, DischargeRecon, DischargeMedList } from './medrec'
+export type { PharmCareView, PharmCarePatient } from './pharmcare'
 export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, BloodScanDemo, BloodScanInput, StartTransfusionInput, TransfusionVitalsInput } from './blood'
 export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { ManagementReport, MonthMetrics } from './management'

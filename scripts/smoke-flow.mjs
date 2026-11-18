@@ -10795,6 +10795,73 @@ try {
     ok(nos.signedAt, '沒有居家用藥清單的病人：照常簽署')
   }
 
+  // 藥事照護紀錄：建議類型與輸入、依類型統計、種子、藥師寫建議、主治接受／不接受、首頁待辦、權限
+  console.log('\n[藥事照護紀錄]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.pharmCareApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const ce = api.checkPharmCareInput({ kind: 'x', text: ' ' })
+    ok(ce.kind && ce.text && !Object.keys(api.checkPharmCareInput({ kind: 'dose', text: '減量' })).length, '輸入：類型、內容必填')
+    const ps = api.pharmCareStats([{ kind: 'dose', status: 'accepted' }, { kind: 'dose', status: 'declined' }, { kind: 'dose', status: 'sent' }, { kind: 'monitor', status: 'accepted' }])
+    ok(ps.find((x) => x.kind === 'dose').rate === 50 && ps.find((x) => x.kind === 'dose').pending === 1 && ps.at(-1).sent === 4 && ps.at(-1).rate === 66.7 && ps.find((x) => x.kind === 'other').rate === null, '統計：依類型建議數、接受率（待回覆不算分母）')
+
+    // 種子
+    await as('ph01')
+    let l = await C.listPharmCare()
+    const fr = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    ok(l.notes.some((x) => x.id === 'PC-SEED-1' && x.status === 'accepted') && l.notes.some((x) => x.id === 'PC-SEED-2' && x.status === 'sent') && l.patients.find((p) => p.admissionId === fr.id)?.pending === 1 && l.stats.at(-1).rate === 100, '種子：敗血症監測腎功能（已接受）、骨折停一種 NSAID（待回覆）；統計接受率 100%')
+    await as(userOf(fr.doctorId))
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.pharmCareToReply === 1, '骨折主治首頁「藥師建議待回覆」1')
+
+    // 寫建議
+    let msg = await errOf(() => C.addPharmCare(fr.id, { kind: 'dose', text: 'x' }))
+    ok(msg.includes('藥師'), '醫師不能寫藥事照護建議')
+    await as('ph01')
+    let f = await fieldsOf(() => C.addPharmCare(fr.id, { kind: 'dose', text: '' }))
+    ok(f.text, '內容必填')
+    const n = await C.addPharmCare(fr.id, { kind: 'monitor', text: '使用 Celecoxib 期間建議每週追蹤腎功能' })
+    ok(n.status === 'sent' && n.kindLabel === '建議監測' && db().auditLogs[0].action === '藥事照護建議', '藥師送出建議、寫稽核')
+
+    // 主治回覆
+    const other = db().doctors.find((d) => d.deptId !== fr.deptId && db().users.some((u) => u.doctorId === d.id))
+    await as(userOf(other.id))
+    msg = await errOf(() => C.replyPharmCare('PC-SEED-2', { accept: true }))
+    ok(msg.includes('醫師'), '別科醫師不能回覆')
+    await as(userOf(fr.doctorId))
+    f = await fieldsOf(() => C.replyPharmCare(n.id, { accept: false }))
+    ok(f.text, '不接受要寫原因')
+    const r1 = await C.replyPharmCare('PC-SEED-2', { accept: true, text: '已停用 Ibuprofen' })
+    const r2 = await C.replyPharmCare(n.id, { accept: false, text: '短期使用，出院前再驗' })
+    ok(r1.status === 'accepted' && r1.reply.text.includes('Ibuprofen') && r2.status === 'declined' && (await api.dashboardApi.getDashboard()).pharmCareToReply === 0, '接受（寫處理）、不接受（寫原因），待辦清掉')
+    msg = await errOf(() => C.replyPharmCare(n.id, { accept: true }))
+    ok(msg.includes('回覆過'), '回覆過的不能再回')
+    await as('nurse01')
+    const pv = await C.patientPharmCare(fr.id)
+    ok(pv.notes.length === 2 && pv.notes.every((x) => x.reply), '病人分頁：護理師也看得到紀錄與回覆')
+    await as('ph01')
+    l = await C.listPharmCare()
+    ok(l.stats.at(-1).sent === 3 && l.stats.at(-1).rate === 66.7 && l.stats.find((x) => x.kind === 'monitor').declined === 1, `統計更新：合計 3 則、接受率 ${l.stats.at(-1).rate}%`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

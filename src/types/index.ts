@@ -1363,6 +1363,20 @@ export interface IpdOrder {
   allergyOverride?: string[]
 }
 
+export type PharmCareKind = 'dose' | 'monitor' | 'interaction' | 'deprescribe' | 'other'
+/** 藥事照護紀錄（臨床藥師查房）：對病人（不綁某一筆醫囑）的建議，主治接受或不接受（寫原因） */
+export interface PharmCareNote {
+  id: string
+  admissionId: string
+  patientId: string
+  kind: PharmCareKind
+  text: string
+  by: string
+  at: string
+  status: 'sent' | 'accepted' | 'declined'
+  reply?: { by: string; at: string; text: string }
+}
+
 export type AdrSeverity = 'mild' | 'moderate' | 'severe'
 /**
  * 藥物不良反應通報（住院）：醫師、護理師通報懷疑的藥（這次住院給過的）；藥師用 Naranjo 量表評估因果，

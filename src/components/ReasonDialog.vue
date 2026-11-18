@@ -16,6 +16,8 @@ const props = defineProps<{
   pending?: boolean
   /** 服務層回傳的欄位錯誤 */
   error?: string
+  /** 選填（例：接受建議時寫怎麼處理）：欄位不標必填 */
+  optional?: boolean
 }>()
 const emit = defineEmits<{ confirm: [note: string] }>()
 
@@ -34,7 +36,7 @@ watch(note, () => (showError.value = false))
       <div class="flex flex-wrap gap-1.5">
         <UButton v-for="p in presets" :key="p" size="sm" variant="secondary" @click="note = p">{{ p }}</UButton>
       </div>
-      <UTextarea v-model="note" :label="label" required :rows="2" :error="showError ? error : undefined" />
+      <UTextarea v-model="note" :label="label" :required="!optional" :rows="2" :error="showError ? error : undefined" />
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
