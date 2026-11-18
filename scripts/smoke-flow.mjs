@@ -9926,6 +9926,73 @@ try {
     ok(nfl.pending[0]?.patientId === sep.patientId && nfl.pending[0].state === 'overdue' && (await api.dashboardApi.getDashboard()).notifiableOverdue >= 1 && nfl.reported.some((r) => r.id === rep.id && !r.late), '超過 7 天沒通報：逾時排最前、首頁通報逾時；剛才那筆列在已通報（準時）')
   }
 
+  // 細菌培養與藥敏：輸入檢查、多重抗藥判斷、培養結果值；檢驗科登打（一般報告擋、欄位一次標出、血液培養陽性危急值）、
+  // 抗藥菌提醒開接觸隔離（醫師首頁）、開了就消失；種子（MRSA、E. coli 藥敏）
+  console.log('\n[細菌培養與藥敏]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const L = api.labApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    let e = api.checkCulture({ isolates: [{ organism: 'ECO', ast: { AMP: 'S' } }, { organism: 'ECO', ast: {} }, { organism: 'XX' }] })
+    ok(e.specimen && e.ast0?.includes('Ceftriaxone') && e.organism1?.includes('重複') && e.organism2, '培養：檢體、藥敏組合沒填完、菌種重複、菌種不正確一次標出')
+    ok(!Object.keys(api.checkCulture({ specimen: 'urine', isolates: [] })).length && !Object.keys(api.checkCulture({ specimen: 'sputum', isolates: [{ organism: 'CAN', ast: {} }] })).length, '無菌生長；念珠菌不做細菌藥敏')
+    ok(api.mdroOf({ organism: 'ECO', ast: { MEM: 'R' } }) === 'CRE' && !api.mdroOf({ organism: 'ECO', ast: { MEM: 'S' } }) && api.mdroOf({ organism: 'MRSA', ast: {} }) === 'MRSA' && api.cultureValue([]) === '無菌生長' && api.cultureValue([{ organism: 'SAU', ast: {} }]) === '其他細菌' && api.cultureValue([{ organism: 'SAU', ast: {} }, { organism: 'VRE', ast: {} }]) === 'VRE', '多重抗藥（Meropenem 抗藥的腸道菌＝CRE）、培養結果值')
+    ok(api.astKeyOfDrug('M036') === 'CRO' && api.astKeyOfDrug('M042') === 'VAN' && !api.astKeyOfDrug('M001'), '院內的藥對應藥敏項目')
+
+    // 種子
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const mrsa = db().labReports.find((r) => r.patientId === cell.patientId && r.culture?.isolates.some((x) => x.organism === 'MRSA'))
+    const eco = db().labReports.find((r) => r.patientId === st.patientId && r.culture?.isolates.some((x) => x.organism === 'ECO'))
+    ok(mrsa?.culture.isolates[0].ast.OXA === 'R' && mrsa.culture.isolates[0].ast.VAN === 'S' && mrsa.culture.specimen === 'wound', '種子：蜂窩性組織炎傷口培養 MRSA（Oxacillin 抗藥、Vancomycin 敏感）')
+    ok(eco?.culture.isolates[0].ast.AMC === 'R' && eco.culture.isolates[0].ast.CRO === 'S' && eco.culture.specimen === 'urine', '種子：腦梗塞尿液培養 E. coli（Amoxicillin/Clavulanate 抗藥、Ceftriaxone 敏感）')
+    await as('nurse01')
+    ok(!(await api.flagApi.getPatientFlags(cell.patientId)).mdroAlerts.length, 'MRSA 已經在接觸隔離：沒有提醒')
+    // 檢驗科登打
+    const pd = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    await as(db().users.find((u) => u.doctorId === pd.doctorId).username)
+    const ord = await api.ipdApi.addOrder({ admissionId: pd.id, type: 'stat', category: 'procedure', procId: 'P059', content: '' })
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(ord.id)
+    await as('lab01')
+    const key = `O:${ord.id}`
+    let msg = await errOf(() => L.reportLab({ key, values: { CULT: '無菌生長' } }))
+    ok(msg.includes('培養報告'), `細菌培養用一般報告 → 「${msg}」`)
+    let f = await fieldsOf(() => L.reportCulture({ key, specimen: '', isolates: [{ organism: 'ECO', ast: {} }] }))
+    ok(f.specimen && f.ast0, '培養報告：欄位一次標出')
+    const rr = await L.reportCulture({ key, specimen: 'blood', isolates: [{ organism: 'KPN', ast: { AMC: 'R', CEX: 'R', CRO: 'R', TZP: 'R', MEM: 'R', AMP: 'S' } }] })
+    ok(rr.culture.isolates[0].organism === 'KPN' && !('AMP' in rr.culture.isolates[0].ast) && rr.values[0].value === 'CRE' && rr.hasCritical && rr.needsAck && db().auditLogs[0].action === '發培養報告（危急值）', '血液培養克雷伯氏菌（Meropenem 抗藥＝CRE）：只存藥敏組合裡的、結果值 CRE、危急值待醫師確認')
+    msg = await errOf(() => L.reportCulture({ key, specimen: 'blood', isolates: [] }))
+    ok(msg.includes('已經發過'), '不能重複發')
+    // 抗藥菌提醒
+    await as(db().users.find((u) => u.doctorId === pd.doctorId).username)
+    let fl = await api.flagApi.getPatientFlags(pd.patientId)
+    ok(fl.mdroAlerts.length === 1 && fl.mdroAlerts[0].mdro === 'CRE' && (await api.dashboardApi.getDashboard()).mdroAlerts >= 1, '培養出 CRE、還沒隔離：隔離分頁提醒、醫師首頁「抗藥菌待隔離」')
+    await api.flagApi.startIsolation({ patientId: pd.patientId, kind: 'contact', organism: 'CRE（血液）' })
+    fl = await api.flagApi.getPatientFlags(pd.patientId)
+    ok(!fl.mdroAlerts.length, '開了 CRE 接觸隔離：提醒消失')
+    const labs = await L.patientLabs(st.patientId)
+    ok(labs.reports.some((r) => r.culture?.isolates[0]?.organism === 'ECO'), '病歷的檢驗報告帶結構化培養結果')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

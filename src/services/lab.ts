@@ -4,6 +4,8 @@
 // 待檢驗清單不另存資料，由醫令推算（還沒發報告的）：
 //   門診：完成看診、已批價（先批價再到檢驗科）的檢驗醫令；櫃台標「未執行」的不列
 //   住院：檢驗的臨時醫囑。護理師「執行」＝已採檢，才能發報告；還沒採檢的列在清單上但不能登打
+import type { CultureIsolate, CultureSpecimen } from '@/types'
+import { checkCulture, cultureValue, mdroOf, organismName, ORGANISMS, specimenLabel } from './culture-rules'
 import type { Gender, LabItemDef, LabReport, LabValue } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
@@ -63,11 +65,9 @@ function nextLabNo(at: string): string {
   return `L${day}${String(db.counters[key]).padStart(4, '0')}`
 }
 
-/** 發報告：一份檢驗醫令的所有檢驗值都要填（一次標出所有沒填好的） */
-export function reportLab(input: { key: string; values: Record<string, string> }): Promise<LabReportView> {
-  return mutate(() => {
-    const u = requireUser('lab')
-    const [kind, a, b] = (input.key ?? '').split(':')
+/** 這筆待檢驗是誰的（門診看診的醫令、住院的臨時醫囑）：檢查能不能發報告。發報告、發培養報告共用 */
+function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' | 'doctorId' | 'orderedAt' | 'encounterId' | 'orderId' | 'admissionId'> {
+    const [kind, a, b] = (key ?? '').split(':')
     let base: Pick<LabReport, 'patientId' | 'procId' | 'doctorId' | 'orderedAt' | 'encounterId' | 'orderId' | 'admissionId'>
     if (kind === 'E') {
       const e = must(db.encounters.find((x) => x.id === a), '病歷')
@@ -88,6 +88,15 @@ export function reportLab(input: { key: string; values: Record<string, string> }
     } else {
       fail('找不到這筆檢驗，請重新整理')
     }
+    return base!
+}
+
+/** 發報告：一份檢驗醫令的所有檢驗值都要填（一次標出所有沒填好的）。細菌培養要用 reportCulture（檢體、菌種、藥敏） */
+export function reportLab(input: { key: string; values: Record<string, string> }): Promise<LabReportView> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const base = labTarget(input.key)
+    if (base.procId === 'P059') fail('細菌培養請用培養報告登打（檢體、菌種、藥敏）', 'CONFLICT')
     const defs = procItems(base!.procId)
     if (!defs.length) fail('這個醫令沒有設定檢驗項目')
     const p = must(find.patient(base!.patientId), '病患')
@@ -98,6 +107,32 @@ export function reportLab(input: { key: string; values: Record<string, string> }
     db.labReports.push(r)
     const crit = values.filter((x) => x.critical)
     audit(crit.length ? '發檢驗報告（危急值）' : '發檢驗報告', `${r.no} ${p.name} ${find.procedure(r.procId)?.name}${crit.length ? `：${crit.map((x) => `${x.name} ${x.value}`).join('、')}` : ''}`)
+    return reportView(r)
+  })
+}
+
+/**
+ * 發細菌培養報告：檢體、長出的菌（最多 3 株、不重複）與各自藥敏組合的 S／I／R；沒長菌＝無菌生長。
+ * 報告上的「培養結果」值由菌種推（無菌生長、MRSA、CRE、VRE、其他細菌：解除隔離看這個）；血液培養有長菌是危急值
+ */
+export function reportCulture(input: { key: string; specimen: CultureSpecimen; isolates: CultureIsolate[] }): Promise<LabReportView> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const base = labTarget(input.key)
+    if (base.procId !== 'P059') fail('這不是細菌培養', 'CONFLICT')
+    failFields(checkCulture(input))
+    const p = must(find.patient(base.patientId), '病患')
+    const isolates = (input.isolates ?? []).map((x) => {
+      const o = ORGANISMS.find((v) => v.id === x.organism)!
+      return { organism: o.id, ast: Object.fromEntries(o.panel.map((k) => [k, x.ast[k]])) as CultureIsolate['ast'] }
+    })
+    const { values } = buildLabValues(procItems('P059'), { CULT: cultureValue(isolates) }, p.gender)
+    if (input.specimen === 'blood' && isolates.length) values.forEach((v) => (v.critical = true))
+    const t = now()
+    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base, values, culture: { specimen: input.specimen, isolates }, reportedBy: u.id, reportedAt: t }
+    db.labReports.push(r)
+    const mdro = isolates.map(mdroOf).filter(Boolean)
+    audit(values.some((v) => v.critical) ? '發培養報告（危急值）' : '發培養報告', `${r.no} ${p.name} ${specimenLabel(input.specimen)}：${isolates.length ? isolates.map((x) => organismName(x.organism)).join('、') : '無菌生長'}${mdro.length ? `（${mdro.join('、')}）` : ''}`)
     return reportView(r)
   })
 }

@@ -2588,10 +2588,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   //   - 蜂窩性組織炎（MRSA、接觸隔離）：開了培養＋手套隔離衣；一套無菌生長 → 還要一套
   {
     const procMap = new Map(codes.procedures.map((p) => [p.id, p]))
+    const later = (x: string, y: string) => (x > y ? x : y)
     let k = 0
-    const report = (a: Admission, o: IpdOrder, procId: string, at: string, input: Record<string, string>) => {
+    const report = (a: Admission, o: IpdOrder, procId: string, at: string, input: Record<string, string>, culture?: LabReport['culture']) => {
       const pt = patients.find((x) => x.id === a.patientId)!
-      labReports.push({ id: `LR-ISO-${++k}`, no: `L${at.slice(0, 10).replace(/-/g, '')}${9700 + k}`, patientId: a.patientId, procId, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+      labReports.push({ id: `LR-ISO-${++k}`, no: `L${at.slice(0, 10).replace(/-/g, '')}${9700 + k}`, patientId: a.patientId, procId, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, ...(culture ? { culture } : {}), reportedBy: 'U601', reportedAt: at })
     }
     const pn = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('J18'))
     const pnIso = pn && isolations.find((i) => i.patientId === pn.patientId && i.kind === 'airborne' && !i.ended)
@@ -2615,7 +2616,22 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const done = addMinutes(ordAt, 60)
       const o: IpdOrder = { id: 'IO-CULT-1', admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P059', content: '細菌培養（傷口、尿液）', startAt: ordAt, stopAt: done, status: 'done', doctorId: cell.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: cellIso.id, isoKey: 'culture' }
       ipdOrders.push(o, { id: 'IO-CULT-GOWN', admissionId: cell.id, type: 'long', category: 'nursing', content: '接觸隔離：接觸病人與環境戴手套、穿隔離衣；聽診器、血壓計專用；出病室前脫除並洗手', startAt: ordAt, status: 'active', doctorId: cell.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: cellIso.id, isoKey: 'gown' })
-      if (addMinutes(done, 18 * 60) < nowStr) report(cell, o, 'P059', addMinutes(done, 18 * 60), { CULT: '無菌生長' })
+      if (addMinutes(done, 18 * 60) < nowStr) report(cell, o, 'P059', addMinutes(done, 18 * 60), { CULT: '無菌生長' }, { specimen: 'wound', isolates: [] })
+      // 入院時的傷口培養（開接觸隔離的依據）：MRSA，Oxacillin 抗藥、Vancomycin 敏感
+      const o0At = later(addMinutes(cell.admittedAt!, 30), addMinutes(cellIso.startedAt, -24 * 60))
+      const o0: IpdOrder = { id: 'IO-CULT-0', admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P059', content: '細菌培養（傷口、尿液）', startAt: o0At, stopAt: addMinutes(o0At, 30), status: 'done', doctorId: cell.doctorId, createdAt: o0At, ackAt: addMinutes(o0At, 5), ackBy: 'U201' }
+      ipdOrders.push(o0)
+      report(cell, o0, 'P059', addMinutes(cellIso.startedAt, -10), { CULT: 'MRSA' }, { specimen: 'wound', isolates: [{ organism: 'MRSA', ast: { OXA: 'R', CEX: 'R', AMC: 'R', VAN: 'S' } }] })
+    }
+    // 腦梗塞病人導尿管的尿液培養（院內感染那例）：E. coli，Amoxicillin/Clavulanate 抗藥、Ceftriaxone 敏感
+    const st = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('I63'))
+    if (st) {
+      const oAt = later(`${addDays(T, -1)} 10:00`, addMinutes(st.admittedAt!, 60))
+      if (oAt < addMinutes(nowStr, -60)) {
+        const o: IpdOrder = { id: 'IO-CULT-ST', admissionId: st.id, type: 'stat', category: 'procedure', procId: 'P059', content: '細菌培養（傷口、尿液）', startAt: oAt, stopAt: addMinutes(oAt, 20), status: 'done', doctorId: st.doctorId, createdAt: oAt, ackAt: addMinutes(oAt, 5), ackBy: 'U202' }
+        ipdOrders.push(o)
+        report(st, o, 'P059', [addMinutes(oAt, 18 * 60), addMinutes(nowStr, -30)].sort()[0], { CULT: '其他細菌' }, { specimen: 'urine', isolates: [{ organism: 'ECO', ast: { AMP: 'R', AMC: 'R', CEX: 'S', CRO: 'S', TZP: 'S', MEM: 'S' } }] })
+      }
     }
   }
 

@@ -11,6 +11,8 @@ import { followToday } from '@/composables/useClock'
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { ageText, today } from '@/utils/date'
 import { genderLabel } from '@/utils/labels'
+import CultureForm from './components/CultureForm.vue'
+import CultureView from '@/components/CultureView.vue'
 
 const tab = ref<'work' | 'done'>('work')
 const date = ref(today())
@@ -80,6 +82,11 @@ async function onFix() {
   if (report.value && (await fix.run(report.value.id, { values: values.value, reason: reason.value }))) correcting.value = false
 }
 const errors = computed(() => ({ ...submit.fieldErrors.value, ...fix.fieldErrors.value }))
+// 細菌培養：用培養表單（沒有逐項的檢驗值、不做更正）
+const isCulture = computed(() => (item.value?.procId ?? report.value?.procId) === 'P059')
+function onCultureDone() {
+  selKey.value = work.value?.find((w) => w.key !== item.value?.key && !w.awaitingCollection)?.key
+}
 const editable = computed(() => (!!item.value && !item.value.awaitingCollection) || correcting.value)
 
 const flagTone = (f: string, critical?: boolean) => (critical ? 'text-red-700 font-bold' : f ? 'text-amber-800 font-semibold' : 'text-slate-800')
@@ -143,7 +150,10 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
       <div v-if="report?.needsAck" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">醫師還沒確認（{{ report.hasCritical ? '危急值' : '更正過' }}）：已出現在醫師首頁。</div>
       <div v-else-if="report?.ackAt" class="mx-4 mt-3 text-xs text-slate-500">醫師 {{ report.ackByName }} 已於 {{ whenText(report.ackAt) }} 確認</div>
 
-      <table class="tabular mt-2 w-full text-sm">
+      <!-- 細菌培養：結構化登打（檢體、菌種、藥敏）與報告 -->
+      <CultureForm v-if="isCulture && item && !item.awaitingCollection" :item-key="item.key" @done="onCultureDone" />
+      <div v-else-if="report?.culture" class="px-4 pt-3"><CultureView :culture="report.culture" /></div>
+      <table v-if="!isCulture" class="tabular mt-2 w-full text-sm">
         <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
           <tr>
             <th class="px-4 py-1.5 text-left font-medium">項目</th>
@@ -186,7 +196,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
           危急值：{{ criticalNow.map((d) => d.name).join('、') }}。發出後會立即出現在醫師首頁，請同時電話通知開立醫師。
         </p>
         <UTextarea v-if="correcting" v-model="reason" label="更正原因" :rows="2" placeholder="例：檢體溶血重驗、登打錯誤" required :error="errors.reason" />
-        <div class="flex justify-end gap-2">
+        <div v-if="!isCulture" class="flex justify-end gap-2">
           <UButton v-if="item && !item.awaitingCollection" :icon="Send" :loading="submit.pending.value" @click="onSubmit">發報告</UButton>
           <template v-if="report">
             <UButton v-if="!correcting" variant="secondary" :icon="Pencil" @click="correcting = true">更正</UButton>

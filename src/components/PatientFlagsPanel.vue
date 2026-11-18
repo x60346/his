@@ -119,6 +119,11 @@ const docWho = (d: DnrView) =>
               <UBadge v-if="!f.isolations.length" tone="gray">沒有隔離</UBadge>
               <UButton v-if="canIsolate" size="sm" class="ml-auto" :icon="ShieldPlus" @click="openIso">開始隔離</UButton>
             </div>
+            <div v-for="m in f.mdroAlerts" :key="m.mdro" class="flex flex-wrap items-center gap-2 rounded border border-red-300 bg-red-50 px-3 py-2">
+              <b class="text-red-800">培養出 {{ m.mdro }}（{{ m.organism }}）：請開接觸隔離</b>
+              <span class="text-xs text-slate-600">{{ m.no }}・{{ m.at.slice(5, 16).replace('-', '/') }}</span>
+              <UButton v-if="canIsolate" class="ml-auto" size="sm" @click="iso.kind = 'contact'; iso.organism = m.mdro; iso.note = `${m.no} 培養`; start.fieldErrors.value = {}; isoOpen = true">開接觸隔離</UButton>
+            </div>
             <div v-for="p in nf?.pending ?? []" :key="p.disease" :class="['flex flex-wrap items-center gap-2 rounded border px-3 py-2', p.state === 'overdue' ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50']">
               <b class="text-red-800">法定傳染病待通報：{{ p.label }}</b>
               <span class="text-xs text-slate-600">{{ p.basis }}・時限 {{ p.dueAt.slice(5, 16).replace('-', '/') }}{{ p.state === 'overdue' ? '（已逾時）' : p.state === 'soon' ? '（快到期）' : '' }}</span>

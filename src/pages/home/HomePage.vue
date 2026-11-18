@@ -64,6 +64,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '疑似群聚待判定', count: s.value.clustersOpen ?? 0, hint: '同病房 14 天內兩例以上同菌種或同感染部位：確認（寫處置）或排除（寫原因）（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '法定傳染病通報逾時', count: s.value.notifiableOverdue ?? 0, hint: '隔離原因或診斷符合法定傳染病、超過通報時限還沒通報（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
+    { roles: ['doctor'], label: '抗藥菌待隔離', count: s.value.mdroAlerts ?? 0, hint: '你的住院病人培養出 MRSA、CRE 或 VRE，還沒開接觸隔離（「隔離與 DNR」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '法定傳染病待通報', count: s.value.notifiablePending ?? 0, hint: '你的住院病人隔離原因或診斷符合法定傳染病：在時限內通報（「隔離與 DNR」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'PCA 警示待處理', count: s.value.pcaAlerts ?? 0, hint: 'PCA 使用中的病人鎮靜過深或呼吸過慢：請處理（住院醫囑「PCA」分頁）', route: 'ipd', icon: Droplet, urgent: true },

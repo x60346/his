@@ -904,8 +904,20 @@ export interface LabValue {
  * 檢驗報告（醫檢師發出）。來源：門診看診的檢驗醫令（encounterId＋procId），或住院臨時醫囑（orderId）。
  * 還沒發的不存：待檢驗清單由醫令推算（見 lab.listLabWork）
  */
+/** 細菌培養：檢體、藥敏結果（S 敏感、I 中等、R 抗藥） */
+export type CultureSpecimen = 'urine' | 'blood' | 'sputum' | 'wound'
+export type SirResult = 'S' | 'I' | 'R'
+export interface CultureIsolate {
+  /** 菌種主檔 id（culture-rules.ORGANISMS） */
+  organism: string
+  /** 抗生素藥敏（culture-rules.AST_DRUGS 的 key → S/I/R） */
+  ast: Record<string, SirResult>
+}
+
 export interface LabReport {
   id: string
+  /** 細菌培養（P059）的結構化結果：檢體、長出的菌與各自的藥敏；沒長菌＝isolates 空的 */
+  culture?: { specimen: CultureSpecimen; isolates: CultureIsolate[] }
   /** 檢驗單號 */
   no: string
   patientId: string

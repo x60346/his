@@ -6,6 +6,7 @@ import { computed, ref } from 'vue'
 import { UBadge, UButton, UEmpty, UQueryState } from '@/components/ui'
 import { LAB_FLAG_TEXT, labApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
+import CultureView from './CultureView.vue'
 
 const props = defineProps<{ patientId?: string }>()
 const { data, loading } = useQuery(async () => (props.patientId ? labApi.patientLabs(props.patientId) : undefined), [() => props.patientId])
@@ -55,7 +56,8 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
             <UButton v-if="r.canAck" size="sm" variant="danger" class="ml-auto" :loading="ack.pending.value" @click="ack.run(r.id)">已知悉</UButton>
             <span v-else-if="r.needsAck" class="ml-auto text-xs font-medium text-red-700">待開立醫師確認</span>
           </header>
-          <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm">
+          <CultureView v-if="r.culture" class="mt-1" :culture="r.culture" />
+          <ul v-else class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm">
             <li v-for="v in r.values" :key="v.code" class="tabular">
               <span class="text-slate-500">{{ v.name }}</span>
               <span :class="['ml-1', tone(v.flag, v.critical)]">{{ v.value }}{{ v.unit ? ` ${v.unit}` : '' }} {{ LAB_FLAG_TEXT[v.flag] }}</span>

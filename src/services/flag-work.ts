@@ -7,6 +7,7 @@ import { dnrText, placementProblem } from './flag-rules'
 import { icuWard } from '@/mock/codes'
 import { shiftRange } from './nursing-rules'
 import { negativeAdmitProblem, pressureState } from './pressure-rules'
+import { mdroOf, organismName } from './culture-rules'
 
 export const activeIsolations = (patientId: string): Isolation[] =>
   db.isolations.filter((i) => i.patientId === patientId && !i.ended).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
@@ -41,6 +42,23 @@ export function roommatesOf(bed: Bed, patientId: string) {
 /** 這位病人能不能排這張床（依隔離）：不能的回原因 */
 export const placementFor = (patientId: string, bed: Bed): string | undefined =>
   placementProblem({ isolations: activeIsolations(patientId), bedClass: bed.bedClass, roommates: roommatesOf(bed, patientId), negative: !!bed.negativePressure, icu: bed.ward === icuWard })
+
+/**
+ * 培養出多重抗藥菌（MRSA、CRE、VRE；最近 30 天的報告）、但沒有對應的接觸隔離：提醒醫師開接觸隔離。
+ * 「對應」＝隔離中的接觸隔離原因寫了那個菌（例：MRSA（傷口））
+ */
+export function mdroAlertsOf(patientId: string, t: string): { reportId: string; no: string; at: string; mdro: string; organism: string }[] {
+  const from = addDays(t.slice(0, 10), -30)
+  const isos = activeIsolations(patientId).filter((i) => i.kind === 'contact').map((i) => i.organism.toUpperCase())
+  const out: { reportId: string; no: string; at: string; mdro: string; organism: string }[] = []
+  for (const r of db.labReports.filter((x) => x.patientId === patientId && x.culture && x.reportedAt.slice(0, 10) >= from)) {
+    for (const iso of r.culture!.isolates) {
+      const m = mdroOf(iso)
+      if (m && !isos.some((o) => o.includes(m)) && !out.some((x) => x.mdro === m)) out.push({ reportId: r.id, no: r.no, at: r.reportedAt, mdro: m, organism: organismName(iso.organism) })
+    }
+  }
+  return out
+}
 
 /** 負壓隔離室這一班的壓差狀態 */
 export function negativeRoomState(bed: Bed, t: string) {

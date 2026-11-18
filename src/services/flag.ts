@@ -5,7 +5,7 @@ import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { checkDnrInput, DNR_DOC_LABEL, dnrText, ISOLATION_KIND_LABEL, isolationReviewDue, isoText, normalizeOrganism, type IsolationReview } from './flag-rules'
-import { activeDnr, activeIsolations, placementFor } from './flag-work'
+import { activeDnr, activeIsolations, mdroAlertsOf, placementFor } from './flag-work'
 import { find, nameOf } from './views'
 import { requireCare } from './care-team'
 import { ISO_BUNDLES, ISO_PPE, releaseCheck, type IsoBundleItem } from './iso-rules'
@@ -45,6 +45,8 @@ export interface PatientFlagsDetail {
   dnrHistory: DnrView[]
   /** 住院中：目前這張床依隔離其實不該住（隔離是住進來之後才開的）——請安排轉床 */
   placementWarning?: string
+  /** 培養出多重抗藥菌、還沒有對應的接觸隔離：請開接觸隔離 */
+  mdroAlerts: ReturnType<typeof mdroAlertsOf>
 }
 
 const currentAdmission = (patientId: string): Admission | undefined => db.admissions.find((a) => a.patientId === patientId && a.status === 'admitted')
@@ -96,6 +98,7 @@ export function getPatientFlags(patientId: string): Promise<PatientFlagsDetail> 
     const cur = activeDnr(p.id)
     const warn = placementWarningOf(p.id)
     return {
+      mdroAlerts: mdroAlertsOf(p.id, now()),
       patientId: p.id, patientName: p.name,
       isolations: all.filter((i) => !i.ended).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).map((i) => isoView(i, t)),
       ended: all.filter((i) => i.ended).sort((a, b) => b.ended!.at.localeCompare(a.ended!.at)).map((i) => isoView(i, t)),
