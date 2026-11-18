@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -65,6 +65,7 @@ import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
+import { autoVerify, qcFailedCodes } from '@/services/analyzer-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -3072,6 +3073,49 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     patients.slice(20, 23).forEach((pt, i) => add(pt, `${addDays(T, -(60 + i * 90))} 14:20`, 'sputum', { organism: 'PAE', ast: { TZP: R(i === 1), MEM: 'S' } }))
   }
 
+  // 檢驗儀器自動傳輸與自動審核（示範，不抽亂數）：今天五位住院病人的臨時檢驗都已採檢、收件、上機——
+  //   自動審核發出三份：骨折 CBC（和上次差不多）、腦梗塞肌酸酐、蜂窩性組織炎 CRP；
+  //   待審核兩份：闌尾炎 CBC 血色素比昨天掉 2.5（差異檢查）、泌尿道感染電解質（今天鉀品管被拒絕）
+  const analyzerResults: AnalyzerResult[] = []
+  {
+    const day = T.replace(/-/g, '')
+    const at = (min: number) => { const t = addMinutes(nowStr, -min); return t < `${T} 00:00` ? `${T} 00:00` : t }
+    const plan: [string, string, Record<string, string>, boolean][] = [
+      ['S52', 'P003', { WBC: '7.6', Hb: '14.9', HCT: '45', PLT: '241' }, true],
+      ['I63', 'P008', { CRE: '1.0' }, true],
+      ['L03', 'P011', { CRP: '3.20' }, true],
+      ['K35', 'P003', { WBC: '12.8', Hb: '10.6', HCT: '32', PLT: '330' }, false],
+      ['N39', 'P055', { NA: '138', K: '4.4' }, false],
+    ]
+    let k = 0
+    for (const [dx, procId, vals, auto] of plan) {
+      const a = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith(dx))
+      if (!a) continue
+      k++
+      const pt = patients.find((p) => p.id === a.patientId)!
+      const proc = procMap.get(procId)!
+      const id = `IO-AN-${k}`
+      const t0 = at(150 - k * 8)
+      ipdOrders.push({ id, admissionId: a.id, type: 'stat', category: 'procedure', procId, content: proc.name, startAt: t0, status: 'done', stopAt: at(140 - k * 8), doctorId: a.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201' })
+      const barcode = `S${day}7${String(k).padStart(3, '0')}`
+      specimens.push({ id: `SP-AN-${k}`, barcode, admissionId: a.id, patientId: a.patientId, tube: proc.tube ?? 'red', orderIds: [id], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: at(140 - k * 8), collectedBy: 'U201', receivedAt: at(120 - k * 8), receivedBy: 'U601' })
+      const loadedAt = at(90 - k * 8)
+      const x: AnalyzerResult = { id: `AR-SEED-${k}`, key: `O:${id}`, barcode, patientId: a.patientId, procId, values: vals, holds: [], status: auto ? 'auto' : 'held', loadedAt, loadedBy: 'U601' }
+      if (auto) {
+        const r: LabReport = { id: `LR-AN-${k}`, no: `L${day}95${String(k).padStart(2, '0')}`, patientId: a.patientId, procId, orderId: id, admissionId: a.id, doctorId: a.doctorId, orderedAt: t0, values: buildLabValues(proc.labItems!, vals, pt.gender).values, reportedBy: 'U601', reportedAt: loadedAt, autoVerified: true }
+        labReports.push(r)
+        x.reportId = r.id
+      } else {
+        // 待審核的規則用同一個自動審核（analyzer-rules.autoVerify）算：上一次的值、今天的品管
+        const prev: Record<string, string> = {}
+        for (const r of labReports.filter((r) => r.patientId === a.patientId).sort((p, q) => p.reportedAt.localeCompare(q.reportedAt))) for (const v of r.values) prev[v.code] = v.value
+        const qcFailed = qcFailedCodes(qcRuns, proc.labItems!.map((d) => d.code), T)
+        x.holds = autoVerify({ defs: proc.labItems!, values: vals, gender: pt.gender, prev, qcFailed })
+      }
+      analyzerResults.push(x)
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -3147,6 +3191,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     qcRuns,
     imagingExams,
     labCheckins,
+    analyzerResults,
     dischargePlans,
     vitals,
     nursingNotes,

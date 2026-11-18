@@ -867,6 +867,33 @@ export interface ImagingExam {
 }
 
 /** 門診抽血櫃台報到（一天一位病人一號） */
+/** 自動審核沒通過的規則：品管沒過、危急值、和上次差太多（delta check）、超出儀器可測範圍 */
+export interface AutoVerifyHold {
+  rule: 'qc' | 'critical' | 'delta' | 'amr'
+  code?: string
+  text: string
+}
+
+/** 檢驗儀器上機結果（自動傳輸）：通過自動審核直接發報告（auto）；沒過的等醫檢師審核（held → released） */
+export interface AnalyzerResult {
+  id: string
+  /** 待檢驗的 key（E:看診:醫令／O:醫囑） */
+  key: string
+  barcode: string
+  patientId: string
+  procId: string
+  values: Record<string, string>
+  holds: AutoVerifyHold[]
+  status: 'auto' | 'held' | 'released'
+  loadedAt: string
+  loadedBy: string
+  /** 重測：之前的數值（舊到新） */
+  reruns?: { at: string; values: Record<string, string> }[]
+  reportId?: string
+  releasedAt?: string
+  releasedBy?: string
+}
+
 export interface LabCheckin {
   id: string
   no: number
@@ -1012,6 +1039,8 @@ export interface LabReport {
   reportedAt: string
   /** 更正（發出後改值）：寫原因、留舊值；更正後要醫師重新確認 */
   corrections?: { at: string; by: string; reason: string; before: LabValue[] }[]
+  /** 儀器自動傳輸、通過自動審核直接發出（沒有人工審核） */
+  autoVerified?: boolean
   /** 醫師確認（有危急值或更正過的才需要）：沒有＝待確認 */
   ackBy?: string
   ackAt?: string

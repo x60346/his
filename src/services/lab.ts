@@ -12,10 +12,8 @@ import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
 import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
-import { awaitingReceipt } from './specimen'
-import { qcBlockers } from './qc-rules'
-import { opdSpecimenOf } from './specimen-work'
-import { canAckLab, pendingLabWork, procItems, reportedIpd, reportedOpd, type LabWorkItem } from './lab-work'
+import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
+import { canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
 
@@ -61,65 +59,9 @@ function reportView(r: LabReport): LabReportView {
   }
 }
 
-function nextLabNo(at: string): string {
-  const day = at.slice(0, 10).replace(/-/g, '')
-  const key = `lab:${day}`
-  db.counters[key] = (db.counters[key] ?? 0) + 1
-  return `L${day}${String(db.counters[key]).padStart(4, '0')}`
-}
-
-/** 這筆待檢驗是誰的（門診看診的醫令、住院的臨時醫囑）：檢查能不能發報告。發報告、發培養報告共用 */
-function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' | 'doctorId' | 'orderedAt' | 'encounterId' | 'orderId' | 'admissionId'> {
-    const [kind, a, b] = (key ?? '').split(':')
-    let base: Pick<LabReport, 'patientId' | 'procId' | 'doctorId' | 'orderedAt' | 'encounterId' | 'orderId' | 'admissionId'>
-    if (kind === 'E') {
-      const e = must(db.encounters.find((x) => x.id === a), '病歷')
-      const x = e.procedures.find((p) => p.procId === b)
-      if (!x) fail('這次看診沒有這項檢驗，請重新整理', 'CONFLICT')
-      if (x!.notDone) fail('櫃台已標「未執行」（病人沒做），不能發報告', 'CONFLICT')
-      const v = find.visit(e.visitId)
-      if (v?.status !== 'charged' && v?.status !== 'dispensed') fail('病人還沒批價，請先到批價櫃台', 'CONFLICT')
-      if (reportedOpd(e.id, b)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
-      const sp = opdSpecimenOf(key)
-      if (!sp?.collectedAt) fail('病人還沒在抽血櫃台採檢（或還沒交回檢體），不能發報告', 'CONFLICT')
-      if (!sp!.receivedAt) fail(`檢體還沒收件（條碼 ${sp!.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')
-      base = { patientId: e.patientId, procId: b, doctorId: e.doctorId, orderedAt: e.completedAt ?? e.date, encounterId: e.id }
-    } else if (kind === 'O') {
-      const o = must(db.ipdOrders.find((x) => x.id === a), '醫囑')
-      if (o.category !== 'procedure' || !o.procId) fail('這不是檢驗醫囑')
-      if (o.status === 'active') fail('護理師還沒採檢（臨時醫囑還沒執行），不能發報告', 'CONFLICT')
-      if (o.status === 'stopped') fail('醫囑已停止，不能發報告', 'CONFLICT')
-      const waitSp = awaitingReceipt(o.id)
-      if (waitSp) fail(`檢體還沒收件（條碼 ${waitSp.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')
-      if (reportedIpd(o.id)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
-      base = { patientId: must(find.admission(o.admissionId), '住院').patientId, procId: o.procId!, doctorId: o.doctorId, orderedAt: o.createdAt, orderId: o.id, admissionId: o.admissionId }
-    } else {
-      fail('找不到這筆檢驗，請重新整理')
-    }
-    return base!
-}
-
 /** 發報告：一份檢驗醫令的所有檢驗值都要填（一次標出所有沒填好的）。細菌培養要用 reportCulture（檢體、菌種、藥敏） */
 export function reportLab(input: { key: string; values: Record<string, string> }): Promise<LabReportView> {
-  return mutate(() => {
-    const u = requireUser('lab')
-    const base = labTarget(input.key)
-    if (base.procId === 'P059') fail('細菌培養請用培養報告登打（檢體、菌種、藥敏）', 'CONFLICT')
-    const defs = procItems(base!.procId)
-    if (!defs.length) fail('這個醫令沒有設定檢驗項目')
-    // 品管：這份檢驗裡的品管項目今天都要通過（沒做、被拒絕都不能發）
-    const qc = qcBlockers(defs.map((d) => d.code), db.qcRuns, now().slice(0, 10))
-    if (qc.length) fail(`${qc.join('；')}，不能發報告（到「品管」登打）`, 'CONFLICT', 'qc')
-    const p = must(find.patient(base!.patientId), '病患')
-    const { values, errors } = buildLabValues(defs, input.values ?? {}, p.gender)
-    failFields(errors)
-    const t = now()
-    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base!, values, reportedBy: u.id, reportedAt: t }
-    db.labReports.push(r)
-    const crit = values.filter((x) => x.critical)
-    audit(crit.length ? '發檢驗報告（危急值）' : '發檢驗報告', `${r.no} ${p.name} ${find.procedure(r.procId)?.name}${crit.length ? `：${crit.map((x) => `${x.name} ${x.value}`).join('、')}` : ''}`)
-    return reportView(r)
-  })
+  return mutate(() => reportView(issueLabReport(input.key, input.values ?? {}, requireUser('lab'))))
 }
 
 /**

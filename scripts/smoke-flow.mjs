@@ -11347,6 +11347,115 @@ try {
     ok(dash.deskToCollect === 1, `首頁待採檢：${dash.deskToCollect} 位（退件的 2 號）`)
   }
 
+  // 檢驗儀器自動傳輸與自動審核：模擬回傳、四條規則、種子（自動發出比例、兩筆待審核）、上機、審核發出、重測、人工登打擋、權限
+  console.log('\n[檢驗儀器自動審核]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.analyzerApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 純函式
+    const cbc = db().procedures.find((p) => p.id === 'P003').labItems
+    const cre = db().procedures.find((p) => p.id === 'P008').labItems
+    const sim = api.simulateAnalyzer(cbc, 'M', { Hb: '10.0' }, 'x')
+    ok(JSON.stringify(sim) === JSON.stringify(api.simulateAnalyzer(cbc, 'M', { Hb: '10.0' }, 'x')) && Math.abs(Number(sim.Hb) - 10) <= 0.3 && /^\d+\.\d$/.test(sim.WBC) && /^\d+$/.test(sim.PLT), `模擬回傳：同一個 seed 一樣、以上次值為準 ±3%、小數位數照項目（Hb ${sim.Hb}、WBC ${sim.WBC}、PLT ${sim.PLT}）`)
+    const av = (values, prev = {}, qcFailed = []) => api.autoVerify({ defs: cbc, values, gender: 'M', prev, qcFailed }).map((h) => `${h.rule}:${h.code}`).join()
+    const okVals = { WBC: '7.0', Hb: '14.0', HCT: '42', PLT: '250' }
+    ok(av(okVals) === '' && av(okVals, { Hb: '13.0', PLT: '200' }) === '', '自動審核：都在範圍、和上次差不多 → 通過')
+    ok(av(okVals, {}, ['Hb']) === 'qc:Hb', '品管沒過 → 擋')
+    ok(av({ ...okVals, Hb: '6.5' }) === 'critical:Hb', '危急值 → 擋')
+    ok(av(okVals, { Hb: '11.9' }) === 'delta:Hb' && av(okVals, { Hb: '12.0' }) === '', '差異檢查（絕對值）：Hb 差 2 以上擋、剛好 2 通過')
+    ok(av(okVals, { PLT: '170' }) === 'delta:PLT' && av(okVals, { PLT: '180' }) === '', '差異檢查（百分比）：PLT 差 40% 以上擋')
+    ok(av({ ...okVals, WBC: '150' }) === 'amr:WBC' && api.autoVerify({ defs: cre, values: { CRE: '0.05' }, gender: 'M', prev: {}, qcFailed: [] })[0]?.rule === 'amr', '超出儀器可測範圍 → 擋（不另判危急值）')
+    ok(api.qcFailedCodes(db().qcRuns, ['Hb', 'K', 'NA'], T).join() === 'K', '品管沒過的項目：今天鉀被拒絕；沒有品管的項目（血色素）不算')
+    ok(api.autoRate([{ status: 'auto' }, { status: 'held' }, { status: 'released' }]).pct === 33 && api.autoRate([]).pct === 0, '自動發報告比例')
+    ok(!api.isAnalyzerProc('P010') && !api.isAnalyzerProc('P052') && api.isAnalyzerProc('P055'), '尿液、血液氣體不上儀器；電解質上儀器')
+
+    // 種子
+    await as('lab01')
+    let b = await A.analyzerBoard()
+    const dHeld = b.held.find((h) => h.holds.some((x) => x.rule === 'delta'))
+    const qHeld = b.held.find((h) => h.holds.some((x) => x.rule === 'qc'))
+    ok(b.today.total === 5 && b.today.auto === 3 && b.today.pct === 60 && b.autoToday.length === 3, `種子：今天上機 ${b.today.total} 份、自動發出 ${b.today.auto} 份（${b.today.pct}%）`)
+    ok(b.held.length === 2 && dHeld?.rows.find((r) => r.code === 'Hb').holds.length && dHeld.rows.find((r) => r.code === 'Hb').prev && qHeld?.procName.includes('電解質'), '種子：待審核兩筆——CBC 血色素差異檢查（附上次值）、電解質鉀品管被拒絕')
+    ok(db().labReports.filter((r) => r.autoVerified).length === 3, '自動發出的報告標「自動審核」')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.analyzerHeld === 2, `檢驗科首頁：儀器待審核 ${dash.analyzerHeld}`)
+    const work = await api.labApi.listLabWork()
+    ok(work.find((w) => w.key === dHeld.key)?.analyzerHeld, '待檢驗清單標「儀器待審核」')
+    let msg = await errOf(() => labRaw.reportLab({ key: dHeld.key, values: okVals }))
+    ok(msg.includes('儀器'), `儀器待審核的不能人工登打 → 「${msg}」`)
+    await as('nurse01')
+    msg = await errOf(() => A.analyzerBoard())
+    ok(msg.includes('權限'), '護理師不能用儀器')
+
+    // 審核發出：品管沒過一樣擋
+    await as('lab01')
+    msg = await errOf(() => A.releaseAnalyzer(qHeld.id))
+    ok(msg.includes('品管'), `品管沒過不能發 → 「${msg}」`)
+    const k = api.qcAnalyte('K')
+    await api.qcApi.recordQc({ analyte: 'K', values: k.levels.map((l) => l.mean), correction: '更換試劑重新校正' })
+    const rq = await A.releaseAnalyzer(qHeld.id)
+    const repQ = db().labReports.find((r) => r.id === rq.reportId)
+    ok(rq.status === 'released' && repQ && !repQ.autoVerified && db().auditLogs[0].action === '發檢驗報告（儀器審核）', '品管矯正後審核發出（不是自動審核、稽核標儀器審核）')
+    msg = await errOf(() => A.releaseAnalyzer(qHeld.id))
+    ok(msg.includes('已經發出'), '不能重複發出')
+
+    // 重測：舊值留著、仍要確認；可改值發出
+    const before = { ...db().analyzerResults.find((x) => x.id === dHeld.id).values }
+    const rr = await A.rerunAnalyzer(dHeld.id)
+    ok(rr.reruns.length === 1 && JSON.stringify(rr.reruns[0].values) === JSON.stringify(before) && Math.abs(Number(rr.values.Hb) - Number(before.Hb)) <= 0.4 && rr.holds.some((h) => h.rule === 'delta') && rr.status === 'held', `重測：Hb ${before.Hb} → ${rr.values.Hb}，仍是差異檢查、待確認`)
+    const rd = await A.releaseAnalyzer(dHeld.id, { ...rr.values, HCT: '33' })
+    ok(db().labReports.find((r) => r.id === rd.reportId).values.find((v) => v.code === 'HCT').value === '33', '確認發出時可以改值')
+    b = await A.analyzerBoard()
+    dash = await api.dashboardApi.getDashboard()
+    ok(!b.held.length && dash.analyzerHeld === 0, '審核完：待審核清空')
+
+    // 上機：新開的 CBC（住院採檢、收件）→ 自動發出
+    const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    await as(userOf(fx.doctorId))
+    const o = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+    await as('nurse01')
+    const sp = (await api.specimenApi.printSpecimenLabels(fx.id)).find((x) => x.orderIds.includes(o.id))
+    await as('lab01')
+    msg = await errOf(() => A.loadAnalyzer(sp.barcode))
+    ok(msg.includes('收件'), '還沒收件不能上機')
+    await as('nurse01')
+    await api.specimenApi.collectSpecimen(sp.barcode)
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(sp.barcode)
+    b = await A.analyzerBoard()
+    ok(b.toLoad.some((x) => x.barcode === sp.barcode), '收件後列在待上機')
+    const ld = await A.loadAnalyzer(sp.barcode)
+    const rep = db().labReports.find((r) => r.orderId === o.id)
+    ok(ld.auto === 1 && rep?.autoVerified && db().auditLogs.some((x) => x.action === '發檢驗報告（自動審核）') && db().auditLogs[0].action === '檢驗儀器上機', `上機：和上次差不多 → 自動發出（Hb ${rep?.values.find((v) => v.code === 'Hb').value}）`)
+    msg = await errOf(() => A.loadAnalyzer(sp.barcode))
+    ok(msg.includes('沒有要上機'), '同一支不能重複上機')
+    // 指定儀器值：肌酸酐 12（危急值、和上次差太多）→ 待審核
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(st.doctorId))
+    const o2 = await api.ipdApi.addOrder({ admissionId: st.id, type: 'stat', category: 'procedure', procId: 'P008', content: '' })
+    await as('nurse01')
+    const sp2 = (await api.specimenApi.printSpecimenLabels(st.id)).find((x) => x.orderIds.includes(o2.id))
+    await api.specimenApi.collectSpecimen(sp2.barcode)
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(sp2.barcode)
+    const ld2 = await A.loadAnalyzer(sp2.barcode, { P008: { CRE: '12.0' } })
+    ok(ld2.held === 1 && ld2.results[0].holds.map((h) => h.rule).sort().join() === 'critical,delta' && !db().labReports.some((r) => r.orderId === o2.id), '肌酸酐 12：危急值＋差異檢查 → 待審核、還沒發報告')
+    b = await A.analyzerBoard()
+    ok(b.today.total === 7 && b.today.auto === 4, `今天比例：${b.today.auto}/${b.today.total}（${b.today.pct}%）`)
+    const rc = await A.releaseAnalyzer(ld2.results[0].id)
+    ok(db().labReports.find((r) => r.id === rc.reportId).values[0].critical, '審核發出：危急值照樣標，醫師要確認')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

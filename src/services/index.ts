@@ -28,6 +28,7 @@ import * as specimen from './specimen'
 import * as qc from './qc'
 import * as exam from './exam'
 import * as labDesk from './lab-desk'
+import * as analyzer from './analyzer'
 import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
@@ -104,6 +105,7 @@ export const specimenApi = overNetwork(specimen)
 export const qcApi = overNetwork(qc)
 export const examApi = overNetwork(exam)
 export const labDeskApi = overNetwork(labDesk)
+export const analyzerApi = overNetwork(analyzer)
 export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
@@ -206,6 +208,7 @@ export * from './pharmcare-rules'
 export * from './specimen-rules'
 export * from './lab-schedule-rules'
 export * from './qc-rules'
+export * from './analyzer-rules'
 export * from './exam-rules'
 export * from './blood-rules'
 export * from './copy-rules'
@@ -278,6 +281,7 @@ export type { SpecimenView, WardSpecimens } from './specimen'
 export type { QcOverview, QcRunView } from './qc'
 export type { ExamView, ExamBoard } from './exam'
 export type { DeskPatient, DeskSpecimen } from './lab-desk'
+export type { AnalyzerBoard, AnalyzerHeldView, AnalyzerLoadable, AnalyzerRow } from './analyzer'
 export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, BloodScanDemo, BloodScanInput, StartTransfusionInput, TransfusionVitalsInput } from './blood'
 export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { ManagementReport, MonthMetrics } from './management'

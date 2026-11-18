@@ -26,6 +26,8 @@ export interface LabWorkItem {
   awaitingCollection?: boolean
   /** 住院：已採檢、檢驗科還沒收件（條碼）——收件後才能發報告 */
   awaitingReceipt?: string
+  /** 儀器結果沒通過自動審核、等醫檢師在「儀器」審核（人工登打擋住） */
+  analyzerHeld?: boolean
   /** 檢驗值的定義（畫面用同一個 judgeLab 即時標示偏高偏低）＋這位病人的參考範圍文字 */
   items: (LabItemDef & { ref: string })[]
 }
@@ -40,6 +42,7 @@ function workItem(base: Omit<LabWorkItem, 'patientName' | 'chartNo' | 'gender' |
   return {
     ...base,
     procName: find.procedure(base.procId)?.name ?? base.procId,
+    ...(db.analyzerResults.some((x) => x.key === base.key && x.status === 'held') ? { analyzerHeld: true } : {}),
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', gender, birthDate: p?.birthDate ?? '',
     items: procItems(base.procId).map((d) => ({ ...d, ref: labRefText(d, gender) })),
   }
@@ -81,7 +84,9 @@ export function canAckLab(r: LabReport, doctorId?: string): boolean {
 }
 
 /** 首頁：可以登打的待檢驗（住院還沒採檢、還沒收件的不算）；某醫師待確認的報告份數 */
-export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined).length
+export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined && !w.analyzerHeld).length
+/** 檢驗儀器：待審核的儀器結果 */
+export const analyzerHeldCount = () => db.analyzerResults.filter((x) => x.status === 'held').length
 export const labAckCount = (doctorId: string) => db.labReports.filter((r) => labNeedsAck(r) && canAckLab(r, doctorId)).length
 
 /** 抽血櫃台：今天要採檢的門診病人數（已批價、檢體還沒採檢或容器還沒交回的） */
