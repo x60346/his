@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -693,6 +693,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   for (let n = 1; n <= codes.OBS_BEDS; n++) beds.push({ id: `BOB${n}`, ward: codes.obsWard, roomNo: `OB${n}`, bedNo: `OB${n}`, bedClass: '健保床', extraFee: 0, status: 'empty' })
   // 加護病房 ICU1–ICU8（每床一間、健保床；加護病房的病房費、護理費另計）
   for (let n = 1; n <= codes.ICU_BEDS; n++) beds.push({ id: `BICU${n}`, ward: codes.icuWard, roomNo: `ICU${n}`, bedNo: `ICU${n}`, bedClass: '健保床', extraFee: 0, status: 'empty' })
+  // 負壓隔離室：綜合病房 705（那間單人房改成負壓）、加護病房多一床 ICU9（負壓床，放在最後：以前「找一張空的加護病房床」不會挑到它）
+  for (const b of beds) if (b.ward === codes.wards[2] && b.bedClass === '單人房') b.negativePressure = true
+  beds.push({ id: 'BICU9', ward: codes.icuWard, roomNo: 'ICU9', bedNo: 'ICU9', bedClass: '健保床', extraFee: 0, status: 'empty', negativePressure: true })
 
   const admissions: Admission[] = []
   const ipdOrders: IpdOrder[] = []
@@ -2093,6 +2096,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const rrtCalls: RrtCall[] = []
   const codeBlues: CodeBlue[] = []
   const palliativeCases: PalliativeCase[] = []
+  const pressureLogs: PressureLog[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2577,6 +2581,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 負壓壓差紀錄（示範，不抽亂數）：過去兩天每班一筆（班開始後 30 分鐘）；705 都正常；ICU9 這一班 −1.8（負壓不足、已通知工務）
+  {
+    const shiftStarts = ['00:00', '08:00', '16:00']
+    let k = 0
+    for (const b of beds.filter((x) => x.negativePressure)) {
+      for (let day = -2; day <= 0; day++) {
+        for (const [si, hh] of shiftStarts.entries()) {
+          const at = addMinutes(`${addDays(T, day)} ${hh}`, 30)
+          if (at > nowStr) continue
+          const nextStart = si < 2 ? `${addDays(T, day)} ${shiftStarts[si + 1]}` : `${addDays(T, day + 1)} 00:00`
+          const current = nextStart > nowStr
+          const bad = b.id === 'BICU9' && current
+          pressureLogs.push({ id: `NP-SEED-${++k}`, bedId: b.id, at, pa: bad ? -1.8 : b.id === 'BICU9' ? -9.5 : -11 + (k % 3), by: b.id === 'BICU9' ? 'U213' : 'U205', ...(bad ? { note: '前室門關不緊，已通知工務維修' } : {}) })
+        }
+      }
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -2642,6 +2664,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     rrtCalls,
     codeBlues,
     palliativeCases,
+    pressureLogs,
     dischargePlans,
     vitals,
     nursingNotes,

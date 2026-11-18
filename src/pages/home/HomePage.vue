@@ -73,6 +73,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '鎮靜超出目標', count: s.value.rassOut ?? 0, hint: '你的加護病房病人最近一次 RASS 超出你設的鎮靜目標：調整鎮靜藥或目標（住院醫囑「呼吸器與鎮靜」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '今日脫離評估', count: s.value.weanDue ?? 0, hint: '插管接呼吸器的病人今天還沒做 SAT（停鎮靜）／SBT（自發呼吸）：做完記結果（住院醫囑「呼吸器與鎮靜」分頁）', route: 'ipd', icon: Droplet },
     { roles: ['doctor'], label: '傷口 2 週沒變小', count: s.value.woundStall ?? 0, hint: '你的住院病人傷口連續 2 週面積沒變小：評估換敷料、會診整形外科、營養（住院醫囑「傷口」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '負壓室待處理', count: s.value.negativeRoomTodo ?? 0, hint: '負壓隔離室這一班還沒記錄壓差、或負壓不足（高於 −2.5 Pa）：沒處理好不能收新的空氣隔離病人（護理站「負壓室」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: 'NEWS2 再量逾時', count: s.value.newsRecheckOverdue ?? 0, hint: 'NEWS2 中或高的病人 1 小時內要再量一次生命徵象（含給氧、意識；護理站「生命徵象」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '重症流程表漏記', count: s.value.icuHourlyLate ?? 0, hint: '加護病房病人超過 75 分鐘沒記流程表（每小時一筆；護理站「重症流程表」分頁）', route: 'nursing', query: { ward: masterApi.staticCodes.icuWard }, icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '點滴已滴完未換', count: s.value.infusionOverdue, hint: '點滴已滴完還沒換瓶、或醫囑停了還在滴（護理站「點滴」分頁）', route: 'nursing', icon: Droplet, urgent: true },

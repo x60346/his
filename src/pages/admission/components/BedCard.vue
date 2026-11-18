@@ -45,7 +45,7 @@ const days = computed(() => (props.bed.admission?.admittedAt ? diffDays(props.be
   >
     <div class="flex items-center justify-between">
       <span class="tabular text-sm font-bold">{{ bed.bedNo }}</span>
-      <span class="text-[10px] opacity-80">{{ bed.bedClass }}</span>
+      <span class="text-[10px] opacity-80">{{ bed.bedClass }}<template v-if="bed.negativePressure">・負壓</template></span>
     </div>
     <template v-if="bed.status === 'occupied' && bed.patient">
       <div class="mt-1 flex items-center gap-1 text-sm font-semibold"><User class="h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ bed.patient.patientName }}</span><PatientFlags :flags="bed.patient.flags" compact class="ml-auto shrink-0" /></div>

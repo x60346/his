@@ -12,7 +12,7 @@ import { activeIpdChargeOf, ipdBillOf } from './ipd-bill'
 import { needsAck } from './nursing-rules'
 import { orderView, type OrderView } from './ipd'
 import { stopOrderRecord, addChartNote } from './order-ops'
-import { placementFor } from './flag-work'
+import { negativeAdmitFor, placementFor } from './flag-work'
 import { closeLines } from './line-work'
 import { closeRestraints } from './delirium-work'
 import { openPca } from './pca-work'
@@ -74,7 +74,7 @@ export function bedBlocks(admissionId: string, opts: { afterObs?: boolean } = {}
     const as = opts.afterObs && a.obs ? { obs: { ...a.obs, endAt: 'x' } } : a
     for (const b of db.beds) {
       if (b.status !== 'empty' && !(b.status === 'reserved' && b.reservedFor === a.id)) continue
-      const p = obsPlacementProblem(as, b) ?? (a.status === 'reserved' && isIcuBed(b) ? icuCheckInProblem(fromEr(a)) : undefined) ?? (a.status === 'admitted' && !opts.afterObs ? icuMoveProblem(a, b) : undefined) ?? placementFor(a.patientId, b)
+      const p = obsPlacementProblem(as, b) ?? (a.status === 'reserved' && isIcuBed(b) ? icuCheckInProblem(fromEr(a)) : undefined) ?? (a.status === 'admitted' && !opts.afterObs ? icuMoveProblem(a, b) : undefined) ?? placementFor(a.patientId, b) ?? negativeAdmitFor(a.patientId, b, now())
       if (p) out[b.id] = p
     }
     return out
@@ -301,7 +301,7 @@ export function setBedStatus(bedId: string, status: Exclude<BedStatus, 'occupied
       if (!reservedFor) failField('reservedFor', '請選擇要保留給哪一位待報到的病人')
       const a = must(find.admission(reservedFor!), '住院預約')
       if (a.status !== 'reserved') fail('只能保留給待報到的病人', 'CONFLICT')
-      const problem = obsPlacementProblem(a, bed) ?? placementFor(a.patientId, bed)
+      const problem = obsPlacementProblem(a, bed) ?? placementFor(a.patientId, bed) ?? negativeAdmitFor(a.patientId, bed, now())
       if (problem) fail(`${bed.bedNo} 不能保留給 ${nameOf.patient(a.patientId)}：${problem}`, 'CONFLICT')
       bed.reservedFor = a.id
       audit('保留床位', `${bed.bedNo} → ${nameOf.patient(a.patientId)}`)

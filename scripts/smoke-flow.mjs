@@ -5968,7 +5968,7 @@ try {
     const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
     // 規則
     const C = (o) => ({ kind: 'contact', organism: o })
-    ok(api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '健保床', roommates: [] })?.includes('只能排單人房') && !api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '單人房', roommates: [] }), '空氣隔離只能排單人房')
+    ok(api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '健保床', roommates: [] })?.includes('負壓隔離室') && !api.placementProblem({ isolations: [{ kind: 'airborne', organism: '肺結核' }], bedClass: '單人房', roommates: [] }), '空氣隔離要排負壓隔離室（沒有負壓床時可排單人房）')
     ok(!api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [] }) && !api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [C(' mrsa ')] }] }), '接觸隔離：同房沒人可以；同類同原因可以同房（大小寫、空白不計）')
     ok(api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: '601-2', name: '甲', isolations: [] }] })?.includes('沒有隔離') && api.placementProblem({ isolations: [], bedClass: '健保床', roommates: [{ bedNo: '601-1', name: '乙', isolations: [C('MRSA')] }] })?.includes('沒有隔離的病人不能同房'), '隔離病人不能和沒隔離的同房，反過來也一樣')
     ok(!!api.placementProblem({ isolations: [C('MRSA')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [C('VRE')] }] }) && !!api.placementProblem({ isolations: [C('流感')], bedClass: '健保床', roommates: [{ bedNo: 'x', name: '甲', isolations: [{ kind: 'droplet', organism: '流感' }] }] }), '不同菌種、不同類別都不能同房')
@@ -6079,7 +6079,7 @@ try {
     // 空氣隔離不能轉到健保床
     const ward0Free = db().beds.find((b) => b.status === 'empty' && b.bedClass === '健保床')
     msg = await errOf(() => A.transferBed(pneu.id, ward0Free.id))
-    ok(msg.includes('只能排單人房'), `空氣隔離轉到健保床 → 「${msg}」`)
+    ok(msg.includes('負壓隔離室'), `空氣隔離轉到健保床 → 「${msg}」`)
     // 轉科接受時選床也檢查（腦梗塞現在 VRE 隔離；復健科醫師接受轉科、選 MRSA 同房的床）
     await as('dr09')
     const inc = (await A.listIncomingTransfers()).find((x) => x.admission.id === stroke.id)
@@ -8525,7 +8525,7 @@ try {
 
     // 種子：8 床、敗血症病人住加護病房，流程表最後一筆在 80 分鐘以前（漏記）
     const icuBeds = db().beds.filter((b) => b.ward === ICU)
-    ok(icuBeds.length === 8 && icuBeds.every((b) => b.bedClass === '健保床' && b.extraFee === 0), '種子：加護病房 ICU1–ICU8（健保床）')
+    ok(icuBeds.length === 9 && icuBeds.every((b) => b.bedClass === '健保床' && b.extraFee === 0) && icuBeds.filter((b) => b.negativePressure).map((b) => b.bedNo).join() === 'ICU9', '種子：加護病房 ICU1–ICU9（健保床；ICU9 是負壓床）')
     const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
     const sepBed = db().beds.find((b) => b.id === sep.bedId)
     ok(sepBed.ward === ICU && db().admissions.filter((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === ICU).length === 2, `種子：敗血症病人住 ${sepBed.bedNo}（另一位是申請轉入的糖尿病酮酸中毒）`)
@@ -8545,7 +8545,7 @@ try {
     ok((await api.nursingApi.listWardTasks(ICU)).some((t) => t.kind === 'icu' && t.admissionId === sep.id && t.urgency === 'overdue'), '本班待辦：重症流程表漏記（逾時）')
     ok((await api.dashboardApi.getDashboard()).icuHourlyLate === 1, '護理師首頁：重症流程表漏記 1 位')
     let board = await I.icuBoard()
-    ok(board.length === 8 && board.find((b) => b.admissionId === sep.id)?.late && board.find((b) => b.admissionId === sep.id)?.nurseName === dutyUser.name && board.filter((b) => !b.admissionId).length === 6, '床邊看板：8 床（2 床有人）、敗血症紅框（漏記）、責任護理師')
+    ok(board.length === 9 && board.find((b) => b.admissionId === sep.id)?.late && board.find((b) => b.admissionId === sep.id)?.nurseName === dutyUser.name && board.filter((b) => !b.admissionId).length === 7, '床邊看板：9 床（2 床有人）、敗血症紅框（漏記）、責任護理師')
     const sb = board.find((b) => b.admissionId === sep.id)
     ok(sb.neuro?.gcs && sb.neuro.pupils && !sb.last.gcs ? sb.neuro.gcs.at < sb.last.at : !!sb.neuro?.gcs, '看板：最新一筆沒評意識時，顯示最近一次的 GCS、瞳孔（附時間）')
     let fs = await I.getFlowsheet(sep.id)
@@ -8881,7 +8881,7 @@ try {
     await as('dr03')
     ok((await api.dashboardApi.getDashboard()).icuRequestsPending === 1, '加護病房主治首頁：轉入待處理 1')
     let work = await M.listIcuWork()
-    ok(work.pending.length === 1 && work.pending[0].patientName && work.pending[0].categoryLabel === '休克' && work.canDecide && work.emptyBeds.length === 6, '加護病房頁：待同意 1（休克）、空床 6、可以處理')
+    ok(work.pending.length === 1 && work.pending[0].patientName && work.pending[0].categoryLabel === '休克' && work.canDecide && work.emptyBeds.length === 7, '加護病房頁：待同意 1（休克）、空床 7（含負壓 ICU9）、可以處理')
     let pi = await M.patientIcu(sep.id)
     const y = pi.sofa.find((s) => !s.partial && s.parts.liver !== null)
     ok(pi.inIcu && pi.sofa.length >= 2 && (!y || (y.parts.resp >= 2 && y.parts.coag === 2 && y.parts.liver === 2 && y.parts.renal >= 1 && y.parts.cns === null)), `敗血症 SOFA（膽紅素 2.4→肝 2、血小板 92→凝血 2、插管的 GCS T 不算神經項）：${pi.sofa.map((s) => `${s.date.slice(5)} ${s.total}${s.missing.length ? '+' : ''}`).join('、')}`)
@@ -9690,6 +9690,79 @@ try {
     w = await M.listMortality(30)
     const cs = w.cases.find((c) => c.admissionId === sep.id)
     ok(cs && cs.expected && cs.icuPredicted === pi.apache.mortality && w.stats.icuStays >= 1 && w.stats.icuDeaths === 1 && w.stats.icuExpected > 0 && w.stats.smr === Math.round((1 / w.stats.icuExpected) * 100) / 100, `加護病房：死亡 ${w.stats.icuDeaths} / ${w.stats.icuStays}（${w.stats.icuMortality}%）、預估 ${w.stats.icuExpected}、SMR ${w.stats.smr}（${msg ? `送太平間：${msg}` : '已送太平間'}）`)
+  }
+
+  // 負壓隔離室：壓差輸入與異常、這一班的狀態、空氣隔離排床（負壓優先、單人房可、加護病房只能負壓）、
+  // 這一班沒記錄或負壓不足不能新收、排床建議、記錄權限、首頁待辦
+  console.log('\n[負壓隔離室]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const NP = api.pressureApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.checkPressure({}).pa && api.checkPressure({ pa: -80 }).pa?.includes('不合理') && api.checkPressure({ pa: -1.8 }).note && !Object.keys(api.checkPressure({ pa: -1.8, note: '已通知工務' })).length && !Object.keys(api.checkPressure({ pa: -10 })).length, '壓差：要填、範圍、負壓不足要寫處理')
+    ok(api.pressureAbnormal(-2.4) && !api.pressureAbnormal(-2.6) && api.pressureState([]).state === 'missing' && api.pressureState([{ at: '2026-11-18 08:30', pa: -10 }, { at: '2026-11-18 10:00', pa: -1 }]).state === 'abnormal' && api.pressureState([{ at: '2026-11-18 10:00', pa: -1 }, { at: '2026-11-18 11:00', pa: -9 }]).state === 'ok', '高於 −2.5 是負壓不足；這一班看最後一筆（處理後再記正常就恢復）')
+    const air = [{ kind: 'airborne', organism: '疑似肺結核' }]
+    ok(api.placementProblem({ isolations: air, bedClass: '健保床', roommates: [], icu: true })?.includes('加護病房只有負壓') && !api.placementProblem({ isolations: air, bedClass: '健保床', roommates: [], icu: true, negative: true }) && api.placementProblem({ isolations: air, bedClass: '雙人房', roommates: [] })?.includes('負壓隔離室') && !api.placementProblem({ isolations: air, bedClass: '單人房', roommates: [] }), '空氣隔離：負壓室可以、單人房可以、雙人房不行、加護病房只有負壓床')
+
+    // 種子
+    const ICU = '3I 加護病房'
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    const neg705 = db().beds.find((b) => b.negativePressure && b.ward !== ICU)
+    const icu9 = db().beds.find((b) => b.id === 'BICU9')
+    ok(neg705?.bedClass === '單人房' && pn.bedId === neg705.id && icu9?.negativePressure && icu9.status === 'empty', `種子：${neg705?.ward} ${neg705?.bedNo} 改成負壓（疑似肺結核的肺炎病人住這間）、加護病房多一床 ICU9（負壓、空床）`)
+    await as('nurse01')
+    let rooms = await NP.listNegativeRooms()
+    const r705 = rooms.find((r) => r.bedId === neg705.id)
+    const r9 = rooms.find((r) => r.bedId === 'BICU9')
+    ok(rooms.length === 2 && r705.occupied && r705.isolation?.includes('空氣') && r705.logs.length > 0 && r9.state !== 'ok' && !r9.occupied, `負壓室清單：705（${r705.stateLabel}，住肺炎病人、空氣隔離）、ICU9（${r9.stateLabel}${r9.last ? ` ${r9.last.pa} Pa` : ''}）`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.negativeRoomTodo >= 1, `首頁：負壓室待處理 ${dash.negativeRoomTodo}`)
+    // 排床建議與把關（加護病房：同意轉入選 ICU9）
+    let hint = await NP.bedHints(pn.id)
+    ok(hint.airborne && !hint.recommend.some((b) => b.id === 'BICU9'), '排床建議：ICU9 這一班負壓不足（或未記錄），不列為可收')
+    await as('dr02')
+    const req = await api.icuMoveApi.requestIcu(pn.id, { category: 'other', reason: '疑似肺結核，呼吸衰竭惡化' })
+    await as('dr03')
+    let msg = await errOf(() => api.icuMoveApi.decideIcuRequest(req.id, { accept: true, bedId: db().beds.find((b) => b.ward === ICU && b.status === 'empty' && !b.negativePressure).id }))
+    ok(msg.includes('加護病房只有負壓'), `空氣隔離排加護病房一般床 → 「${msg}」`)
+    msg = await errOf(() => api.icuMoveApi.decideIcuRequest(req.id, { accept: true, bedId: 'BICU9' }))
+    ok(msg.includes('負壓') && db().icuRequests.find((r) => r.id === req.id).status === 'pending', `ICU9 這一班沒有正常的壓差 → 「${msg}」（申請還在待同意）`)
+    // 記錄壓差
+    msg = await errOf(() => NP.recordPressure('BICU9', { pa: -9 }))
+    ok(msg.includes('權限') || msg.includes('護理師'), '醫師不能記壓差')
+    await as('nurse01')
+    let f = await fieldsOf(() => NP.recordPressure('BICU9', { pa: -2 }))
+    ok(f.note, '負壓不足要寫處理')
+    msg = await errOf(() => NP.recordPressure(db().beds.find((b) => !b.negativePressure).id, { pa: -9 }))
+    ok(msg.includes('不是負壓'), '一般床不能記壓差')
+    const rr = await NP.recordPressure('BICU9', { pa: -9 })
+    ok(rr.state === 'ok' && rr.last.pa === -9 && db().auditLogs[0].action === '負壓壓差', '記錄 −9 Pa：恢復正常、寫稽核')
+    hint = await NP.bedHints(pn.id)
+    ok(hint.recommend.some((b) => b.id === 'BICU9'), '排床建議：ICU9 可收')
+    await as('dr03')
+    const placed = await api.icuMoveApi.decideIcuRequest(req.id, { accept: true, bedId: 'BICU9' })
+    ok(placed.status === 'placed' && db().admissions.find((a) => a.id === pn.id).bedId === 'BICU9' && db().beds.find((b) => b.id === neg705.id).status !== 'occupied', '同意並排 ICU9：空氣隔離的病人進加護病房（以前排不進去）、705 空出來')
+    await as('nurse01')
+    rooms = await NP.listNegativeRooms(ICU)
+    ok(rooms.length === 1 && rooms[0].occupied && rooms[0].patientName, '加護病房的負壓室：住進去了')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

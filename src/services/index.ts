@@ -40,6 +40,7 @@ import * as vaso from './vaso'
 import * as death from './death'
 import * as palliative from './palliative'
 import * as mortality from './mortality'
+import * as pressure from './pressure'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -102,6 +103,7 @@ export const vasoApi = overNetwork(vaso)
 export const deathApi = overNetwork(death)
 export const palliativeApi = overNetwork(palliative)
 export const mortalityApi = overNetwork(mortality)
+export const pressureApi = overNetwork(pressure)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -187,6 +189,7 @@ export * from './vaso-rules'
 export * from './death-rules'
 export * from './palliative-rules'
 export * from './mortality-rules'
+export * from './pressure-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -242,6 +245,7 @@ export type { PatientVaso, VasoItem } from './vaso'
 export type { DeathView, PatientDeath } from './death'
 export type { PalliativeView, PatientPalliative, PalliativeWork } from './palliative'
 export type { MortalityCase, MortalityWork } from './mortality'
+export type { NegativeRoom } from './pressure'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

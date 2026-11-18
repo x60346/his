@@ -4,6 +4,9 @@ import type { Bed, DnrItem, DnrRecord, Isolation, IsolationKind } from '@/types'
 import { db } from '@/mock/db'
 import { addDays } from '@/utils/date'
 import { dnrText, placementProblem } from './flag-rules'
+import { icuWard } from '@/mock/codes'
+import { shiftRange } from './nursing-rules'
+import { negativeAdmitProblem, pressureState } from './pressure-rules'
 
 export const activeIsolations = (patientId: string): Isolation[] =>
   db.isolations.filter((i) => i.patientId === patientId && !i.ended).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
@@ -37,7 +40,21 @@ export function roommatesOf(bed: Bed, patientId: string) {
 
 /** 這位病人能不能排這張床（依隔離）：不能的回原因 */
 export const placementFor = (patientId: string, bed: Bed): string | undefined =>
-  placementProblem({ isolations: activeIsolations(patientId), bedClass: bed.bedClass, roommates: roommatesOf(bed, patientId) })
+  placementProblem({ isolations: activeIsolations(patientId), bedClass: bed.bedClass, roommates: roommatesOf(bed, patientId), negative: !!bed.negativePressure, icu: bed.ward === icuWard })
+
+/** 負壓隔離室這一班的壓差狀態 */
+export function negativeRoomState(bed: Bed, t: string) {
+  const { start } = shiftRange(t)
+  return pressureState(db.pressureLogs.filter((l) => l.bedId === bed.id && l.at >= start && l.at <= t))
+}
+/**
+ * 新排床（報到、轉床、保留）時的負壓把關：空氣隔離的病人排進負壓室，這一班要有正常的壓差紀錄。
+ * 只用在「新排進去」：已經住著的病人不會因為這班還沒記錄就被標成床位不合
+ */
+export function negativeAdmitFor(patientId: string, bed: Bed, t: string): string | undefined {
+  if (!bed.negativePressure || !activeIsolations(patientId).some((i) => i.kind === 'airborne')) return undefined
+  return negativeAdmitProblem(bed.bedNo, negativeRoomState(bed, t).state)
+}
 
 /** 某一天（YYYY-MM-DD）這位病人有沒有在隔離中：開始那天算、解除那天不算 */
 export const isolatedOn = (patientId: string, date: string) =>

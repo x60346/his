@@ -29,17 +29,21 @@ export interface PlacementInput {
   bedClass: string
   /** 同房其他床的病人（住著的、保留給他的） */
   roommates: { bedNo: string; name: string; isolations: IsoTag[] }[]
+  /** 負壓隔離室；加護病房的床（加護病房只有負壓床能收空氣隔離） */
+  negative?: boolean
+  icu?: boolean
 }
 
 /**
  * 這張床能不能排（不能的回原因）：
- *   - 空氣隔離只能排單人房
+ *   - 空氣隔離排負壓隔離室；沒有負壓床時可排單人房（加護病房只能排負壓床）
  *   - 同房的人要「隔離完全一樣」才能住一起：都沒隔離、或同類同原因（集中照護）；
  *     沒隔離的病人不能排進有隔離病人的房間，反過來也一樣
  */
 export function placementProblem(p: PlacementInput): string | undefined {
   const air = p.isolations.find((i) => i.kind === 'airborne')
-  if (air && p.bedClass !== '單人房') return `空氣隔離（${air.organism}）只能排單人房`
+  if (air && !p.negative && p.icu) return `空氣隔離（${air.organism}）：加護病房只有負壓隔離床能收`
+  if (air && !p.negative && p.bedClass !== '單人房') return `空氣隔離（${air.organism}）要排負壓隔離室（沒有負壓床時可排單人房）`
   const mine = signature(p.isolations)
   for (const r of p.roommates) {
     if (signature(r.isolations) === mine) continue

@@ -13,7 +13,7 @@ import DischargeDialog from './components/DischargeDialog.vue'
 import ChangeAttendingDialog from './components/ChangeAttendingDialog.vue'
 import WristbandDialog from '@/components/WristbandDialog.vue'
 import PatientFlags from '@/components/PatientFlags.vue'
-import { admissionApi, masterApi, type AdmissionView } from '@/services'
+import { admissionApi, masterApi, pressureApi, type AdmissionView } from '@/services'
 import type { BedView } from '@/services/admission'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -78,6 +78,9 @@ const reservedForTarget = (b: BedView) => mode.value === 'checkin' && b.status =
 // 隔離：依服務層的排床規則標出不能排的床（空氣隔離只排單人房、同房隔離要一樣）——和報到、轉床時的把關同一個判斷
 const { data: blocksData } = useQuery(async () => (target.value && picking.value ? { id: target.value.id, map: await admissionApi.bedBlocks(target.value.id) } : undefined), [() => target.value?.id, picking])
 const blocks = computed(() => (blocksData.value && blocksData.value.id === target.value?.id ? blocksData.value.map : {}))
+// 空氣隔離：建議排負壓隔離室（目前可收的負壓床）
+const { data: hintsData } = useQuery(async () => (target.value && picking.value ? { id: target.value.id, v: await pressureApi.bedHints(target.value.id) } : undefined), [() => target.value?.id, picking])
+const hints = computed(() => (hintsData.value && hintsData.value.id === target.value?.id ? hintsData.value.v : undefined))
 const isPickable = (b: BedView) => picking.value && (b.status === 'empty' || reservedForTarget(b)) && !blocks.value[b.id]
 const isPreferred = (b: BedView) => mode.value === 'checkin' && (reservedForTarget(b) || b.bedClass === target.value?.preferBedClass)
 
@@ -186,6 +189,7 @@ const reserveOpen = ref(false)
           <template v-else>・目前 {{ target.bed?.bedNo }}</template>
           ，請點選一張空床
           <span v-if="target.flags.isolations.length" class="mt-1 flex flex-wrap items-center gap-1"><PatientFlags :flags="{ isolations: target.flags.isolations }" />依隔離不能排的床已淡化（滑過去看原因）</span>
+          <span v-if="hints?.airborne" class="mt-1 block font-medium text-violet-800">建議排負壓隔離室：{{ hints.recommend.length ? hints.recommend.map((b) => `${b.ward} ${b.bedNo}`).join('、') : '目前沒有可收的負壓床（可排單人房；加護病房只能排負壓床）' }}</span>
         </span>
         <UButton class="ml-auto" size="sm" variant="ghost" :icon="X" @click="cancelMode">結束選床</UButton>
       </div>

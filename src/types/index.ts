@@ -958,6 +958,18 @@ export interface Bed {
   admissionId?: string
   /** 保留給哪一筆住院預約（保留一定要指定病人；那位病人報到時可以直接選這床） */
   reservedFor?: string
+  /** 負壓隔離室：空氣隔離優先排這裡；護理師每班記錄壓差 */
+  negativePressure?: boolean
+}
+
+/** 負壓隔離室壓差紀錄（每班至少一次；Pa，負值；高於 −2.5 是負壓不足，要寫處理） */
+export interface PressureLog {
+  id: string
+  bedId: string
+  at: string
+  pa: number
+  by: string
+  note?: string
 }
 
 export type AdmissionStatus = 'reserved' | 'admitted' | 'discharged' | 'cancelled'

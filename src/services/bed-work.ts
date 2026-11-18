@@ -5,7 +5,8 @@ import { db, nextCounter } from '@/mock/db'
 import { icuWard, obsWard } from '@/mock/codes'
 import { audit, fail, must } from './http'
 import { find, nameOf } from './views'
-import { placementFor } from './flag-work'
+import { negativeAdmitFor, placementFor } from './flag-work'
+import { now } from '@/utils/date'
 
 export const bedStatusLabel: Record<BedStatus, string> = { empty: '空床', occupied: '使用中', reserved: '保留', cleaning: '清潔中' }
 
@@ -38,7 +39,7 @@ export function takeBed(bedId: string, admissionId: string): Bed {
   const obs = obsPlacementProblem(adm, bed)
   if (obs) fail(`${bed.bedNo} 不能排：${obs}`, 'CONFLICT')
   // 隔離：空氣隔離只排單人房；同房的人隔離要完全一樣
-  const problem = adm ? placementFor(adm.patientId, bed) : undefined
+  const problem = adm ? placementFor(adm.patientId, bed) ?? negativeAdmitFor(adm.patientId, bed, now()) : undefined
   if (problem) fail(`${bed.bedNo} 不能排：${problem}`, 'CONFLICT')
   bed.status = 'occupied'
   bed.admissionId = admissionId

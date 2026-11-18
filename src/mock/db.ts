@@ -2,7 +2,7 @@
 // 服務層（src/services）是唯一可以讀寫這裡的程式；頁面一律透過服務層存取。
 import { ref } from 'vue'
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, RecordCopyRequest, Surgery, LineDevice, NutritionScreen, NutritionAssessment, TubeFormula, TubeFeedRecord, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, StaffingSettings, DischargePlan, ShiftRequest, PcaOrder, InfectionCase, InfusionRun, Wound, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, RecordCopyRequest, Surgery, LineDevice, NutritionScreen, NutritionAssessment, TubeFormula, TubeFeedRecord, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, StaffingSettings, DischargePlan, ShiftRequest, PcaOrder, InfectionCase, InfusionRun, Wound, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog,
   Admission,
   AuditLog,
   Bed,
@@ -157,6 +157,8 @@ export interface Database {
   codeBlues: CodeBlue[]
   /** 安寧共同照護 */
   palliativeCases: PalliativeCase[]
+  /** 負壓隔離室壓差紀錄 */
+  pressureLogs: PressureLog[]
   vitals: VitalRecord[]
   nursingNotes: NursingNote[]
   progressNotes: ProgressNote[]
@@ -204,7 +206,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 104
+export const SCHEMA_VERSION = 105
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {
