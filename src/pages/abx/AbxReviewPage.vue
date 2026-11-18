@@ -15,6 +15,7 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { useRoute, useRouter } from 'vue-router'
 import AbxStewardPanel from './components/AbxStewardPanel.vue'
 import AbxMetricsPanel from './components/AbxMetricsPanel.vue'
+import AbxTimeline from '@/components/AbxTimeline.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -118,6 +119,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
           </template>
           <p v-else-if="decision" class="mt-2 text-xs text-slate-500">{{ decision.at.slice(5) }} {{ decision.action === 'approve' ? '核准' : '不核准' }}：{{ decision.text }}</p>
         </UCard>
+        <UCard title="抗生素時間軸" subtitle="這次住院：用藥、培養、腎功能、谷濃度、感染科建議"><AbxTimeline :admission-id="item.admissionId" /></UCard>
       </div>
     </div>
   </div>

@@ -10384,6 +10384,42 @@ try {
     ok(m.prophylaxis.surgeries >= 2 && m.prophylaxis.timingOk === m.prophylaxis.surgeries - 1, '做完的闌尾炎算進指標：時機不符')
   }
 
+  // 抗生素時間軸：每天一格（給藥實心、有醫囑沒給空心）、同藥多筆醫囑併一列、臨時醫囑只一天；種子（蜂窩性組織炎、腦梗塞）的培養、谷濃度、建議
+  console.log('\n[抗生素時間軸]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const days = api.daysBetween('2026-11-08 14:00', '2026-11-12')
+    ok(days.length === 5 && days[0] === '2026-11-08' && days.at(-1) === '2026-11-12', '日期：入院日到今天（含）')
+    const rows = api.timelineRows(days, [
+      { drugId: 'M036', startAt: '2026-11-08 15:00', stopAt: '2026-11-10 09:00' },
+      { drugId: 'M036', startAt: '2026-11-10 09:01' },
+      { drugId: 'M004', startAt: '2026-11-11 10:00', stopAt: '2026-11-11 10:00' },
+      { drugId: 'M042', startAt: '2026-11-01 09:00', stopAt: '2026-11-03 09:00' },
+    ], [
+      { drugId: 'M036', at: '2026-11-08 21:00' }, { drugId: 'M036', at: '2026-11-09 09:00' }, { drugId: 'M036', at: '2026-11-09 21:00' }, { drugId: 'M036', at: '2026-11-12 09:00' },
+      { drugId: 'M004', at: '2026-11-11 10:30' },
+    ])
+    const cro = rows.find((r) => r.drugId === 'M036')
+    ok(rows.length === 2 && rows[0].drugId === 'M036' && rows[1].drugId === 'M004', '同藥多筆醫囑併一列、第一天用藥早的在前；範圍外的醫囑不列')
+    ok(cro.cells[1].given === 2 && cro.cells[2].ordered && cro.cells[2].given === 0 && cro.cells[3].ordered && !cro.cells[3].given && cro.cells[4].given === 1 && cro.dot === 3, '每天：給了幾劑；有醫囑沒給（空心）；給藥天數 DOT')
+    ok(rows[1].cells.filter((c) => c.ordered).length === 1, '臨時（停在同一天）只佔一天')
+
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as('dr11')
+    let tl = await api.abxTimelineApi.abxTimeline(cell.id)
+    const van = tl.rows.find((r) => r.drugId === 'M042')
+    ok(tl.from === cell.admittedAt.slice(0, 10) && tl.to === T && tl.days.length === 10 && van?.restricted && van.dot >= 7 && tl.rows.find((r) => r.drugId === 'M036')?.name === 'Ceftriaxone', `蜂窩性組織炎：住院 ${tl.days.length} 天、Ceftriaxone 與 Vancomycin（管制性）各一列`)
+    ok(tl.cultures.length === 2 && tl.cultures[0].summary.includes('MRSA') && tl.cultures[1].summary === '無菌生長' && tl.labs.some((l) => l.kind === 'vant' && l.value === 22 && l.flag === 'H') && tl.advice.length === 1 && tl.advice[0].statusLabel === '待主治回覆', '培養（MRSA、無菌生長）、谷濃度 22（高）、感染科建議（待回覆）都在時間軸上')
+    tl = await api.abxTimelineApi.abxTimeline(st.id)
+    ok(tl.days.length === 33 && tl.rows.map((r) => r.drugId).join() === 'M042,M004' && tl.cultures.some((c) => c.summary.includes('大腸桿菌')), '腦梗塞（住 33 天）：前天的 Vancomycin 預防、昨天的 Augmentin；尿液培養大腸桿菌')
+    await as('nurse01')
+    let msg = ''
+    try { await api.abxTimelineApi.abxTimeline(cell.id) } catch (e) { msg = e.message }
+    ok(msg.includes('醫師'), `護理師不能看時間軸 → 「${msg}」`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

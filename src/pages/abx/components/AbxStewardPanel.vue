@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { UBadge, UButton, UCard, UEmpty, UQueryState, UTabs } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
 import CultureView from '@/components/CultureView.vue'
+import AbxTimeline from '@/components/AbxTimeline.vue'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import { abxStewardApi, type AbxInterventionView, type StewardFindingView, type StewardItem } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
@@ -144,6 +145,8 @@ const presets = computed(() => {
             </li>
           </ul>
         </UCard>
+
+        <UCard title="抗生素時間軸" subtitle="這次住院：用藥、培養、腎功能、谷濃度、感染科建議"><AbxTimeline :admission-id="item.admissionId" /></UCard>
 
         <UCard v-if="item.culture" title="最近一次長菌的培養" :subtitle="`報告 ${item.culture.reportedAt.slice(5)}`">
           <CultureView :culture="item.culture.culture" />

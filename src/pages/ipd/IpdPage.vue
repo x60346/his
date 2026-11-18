@@ -25,6 +25,7 @@ import DeathPanel from '@/components/DeathPanel.vue'
 import PalliativePanel from '@/components/PalliativePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
+import AbxTimeline from '@/components/AbxTimeline.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
@@ -194,6 +195,7 @@ const tabs = computed(() => [
   ...(adm.value?.bed?.ward === masterApi.staticCodes.icuWard ? [{ key: 'flowsheet', label: '重症流程表' }, { key: 'vent', label: '呼吸器與鎮靜' }] : []),
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
+  { key: 'abx', label: '抗生素' },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
   { key: 'blood', label: '輸血', count: blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.filter((r) => !['done', 'cancelled'].includes(r.status)).length || undefined : undefined },
   { key: 'surgery', label: '手術' },
@@ -482,6 +484,7 @@ async function submitNote() {
 
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
+        <div v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
         <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
