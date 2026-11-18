@@ -36,6 +36,7 @@ import IcuBoardPanel from './components/IcuBoardPanel.vue'
 import MarPanel from './components/MarPanel.vue'
 import OrdersPanel from './components/OrdersPanel.vue'
 import VitalsPanel from './components/VitalsPanel.vue'
+import CodeBluePanel from '@/components/CodeBluePanel.vue'
 import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
@@ -110,7 +111,7 @@ watch(allPatients, (list) => {
 // 分頁分兩組：沒選病人時是病房層級（本班待辦、交班）；選了病人才有個人的五個分頁。
 // 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
 // 首頁待辦可以直接帶到某個病房層級的分頁（例：本班未點班 → 常備點班）
-const tab = ref(['stock', 'handover', 'icuboard'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
+const tab = ref(['stock', 'handover', 'icuboard', 'code'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
 // 輸血：已發血待輸、輸血中（分頁上的數字）
 const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
 const bloodTodo = computed(() => (blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.reduce((n, r) => n + r.rows.filter((x) => x.state === 'issued' || x.state === 'transfusing').length, 0) : 0))
@@ -130,6 +131,7 @@ const tabs = computed(() =>
         { key: 'mar', label: '給藥紀錄', count: adm.value.overdueCount + adm.value.dueCount || undefined },
         { key: 'orders', label: '醫囑', count: adm.value.unackedCount || undefined },
         { key: 'vitals', label: '生命徵象' },
+        { key: 'code', label: '急救' },
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'wounds', label: '傷口', count: adm.value.woundTodo || undefined },
@@ -311,6 +313,7 @@ const wardTotals = computed(() => ({
           <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
           <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
+          <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
           <NursingNotesPanel v-else :admission="adm" />
         </UCard>
       </div>

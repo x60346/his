@@ -243,6 +243,9 @@ const drugBase = [
   { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
   // 病人自控止痛（PCA）藥袋：只放住院藥局、只能在 PCA 開（seed 另外開帳）
   { ...drug('M045', 'AC00045100', 'Morphine PCA 100mg/100ml', 'Morphine', '1 mg/ml，100 ml/袋', 'BAG', '注射', 260, 520, 30, 1, 'PRN', 'IV', true), safetyStock: 5, pca: { totalMg: 100, volumeMl: 100 } },
+  // 急救車用藥：只能在急救紀錄給（自動開臨時醫囑扣帳），放住院藥局（seed 另外開帳）
+  { ...drug('M046', 'AC00046100', 'Epinephrine 1mg/ml Inj', 'Epinephrine', '1 mg/ml/amp', 'AMP', '注射', 15, 35, 200, 1, 'STAT', 'IV', true), safetyStock: 30, crash: true },
+  { ...drug('M047', 'AC00047100', 'Amiodarone 150mg/3ml Inj', 'Amiodarone', '150 mg/3 ml/amp', 'AMP', '注射', 42, 90, 100, 2, 'STAT', 'IV', true), safetyStock: 20, crash: true },
 ]
 
 /**
@@ -295,6 +298,8 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M043: ['抗生素（注射，嚴重或抗藥性感染）', '出現皮疹、呼吸困難立即告知醫護人員；可能腹瀉'],
   M044: ['抗生素（注射，嚴重感染）', '對盤尼西林過敏者不可使用；出現皮疹、呼吸困難立即告知醫護人員'],
   M045: ['術後止痛（病人自控止痛機）', '覺得痛再按，機器會限制次數；嗜睡、呼吸變慢請立即告知醫護人員；家屬不可代按'],
+  M046: ['急救用強心劑', '急救時由醫護人員注射'],
+  M047: ['急救用抗心律不整', '急救時由醫護人員注射'],
 }
 
 /**
@@ -359,6 +364,8 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M043: ['美羅培南注射劑', ['Mepem']],
   M044: ['哌拉西林／他唑巴坦注射劑', ['Tazocin']],
   M045: ['嗎啡病人自控止痛藥袋', ['PCA']],
+  M046: ['腎上腺素注射劑', ['Bosmin']],
+  M047: ['胺碘酮注射劑', ['Cordarone']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */
@@ -473,6 +480,8 @@ const procedureBase: Procedure[] = [
   // 加護病房常用檢驗（SOFA、APACHE II 要用）。點數為展示用近似值
   { id: 'P052', code: '09041B', name: '動脈血液氣體分析 ABG', category: '檢驗', points: 350, selfPrice: 500, active: true },
   { id: 'P053', code: '09029C', name: '總膽紅素 T-Bilirubin', category: '檢驗', points: 40, selfPrice: 80, active: true },
+  // 急救：開始 CPR 時自動開一筆（一次急救收一次）。點數為展示用近似值
+  { id: 'P054', code: '47029C', name: '心肺復甦術 CPR', category: '處置', points: 2240, selfPrice: 3500, codeBlue: true, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

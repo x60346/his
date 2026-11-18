@@ -20,6 +20,7 @@ import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
 import VentPanel from '@/components/VentPanel.vue'
 import IcuCarePanel from '@/components/IcuCarePanel.vue'
+import CodeBluePanel from '@/components/CodeBluePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -168,7 +169,8 @@ const vitalFields: { label: string; keys: VitalKey[] }[] = [
 ]
 
 // ---------- 分頁 ----------
-const tab = ref('orders')
+// 從急救橫幅點過來：直接開「急救」分頁
+const tab = ref(useRoute().query.tab === 'code' ? 'code' : 'orders')
 const ds = computed(() => adm.value?.dischargeSummary)
 const tabs = computed(() => [
   { key: 'orders', label: '醫囑', count: orders.value?.filter((o) => o.status === 'active').length },
@@ -188,6 +190,7 @@ const tabs = computed(() => [
   { key: 'infusion', label: '點滴' },
   { key: 'wounds', label: '傷口' },
   { key: 'icu', label: '加護病房' },
+  { key: 'code', label: '急救' },
   { key: 'nutrition', label: '營養' },
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
@@ -455,6 +458,7 @@ async function submitNote() {
         <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
         <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" />
         <IcuCarePanel v-else-if="tab === 'icu'" :admission-id="adm.id" />
+        <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
         <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->

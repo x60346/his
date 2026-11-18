@@ -9089,6 +9089,153 @@ try {
     ok(st.calls === 4 && st.auto === 2 && st.done === 4 && st.toIcu === 3 && st.avgResponseMin !== null, `品質指標：呼叫 ${st.calls}（自動 ${st.auto}）、平均 ${st.avgResponseMin} 分鐘到場、轉加護病房 ${st.toIcu}/${st.done}`)
   }
 
+  // 急救（Code Blue）：事件檢查、DNR 硬擋、醫師帶領才能給藥電擊、腎上腺素 3–5 分鐘、Amiodarone 兩劑、藥自動開醫囑扣帳、
+  // CPR 處置費、結束（ROSC、宣告死亡要醫師、依 DNR 不施行）、ROSC 後申請轉加護病房、全院橫幅、品質指標
+  console.log('\n[急救 Code Blue]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const C = api.codeApi
+    const { addMinutes, now } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const ev = (kind, x = {}) => ({ id: 'e', at: '2026-11-18 10:00', by: 'u', kind, ...x })
+    ok(api.checkCodeEvent({ events: [] }, { kind: 'rhythm' }).rhythm && api.checkCodeEvent({ events: [] }, { kind: 'shock', joules: 200 }).kind?.includes('先判讀心律'), '心律要選；沒判讀心律不能電擊')
+    let e = api.checkCodeEvent({ events: [ev('rhythm', { rhythm: 'vf' })] }, { kind: 'shock', joules: 50 })
+    ok(e.joules && !e.kind, '電擊能量 120–360 J')
+    e = api.checkCodeEvent({ events: [ev('rhythm', { rhythm: 'asystole' })] }, { kind: 'shock', joules: 200 })
+    ok(e.kind?.includes('不可電擊') && !Object.keys(api.checkCodeEvent({ events: [ev('rhythm', { rhythm: 'pvt' })] }, { kind: 'shock', joules: 200 })).length, 'Asystole 不可電擊、pVT 可以')
+    ok(api.checkCodeEvent({ events: [ev('cpr')] }, { kind: 'cpr' }).kind && api.checkCodeEvent({ events: [ev('rhythm', { rhythm: 'vf' }), ev('amio'), ev('amio')] }, { kind: 'amio' }).kind?.includes('兩劑') && api.checkCodeEvent({ events: [] }, { kind: 'note', note: ' ' }).note, 'CPR 只開始一次、Amiodarone 最多兩劑、備註要寫')
+    ok(api.nextAmioDose({ events: [] }) === 300 && api.nextAmioDose({ events: [ev('amio')] }) === 150, 'Amiodarone 300 → 150 mg')
+    const t0 = '2026-11-18 10:00'
+    ok(api.epiState({ status: 'active', events: [] }, t0) === undefined && api.epiState({ status: 'active', events: [ev('cpr')] }, t0).status === 'none', '還沒 CPR 不提示；CPR 中還沒給腎上腺素')
+    const withEpi = { status: 'active', events: [ev('cpr'), { ...ev('epi'), at: t0 }] }
+    ok(api.epiState(withEpi, '2026-11-18 10:02').status === 'wait' && api.epiState(withEpi, '2026-11-18 10:03').status === 'due' && api.epiState(withEpi, '2026-11-18 10:05').status === 'due' && api.epiState(withEpi, '2026-11-18 10:06').status === 'overdue', '腎上腺素：未滿 3 分鐘等、3–5 分鐘可以給、超過 5 分鐘提示')
+    ok(api.dnrBlockText('cpr', ['compress'])?.includes('胸外按壓') && api.dnrBlockText('epi', ['drugs']) && !api.dnrBlockText('epi', ['compress']) && !api.dnrBlockText('rhythm', ['compress', 'defib', 'drugs']), 'DNR：不按壓擋 CPR、不給急救藥擋腎上腺素；心律判讀不擋')
+    ok(api.checkCodeEnd({ events: [] }, 'rosc', []).includes('CPR') && api.checkCodeEnd({ events: [] }, 'dnr', []).includes('要急救') && api.checkCodeEnd({ events: [ev('cpr')] }, 'dnr', ['compress']) && !api.checkCodeEnd({ events: [] }, 'dnr', ['compress']), '結束：沒 CPR 不能 ROSC；沒有不按壓的 DNR 不能「依 DNR 不施行」；開始 CPR 後也不行')
+    const qs = api.codeStats([{ status: 'ended', outcome: 'rosc' }, { status: 'ended', outcome: 'death' }, { status: 'ended', outcome: 'dnr' }, { status: 'active' }])
+    ok(qs.codes === 4 && qs.resus === 2 && qs.rosc === 1 && qs.roscRate === 50 && qs.dnr === 1, '品質指標：ROSC 率不算依 DNR 不施行的')
+
+    // 種子
+    const dka = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const seed = db().codeBlues.find((c) => c.id === 'CB-SEED-1')
+    ok(seed?.admissionId === dka.id && seed.outcome === 'rosc' && db().icuRequests.find((r) => r.id === seed.icuRequestId)?.codeBlueId === seed.id && db().ipdOrders.some((o) => o.codeBlueId === seed.id && o.procId === 'P054' && o.status === 'done'), '種子：酮酸中毒病人低血鉀 VF 急救 → ROSC → 申請轉入（已轉 ICU2），CPR 處置費')
+    await as('nurse01')
+    let pc = await C.patientCode(dka.id)
+    ok(pc.history.length === 1 && pc.history[0].events.length === 7 && pc.history[0].minutes === 10 && pc.history[0].icuRequestStatus === 'placed' && !pc.icuAfter && !pc.active && pc.canStart, '急救分頁：以前的急救（10 分鐘、7 個事件、已轉入加護病房）')
+    ok(!(await C.activeCodes()).length, '沒有進行中的急救：沒有橫幅')
+
+    // 一般醫囑不能開急救藥、CPR 費
+    await as(db().users.find((u) => u.doctorId === cell.doctorId).username)
+    let msg = await errOf(() => api.ipdApi.addOrder({ admissionId: cell.id, type: 'stat', category: 'medication', drugId: 'M046', content: '', dose: 1, freq: 'STAT', route: 'IV' }))
+    ok(msg.includes('急救車用藥'), `一般醫囑開腎上腺素 → 「${msg}」`)
+    msg = await errOf(() => api.ipdApi.addOrder({ admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P054', content: '' }))
+    ok(msg.includes('急救計費項目'), `一般醫囑開 CPR 處置費 → 「${msg}」`)
+
+    // 啟動（護理師）
+    await as('admin')
+    await expectError(() => C.startCode(cell.id), '管理員啟動急救')
+    await as('nurse01')
+    let c = await C.startCode(cell.id)
+    ok(c.status === 'active' && !c.leaderId && db().auditLogs[0].action === '啟動急救', '護理師啟動急救：還沒有醫師帶領、寫稽核')
+    let banner = await C.activeCodes()
+    ok(banner.length === 1 && banner[0].patientName && banner[0].bedNo, `全院橫幅：${banner[0].ward} ${banner[0].bedNo} ${banner[0].patientName}`)
+    msg = await errOf(() => C.startCode(cell.id))
+    ok(msg.includes('已經在進行中'), `重複啟動 → 「${msg}」`)
+    c = await C.addCodeEvent(c.id, { kind: 'cpr' })
+    let f = await fieldsOf(() => C.addCodeEvent(c.id, { kind: 'cpr' }))
+    ok(c.events.length === 1 && f.kind, 'CPR 開始（只能一次）')
+    c = await C.addCodeEvent(c.id, { kind: 'rhythm', rhythm: 'vf' })
+    msg = await errOf(() => C.addCodeEvent(c.id, { kind: 'epi' }))
+    ok(c.rhythm === 'vf' && msg.includes('帶領'), `沒有醫師帶領給腎上腺素 → 「${msg}」`)
+    pc = await C.patientCode(cell.id)
+    ok(pc.active?.epi?.status === 'none' && !pc.canStart, '急救中：提示還沒給腎上腺素、不能再啟動')
+    // 醫師帶領
+    const doc = db().users.find((u) => u.doctorId === 'DR01')
+    await as(doc.username)
+    c = await C.leadCode(c.id)
+    ok(c.leaderId === doc.id, '醫師帶領')
+    f = await fieldsOf(() => C.addCodeEvent(c.id, { kind: 'shock', joules: 50 }))
+    ok(f.joules, '電擊能量不合理')
+    c = await C.addCodeEvent(c.id, { kind: 'shock', joules: 200 })
+    const stock0 = db().stockTxns.length
+    c = await C.addCodeEvent(c.id, { kind: 'epi' })
+    const eo = db().ipdOrders.find((o) => o.id === c.events.at(-1).orderId)
+    const etx = db().stockTxns.slice(stock0).find((t) => t.drugId === 'M046')
+    ok(eo?.codeBlueId === c.id && eo.status === 'done' && eo.doctorId === doc.doctorId && eo.ackAt && eo.drugId === 'M046' && etx?.type === 'dispense' && etx.ref.endsWith(cell.admitNo), `腎上腺素：自動開臨時醫囑（已執行、帶領醫師名下、不用再核對）、扣帳（${etx?.ref}）`)
+    c = await C.addCodeEvent(c.id, { kind: 'amio' })
+    ok(c.events.at(-1).doseMg === 300 && db().ipdOrders.find((o) => o.id === c.events.at(-1).orderId)?.dose === 2 && c.nextAmioMg === 150, 'Amiodarone 第一劑 300 mg（2 支）、下一劑 150 mg')
+    c = await C.addCodeEvent(c.id, { kind: 'amio' })
+    f = await fieldsOf(() => C.addCodeEvent(c.id, { kind: 'amio' }))
+    ok(c.events.at(-1).doseMg === 150 && f.kind?.includes('兩劑'), '第二劑 150 mg；第三劑擋')
+    c = await C.addCodeEvent(c.id, { kind: 'rhythm', rhythm: 'pea' })
+    f = await fieldsOf(() => C.addCodeEvent(c.id, { kind: 'shock', joules: 200 }))
+    ok(f.kind?.includes('不可電擊'), `PEA 電擊 → 「${f.kind}」`)
+    // 腎上腺素超過 5 分鐘
+    const lastEpi = db().codeBlues.find((x) => x.id === c.id).events.find((x) => x.kind === 'epi')
+    lastEpi.at = addMinutes(now(), -6)
+    pc = await C.patientCode(cell.id)
+    ok(pc.active.epi.status === 'overdue', '腎上腺素超過 5 分鐘：提示')
+    c = await C.addCodeEvent(c.id, { kind: 'intubate' })
+    c = await C.addCodeEvent(c.id, { kind: 'note', note: '家屬已通知' })
+    ok(c.events.length === 9 && c.events.at(-1).text.includes('家屬'), `時間軸 ${c.events.length} 筆`)
+    // 結束
+    await as('nurse01')
+    msg = await errOf(() => C.endCode(c.id, { outcome: 'death' }))
+    ok(msg.includes('醫師'), `護理師宣告死亡 → 「${msg}」`)
+    msg = await errOf(() => C.endCode(c.id, { outcome: 'dnr' }))
+    ok(msg.includes('沒有'), `沒有 DNR 的病人「依 DNR 不施行」 → 「${msg}」`)
+    c = await C.endCode(c.id, { outcome: 'rosc' })
+    ok(c.status === 'ended' && c.outcome === 'rosc' && db().ipdOrders.filter((o) => o.codeBlueId === c.id && o.procId === 'P054').length === 1 && !(await C.activeCodes()).length, 'ROSC：結束、帶入一次 CPR 處置費、橫幅消失')
+    msg = await errOf(() => C.addCodeEvent(c.id, { kind: 'note', note: 'x' }))
+    ok(msg.includes('已經結束'), '結束後不能再記')
+    // ROSC 後申請轉加護病房
+    pc = await C.patientCode(cell.id)
+    ok(!pc.icuAfter, '護理師看不到申請按鈕')
+    await expectError(() => C.requestIcuAfterCode(c.id), '護理師申請轉入')
+    await as(doc.username)
+    pc = await C.patientCode(cell.id)
+    ok(pc.icuAfter === c.id, '醫師：ROSC 後可以申請轉加護病房')
+    c = await C.requestIcuAfterCode(c.id, { note: '血壓靠輸液維持' })
+    const r = db().icuRequests.find((x) => x.id === c.icuRequestId)
+    ok(r?.status === 'pending' && r.category === 'other' && r.codeBlueId === c.id && r.reason.includes('ROSC') && r.reason.includes('VF') && r.reason.includes('電擊 1 次') && r.reason.includes('腎上腺素 1 劑') && r.reason.includes('血壓靠輸液'), `轉入申請（類別其他）：${r?.reason}`)
+    msg = await errOf(() => C.requestIcuAfterCode(c.id))
+    ok(msg.includes('已經申請過'), '同一次急救不能申請兩次')
+
+    // DNR：不按壓、不電擊
+    await as('nurse01')
+    let d = await C.startCode(sep.id)
+    msg = await errOf(() => C.addCodeEvent(d.id, { kind: 'cpr' }))
+    ok(msg.includes('DNR') && msg.includes('胸外按壓'), `DNR 不按壓開始 CPR → 「${msg}」`)
+    d = await C.addCodeEvent(d.id, { kind: 'rhythm', rhythm: 'vf' })
+    msg = await errOf(() => C.addCodeEvent(d.id, { kind: 'shock', joules: 200 }))
+    ok(msg.includes('電擊'), `DNR 不電擊 → 「${msg}」`)
+    msg = await errOf(() => C.endCode(d.id, { outcome: 'rosc' }))
+    ok(msg.includes('CPR'), '沒 CPR 不能記 ROSC')
+    d = await C.endCode(d.id, { outcome: 'dnr' })
+    ok(d.outcome === 'dnr' && !db().ipdOrders.some((o) => o.codeBlueId === d.id), '依 DNR 不施行急救：結束、沒有 CPR 處置費')
+    const q = await C.codeQuality(30)
+    ok(q.codes === 3 && q.dnr === 1 && q.resus === 2 && q.rosc === 2 && q.roscRate === 100, `品質指標：急救 ${q.codes}（依 DNR 不施行 ${q.dnr}）、ROSC ${q.rosc}/${q.resus}（${q.roscRate}%）`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

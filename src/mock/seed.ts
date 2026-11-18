@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -1176,7 +1176,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
   /** 不走一般庫存帳重播的藥（不抽亂數、不用流水號：加進來不會改變其他藥與後面的種子資料），在迴圈後另外開帳 */
-  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044', 'M045'])
+  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044', 'M045', 'M046', 'M047'])
   drugs.forEach((drug, di) => {
     if (FIXED_STOCK.has(drug.id)) return
     // 展示用：幾種藥庫存偏低、一種缺貨（codes 的安全庫存是依原庫存的 15% 設的，不調低的話永遠不會「偏低」）
@@ -1316,7 +1316,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 門診示範用的第二級管制藥（Morphine 錠）：只放門診藥局，期初一批、之後沒有異動。
   // 大型醫院期初一律進藥庫，當天整批撥給門診藥局（和其他藥一樣：藥局的批號都來自藥庫、撥出撥入成對）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx && !d.pca)) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx && !d.pca && !d.crash)) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}M`
@@ -1342,7 +1342,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const pcas: PcaOrder[] = []
   const pcaAdm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('K35') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -12 * 60))
   // PCA 藥袋（M045）也一樣只放住院藥局（大型：藥庫、住院藥局、門診藥局都有一點，照同一套撥補）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && (d.restrictedAbx || d.pca))) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && (d.restrictedAbx || d.pca || d.crash))) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}V`
@@ -2089,6 +2089,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const weanTrials: WeanTrial[] = []
   const icuRequests: IcuRequest[] = []
   const rrtCalls: RrtCall[] = []
+  const codeBlues: CodeBlue[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2273,7 +2274,28 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       icu2.admissionId = dka.id
       dka.bedHistory = [{ bedId: old.id, from: dka.admittedAt! }, { bedId: icu2.id, from: since }]
       dka.bedId = icu2.id
-      icuRequests.push({ id: 'ICR-SEED-1', admissionId: dka.id, category: 'other', reason: '糖尿病酮酸中毒：血糖 520、pH 7.18，需胰島素點滴、每小時驗血糖', requestedBy: dr02, requestedAt: addMinutes(since, -50), status: 'placed', decidedBy: dr03, decidedAt: addMinutes(since, -30), placedAt: since, bedId: icu2.id })
+      // 急救（示範）：轉入前 70 分鐘在原病房低血鉀（K 2.6）心室顫動 → CPR、電擊兩次、腎上腺素一劑，10 分鐘恢復自主循環 → 主治申請轉入。
+      // 急救藥的醫囑有開（已執行），種子這幾支沒有扣帳異動（展示用；之後的急救照常扣帳）；CPR 處置費照常進帳單
+      const cs = addMinutes(since, -70)
+      const m = (k: number) => addMinutes(cs, k)
+      const cbOrder = (no: number, at: string, x: Partial<IpdOrder> & Pick<IpdOrder, 'category' | 'content'>): IpdOrder => ({ id: `IO-CB-SEED-${no}`, admissionId: dka.id, type: 'stat', startAt: at, stopAt: at, status: 'done', doctorId: 'DR02', createdAt: at, ackAt: at, ackBy: 'U201', codeBlueId: 'CB-SEED-1', ...x })
+      ipdOrders.push(
+        cbOrder(1, m(4), { category: 'medication', drugId: 'M046', content: 'Epinephrine 1mg/ml Inj 1 mg IV（急救）', dose: 1, freq: 'STAT', route: 'IV' }),
+        cbOrder(2, m(10), { category: 'procedure', procId: 'P054', content: '心肺復甦術 CPR（急救）' }),
+      )
+      codeBlues.push({
+        id: 'CB-SEED-1', admissionId: dka.id, startedAt: cs, startedBy: 'U201', leaderId: dr02, status: 'ended', endedAt: m(10), endedBy: dr02, outcome: 'rosc', icuRequestId: 'ICR-SEED-1',
+        events: [
+          { id: 'CE-SEED-1', at: cs, kind: 'cpr', by: 'U201' },
+          { id: 'CE-SEED-2', at: m(1), kind: 'rhythm', rhythm: 'vf', by: 'U201' },
+          { id: 'CE-SEED-3', at: m(2), kind: 'shock', joules: 200, by: dr02 },
+          { id: 'CE-SEED-4', at: m(4), kind: 'epi', doseMg: 1, orderId: 'IO-CB-SEED-1', by: 'U202' },
+          { id: 'CE-SEED-5', at: m(5), kind: 'shock', joules: 200, by: dr02 },
+          { id: 'CE-SEED-6', at: m(6), kind: 'note', note: '抽血：K 2.6，給 KCl', by: dr02 },
+          { id: 'CE-SEED-7', at: m(8), kind: 'rhythm', rhythm: 'pea', by: 'U201' },
+        ],
+      })
+      icuRequests.push({ id: 'ICR-SEED-1', admissionId: dka.id, category: 'other', reason: '急救後（ROSC）：糖尿病酮酸中毒治療中低血鉀（K 2.6）心室顫動，CPR 10 分鐘、電擊 2 次、腎上腺素 1 劑恢復自主循環；需胰島素點滴、每小時驗血糖與電解質', requestedBy: dr02, requestedAt: addMinutes(since, -50), status: 'placed', decidedBy: dr03, decidedAt: addMinutes(since, -30), placedAt: since, bedId: icu2.id, codeBlueId: 'CB-SEED-1' })
       // 轉入之後還留在原病房的交班（住院時產生的）拿掉：人已經在加護病房
       for (let j = handovers.length - 1; j >= 0; j--) if (handovers[j].admissionId === dka.id && handovers[j].createdAt >= since) handovers.splice(j, 1)
       // 分床：從 5A 的分床拿掉、分給加護病房這一班的護理師
@@ -2454,6 +2476,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     weanTrials,
     icuRequests,
     rrtCalls,
+    codeBlues,
     dischargePlans,
     vitals,
     nursingNotes,

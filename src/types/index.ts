@@ -773,6 +773,8 @@ export interface Drug {
   restrictedAbx?: boolean
   /** 病人自控止痛（PCA）用的藥袋：一袋多少 mg、多少 ml（只能在住院醫囑「PCA」開，不能當一般醫囑或處方） */
   pca?: { totalMg: number; volumeMl: number }
+  /** 急救車用藥（腎上腺素、Amiodarone）：只能在急救紀錄給（自動開臨時醫囑、扣病房常備或住院藥局） */
+  crash?: boolean
   /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
@@ -808,6 +810,8 @@ export interface Procedure {
   /** 每日計費依病床：generalBed 一般病床的病房費、護理費（住加護病房的那幾天不收）；icu 加護病床的（只收住加護病房的那幾天）。都沒標的（住院診察費）每天都收 */
   generalBed?: boolean
   icu?: boolean
+  /** 急救計費項目（心肺復甦術）：急救紀錄開始 CPR 時自動開，醫囑不能另外開 */
+  codeBlue?: boolean
   /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
   blood?: BloodProduct | 'crossmatch'
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
@@ -1180,6 +1184,8 @@ export interface IpdOrder {
   infusion?: { volumeMl: number; rateMlH: number; additives?: { drugId: string; dose: number }[] }
   /** 呼吸器醫囑（長期、護理類）：模式與設定；改設定＝停掉舊的、開新的（changeReason 寫為什麼改） */
   vent?: VentSetting
+  /** 急救時自動開的（急救藥、CPR 處置費）：口頭醫囑記在帶領醫師名下，執行完成 */
+  codeBlueId?: string
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory
@@ -1480,6 +1486,43 @@ export interface RrtCall {
   icuRequestId?: string
 }
 
+/** 急救心律：心室顫動、無脈性心室頻脈（可電擊）；無脈性電氣活動、心搏停止（不可電擊） */
+export type CodeRhythm = 'vf' | 'pvt' | 'pea' | 'asystole'
+/** 急救事件：開始 CPR、心律判讀、電擊、腎上腺素、Amiodarone、插管、甦醒球人工呼吸、備註 */
+export type CodeEventKind = 'cpr' | 'rhythm' | 'shock' | 'epi' | 'amio' | 'intubate' | 'bvm' | 'note'
+export interface CodeEvent {
+  id: string
+  at: string
+  kind: CodeEventKind
+  by: string
+  rhythm?: CodeRhythm
+  joules?: number
+  /** 藥（mg）：自動開的臨時醫囑 */
+  doseMg?: number
+  orderId?: string
+  note?: string
+}
+/**
+ * 急救（Code Blue）：任何護理師、醫師都能啟動；醫師「帶領」後急救藥、電擊才記得下去（口頭醫囑記在帶領醫師名下）。
+ * DNR 硬擋：不按壓不能開始 CPR、不電擊不能電擊、不插管不能插管、不施行急救藥物不能給藥、不施行人工呼吸不能用甦醒球。
+ * 結束：恢復自主循環（ROSC）、宣告死亡（醫師）、或依 DNR 不施行急救
+ */
+export interface CodeBlue {
+  id: string
+  admissionId: string
+  startedAt: string
+  startedBy: string
+  /** 帶領的醫師（使用者 id） */
+  leaderId?: string
+  events: CodeEvent[]
+  status: 'active' | 'ended'
+  endedAt?: string
+  endedBy?: string
+  outcome?: 'rosc' | 'death' | 'dnr'
+  /** 急救後申請轉加護病房 */
+  icuRequestId?: string
+}
+
 /** 瞳孔光反射：靈敏、遲鈍、無反應 */
 export type PupilLight = 'brisk' | 'sluggish' | 'none'
 
@@ -1527,6 +1570,8 @@ export interface IcuRequest {
   bedId?: string
   /** 快速反應小組評估後申請的 */
   rrtCallId?: string
+  /** 急救後申請的 */
+  codeBlueId?: string
 }
 
 /** 每日脫離評估：自發性甦醒試驗（停鎮靜，SAT）→ 通過才做自發性呼吸試驗（SBT）；不適合要寫原因 */

@@ -4,12 +4,13 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { UBadge, UButton, UCard, UDialog, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { ICU_CATEGORIES, NEWS_LEVEL_LABEL, RRT_DISPOSITION_LABEL, rrtApi, type RrtView } from '@/services'
+import { codeApi, ICU_CATEGORIES, NEWS_LEVEL_LABEL, RRT_DISPOSITION_LABEL, rrtApi, type RrtView } from '@/services'
 import type { IcuCategory } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 
 const router = useRouter()
 const { data, loading, reload } = useQuery(() => rrtApi.listRrt())
+const { data: cq } = useQuery(() => codeApi.codeQuality())
 const at = (s?: string) => s?.slice(5, 16).replace('-', '/') ?? ''
 const tone = { low: 'green', medium: 'yellow', high: 'red' } as const
 const icuText = { pending: '待加護病房主治同意', accepted: '同意，候床中', declined: '加護病房不同意', cancelled: '已取消', placed: '已轉入加護病房' } as const
@@ -80,6 +81,11 @@ const toIpd = (id: string) => router.push({ name: 'ipd', query: { admission: id 
             <dt class="text-slate-500">呼叫次數</dt><dd>{{ data.stats.calls }}（自動 {{ data.stats.auto }}）</dd>
             <dt class="text-slate-500">平均到場評估</dt><dd>{{ data.stats.avgResponseMin === null ? '—' : `${data.stats.avgResponseMin} 分鐘` }}</dd>
             <dt class="text-slate-500">轉加護病房</dt><dd>{{ data.stats.toIcu }} / {{ data.stats.done }}</dd>
+          </dl>
+          <div v-if="cq" class="mt-3 border-t border-slate-100 pt-2 text-sm font-semibold text-slate-700">急救（最近 {{ cq.days }} 天）</div>
+          <dl v-if="cq" class="tabular mt-1 grid grid-cols-[1fr_auto] gap-y-1 text-sm">
+            <dt class="text-slate-500">急救次數</dt><dd>{{ cq.codes }}<template v-if="cq.dnr">（依 DNR 不施行 {{ cq.dnr }}）</template></dd>
+            <dt class="text-slate-500">恢復自主循環 ROSC</dt><dd>{{ cq.rosc }} / {{ cq.resus }}{{ cq.roscRate === null ? '' : `（${cq.roscRate}%）` }}</dd>
           </dl>
           <p class="mt-2 text-xs text-slate-500">NEWS2：5–6 分或單項 3 分通知主治、1 小時內再量；≥7 分自動呼叫（已經在等、或已申請轉加護病房的不重複叫）。</p>
         </UCard>

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // 主版面：側邊選單（依角色過濾）、頂端列、展示資料過期提示。
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AlertTriangle, Eye, Hospital, KeyRound, Lock, LogOut, Menu, RotateCcw, X } from 'lucide-vue-next'
 import { UButton, UDialog } from '@/components/ui'
 import { appRoutes, menuGroups } from '@/router/routes'
-import { authApi, dbVersion, masterApi, storageIssue, storageMode } from '@/services'
+import { authApi, codeApi, dbVersion, masterApi, storageIssue, storageMode, type CodeView } from '@/services'
 import { errorMessage } from '@/composables/useService'
 import { isNavigationFailure } from 'vue-router'
 import type { Role } from '@/types'
@@ -41,6 +41,25 @@ const viewOnlyRoles = computed(() => route.meta.roles?.map((r) => roleLabel[r]).
 
 const mobileOpen = ref(false)
 watch(() => route.fullPath, () => (mobileOpen.value = false))
+
+// 急救進行中：全院畫面上方紅色橫幅（資料一變就重查，另外每 30 秒查一次；點了到那位病人的「急救」分頁）
+const codes = ref<CodeView[]>([])
+async function loadCodes() {
+  if (!auth.user) return void (codes.value = [])
+  try {
+    codes.value = await codeApi.activeCodes()
+  } catch {
+    codes.value = []
+  }
+}
+watch([dbVersion, () => auth.user?.id], loadCodes, { immediate: true })
+const codeTimer = setInterval(loadCodes, 30000)
+onUnmounted(() => clearInterval(codeTimer))
+function openCode(c: CodeView) {
+  const role = auth.user?.role
+  if (role === 'doctor') router.push({ name: 'ipd', query: { admission: c.admissionId, tab: 'code' } })
+  else router.push({ name: 'nursing', query: { ward: c.ward, admission: c.admissionId, tab: 'code' } })
+}
 
 // 展示資料過期提示（dbVersion 變動時重新判斷，例如重置之後）
 const seed = computed(() => (dbVersion.value, masterApi.seedInfo()))
@@ -175,6 +194,11 @@ const dateText = computed(() => `${toRoc(todayStr.value)}（${weekdayLabel(today
         <UButton size="sm" variant="secondary" :icon="RotateCcw" :loading="resetting" @click="resetData">重置為今天</UButton>
       </div>
 
+      <button v-for="c in codes" :key="c.id" type="button" class="no-print flex w-full items-center gap-2 border-b border-red-700 bg-red-600 px-4 py-2 text-left text-sm font-semibold text-white hover:bg-red-700" role="alert" @click="openCode(c)">
+        <AlertTriangle class="h-4 w-4 shrink-0" />
+        急救進行中：{{ c.ward }} {{ c.bedNo }} {{ c.patientName }}・{{ c.startedAt.slice(11, 16) }} 開始（{{ c.minutes }} 分鐘）{{ c.leaderName ? `・${c.leaderName}帶領` : '・還沒有醫師帶領' }}
+        <span class="ml-auto text-xs font-normal underline">前往急救紀錄</span>
+      </button>
       <div v-if="adminViewOnly" class="no-print flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <Eye class="h-4 w-4 shrink-0" />
         系統管理員僅能檢視此頁；新增、修改等臨床操作請以{{ viewOnlyRoles }}帳號登入。

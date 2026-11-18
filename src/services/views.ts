@@ -44,6 +44,7 @@ export const usable = {
     const d = must(find.drug(id), `藥品 ${id}`)
     if (!d.active) fail(`${d.name} 已停用，不能開立`)
     if (d.pca) fail(`${d.name}是病人自控止痛（PCA）藥袋：請在住院醫囑「PCA」分頁開立`)
+    if (d.crash) fail(`${d.name}是急救車用藥：請在「急救」分頁記錄（自動開醫囑、扣帳）`)
     return d
   },
   procedure(id: string) {
@@ -52,6 +53,7 @@ export const usable = {
     // 病房費、護理費、住院診察費：出院結帳依住院天數自動算，不能當醫令開（會重複收）
     if (p.dailyFee) fail(`${p.name}是住院每日計費項目，出院結帳時自動帶入，不能另外開立`)
     // 交叉試驗、血品：備血單由血庫配血、發血，住院帳單依血庫紀錄帶入
+    if (p.codeBlue) fail(`${p.name}是急救計費項目：急救紀錄開始 CPR 時自動帶入`)
     if (p.er) fail(`${p.name}是急診計費項目，急診就醫依紀錄自動帶入`)
     if (p.surgery || p.anesthesiaFee) fail(`${p.name}是手術或麻醉計費項目：請在住院醫囑「手術」分頁申請手術，做完依手術室紀錄自動列入帳單`)
     if (p.recordCopy) fail(`${p.name}是病歷影本計費項目，申請病歷影本時自動帶入`)
