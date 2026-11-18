@@ -868,6 +868,20 @@ export interface ImagingExam {
   prep?: Record<string, { ok: boolean; at: string; by: string; note?: string }>
   /** 取消（寫原因）：影像回到待排程 */
   cancelled?: { at: string; by: string; reason: string }
+  /** 含顯影劑、病人有用 Metformin 且腎功能不好：完成時提醒主治暫停 48 小時（主治按已處理） */
+  metforminAlert?: { doctorId: string; until: string; ackAt?: string; ackBy?: string }
+  /** 一鍵開的水化醫囑 */
+  hydrationOrderId?: string
+}
+
+/** 顯影劑過敏放行：醫師確認已開前置用藥（類固醇＋抗組織胺）、寫原因，這一筆影像（key）才能報到 */
+export interface ContrastClearance {
+  id: string
+  key: string
+  patientId: string
+  by: string
+  at: string
+  reason: string
 }
 
 /** 自動審核沒通過的規則：品管沒過、危急值、和上次差太多（delta check）、超出儀器可測範圍 */

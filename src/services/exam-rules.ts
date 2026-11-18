@@ -54,3 +54,16 @@ export function contrastCheck(crcl: number | null): { level: 'ok' | 'hydrate' | 
   if (crcl < 45) return { level: 'hydrate', text: `CrCl ${crcl} ml/min（30–45）：可以打，檢查前後請水化（補充水分）` }
   return { level: 'ok', text: `CrCl ${crcl} ml/min：腎功能可以打顯影劑` }
 }
+
+/** 顯影劑過敏：病人過敏紀錄裡有顯影劑、碘（含英文）→ 回傳那一筆 */
+export const contrastAllergy = (allergies: string[] | undefined) => (allergies ?? []).find((a) => /顯影劑|碘|contrast|iodin/i.test(a))
+
+/** Metformin：打顯影劑後暫停幾小時（腎功能不好時乳酸中毒風險） */
+export const METFORMIN_HOLD_HOURS = 48
+/** 要不要暫停 Metformin：CrCl < 45 或算不出 */
+export const metforminAtRisk = (crcl: number | null) => crcl === null || crcl < 45
+export const metforminText = (crcl: number | null) => `病人有在用 Metformin${crcl === null ? '、CrCl 算不出' : `、CrCl ${crcl}`}：打顯影劑後暫停 ${METFORMIN_HOLD_HOURS} 小時，複查腎功能正常再恢復`
+
+/** 顯影劑水化建議：生理食鹽水 1 mL/kg/hr（檢查前後），一袋 500 mL */
+export const HYDRATION = { mlPerKgH: 1, volumeMl: 500 }
+export const hydrationRate = (weightKg: number) => Math.max(1, Math.round(weightKg * HYDRATION.mlPerKgH))

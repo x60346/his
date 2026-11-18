@@ -3032,10 +3032,13 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ex(o, s3, { arrivedAt: arr, arrivedBy: 'U101', prep: { npo6: { ok: false, at: arr, by: 'U101', note: '早上 8 點吃過早餐' } } })
     }
     const sep = by('A41')
-    if (sep) {
-      const s4 = [addMinutes(nowStr, 90), `${T} 16:30`].sort()[0]
-      ex(order('IO-EX-6', sep, 'P061', addMinutes(nowStr, -90)), s4)
-    }
+    // 顯影劑安全：蜂窩性組織炎病人（過敏紀錄有顯影劑）的含顯影劑 CT 排在敗血症那筆後面、還沒放行；
+    // 糖尿病病人（Metformin 執行中、CrCl 算不出）的含顯影劑 CT 待排程
+    const s4 = [addMinutes(nowStr, 90), `${T} 16:00`].sort()[0]
+    if (sep) ex(order('IO-EX-6', sep, 'P061', addMinutes(nowStr, -90)), s4)
+    if (cell) ex(order('IO-EX-7', cell, 'P061', addMinutes(nowStr, -80)), addMinutes(s4, 30))
+    const dmx = by('E11')
+    if (dmx) order('IO-EX-8', dmx, 'P061', addMinutes(nowStr, -30))
     const busy = new Set(admissions.filter((x) => x.status === 'admitted').map((x) => x.patientId))
     const opd = visits
       .filter((v) => v.date === T && (v.status === 'charged' || v.status === 'dispensed') && !busy.has(v.patientId))
@@ -3246,6 +3249,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     imagingExams,
     labCheckins,
     analyzerResults,
+    contrastClearances: [],
     dischargePlans,
     vitals,
     nursingNotes,

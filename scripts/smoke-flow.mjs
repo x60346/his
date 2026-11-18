@@ -3204,7 +3204,7 @@ try {
     ok(ng.find((o) => o.id === o2.id)?.needsAck && ng.find((o) => o.id === o1.id)?.lastReply?.resolution === 'modified', '護理站：新醫囑待核對、舊醫囑看得到醫師的修改回覆')
     const { readFileSync } = await import('node:fs')
     const src = readFileSync('src/services/ipd.ts', 'utf8')
-    ok((src.match(/doseLevel\(drug,/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 3, '開立、修改、依營養師建議開管灌共用 createOrder：劑量、重複、服用時機、管灌的檢查只有一份')
+    ok((src.match(/doseLevel\(drug,/g) ?? []).length === 1 && (src.match(/createOrder\(user, a,/g) ?? []).length === 4, '開立、修改、依營養師建議開管灌、顯影劑水化共用 createOrder：劑量、重複、服用時機、管灌的檢查只有一份')
   }
 
   // 門診退藥：已發出的藥整張收回，退回發出時的批號；之後櫃台才能作廢或退費
@@ -11674,6 +11674,117 @@ try {
     ok(fixed.calloutState === 'pending' && fixed.calloutDue === dateUtil.addMinutes(fixed.corrections.at(-1).at, 30), '更正後才變危急值：從更正時間起算 30 分鐘')
     dash = await api.dashboardApi.getDashboard()
     ok(dash.calloutPending >= 1, '首頁待通報跟著增加')
+  }
+
+  // 顯影劑安全連動：過敏放行（前置用藥）、Metformin 提醒與做完後暫停、水化醫囑一鍵開立、權限、種子
+  console.log('\n[顯影劑安全連動]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.contrastAllergy(['Penicillin', '顯影劑']) === '顯影劑' && api.contrastAllergy(['碘酒']) && api.contrastAllergy(['Iodinated contrast']) && !api.contrastAllergy(['Penicillin']) && !api.contrastAllergy(undefined), '顯影劑過敏：顯影劑、碘、英文都認得；其他過敏不算')
+    ok(api.metforminAtRisk(null) && api.metforminAtRisk(44) && !api.metforminAtRisk(45) && api.metforminText(31).includes('48 小時'), 'Metformin：CrCl < 45 或算不出要暫停 48 小時')
+    ok(api.hydrationRate(60) === 60 && api.hydrationRate(0.2) === 1, '水化：1 mL/kg/hr')
+
+    // 種子
+    await as('clerk01')
+    let b = await E.examBoard(T)
+    const ctRoom = b.rooms.find((r) => r.room === 'CT').exams
+    const al = ctRoom.find((e) => e.orderId === 'IO-EX-7')
+    const sepEx = ctRoom.find((e) => e.orderId === 'IO-EX-6')
+    ok(al?.safety.allergy?.text === '顯影劑' && !al.safety.allergy.cleared && !sepEx.safety.allergy && !b.canClear, '種子：蜂窩性組織炎病人顯影劑過敏、含顯影劑 CT 還沒放行（櫃台不能放行）')
+    const met = b.toSchedule.find((w) => w.key === 'O:IO-EX-8')
+    ok(met?.safety.metformin?.includes('Metformin') && met.safety.metformin.includes('算不出'), `種子：糖尿病病人含顯影劑 CT 待排程——${met?.safety.metformin}`)
+    let msg = await errOf(() => E.arriveExam(al.id))
+    ok(msg.includes('過敏'), `沒放行不能報到 → 「${msg}」`)
+
+    // 放行
+    const cell = db().admissions.find((a) => a.id === al.admissionId)
+    msg = await errOf(() => E.clearContrastAllergy(al.key, { reason: 'x', premed: true }))
+    ok(msg.includes('權限'), '櫃台不能放行')
+    const other = db().doctors.find((d) => d.id !== cell.doctorId && d.id !== db().ipdOrders.find((o) => o.id === 'IO-EX-7').doctorId && db().departments.find((x) => x.id === d.deptId)?.code !== 'RAD' && db().users.some((u) => u.doctorId === d.id))
+    await as(userOf(other.id))
+    msg = await errOf(() => E.clearContrastAllergy(al.key, { reason: 'x', premed: true }))
+    ok(msg.includes('開立醫師'), `別的醫師不能放行 → 「${msg}」`)
+    await as(userOf(cell.doctorId))
+    let f = await fieldsOf(() => E.clearContrastAllergy(al.key, { reason: ' ', premed: false }))
+    ok(f.reason && f.premed, '放行要寫原因、勾已開前置用藥')
+    msg = await errOf(() => E.clearContrastAllergy('O:IO-EX-6', { reason: 'x', premed: true }))
+    ok(msg.includes('沒有顯影劑過敏'), '沒有過敏不用放行')
+    msg = await errOf(() => E.clearContrastAllergy('O:IO-EX-4', { reason: 'x', premed: true }))
+    ok(msg.includes('不打顯影劑'), '不打顯影劑的不用放行')
+    const c = await E.clearContrastAllergy(al.key, { reason: '疑深部膿瘍，非顯影檢查無法診斷', premed: true })
+    ok(c.by && db().auditLogs[0].action === '顯影劑過敏放行', '主治放行、寫稽核')
+    const ae = await E.admissionExams(cell.id)
+    ok(ae.exams.find((e) => e.id === al.id)?.safety.allergy?.cleared?.reason.includes('膿瘍'), '病人分頁看得到放行紀錄')
+    await as('clerk01')
+    ok((await E.arriveExam(al.id)).stage === 'arrived', '放行後可以報到')
+    await as('dr10')
+    ok((await E.examBoard(T)).canClear, '放射科醫師可以在檢查室放行')
+
+    // 水化醫囑
+    const sep = db().admissions.find((a) => a.id === sepEx.admissionId)
+    await as(userOf(sep.doctorId))
+    const sx = (await E.admissionExams(sep.id)).exams.find((e) => e.id === sepEx.id)
+    ok(sx.safety.hydration?.rateMlH === 60 && sx.safety.hydration.text.includes('60 kg'), `CrCl 31、60 kg → 建議 ${sx.safety.hydration?.text}`)
+    const ho = await api.ipdApi.orderContrastHydration(sepEx.id)
+    ok(ho.drugId === 'M037' && ho.infusion.rateMlH === 60 && ho.infusion.volumeMl === 500 && db().imagingExams.find((e) => e.id === sepEx.id).hydrationOrderId === ho.id && db().auditLogs[0].detail.includes('顯影劑水化'), '一鍵開水化醫囑：生理食鹽水 500 mL、60 mL/hr，記在檢查上')
+    msg = await errOf(() => api.ipdApi.orderContrastHydration(sepEx.id))
+    ok(msg.includes('開過'), '同一筆檢查只能開一次')
+    await as(userOf(cell.doctorId))
+    msg = await errOf(() => api.ipdApi.orderContrastHydration(al.id))
+    ok(msg.includes('CrCl'), `不在水化範圍（CrCl 算不出）→ 「${msg}」`)
+    await as('nurse01')
+    msg = await errOf(() => api.ipdApi.orderContrastHydration(sepEx.id))
+    ok(msg.includes('權限'), '護理師不能開醫囑')
+
+    // Metformin：做完後主治暫停提醒
+    const dm = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    await as('clerk01')
+    const tmr = addDaysT(1)
+    const mx = await E.scheduleExam('O:IO-EX-8', `${tmr} 09:00`)
+    ok(mx.safety.metformin, '排好之後檢查室清單也看得到 Metformin 提醒')
+    await E.arriveExam(mx.id)
+    for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(mx.id, k, true)
+    const done = await E.completeExam(mx.id)
+    const alert = db().imagingExams.find((e) => e.id === mx.id).metforminAlert
+    ok(alert?.doctorId === dm.doctorId && alert.until === dateUtil.addMinutes(done.doneAt, 48 * 60), '做完：提醒主治暫停 Metformin 48 小時')
+    await as(userOf(dm.doctorId))
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.metforminAlerts === 1 && (await E.myMetforminAlerts()).some((e) => e.id === mx.id) && (await E.admissionExams(dm.id)).metforminAlerts[0]?.metforminAlertText.includes('48 小時'), '主治首頁、清單、病人分頁看得到')
+    await as(userOf(other.id))
+    msg = await errOf(() => E.ackMetforminAlert(mx.id))
+    ok(msg.includes('主治'), '別的醫師不能按已處理')
+    await as(userOf(dm.doctorId))
+    await E.ackMetforminAlert(mx.id)
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.metforminAlerts === 0 && db().auditLogs[0].action.includes('Metformin'), '主治按已處理：首頁清掉、寫稽核')
+    msg = await errOf(() => E.ackMetforminAlert(mx.id))
+    ok(msg.includes('處理過'), '不能重複處理')
+    // 沒用 Metformin 的做完不提醒
+    await as('clerk01')
+    await E.arriveExam(sepEx.id)
+    for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(sepEx.id, k, true)
+    await E.completeExam(sepEx.id)
+    ok(!db().imagingExams.find((e) => e.id === sepEx.id).metforminAlert, '沒用 Metformin：做完不提醒')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

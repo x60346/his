@@ -14,6 +14,7 @@ import { checkAllergies } from './allergy'
 import { checkLabSchedule, labDrawAt, labScheduleText } from './lab-schedule-rules'
 import { homeMedPlanProblems } from './medrec-rules'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
+import { contrastCheck, hydrationRate, HYDRATION } from './exam-rules'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
@@ -26,7 +27,7 @@ import { activeLines } from './line-work'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 import { acceptAdviceOn, adviceOfOrder, medHistory, type AbxAdviceView } from './abx-steward-work'
 import { abxCourseStart } from './abx-steward-rules'
-import { renalAlertOf, tdmOf } from './renal-work'
+import { renalAlertOf, tdmOf, latestWeight, renalOfPatient } from './renal-work'
 import type { TdmState } from './renal-rules'
 import { openPharmQuery, pharmBlocksUd } from './pharm-rules'
 import { newPharm, settlePharmOnChange } from './pharm-work'
@@ -348,6 +349,32 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     const o = createOrder(user, a, input, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
     const severe = (o.rxAlerts ?? []).filter((x) => x.level === 'severe')
     audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((x) => `${x.title}（${x.reason}）`).join('、')}` : ''}`)
+    return orderView(o)
+  })
+}
+
+/**
+ * 顯影劑水化醫囑（醫師一鍵帶入，開的人仍是醫師）：含顯影劑檢查、CrCl 30–45、有體重的住院病人——
+ * 生理食鹽水 500 mL，1 mL/kg/hr（長期醫囑，做完檢查由醫師停）；同一筆檢查只能帶一次
+ */
+export function orderContrastHydration(examId: string): Promise<OrderView> {
+  return mutate(() => {
+    const user = requirePermission('order.write')
+    const e = must(db.imagingExams.find((x) => x.id === examId), '影像檢查')
+    if (!e.admissionId) fail('門診不開水化醫囑', 'CONFLICT')
+    if (e.cancelled || e.doneAt) fail('這筆檢查已取消或已做完', 'CONFLICT')
+    if (e.hydrationOrderId) fail('這筆檢查已經開過水化醫囑了', 'CONFLICT')
+    if (!find.procedure(e.procId)?.imaging?.contrast) fail('這項檢查不打顯影劑', 'CONFLICT')
+    const r = renalOfPatient(e.patientId, e.admissionId)
+    if (contrastCheck(r.crcl).level !== 'hydrate') fail(`${r.text}：不在需要水化的範圍（CrCl 30–45）`, 'CONFLICT')
+    const w = latestWeight(e.admissionId)
+    if (!w) fail('沒有 30 天內的體重，算不出流速（營養篩檢可登打）', 'CONFLICT')
+    const a = activeAdmission(e.admissionId)
+    const role = requireCare(user.doctorId, a, '開水化醫囑', { consult: false })
+    const rate = hydrationRate(w!.kg)
+    const o = createOrder(user, a, { admissionId: a.id, type: 'long', category: 'medication', drugId: 'M037', content: '', dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: HYDRATION.volumeMl, rateMlH: rate }, allowDuplicate: true }, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
+    e.hydrationOrderId = o.id
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}（顯影劑水化：${find.procedure(e.procId)?.name} ${e.start}）`)
     return orderView(o)
   })
 }

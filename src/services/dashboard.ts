@@ -204,6 +204,8 @@ export interface DashboardStats {
   examToday?: number
   /** 門診開立醫師：病人沒來做影像（過了排程 30 分鐘沒報到） */
   examNoShow?: number
+  /** 主治：做完含顯影劑檢查、要暫停 Metformin 48 小時（還沒按已處理） */
+  metforminAlerts?: number
   examNoShowText?: string
   udReturns: number
   udVerify: number
@@ -328,6 +330,7 @@ export function getDashboard(): Promise<DashboardStats> {
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
+          metforminAlerts: db.imagingExams.filter((e) => e.metforminAlert && !e.metforminAlert.ackAt && e.metforminAlert.doctorId === me.doctorId).length,
           ...((xs) => ({ examNoShow: xs.length, examNoShowText: xs.map((e) => `${db.patients.find((p) => p.id === e.patientId)?.name} ${db.procedures.find((p) => p.id === e.procId)?.name}（${e.start.slice(5)}）`).join('、') }))(noShowOf(me.doctorId)),
           ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue, abxSteward: stewardTodoCount(now()) }))(abxPendingCounts(now())) : {}),
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),

@@ -96,6 +96,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '輸血待處理', count: s.value.transfusionTodo, hint: '已發血待床邊核對輸血、輸血中該量 15 分鐘生命徵象（全院）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['lab'], label: '待檢驗', count: s.value.labWork ?? 0, hint: '門診已批價、住院已採檢的，登打後發報告', route: 'lab', icon: FlaskConical, urgent: true },
     { roles: ['doctor'], label: '待確認報告', count: (s.value.labAcks ?? 0) + (s.value.imagingAcks ?? 0), hint: '檢驗危急值、影像重要發現或更正補充過的報告，在上方清單按「已知悉」', route: 'home', icon: FlaskConical, urgent: true },
+    { roles: ['doctor'], label: '顯影劑後暫停 Metformin', count: s.value.metforminAlerts ?? 0, hint: '病人做完含顯影劑檢查、腎功能不好：暫停 Metformin 48 小時、複查腎功能（住院醫囑的病人分頁「檢查」按已處理）', route: 'ipd', icon: ScanLine, urgent: !!s.value.metforminAlerts },
     { roles: ['doctor'], label: '影像檢查病人未到', count: s.value.examNoShow ?? 0, hint: s.value.examNoShowText ? `${s.value.examNoShowText}：櫃台可改期，需要的話聯絡病人` : '門診病人過了排程 30 分鐘沒到影像檢查室', route: 'imaging', icon: ScanLine, urgent: !!s.value.examNoShow },
     { roles: ['doctor'], label: '待判讀影像', count: s.value.imagingWork ?? 0, hint: '放射科：X 光、超音波、電腦斷層；其他醫師：自己開的心電圖', route: 'imaging', icon: ScanLine },
     { roles: ['doctor'], label: '管制性抗生素待審核', count: s.value.abxPending ?? 0, hint: s.value.abxOverdue ? `其中 ${s.value.abxOverdue} 筆超過 48 小時` : '感染科：先用後審，開立後 48 小時內審核', route: 'abx', icon: ShieldAlert, urgent: !!s.value.abxOverdue },

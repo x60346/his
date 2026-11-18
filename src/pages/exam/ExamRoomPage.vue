@@ -7,6 +7,7 @@ import { computed, reactive, ref } from 'vue'
 import { CalendarClock, Check, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UInput, UPageHeader, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
+import ContrastClearDialog from '@/components/ContrastClearDialog.vue'
 import { EXAM_DAY, examApi, type ExamBoard, type ExamView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, now, today } from '@/utils/date'
@@ -48,6 +49,8 @@ async function confirmNotReady(note: string) {
   if (notReady.value && (await prep.run(notReady.value.e.id, notReady.value.item.id, false, note))) notReady.value = undefined
 }
 const TONE = { scheduled: 'blue', arrived: 'yellow', done: 'green' } as const
+const clearing = ref<{ key: string; subject: string }>()
+const clearOpen = computed({ get: () => !!clearing.value, set: (x) => !x && (clearing.value = undefined) })
 // 腎功能依據：「CrCl 31 ml/min（肌酸酐 1.8、60 kg…）」只留括號裡（CrCl 已在判斷文字裡）
 const basis = (renal: string) => renal.match(/^CrCl \d+ ml\/min（(.*)）$/)?.[1] ?? renal
 const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown: 'text-amber-800', block: 'text-red-700 font-semibold' } as const
@@ -70,6 +73,9 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 <div class="text-xs text-slate-700">{{ w.procName }}・{{ w.roomName }}・約 {{ w.minutes }} 分・{{ w.doctorName }} {{ w.orderedAt.slice(5) }} 開立</div>
                 <div v-if="w.prep.length" class="text-xs text-indigo-800">檢查前準備（排程時告知病人／病房）：{{ w.prep.join('、') }}</div>
                 <div v-if="w.contrast" :class="['text-xs', CONTRAST_TONE[w.contrast.level]]">顯影劑：{{ w.contrast.text }}<span class="text-slate-500">（{{ basis(w.contrast.renal) }}）</span></div>
+                <div v-if="w.safety.allergy" :class="['text-xs', w.safety.allergy.cleared ? 'text-slate-600' : 'font-semibold text-red-700']">顯影劑過敏（{{ w.safety.allergy.text }}）：{{ w.safety.allergy.cleared ? `${w.safety.allergy.cleared.byName} 已放行` : '開立醫師確認前置用藥並放行後才能報到' }}
+                  <UButton v-if="board.canClear && !w.safety.allergy.cleared" size="sm" variant="danger" @click="clearing = { key: w.key, subject: `${w.patientName} ${w.procName}：過敏 ${w.safety.allergy.text}` }">放行</UButton></div>
+                <div v-if="w.safety.metformin" class="text-xs text-amber-800">{{ w.safety.metformin }}</div>
                 <div v-if="w.cancelledReason" class="text-xs text-slate-500">上次取消：{{ w.cancelledReason }}</div>
                 <p v-if="err?.key === w.key && err.msg" class="text-xs text-red-600">{{ err.msg }}</p>
               </div>
@@ -106,6 +112,9 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                   <p v-if="err?.key === e.key && err.msg" class="w-full text-xs text-red-600">{{ err.msg }}</p>
                 </div>
                 <div v-if="e.contrast" :class="['text-xs', CONTRAST_TONE[e.contrast.level]]">顯影劑：{{ e.contrast.text }}<span class="text-slate-500">（{{ basis(e.contrast.renal) }}）</span></div>
+                <div v-if="e.safety.allergy" :class="['text-xs', e.safety.allergy.cleared ? 'text-slate-600' : 'font-semibold text-red-700']">顯影劑過敏（{{ e.safety.allergy.text }}）：{{ e.safety.allergy.cleared ? `${e.safety.allergy.cleared.byName} 已放行（${e.safety.allergy.cleared.reason}）` : '還沒放行，不能報到' }}
+                  <UButton v-if="board.canClear && !e.safety.allergy.cleared" size="sm" variant="danger" @click="clearing = { key: e.key, subject: `${e.patientName} ${e.procName}：過敏 ${e.safety.allergy.text}` }">放行</UButton></div>
+                <div v-if="e.safety.metformin" class="text-xs text-amber-800">{{ e.safety.metformin }}</div>
                 <ul v-if="e.prepItems.length && e.stage !== 'done'" class="space-y-0.5 text-xs">
                   <li v-for="p in e.prepItems" :key="p.id" class="flex flex-wrap items-center gap-2">
                     <span :class="['inline-flex h-4 w-4 items-center justify-center rounded-full', p.ok === true ? 'bg-emerald-600 text-white' : p.ok === false ? 'bg-red-600 text-white' : 'border border-slate-400']"><Check v-if="p.ok === true" class="h-3 w-3" /><X v-else-if="p.ok === false" class="h-3 w-3" /></span>
@@ -124,6 +133,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
         </div>
       </template>
     </UQueryState>
+    <ContrastClearDialog v-model="clearOpen" :exam-key="clearing?.key ?? ''" :subject="clearing?.subject ?? ''" />
     <ReasonDialog v-model="cancelOpen" title="取消影像檢查" :subject="cancelling ? `${cancelling.patientName} ${cancelling.procName}（${cancelling.start.slice(5)}）` : ''" label="取消原因（影像會回到待排程）" :presets="['病人未禁食，改期', '病人未到', '病人拒絕', '醫師改檢查']" ok-text="取消檢查" danger :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @confirm="confirmCancel" />
     <ReasonDialog v-model="notReadyOpen" title="檢查前準備沒完成" :subject="notReady ? `${notReady.e.patientName}：${notReady.item.label}` : ''" label="原因（沒完成不能做，請取消改期）" :presets="['早上吃過早餐', '同意書還沒簽', '病人拒絕']" ok-text="記錄" :pending="prep.pending.value" :error="prep.fieldErrors.value.note" @confirm="confirmNotReady" />
   </div>
