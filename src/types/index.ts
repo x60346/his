@@ -1430,6 +1430,10 @@ export interface VitalRecord {
   sbp?: number
   dbp?: number
   spo2?: number
+  /** 給氧（L/min）：0＝室內空氣；沒填＝沒記（算不出 NEWS2） */
+  o2?: number
+  /** 意識 ACVPU：清醒、新出現的混亂、對聲音有反應、對痛有反應、沒反應 */
+  avpu?: Avpu
   /** 疼痛分數 0-10（數字量表；每班至少一次） */
   pain?: number
   /** 疼痛 ≥4 的處置（必填）：之後 1 小時內要重評（下一筆有疼痛分數的紀錄就算重評） */
@@ -1447,6 +1451,33 @@ export interface VitalRecord {
   rass?: number
   /** 呼吸器實測（每 4 小時）：尖峰壓 cmH2O、實際潮氣量 ml、實際呼吸次數 */
   vent?: { ppeak: number; vt: number; rr: number }
+}
+
+/** 意識 ACVPU（NEWS2）：A 清醒、C 新出現的混亂、V 對聲音有反應、P 對痛有反應、U 沒反應 */
+export type Avpu = 'A' | 'C' | 'V' | 'P' | 'U'
+
+/**
+ * 快速反應小組（RRT）呼叫：一般病房 NEWS2 ≥7 自動呼叫，或護理師「擔心病人」手動呼叫；
+ * 小組（權限 rrt）到場評估，留原病房或申請轉加護病房（直接建一筆轉入申請）
+ */
+export interface RrtCall {
+  id: string
+  admissionId: string
+  /** 自動：觸發的那筆生命徵象與分數；手動：呼叫原因 */
+  trigger: 'auto' | 'manual'
+  vitalId?: string
+  score?: number
+  reason?: string
+  calledBy: string
+  calledAt: string
+  status: 'pending' | 'done'
+  assessedBy?: string
+  assessedAt?: string
+  /** 評估發現、處置 */
+  findings?: string
+  actions?: string
+  disposition?: 'stay' | 'icu'
+  icuRequestId?: string
 }
 
 /** 瞳孔光反射：靈敏、遲鈍、無反應 */
@@ -1494,6 +1525,8 @@ export interface IcuRequest {
   decideNote?: string
   placedAt?: string
   bedId?: string
+  /** 快速反應小組評估後申請的 */
+  rrtCallId?: string
 }
 
 /** 每日脫離評估：自發性甦醒試驗（停鎮靜，SAT）→ 通過才做自發性呼吸試驗（SBT）；不適合要寫原因 */

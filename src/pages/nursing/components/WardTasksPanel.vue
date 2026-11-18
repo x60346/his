@@ -31,7 +31,7 @@ const urgencyView = {
   todo: { label: '待處理', tone: 'cyan' },
   upcoming: { label: '稍後', tone: 'gray' },
 } as const
-const tabOf: Record<WardTask['kind'], string> = { mar: 'mar', stat: 'mar', ack: 'orders', vitals: 'vitals', risk: 'risk', isolation: 'flags', blood: 'blood', pain: 'vitals', line: 'lines', nutrition: 'nutrition', tube: 'tube', delirium: 'safety', restraint: 'safety', plan: 'plan', pca: 'pca', infusion: 'infusion', wound: 'wounds', icu: 'flowsheet', vent: 'flowsheet' }
+const tabOf: Record<WardTask['kind'], string> = { mar: 'mar', stat: 'mar', ack: 'orders', vitals: 'vitals', risk: 'risk', isolation: 'flags', blood: 'blood', pain: 'vitals', line: 'lines', nutrition: 'nutrition', tube: 'tube', delirium: 'safety', restraint: 'safety', plan: 'plan', pca: 'pca', infusion: 'infusion', wound: 'wounds', icu: 'flowsheet', vent: 'flowsheet', news: 'vitals' }
 const counts = computed(() => ({
   overdue: (tasks.value ?? []).filter((t) => t.urgency === 'overdue').length,
   due: (tasks.value ?? []).filter((t) => t.urgency === 'due').length,

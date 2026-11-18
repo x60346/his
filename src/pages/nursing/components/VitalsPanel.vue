@@ -5,11 +5,12 @@
 //   normal 正常範圍，超出是「異常」（體溫 38.5 度）→ 照常記錄，但畫面標紅提醒
 // 趨勢圖每個指標各一張（小倍數圖），不把體溫和脈搏擠在同一張雙 Y 軸圖上。
 import { computed, reactive, ref, watch } from 'vue'
-import { UButton, UInput, ULineChart, UQueryState, UTable, type Column, type LinePoint } from '@/components/ui'
-import { isAbnormal, nursingApi, PAIN_ACT_FROM, PAIN_ACTIONS, PAIN_REASSESS_MIN, vitalInputProblem, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
+import { UBadge, UButton, UInput, ULineChart, UQueryState, USelect, UTable, type Column, type LinePoint } from '@/components/ui'
+import NewsPanel from '@/components/NewsPanel.vue'
+import { AVPU_LEVELS, checkNewsExtra, isAbnormal, isNews, NEWS_LEVEL_LABEL, newsScore, O2_RANGE, nursingApi, PAIN_ACT_FROM, PAIN_ACTIONS, PAIN_REASSESS_MIN, vitalInputProblem, vitalSpecs, type AdmissionView, type VitalKey } from '@/services'
 import { UTextarea } from '@/components/ui'
 import { useAction, useQuery } from '@/composables/useService'
-import type { VitalRecord } from '@/types'
+import type { Avpu, VitalRecord } from '@/types'
 
 const props = defineProps<{ admission: AdmissionView }>()
 
@@ -28,20 +29,33 @@ const blank = () => Object.fromEntries(fields.map((k) => [k, undefined])) as Rec
 const form = reactive(blank())
 // 疼痛 ≥4 要寫處置（服務層也擋），1 小時內重評：下一次再記疼痛分數就算重評
 const painAction = ref('')
+// NEWS2 要的另外兩項：給氧（L/min，0＝室內空氣）、意識 ACVPU
+const o2 = ref<number | undefined>()
+const avpu = ref<Avpu | ''>('')
+const num = (x: unknown) => (x === undefined || x === null || x === '' ? undefined : Number(x))
+/** 輸入當下就算 NEWS2（和服務層同一個 newsScore）：七項都有才算 */
+const preview = computed(() => newsScore({ id: '', admissionId: '', at: '', nurseId: '', ...Object.fromEntries(fields.map((k) => [k, num(form[k])])), o2: num(o2.value), ...(avpu.value ? { avpu: avpu.value } : {}) }))
+const o2Error = computed(() => checkNewsExtra({ o2: num(o2.value) }).o2 ?? save.fieldErrors.value.o2)
+const newsRefresh = ref(0)
 const needAction = computed(() => form.pain !== undefined && form.pain !== null && (form.pain as unknown) !== '' && Number(form.pain) >= PAIN_ACT_FROM)
 watch(() => props.admission.id, () => {
   Object.assign(form, blank())
   painAction.value = ''
+  o2.value = undefined
+  avpu.value = ''
 })
 
-const save = useAction(nursingApi.addVitals, { success: '已記錄生命徵象' })
+const save = useAction(nursingApi.addVitals, { success: (v) => (v.rrtCalled ? '已記錄生命徵象：NEWS2 ≥7，已自動呼叫快速反應小組' : '已記錄生命徵象') })
 // 今日輸入輸出：生命徵象記的輸入量＋管灌灌入量
 const { data: io, reload: reloadIo } = useQuery(async () => ({ id: props.admission.id, v: await nursingApi.ioToday(props.admission.id) }), [() => props.admission.id])
 async function submit() {
-  if (await save.run({ admissionId: props.admission.id, ...form, ...(needAction.value ? { painAction: painAction.value } : {}) })) {
+  if (await save.run({ admissionId: props.admission.id, ...form, ...(num(o2.value) !== undefined ? { o2: num(o2.value) } : {}), ...(avpu.value ? { avpu: avpu.value } : {}), ...(needAction.value ? { painAction: painAction.value } : {}) })) {
     reloadIo()
     Object.assign(form, blank())
     painAction.value = ''
+    o2.value = undefined
+    avpu.value = ''
+    newsRefresh.value++
   }
 }
 /** 輸入當下就提示「異常」：與服務層、圖表用同一條 isAbnormal 規則 */
@@ -69,13 +83,18 @@ const shortX = (x: string) => x.replace('-', '/') // MM-DD HH:mm → MM/DD HH:mm
 const columns: Column<VitalRecord>[] = [
   { key: 'at', label: '時間', width: '8rem', format: (r) => r.at.slice(5) },
   ...fields.slice(0, 7).map((k) => ({ key: k, label: vitalSpecs[k].label, align: 'right' as const })),
+  { key: 'o2', label: '給氧', align: 'right' },
+  { key: 'avpu', label: '意識', align: 'center' },
+  { key: 'news', label: 'NEWS2', align: 'right' },
   { key: 'io', label: '輸入/輸出', align: 'right' },
 ]
+const newsOf = (r: VitalRecord) => { const x = newsScore(r); return isNews(x) ? x : undefined }
 const history = computed(() => [...(vitals.value ?? [])].reverse())
 </script>
 
 <template>
   <div class="space-y-5 p-4">
+    <NewsPanel :admission-id="admission.id" :refresh="newsRefresh" />
     <form class="rounded-md border border-slate-200 bg-slate-50 p-3" @submit.prevent="submit">
       <div class="mb-2 flex flex-wrap items-baseline gap-x-3 text-sm">
         <span class="font-semibold text-slate-700">記錄生命徵象</span>
@@ -96,12 +115,18 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
           :hint="hintOf(k)"
           :class="!vitalInputProblem(k, form[k]) && isAbnormal(k, form[k]) && '!border-red-400 !text-red-700'"
         />
+        <UInput v-model="o2" type="number" step="any" label="給氧" :error="o2Error" :hint="`L/min・0＝室內空氣（≤${O2_RANGE[1]}）`" />
+        <USelect v-model="avpu" label="意識" :options="[{ label: '—', value: '' }, ...AVPU_LEVELS.map((l) => ({ label: l.label, value: l.value }))]" :error="save.fieldErrors.value.avpu" />
       </div>
       <div v-if="needAction" class="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2">
         <UTextarea v-model="painAction" :label="`疼痛 ${form.pain} 分的處置（${PAIN_REASSESS_MIN} 分鐘內重評）`" :rows="2" required :error="save.fieldErrors.value.painAction" />
         <div class="mt-1 flex flex-wrap gap-1"><button v-for="x in PAIN_ACTIONS" :key="x" type="button" class="rounded border border-amber-300 bg-white px-1.5 text-xs hover:bg-amber-100" @click="painAction = painAction ? `${painAction}；${x}` : x">{{ x }}</button></div>
       </div>
-      <div class="mt-2 text-right"><UButton type="submit" size="sm" :loading="save.pending.value">儲存</UButton></div>
+      <div class="mt-2 flex flex-wrap items-center justify-end gap-2 text-xs">
+        <span v-if="isNews(preview)" class="text-slate-600">NEWS2 <UBadge :tone="preview.level === 'high' ? 'red' : preview.level === 'medium' ? 'yellow' : 'green'" class="tabular">{{ preview.total }} 分・{{ NEWS_LEVEL_LABEL[preview.level] }}</UBadge><template v-if="preview.level === 'high'">　存檔會自動呼叫快速反應小組</template></span>
+        <span v-else-if="preview.missing.length < 7" class="text-slate-500">要算 NEWS2 還缺：{{ preview.missing.join('、') }}</span>
+        <UButton type="submit" size="sm" :loading="save.pending.value">儲存</UButton>
+      </div>
     </form>
 
     <UQueryState :loading="loading && !vitals" :ready="!!vitals" empty-title="尚無生命徵象紀錄">
@@ -131,6 +156,9 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
             <span :class="['tabular', isAbnormal(k, row[k]) && 'font-semibold text-red-600']">{{ row[k] ?? '—' }}</span>
           </template>
           <template #cell-pain="{ row }"><span :class="['tabular', (row.pain ?? 0) >= PAIN_ACT_FROM && 'font-semibold text-red-600']" :title="row.painAction">{{ row.pain ?? '—' }}<span v-if="row.painAction" class="ml-1 text-xs font-normal text-slate-500">（{{ row.painAction }}）</span></span></template>
+          <template #cell-o2="{ row }"><span class="tabular">{{ row.o2 === undefined ? '—' : row.o2 === 0 ? '室內' : `${row.o2} L` }}</span></template>
+          <template #cell-avpu="{ row }"><span :class="row.avpu && row.avpu !== 'A' && 'font-semibold text-red-600'">{{ row.avpu ?? '—' }}</span></template>
+          <template #cell-news="{ row }"><span v-if="newsOf(row)" :class="['tabular', newsOf(row)!.level === 'high' ? 'font-semibold text-red-600' : newsOf(row)!.level === 'medium' && 'font-semibold text-amber-700']">{{ newsOf(row)!.total }}</span><span v-else class="text-slate-300">—</span></template>
           <template #cell-io="{ row }"><span class="tabular">{{ row.intake ?? '—' }} / {{ row.output ?? '—' }}</span></template>
         </UTable>
       </section>

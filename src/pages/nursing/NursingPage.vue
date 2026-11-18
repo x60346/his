@@ -223,6 +223,8 @@ const wardTotals = computed(() => ({
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
                   <span class="ml-auto flex flex-wrap justify-end gap-1">
+                    <UBadge v-if="p.rrtPending" tone="red" title="已呼叫快速反應小組，等到場評估">快速反應</UBadge>
+                    <UBadge v-if="p.news && p.news.level !== 'low'" :tone="p.news.level === 'high' || p.news.recheck === 'overdue' ? 'red' : 'yellow'" :title="`NEWS2 ${p.news.score} 分（${p.news.at.slice(11)}）：${p.news.recheck === 'overdue' ? '1 小時內再量已逾時' : '1 小時內再量'}`">NEWS {{ p.news.score }}</UBadge>
                     <UBadge v-if="p.icu?.late" tone="red" title="重症流程表超過 75 分鐘沒記">流程表 {{ p.icu.minutes }} 分</UBadge>
                     <UBadge v-if="p.vent?.on" tone="blue" title="使用呼吸器">呼吸器</UBadge>
                     <UBadge v-if="p.vent?.todo" :tone="p.vent.overdue ? 'red' : 'yellow'" title="呼吸器實測、RASS 每 4 小時（記在重症流程表）">實測／RASS {{ p.vent.todo }}</UBadge>

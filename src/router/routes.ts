@@ -51,6 +51,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'discharge-plan', name: 'discharge-plan', component: () => import('@/pages/nursing/DischargePlanPage.vue'), meta: { title: '出院準備', icon: HousePlus, group: '住院', roles: ['nurse', 'admin'], permission: 'discharge.plan' } },
   { path: 'nutrition', name: 'nutrition', component: () => import('@/pages/nutrition/NutritionPage.vue'), meta: { title: '營養', icon: Utensils, group: '住院', roles: ['diet', 'nurse'] } },
 
+  { path: 'rrt', name: 'rrt', component: () => import('@/pages/rrt/RrtPage.vue'), meta: { title: '快速反應', icon: Siren, group: '住院', roles: ['doctor', 'admin'], permission: 'rrt' } },
   { path: 'icu', name: 'icu', component: () => import('@/pages/icu/IcuPage.vue'), meta: { title: '加護病房', icon: Activity, group: '住院', roles: ['doctor', 'admin'], permission: 'icu.attending' } },
   { path: 'infection', name: 'infection', component: () => import('@/pages/infection/InfectionPage.vue'), meta: { title: '感染管制', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'admin'], permission: 'infection.control' } },
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },

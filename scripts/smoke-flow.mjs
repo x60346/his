@@ -8859,8 +8859,8 @@ try {
     // 種子
     const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
     const dka = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
-    const uti = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39'))
-    ok(db().beds.find((b) => b.id === dka.bedId).ward === ICU && db().icuRequests.find((r) => r.admissionId === dka.id)?.status === 'placed' && db().icuRequests.find((r) => r.admissionId === uti.id)?.status === 'pending', '種子：糖尿病酮酸中毒申請轉入、已在加護病房；泌尿道感染申請轉入（休克）待同意')
+    const uti = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63')) // 吸入性肺炎併敗血性休克（以前是泌尿道感染，但他是准出院的示範）
+    ok(db().beds.find((b) => b.id === dka.bedId).ward === ICU && db().icuRequests.find((r) => r.admissionId === dka.id)?.status === 'placed' && db().icuRequests.find((r) => r.admissionId === uti.id)?.status === 'pending', '種子：糖尿病酮酸中毒申請轉入、已在加護病房；腦梗塞病人吸入性肺炎併休克申請轉入待同意')
     ok(db().users.find((u) => u.username === 'dr03').grants?.includes('icu.attending'), '種子：dr03 被指定加護病房主治')
     { const since = db().admissions.find((a) => a.id === dka.id).bedHistory.at(-1).from
       ok(!db().handovers.some((h) => h.admissionId === dka.id && h.createdAt >= since) && !db().vitals.some((v) => v.admissionId === dka.id && !v.hourly && v.at > since && v.at <= db().vitals.filter((x) => x.admissionId === dka.id && x.hourly).map((x) => x.at).sort().pop()), '種子：轉入加護病房之後沒有原病房的交班、流程表那段沒有重複的生命徵象') }
@@ -8945,6 +8945,148 @@ try {
     ok(f.surgery, '手術要選')
     pi = await M.setApacheInput(sep.id, { chronic: true, surgery: 'none' })
     ok(pi.apache.chronicPts === 5 && pi.apache.input.set, '有嚴重慢性病、非手術：慢性病 +5')
+  }
+
+  // 早期預警 NEWS2 與快速反應小組：七項計分與分級、缺項不算、給氧與意識的輸入檢查；中 1 小時內再量、高自動呼叫（不重複叫、
+  // 有轉入申請不叫、加護病房不算）；手動呼叫；小組評估（欄位一次標出、留原病房、申請轉加護病房建申請或接上已有的）；權限；品質指標
+  console.log('\n[早期預警 NEWS2 與快速反應小組]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const R = api.rrtApi
+    const N = api.nursingApi
+    const ICU = '3I 加護病房'
+    const { addMinutes, now } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const base = { id: 'x', admissionId: 'x', at: '2026-11-18 10:00', nurseId: 'x', resp: 16, spo2: 97, o2: 0, sbp: 124, pulse: 80, avpu: 'A', temp: 36.8 }
+    const sc = (x) => api.newsScore({ ...base, ...x })
+    let s = sc({ resp: 22, spo2: 94, o2: 2, sbp: 112, pulse: 104, temp: 37.9 })
+    ok(s.total === 6 && s.level === 'medium' && !s.red && s.parts.length === 7, `NEWS2：呼吸 22→2、血氧 94→1、給氧→2、心跳 104→1 ＝ ${s.total}（中）`)
+    ok(sc({}).total === 0 && sc({}).level === 'low', '全部正常 0 分（低）')
+    const pts = (k, v) => sc({ [k]: v }).parts.find((p) => p.key === k).points
+    ok(pts('resp', 8) === 3 && pts('resp', 9) === 1 && pts('resp', 20) === 0 && pts('resp', 21) === 2 && pts('resp', 25) === 3, '呼吸邊界：≤8→3、9→1、20→0、21→2、≥25→3')
+    ok(pts('spo2', 91) === 3 && pts('spo2', 93) === 2 && pts('spo2', 95) === 1 && pts('spo2', 96) === 0, '血氧邊界：≤91→3、93→2、95→1、≥96→0')
+    ok(pts('sbp', 90) === 3 && pts('sbp', 100) === 2 && pts('sbp', 110) === 1 && pts('sbp', 219) === 0 && pts('sbp', 220) === 3, '收縮壓邊界：≤90→3、100→2、110→1、219→0、≥220→3')
+    ok(pts('pulse', 40) === 3 && pts('pulse', 50) === 1 && pts('pulse', 90) === 0 && pts('pulse', 110) === 1 && pts('pulse', 130) === 2 && pts('pulse', 131) === 3, '心跳邊界：≤40→3、50→1、90→0、110→1、130→2、≥131→3')
+    ok(pts('temp', 35) === 3 && pts('temp', 36) === 1 && pts('temp', 38) === 0 && pts('temp', 39) === 1 && pts('temp', 39.1) === 2, '體溫邊界：≤35→3、36→1、38→0、39→1、≥39.1→2')
+    s = sc({ avpu: 'C' })
+    ok(s.total === 3 && s.red && s.level === 'medium', '新出現的混亂（C）3 分：單項 3 分就算「中」（要通知、再量）')
+    ok(sc({ resp: 25, sbp: 100, pulse: 111 }).level === 'high' && sc({ resp: 25, sbp: 100, pulse: 111 }).total === 7, '≥7 分「高」')
+    const miss = api.newsScore({ ...base, o2: undefined, avpu: undefined })
+    ok(!api.isNews(miss) && miss.missing.join() === '給氧,意識', '缺給氧、意識：算不出分數（列出缺哪幾項）')
+    let e = api.checkNewsExtra({ o2: 16, avpu: 'X' })
+    ok(e.o2 && e.avpu && !Object.keys(api.checkNewsExtra({ o2: 0, avpu: 'U' })).length, '給氧 0–15 L/min、意識只能 A C V P U')
+    e = api.checkRrtAssessment({})
+    ok(e.findings && e.actions && e.disposition, '快速反應評估：發現、處置、去向必填')
+
+    // 種子
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    const uti = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63')) // 吸入性肺炎併敗血性休克（以前是泌尿道感染，但他是准出院的示範）
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const pnWard = db().beds.find((b) => b.id === pn.bedId).ward
+    await as('nurse01')
+    let pv = await R.patientNews(pn.id)
+    ok(pv.last?.total === 6 && pv.last.level === 'medium' && pv.recheck?.status === 'upcoming' && pv.trend.map((x) => x.total).join() === (pv.trend.length === 3 ? '2,4,6' : pv.trend.map((x) => x.total).join()) && !pv.open && pv.canCall, `種子：肺炎 NEWS2 ${pv.trend.map((x) => x.total).join(' → ')}（中，1 小時內再量）`)
+    const uc = db().rrtCalls.find((c) => c.admissionId === uti.id)
+    const ur = db().icuRequests.find((r) => r.admissionId === uti.id)
+    ok(uc?.status === 'done' && uc.disposition === 'icu' && uc.icuRequestId === ur.id && ur.rrtCallId === uc.id && ur.status === 'pending' && db().users.find((u) => u.id === ur.requestedBy).username === 'dr03', '種子：腦梗塞病人 NEWS2 11 自動呼叫 → dr03 評估、申請轉入（休克）待同意')
+    pv = await R.patientNews(uti.id)
+    ok(pv.last.total === 11 && pv.last.level === 'high' && !pv.open && pv.calls.length === 1 && pv.calls[0].responseMin === 20, '休克的病人再量仍 11 分：已有轉入申請在走，沒有重複呼叫；20 分鐘到場')
+    ok(db().users.find((u) => u.username === 'dr03').grants?.includes('rrt'), '種子：dr03 被指定快速反應小組')
+    let wp = (await N.listWardPatients(pnWard)).find((p) => p.id === pn.id)
+    ok(wp.news?.score === 6 && wp.news.level === 'medium' && wp.news.recheck === 'upcoming' && !wp.rrtPending, '護理站病人清單：NEWS 6（等再量）')
+    let tasks = await N.listWardTasks(pnWard)
+    ok(tasks.some((t) => t.id === `news-${pn.id}` && t.kind === 'news' && t.urgency === 'due'), '本班待辦：NEWS2 1 小時內再量')
+
+    // 存檔：輸入檢查一次標出；部分紀錄不算再量
+    let f = await fieldsOf(() => N.addVitals({ admissionId: pn.id, temp: 52, o2: 16, avpu: 'X' }))
+    ok(f.temp && f.o2 && f.avpu, '體溫、給氧、意識的錯誤一次標出')
+    await N.addVitals({ admissionId: pn.id, pain: 1 })
+    ok((await R.patientNews(pn.id)).recheck, '只記疼痛：算不出分數，不算再量')
+    // 再量逾時
+    const last = db().vitals.find((v) => v.id === 'VS-NEWS-PN-3')
+    if (last) last.at = addMinutes(now(), -61)
+    tasks = await N.listWardTasks(pnWard)
+    ok(!last || tasks.some((t) => t.id === `news-${pn.id}` && t.urgency === 'overdue'), '超過 1 小時沒再量：本班待辦逾時')
+    let v = await N.addVitals({ admissionId: pn.id, temp: 37.2, pulse: 88, resp: 18, sbp: 122, dbp: 74, spo2: 96, o2: 2, avpu: 'A', pain: 1 })
+    pv = await R.patientNews(pn.id)
+    ok(!v.rrtCalled && pv.last.total === 2 && pv.last.level === 'low' && !pv.recheck, '再量 2 分（低）：不用再量')
+    // 高：自動呼叫，不重複叫
+    v = await N.addVitals({ admissionId: pn.id, temp: 38.9, pulse: 124, resp: 26, sbp: 98, dbp: 60, spo2: 91, o2: 4, avpu: 'A', pain: 2 })
+    const pc = db().rrtCalls.find((c) => c.admissionId === pn.id && c.status === 'pending')
+    ok(v.rrtCalled && pc?.trigger === 'auto' && pc.vitalId === v.id && pc.score === 13 && db().auditLogs[0].action === '呼叫快速反應小組', 'NEWS2 13（≥7）：自動呼叫快速反應小組、寫稽核')
+    v = await N.addVitals({ admissionId: pn.id, temp: 38.9, pulse: 126, resp: 28, sbp: 96, dbp: 58, spo2: 90, o2: 6, avpu: 'A' })
+    ok(!v.rrtCalled && db().rrtCalls.filter((c) => c.admissionId === pn.id).length === 1, '還在等的時候又高：不重複呼叫')
+    wp = (await N.listWardPatients(pnWard)).find((p) => p.id === pn.id)
+    tasks = await N.listWardTasks(pnWard)
+    ok(wp.rrtPending && wp.news.level === 'high' && tasks.some((t) => t.id === `rrt-${pn.id}`), '護理站：標「快速反應」、本班待辦「等到場評估」')
+    let msg = await errOf(() => R.callRrt(pn.id, { reason: 'x' }))
+    ok(msg.includes('已經呼叫'), `已經在等又手動呼叫 → 「${msg}」`)
+    // 加護病房不算
+    v = await N.addVitals({ admissionId: sep.id, temp: 38.9, pulse: 130, resp: 28, sbp: 88, dbp: 50, spo2: 90, o2: 6, avpu: 'P' })
+    pv = await R.patientNews(sep.id)
+    ok(!v.rrtCalled && pv.inIcu && !pv.last && !pv.trend.length && !pv.canCall, '加護病房的病人：不算 NEWS2、不自動呼叫')
+    msg = await errOf(() => R.callRrt(sep.id, { reason: 'x' }))
+    ok(msg.includes('加護病房'), `加護病房的病人手動呼叫 → 「${msg}」`)
+    // 手動呼叫
+    const other = db().admissions.find((a) => a.status === 'admitted' && ![pn.id, uti.id].includes(a.id) && !['3I 加護病房', '急診留觀區'].includes(db().beds.find((b) => b.id === a.bedId)?.ward) && !db().icuRequests.some((r) => r.admissionId === a.id && ['pending', 'accepted'].includes(r.status)))
+    f = await fieldsOf(() => R.callRrt(other.id, { reason: ' ' }))
+    ok(f.reason, '手動呼叫要寫原因')
+    const mc = await R.callRrt(other.id, { reason: '突然躁動、說話不清楚，覺得不對勁' })
+    ok(mc.trigger === 'manual' && mc.status === 'pending' && mc.calledByName, '護理師擔心病人：手動呼叫（分數不高也可以）')
+
+    // 小組評估
+    await as('dr02')
+    ok((await api.dashboardApi.getDashboard()).newsAlerts >= 1, `主治首頁：NEWS2 警示 ${(await api.dashboardApi.getDashboard()).newsAlerts}（肺炎、休克的腦梗塞病人）`)
+    msg = await errOf(() => R.listRrt())
+    ok(msg.includes('快速反應小組'), `沒有權限的醫師看快速反應 → 「${msg}」`)
+    msg = await errOf(() => R.assessRrt(pc.id, { findings: 'x', actions: 'x', disposition: 'stay' }))
+    ok(msg.includes('快速反應小組'), '沒有權限的醫師評估擋下')
+    await as('admin')
+    let w = await R.listRrt()
+    msg = await errOf(() => R.assessRrt(pc.id, { findings: 'x', actions: 'x', disposition: 'stay' }))
+    ok(!w.canAssess && w.pending.length === 2 && msg.includes('小組醫師'), `管理員只能看：評估 → 「${msg}」`)
+    await as('dr03')
+    ok((await api.dashboardApi.getDashboard()).rrtPending === 2, '快速反應小組首頁：待到場 2')
+    w = await R.listRrt()
+    ok(w.canAssess && w.pending[0].id === pc.id && w.pending[0].news?.total === 13 && w.pending[0].latest?.total >= 7 && w.pending[0].waitedMin >= 0 && w.recent.some((c) => c.id === uc.id && c.icuRequestStatus === 'pending'), '快速反應頁：等最久的在上面（觸發的分數、目前分數、等了幾分鐘）、最近評估過的（轉入申請狀態）')
+    f = await fieldsOf(() => R.assessRrt(pc.id, { findings: '', actions: '', disposition: 'icu' }))
+    ok(f.findings && f.actions && f.category && f.reason && !f.disposition, '評估：發現、處置、轉入類別與原因一次標出')
+    let a1 = await R.assessRrt(pc.id, { findings: '呼吸喘、右下肺囉音增加', actions: '氧氣面罩 6 L、抽動脈血液氣體分析、加抗生素', disposition: 'stay' })
+    ok(a1.status === 'done' && a1.disposition === 'stay' && a1.responseMin >= 0 && !a1.icuRequestId && !db().icuRequests.some((r) => r.admissionId === pn.id && r.status === 'pending'), '留原病房：評估完成、沒有轉入申請')
+    msg = await errOf(() => R.assessRrt(pc.id, { findings: 'x', actions: 'x', disposition: 'stay' }))
+    ok(msg.includes('已經評估'), `評估過的再評估 → 「${msg}」`)
+    const a2 = await R.assessRrt(mc.id, { findings: '左側肢體無力、口齒不清', actions: '通知神經科、安排電腦斷層', disposition: 'icu', category: 'other', reason: '疑似急性中風，需密切監測' })
+    const nr = db().icuRequests.find((r) => r.id === a2.icuRequestId)
+    ok(nr?.status === 'pending' && nr.rrtCallId === mc.id && nr.category === 'other' && nr.requestedBy === db().users.find((u) => u.username === 'dr03').id && (await api.icuMoveApi.listIcuWork()).pending.some((r) => r.id === nr.id), '申請轉加護病房：建一筆轉入申請（申請人是小組醫師），加護病房頁待同意')
+    await as('nurse01')
+    v = await N.addVitals({ admissionId: other.id, temp: 38.9, pulse: 130, resp: 28, sbp: 88, dbp: 50, spo2: 90, o2: 6, avpu: 'V' })
+    ok(!v.rrtCalled && !db().rrtCalls.some((c) => c.admissionId === other.id && c.status === 'pending'), '已經申請轉加護病房：分數再高也不重複呼叫')
+    // 已有轉入申請：接上那一筆
+    const uc2 = await R.callRrt(uti.id, { reason: '血壓又掉到 78/40' })
+    await as('dr03')
+    const n0 = db().icuRequests.length
+    const a3 = await R.assessRrt(uc2.id, { findings: '血壓 78/40、意識變差', actions: '再輸液 500 ml', disposition: 'icu' })
+    ok(a3.icuRequestId === ur.id && db().icuRequests.length === n0, '已經有轉入申請在走：接上那一筆，不重複申請（也不用再填類別）')
+    const st = (await R.listRrt()).stats
+    ok(st.calls === 4 && st.auto === 2 && st.done === 4 && st.toIcu === 3 && st.avgResponseMin !== null, `品質指標：呼叫 ${st.calls}（自動 ${st.auto}）、平均 ${st.avgResponseMin} 分鐘到場、轉加護病房 ${st.toIcu}/${st.done}`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
@@ -9169,7 +9311,8 @@ try {
     ok(fu2.closed && fu2.contacts.at(-1).rebooked?.seqNo === nv.seqNo, '清單上顯示改約到哪一診')
     msg = await errOf(() => BK.rebookNoShow(fu.id, { sessionId: target.id }))
     ok(msg.includes('已經結案'), '已改約的不能再改約')
-    ok(fu2.laterVisit?.date === nv.date, '病人之後已有同科掛號：清單標出來（聯絡前先確認）')
+    // 標的是之後最早的一筆同科掛號：病人原本就有更早的同科掛號時是那一筆（依日期，例如 11/18 跑的時候）
+    ok(!!fu2.laterVisit && fu2.laterVisit.date <= nv.date, '病人之後已有同科掛號：清單標出來（聯絡前先確認；之後最早的一筆）')
 
     // 出院後回診：種子的准出院病人已約好
     const ready = db().admissions.find((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt)

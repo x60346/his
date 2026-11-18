@@ -28,6 +28,7 @@ import { pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusionTodosOf } from './infusion-work'
 import { woundStallCount } from './wound-work'
 import { icuHourly } from './icu-work'
+import { newsAlertCount, newsStateOf } from './news-work'
 import { rassOutCount, weanDueCount } from './vent-work'
 import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
@@ -124,6 +125,10 @@ export interface DashboardStats {
   rassOut?: number
   /** 加護病房主治：待同意的轉入申請、同意了候床中 */
   icuRequestsPending?: number
+  /** 早期預警：主治自己的一般病房病人最近一次 NEWS2 中或高；護理師的病人 NEWS2 再量逾時；快速反應小組待到場評估（權限 rrt） */
+  newsAlerts?: number
+  newsRecheckOverdue?: number
+  rrtPending?: number
   weanDue?: number
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
@@ -281,7 +286,9 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
-          ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length } : {}),
+          ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length, newsRecheckOverdue: inpt.filter((a) => newsStateOf(a, t)?.recheck?.status === 'overdue').length } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { newsAlerts: newsAlertCount(me.doctorId, t) } : {}),
+          ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('rrt') ? { rrtPending: db.rrtCalls.filter((c) => c.status === 'pending').length } : {}),
           infusionOverdue: inpt.reduce((n, a) => n + infusionTodosOf(a.id, t).filter((x) => x.urgency === 'overdue').length, 0),
           pcaRecordOverdue: inpt.reduce((n, a) => { const p = runningPca(a.id); return n + (p && pcaRecordState(p, t)?.status === 'overdue' ? 1 : 0) }, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { pcaAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').filter((a) => { const p = runningPca(a.id); return !!p && !!pcaOpenAlert(p) }).length } : {}),

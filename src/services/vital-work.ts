@@ -5,6 +5,7 @@ import { newId } from '@/mock/db'
 import { fail, failField, fieldErrors } from './http'
 import { vitalInputProblem, vitalSpecs, type VitalKey } from './nursing-rules'
 import { painActionProblem } from './line-rules'
+import { checkNewsExtra } from './news-rules'
 
 export type VitalInput = Omit<VitalRecord, 'id' | 'nurseId' | 'at'>
 
@@ -24,6 +25,10 @@ export function buildVital(input: VitalInput, nurseId: string, t: string, extra:
     v[k] = val
   }
   if (v.sbp !== undefined && v.dbp !== undefined && !errs.has('sbp') && v.dbp >= v.sbp) errs.add('dbp', '舒張壓應小於收縮壓')
+  // 給氧（L/min，0＝室內空氣）、意識 ACVPU：NEWS2 要用
+  for (const [k, m] of Object.entries(checkNewsExtra(input))) errs.add(k, m)
+  if (input.o2 !== undefined && input.o2 !== null && !Number.isNaN(input.o2)) v.o2 = input.o2
+  if (input.avpu) v.avpu = input.avpu
   errs.done()
   // 疼痛 ≥4 要寫處置（1 小時內重評：下一筆有疼痛分數的紀錄）
   const pp = painActionProblem(v.pain, input.painAction)

@@ -8,6 +8,7 @@ import { UBadge, UButton, UCheckbox, UDialog, UQueryState, USelect, UTextarea } 
 import { APACHE_LABEL, ICU_CATEGORIES, ICU_SUMMARY_FIELDS, icuMoveApi, SOFA_LABEL, type ApacheKey, type SofaKey } from '@/services'
 import type { IcuCategory } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
+import NewsPanel from './NewsPanel.vue'
 
 const props = defineProps<{ admissionId: string }>()
 const { data, loading, reload } = useQuery(() => icuMoveApi.patientIcu(props.admissionId), [() => props.admissionId])
@@ -68,6 +69,7 @@ const pts = (n: number | null) => (n === null ? '—' : n)
   <div class="space-y-4 p-4 text-sm">
     <UQueryState :loading="loading && !v" :ready="!!v">
       <template v-if="v">
+        <NewsPanel v-if="!v.inIcu" :admission-id="admissionId" />
         <!-- 轉入申請 -->
         <section v-if="!v.inIcu" class="rounded-md border border-slate-200 p-3">
           <div class="flex flex-wrap items-center gap-2">

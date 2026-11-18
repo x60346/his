@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -232,7 +232,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // dr11（感染科）：被指定「感染管制」，判定院內感染個案
       ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
       // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
-      ...(d.id === 'DR03' ? { grants: ['icu.attending'] } : {}),
+      ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
@@ -2088,6 +2088,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const nurseShifts: NurseShift[] = []
   const weanTrials: WeanTrial[] = []
   const icuRequests: IcuRequest[] = []
+  const rrtCalls: RrtCall[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2295,9 +2296,39 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         })
       })
     }
-    // 泌尿道感染：血壓掉、乳酸上升，主治 40 分鐘前申請轉入（休克），等加護病房主治同意
-    const uti = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39'))
-    if (uti) icuRequests.push({ id: 'ICR-SEED-2', admissionId: uti.id, category: 'shock', reason: '血壓 86/48，輸液 1.5 L 後仍低，乳酸 3.8，尿量 0.3 ml/kg/h', requestedBy: users.find((u) => u.doctorId === 'DR02')!.id, requestedAt: addMinutes(nowStr, -40), status: 'pending' })
+    // 腦梗塞（臥床）吸入性肺炎併敗血性休克：65 分鐘前 NEWS2 11 分自動呼叫快速反應小組 → dr03 20 分鐘後到場評估、申請轉入（休克），
+    // 等加護病房主治同意；
+    // 20 分鐘前再量仍 11 分（已有轉入申請在走，不重複呼叫），再量時間還沒到
+    // （以前放在泌尿道感染那位，但他是「准出院」的示範：同一個人又休克、又准出院說不通）
+    const shock = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    if (shock) {
+      const dr03u = users.find((u) => u.doctorId === 'DR03')!.id
+      const t1 = addMinutes(nowStr, -65)
+      const t2 = addMinutes(nowStr, -20)
+      for (let j = vitals.length - 1; j >= 0; j--) if (vitals[j].admissionId === shock.id && vitals[j].at >= t1 && !vitals[j].id.startsWith('VS-BLD')) vitals.splice(j, 1)
+      vitals.push({ id: 'VS-NEWS-SHOCK-1', admissionId: shock.id, at: t1, temp: 38.8, pulse: 124, resp: 26, sbp: 84, dbp: 46, spo2: 92, o2: 0, avpu: 'A', pain: 0, nurseId: 'U202' })
+      vitals.push({ id: 'VS-NEWS-SHOCK-2', admissionId: shock.id, at: t2, temp: 38.3, pulse: 112, resp: 23, sbp: 86, dbp: 48, spo2: 95, o2: 4, avpu: 'A', pain: 0, nurseId: 'U202' })
+      rrtCalls.push({ id: 'RRT-SEED-1', admissionId: shock.id, trigger: 'auto', vitalId: 'VS-NEWS-SHOCK-1', score: 11, calledBy: 'U202', calledAt: t1, status: 'done', assessedBy: dr03u, assessedAt: addMinutes(t1, 20), findings: '發燒、呼吸喘、右下肺囉音，四肢冰冷，血壓 84/46、心跳 124，尿量少（疑吸入性肺炎）', actions: '輸液 1.5 L、血液培養與乳酸、氧氣鼻導管 4 L', disposition: 'icu', icuRequestId: 'ICR-SEED-2' })
+      icuRequests.push({ id: 'ICR-SEED-2', admissionId: shock.id, category: 'shock', reason: '吸入性肺炎併敗血性休克：血壓 86/48，輸液 1.5 L 後仍低，乳酸 3.8，尿量 0.3 ml/kg/h', requestedBy: dr03u, requestedAt: addMinutes(t1, 20), status: 'pending', rrtCallId: 'RRT-SEED-1' })
+    }
+  }
+
+  // 早期預警（示範，不抽亂數）：肺炎病人 NEWS2 逐漸升高 2 → 4 → 6（40 分鐘前，中：通知主治、1 小時內再量，還沒到）
+  {
+    const pn = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    if (pn?.admittedAt) {
+      const from = addMinutes(nowStr, -9 * 60)
+      for (let j = vitals.length - 1; j >= 0; j--) if (vitals[j].admissionId === pn.id && vitals[j].at >= from && !vitals[j].id.startsWith('VS-BLD')) vitals.splice(j, 1)
+      const rows: [number, Partial<VitalRecord>][] = [
+        [9 * 60, { temp: 38.2, pulse: 92, resp: 18, sbp: 124, dbp: 76, spo2: 96, o2: 0, avpu: 'A', pain: 2 }],
+        [4 * 60, { temp: 37.6, pulse: 98, resp: 21, sbp: 118, dbp: 72, spo2: 95, o2: 0, avpu: 'A', pain: 2 }],
+        [40, { temp: 37.9, pulse: 104, resp: 22, sbp: 112, dbp: 70, spo2: 94, o2: 2, avpu: 'A', pain: 1 }],
+      ]
+      rows.forEach(([m, x], j) => {
+        const at = addMinutes(nowStr, -m)
+        if (at >= pn.admittedAt!) vitals.push({ id: `VS-NEWS-PN-${j + 1}`, admissionId: pn.id, at, nurseId: j % 2 ? 'U202' : 'U201', ...x })
+      })
+    }
   }
 
   // 傷口（示範，不抽亂數）：腦梗塞病人（住院超過 20 天）16 天前發現薦骨第 2 級壓傷（院內壓傷），換藥三次，大小沒有變小
@@ -2422,6 +2453,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     wounds,
     weanTrials,
     icuRequests,
+    rrtCalls,
     dischargePlans,
     vitals,
     nursingNotes,

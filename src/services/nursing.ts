@@ -34,6 +34,8 @@ import { buildVital, type VitalInput } from './vital-work'
 import { icuHourly, icuTodosOf } from './icu-work'
 import { activeVent, rassStateOf, ventTodosOf } from './vent-work'
 import { recentIcuOut } from './icu-move-work'
+import { autoCallRrt, newsStateOf, openRrt } from './news-work'
+import type { NewsLevel } from './news-rules'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -94,6 +96,9 @@ export interface WardPatient extends AdmissionView {
   vent?: { on: boolean; rassOut: boolean; todo: number; overdue: boolean }
   /** 48 小時內從加護病房轉出：轉出時間與摘要（交班帶出） */
   icuOut?: { at: string; items: { label: string; text: string }[] }
+  /** 一般病房：最近一次算得出的 NEWS2（中、高要 1 小時內再量）；快速反應小組呼叫了、還沒到場評估 */
+  news?: { score: number; level: NewsLevel; red: boolean; at: string; recheck?: 'upcoming' | 'overdue' }
+  rrtPending: boolean
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -150,6 +155,10 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             return { icu: { minutes: h.minutes, late: h.late }, vent: { on: !!activeVent(a.id), rassOut: !!rs?.vs && rs.vs !== 'in', todo: vt.length, overdue: vt.some((x) => x.urgency === 'overdue') } }
           })(),
           ...(() => {
+            const s = newsStateOf(a, t)
+            return { rrtPending: !!openRrt(a.id), ...(s ? { news: { score: s.last.news.total, level: s.last.news.level, red: s.last.news.red, at: s.last.v.at, ...(s.recheck ? { recheck: s.recheck.status } : {}) } } : {}) }
+          })(),
+          ...(() => {
             const o = recentIcuOut(a, t)
             return o ? { icuOut: { at: o.at, items: o.note?.items ?? [] } } : {}
           })(),
@@ -202,7 +211,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
 // 得一床一床點進去看。這裡把整個病房該做的事依時間排成一張清單；實際執行仍回到各病人的頁面
 // （給藥有高警訊雙人核對、原因填寫，清單上若也能給藥，那些把關就得寫兩份）。
 
-export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu' | 'vent'
+export type WardTaskKind = 'mar' | 'stat' | 'ack' | 'vitals' | 'risk' | 'isolation' | 'blood' | 'pain' | 'line' | 'nutrition' | 'tube' | 'delirium' | 'restraint' | 'plan' | 'pca' | 'infusion' | 'wound' | 'icu' | 'vent' | 'news'
 export type WardTaskUrgency = 'overdue' | 'due' | 'todo' | 'upcoming'
 export interface WardTask {
   id: string
@@ -262,6 +271,10 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       if (!measured) {
         tasks.push({ ...base, id: `vs-${a.id}`, kind: 'vitals', urgency: 'todo', text: '本班尚未測量生命徵象（含疼痛）' })
       }
+      // NEWS2：中、高 1 小時內再量；快速反應小組呼叫了還沒到
+      const ns = newsStateOf(a, t)
+      if (ns?.recheck) tasks.push({ ...base, id: `news-${a.id}`, kind: 'news', urgency: ns.recheck.status === 'overdue' ? 'overdue' : 'due', at: ns.recheck.dueAt, text: `NEWS2 ${ns.last.news.total} 分：1 小時內再量生命徵象（含給氧、意識）` })
+      if (openRrt(a.id)) tasks.push({ ...base, id: `rrt-${a.id}`, kind: 'news', urgency: 'todo', at: openRrt(a.id)!.calledAt, text: '已呼叫快速反應小組，等到場評估' })
       // 疼痛：≥4 處置後 1 小時重評（逾時、或快到了）；量了生命徵象卻沒評疼痛
       const ps = painStateOf(a.id, t)
       if (ps.reassess) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: ps.reassess.status === 'overdue' ? 'overdue' : 'upcoming', at: ps.reassess.dueAt, text: `疼痛 ${ps.last!.score} 分處置後重評` })
@@ -555,14 +568,18 @@ export function listVitals(admissionId: string): Promise<VitalRecord[]> {
 
 export type { VitalInput } from './vital-work'
 
-export function addVitals(input: VitalInput): Promise<VitalRecord> {
+export function addVitals(input: VitalInput): Promise<VitalRecord & { rrtCalled?: boolean }> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     const a = admitted(input.admissionId)
-    const v = buildVital(input, nurse.id, now())
+    const t = now()
+    const v = buildVital(input, nurse.id, t)
     db.vitals.push(v)
     audit('生命徵象', a.admitNo)
-    return v
+    // NEWS2 ≥7：自動呼叫快速反應小組（已經在等、或已經申請轉加護病房的不重複叫）
+    const rrt = autoCallRrt(a, v, t)
+    if (rrt) audit('呼叫快速反應小組', `${a.admitNo} ${nameOf.patient(a.patientId)}：NEWS2 ${rrt.score} 分（自動）`)
+    return { ...v, ...(rrt ? { rrtCalled: true } : {}) }
   })
 }
 
