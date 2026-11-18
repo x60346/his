@@ -2734,6 +2734,21 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // Vancomycin 谷濃度（示範，不抽亂數）：蜂窩性組織炎的 Vancomycin 今天清晨第 4 劑前抽血、4 小時前報告 22（> 20 過高）→
+  // 主治首頁「Vancomycin 谷濃度異常」、住院醫囑紅條，等主治改劑量
+  {
+    const cell = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('L03'))
+    const van = cell && ipdOrders.find((o) => o.admissionId === cell.id && o.drugId === 'M042' && o.status === 'active')
+    if (cell && van) {
+      const pt = patients.find((p) => p.id === cell.patientId)!
+      const repAt = addMinutes(nowStr, -4 * 60)
+      const ordAt = addMinutes(repAt, -150)
+      const o: IpdOrder = { id: 'IO-TDM-1', admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P060', content: procMap.get('P060')!.name, startAt: ordAt, stopAt: addMinutes(ordAt, 30), status: 'done', doctorId: cell.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 5), ackBy: 'U201' }
+      ipdOrders.push(o)
+      labReports.push({ id: 'LR-TDM-1', no: `L${repAt.slice(0, 10).replace(/-/g, '')}9790`, patientId: pt.id, procId: 'P060', orderId: o.id, admissionId: cell.id, doctorId: cell.doctorId, orderedAt: ordAt, values: buildLabValues(procMap.get('P060')!.labItems!, { VANT: '22' }, pt.gender).values, reportedBy: 'U601', reportedAt: repAt })
+    }
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {

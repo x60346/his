@@ -198,9 +198,9 @@ const drugBase = [
   drug('M001', 'AC00001100', 'Acetaminophen 500mg', 'Acetaminophen', '500 mg/tab', 'TAB', '口服', 2, 5, 3200, 1, 'TID', 'PO'),
   drug('M002', 'AC00002100', 'Ibuprofen 400mg', 'Ibuprofen', '400 mg/tab', 'TAB', '口服', 2.5, 6, 1800, 1, 'TID', 'PO'),
   // 抗生素的 WHO DDD（克）與每顆／每支相當幾克：用量統計（每千住院人日 DDD）用
-  { ...drug('M003', 'AC00003100', 'Amoxicillin 500mg', 'Amoxicillin', '500 mg/cap', 'CAP', '口服', 3.2, 8, 1500, 1, 'TID', 'PO'), ddd: 1.5, dddUnitG: 0.5 },
+  { ...drug('M003', 'AC00003100', 'Amoxicillin 500mg', 'Amoxicillin', '500 mg/cap', 'CAP', '口服', 3.2, 8, 1500, 1, 'TID', 'PO'), ddd: 1.5, dddUnitG: 0.5, renal: [{ below: 30, freq: 'BID', text: '建議改每 12 小時' }] },
   { ...drug('M004', 'AC00004100', 'Augmentin 625mg', 'Amoxicillin/Clavulanate', '625 mg/tab', 'TAB', '口服', 9.8, 22, 900, 1, 'BID', 'PO'), ddd: 1.5, dddUnitG: 0.5 },
-  { ...drug('M005', 'AC00005100', 'Cephalexin 500mg', 'Cephalexin', '500 mg/cap', 'CAP', '口服', 4.1, 10, 1100, 1, 'QID', 'PO'), ddd: 2, dddUnitG: 0.5 },
+  { ...drug('M005', 'AC00005100', 'Cephalexin 500mg', 'Cephalexin', '500 mg/cap', 'CAP', '口服', 4.1, 10, 1100, 1, 'QID', 'PO'), ddd: 2, dddUnitG: 0.5, renal: [{ below: 30, freq: 'BID', text: '建議改每 12 小時' }] },
   { ...drug('M006', 'AC00006100', 'Azithromycin 250mg', 'Azithromycin', '250 mg/tab', 'TAB', '口服', 21, 45, 400, 1, 'QD', 'PO'), ddd: 0.3, dddUnitG: 0.25 },
   drug('M007', 'AC00007100', 'Cetirizine 10mg', 'Cetirizine', '10 mg/tab', 'TAB', '口服', 1.6, 4, 2600, 1, 'HS', 'PO'),
   drug('M008', 'AC00008100', 'Loratadine 10mg', 'Loratadine', '10 mg/tab', 'TAB', '口服', 1.8, 4, 1900, 1, 'QD', 'PO'),
@@ -239,9 +239,9 @@ const drugBase = [
   // 門診示範用的第二級管制藥（要專用處方箋）：只放門診藥局、不進一般種子（seed 另外開帳，不抽亂數）
   { ...drug('M041', 'AC00041100', 'Morphine 15mg Tab', 'Morphine sulfate', '15 mg/tab', 'TAB', '口服', 9, 20, 60, 1, 'Q12H', 'PO', true), safetyStock: 20 },
   // 管制性抗生素（住院開立要感染科審核）：只放住院藥局，不進一般種子（seed 另外開帳，不抽亂數）
-  { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 2, dddUnitG: 1 },
-  { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 3, dddUnitG: 1 },
-  { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 14, dddUnitG: 4 },
+  { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 2, dddUnitG: 1, renal: [{ below: 50, freq: 'QD', text: '建議改每 24 小時，依谷濃度調整' }] },
+  { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 3, dddUnitG: 1, renal: [{ below: 51, freq: 'Q12H', text: '建議改每 12 小時' }, { below: 26, freq: 'QD', text: '建議改每 24 小時（或減半劑量每 12 小時）' }] },
+  { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 14, dddUnitG: 4, renal: [{ below: 40, freq: 'Q12H', text: '建議減量為每 12 小時' }] },
   // 病人自控止痛（PCA）藥袋：只放住院藥局、只能在 PCA 開（seed 另外開帳）
   { ...drug('M045', 'AC00045100', 'Morphine PCA 100mg/100ml', 'Morphine', '1 mg/ml，100 ml/袋', 'BAG', '注射', 260, 520, 30, 1, 'PRN', 'IV', true), safetyStock: 5, pca: { totalMg: 100, volumeMl: 100 } },
   // 急救車用藥：只能在急救紀錄給（自動開臨時醫囑扣帳），放住院藥局（seed 另外開帳）
@@ -431,6 +431,8 @@ const labItemsOf: Record<string, LabItemDef[]> = {
   P053: [{ code: 'T-BIL', name: '總膽紅素', unit: 'mg/dL', low: 0.2, high: 1.2, critHigh: 15 }],
   P057: [{ code: 'AFB', name: '抗酸菌', options: ['陰性', '1+', '2+', '3+', '4+'], normal: ['陰性'] }],
   P058: [{ code: 'COVID', name: '新冠病毒抗原', options: ['陰性', '陽性'], normal: ['陰性'] }],
+  // Vancomycin 谷濃度（下一劑前抽）：目標 10–20，過高腎毒性
+  P060: [{ code: 'VANT', name: 'Vancomycin 谷濃度', unit: 'µg/mL', low: 10, high: 20, critHigh: 40 }],
   P059: [{ code: 'CULT', name: '培養結果', options: ['無菌生長', 'MRSA', 'CRE', 'VRE', '其他細菌'], normal: ['無菌生長'] }],
   P012: [
     { code: 'FLU-A', name: 'A 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
@@ -507,6 +509,8 @@ const procedureBase: Procedure[] = [
   { id: 'P057', code: '13025C', name: '痰液抗酸菌塗片 AFB', category: '檢驗', points: 150, selfPrice: 250, active: true },
   { id: 'P058', code: '14084C', name: '新冠病毒快篩', category: '檢驗', points: 300, selfPrice: 500, active: true },
   { id: 'P059', code: '13007C', name: '細菌培養（傷口、尿液）', category: '檢驗', points: 200, selfPrice: 350, active: true },
+  // 治療藥物監測：Vancomycin 谷濃度（點數為展示用近似值）
+  { id: 'P060', code: '12083C', name: 'Vancomycin 谷濃度', category: '檢驗', points: 400, selfPrice: 600, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]

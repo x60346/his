@@ -5,6 +5,7 @@ import type { AbxIntervention, DietKind, IpdOrder, LabReport } from '@/types'
 import { db } from '@/mock/db'
 import { ABX_ADVICE_LABEL, abxCourseStart, stewardFindings, type StewardFinding } from './abx-steward-rules'
 import { isAntibiotic } from './abx-work'
+import { perDayOf, renalOf } from './renal-work'
 import { find, nameOf } from './views'
 
 /** 建議裡寫藥名用學名（Amoxicillin/Clavulanate），商品名留在醫囑上 */
@@ -34,11 +35,12 @@ export function stewardOf(admissionId: string, t: string): { orders: IpdOrder[];
   const orders = activeAbxOf(admissionId)
   if (!orders.length) return { orders, findings: [] }
   const findings = stewardFindings({
-    orders: orders.map((o) => ({ id: o.id, drugId: o.drugId!, route: o.route, startAt: o.startAt, courseStart: courseStartOf(o), ...(o.abx?.status === 'approved' && o.abx.approvedDays ? { approvedDays: o.abx.approvedDays } : {}) })),
+    orders: orders.map((o) => ({ id: o.id, drugId: o.drugId!, route: o.route, freq: o.freq, startAt: o.startAt, courseStart: courseStartOf(o), ...(o.abx?.status === 'approved' && o.abx.approvedDays ? { approvedDays: o.abx.approvedDays } : {}) })),
     isolates: latestCulture(admissionId)?.culture?.isolates ?? [],
     diet: dietOf(admissionId),
     now: t,
     drugName: abxDrugName,
+    renal: { crcl: renalOf(admissionId, t).crcl, bandsOf: (id) => find.drug(id)?.renal, perDay: perDayOf },
   })
   return { orders, findings }
 }

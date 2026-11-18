@@ -10244,6 +10244,74 @@ try {
     ok(saved.ddd === 2 && saved.dddUnitG === 1 && cleared.ddd === undefined, '主檔存 DDD；兩個都清空＝不列入用量統計')
   }
 
+  // 腎功能劑量調整與 Vancomycin 谷濃度：CrCl（Cockcroft-Gault、缺資料不算）、腎功能分級與頻率比較、谷濃度狀態；
+  // 種子（敗血症 CrCl、蜂窩性組織炎谷濃度 22）、醫囑列與開醫囑提示、每日審視「腎功能需調整」、主治待辦、改劑量後重抽、開檢驗到報告
+  console.log('\n[腎功能劑量調整與谷濃度]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.ipdApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    // 純函式
+    ok(api.crclOf({ age: 60, female: true, weightKg: 60, scr: 1.8 }) === 31 && api.crclOf({ age: 70, female: false, weightKg: 70, scr: 1 }) === 68, 'CrCl＝(140−年齡)×體重÷(72×肌酸酐)，女性×0.85：60 歲女 60 kg 肌酸酐 1.8＝31；70 歲男 70 kg 1.0＝68')
+    ok(api.crclOf({ age: 60, female: true, scr: 1.8 }) === null && api.crclOf({ age: 60, weightKg: 60 }) === null, '缺體重或肌酸酐：算不出（不用預設值）')
+    const mero = db().drugs.find((d) => d.id === 'M043').renal
+    ok(api.renalBandOf(mero, 25)?.below === 26 && api.renalBandOf(mero, 40)?.below === 51 && !api.renalBandOf(mero, 60) && !api.renalBandOf(mero, null), '分級：落在門檻最低、又比 CrCl 高的那一級；CrCl 夠或算不出不提')
+    const pd = (c) => db().frequencies.find((f) => f.code === c)?.timesPerDay
+    const adj = api.renalAdjust(mero, 'Q8H', 31, pd)
+    ok(adj?.text.includes('CrCl 31') && adj.text.includes('目前 Q8H') && !api.renalAdjust(mero, 'Q12H', 31, pd) && !api.renalAdjust(mero, 'QD', 31, pd) && api.renalAdjust(mero, 'Q12H', 20, pd), `頻率比建議多才提醒（已是建議或更少不吵）：「${adj?.text}」`)
+    ok(!api.tdmState({ given: 2, ordered: false }) && api.tdmState({ given: 3, ordered: false }).status === 'due' && api.tdmState({ given: 5, ordered: true }).status === 'pending', '谷濃度：給滿 3 劑該抽（第 4 劑前）、開了等報告')
+    ok(api.tdmState({ given: 4, ordered: true, latest: { value: 22, at: 'x' } }).status === 'high' && api.tdmState({ given: 4, ordered: true, latest: { value: 8, at: 'x' } }).status === 'low' && api.tdmState({ given: 4, ordered: true, latest: { value: 20, at: 'x' } }).status === 'ok', '谷濃度 >20 過高、<10 過低、10–20 在範圍')
+
+    // 種子：蜂窩性組織炎谷濃度 22
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const van = db().ipdOrders.find((o) => o.admissionId === cell.id && o.drugId === 'M042' && o.status === 'active')
+    await as(userOf(cell.doctorId))
+    let v = (await I.listOrders(cell.id)).find((o) => o.id === van.id)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(v.tdm?.status === 'high' && v.tdm.value === 22 && dash.tdmAlerts === 1, `種子：蜂窩性組織炎 Vancomycin「${v.tdm?.text}」、主治首頁谷濃度異常 1`)
+    // 改劑量：新醫囑重新算，待辦消失；給滿 3 劑該抽、開檢驗、報告在範圍
+    const nv = await I.reviseOrder(van.id, { dose: 1, freq: 'QD', route: 'IV', reason: '谷濃度 22，延長間隔' })
+    dash = await api.dashboardApi.getDashboard()
+    ok(!nv.tdm && dash.tdmAlerts === 0, '修改劑量：新的醫囑還沒給藥、不再標過高，首頁待辦清掉（要重抽）')
+    const nOrder = db().ipdOrders.find((o) => o.id === nv.id)
+    const t0 = nowStr()
+    for (let i = 0; i < 3; i++) db().mar.push({ id: `MAR-T-${i}`, orderId: nv.id, admissionId: cell.id, scheduledAt: t0, status: 'given', executedAt: t0, nurseId: 'U201' })
+    v = (await I.listOrders(cell.id)).find((o) => o.id === nv.id)
+    ok(v.tdm?.status === 'due', `新醫囑給了 3 劑：「${v.tdm?.text}」`)
+    const tro = await I.addOrder({ admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P060', content: '' })
+    v = (await I.listOrders(cell.id)).find((o) => o.id === nv.id)
+    ok(v.tdm?.status === 'pending', '開了谷濃度：等報告')
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(tro.id)
+    await as('lab01')
+    const rep = await api.labApi.reportLab({ key: `O:${tro.id}`, values: { VANT: '14.5' } })
+    ok(rep.values[0].flag === '' || !rep.values[0].flag, '檢驗科發谷濃度 14.5（在參考範圍）')
+    await as(userOf(cell.doctorId))
+    v = (await I.listOrders(cell.id)).find((o) => o.id === nv.id)
+    ok(v.tdm?.status === 'ok' && v.tdm.value === 14.5 && nOrder.createdAt <= v.tdm.at, `報告回來：「${v.tdm?.text}」`)
+
+    // 腎功能：敗血症（升壓劑開立時 60 kg、肌酸酐）
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    await as(userOf(sep.doctorId))
+    let hint = await api.renalApi.renalHintOf(sep.id, 'M044')
+    ok(hint?.crcl > 0 && hint.crcl < 40 && hint.text.includes('60 kg') && hint.advice?.includes('Q12H'), `開醫囑提示（敗血症）：「${hint?.text}。${hint?.advice}」`)
+    ok(!(await api.renalApi.renalHintOf(sep.id, 'M001')), '主檔沒有腎功能分級的藥：不提示')
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    hint = await api.renalApi.renalHintOf(st.id, 'M042')
+    ok(hint?.crcl === null && hint.text.startsWith('CrCl 算不出'), `資料不齊（腦梗塞）：「${hint?.text}」`)
+    const pip = await I.addOrder(await withRxOk({ admissionId: sep.id, type: 'long', category: 'medication', drugId: 'M044', content: '', dose: 1, freq: 'Q8H', route: 'IV', abx: { reason: 'empiric', site: '血流' } }))
+    ok(pip.renalAlert?.includes('Q12H') && pip.renalAlert.includes('目前 Q8H'), `醫囑列：「${pip.renalAlert}」（只提醒，照常開立）`)
+    await as('dr11')
+    const list = await api.abxStewardApi.listAbxStewardship()
+    const it = list.items.find((x) => x.order.id === pip.id)
+    ok(it?.findings.some((f) => f.kind === 'renal' && f.label === '腎功能需調整') && it.renal.startsWith('CrCl'), '每日審視：「腎功能需調整」、病人資料帶 CrCl')
+    await api.abxStewardApi.sendAbxAdvice(pip.id, 'renal', 'CrCl 約 30，建議 Pip/Tazo 改每 12 小時')
+    await as(userOf(sep.doctorId))
+    const pip2 = await I.reviseOrder(pip.id, { dose: 1, freq: 'Q12H', route: 'IV', reason: '依腎功能調整' })
+    ok(!pip2.renalAlert && db().abxInterventions.at(-1).status === 'accepted' && (await api.abxMetricsApi.abxMetrics()).advice.find((x) => x.kind === 'renal').accepted === 1, '改成 Q12H：提醒消失、建議記為接受、指標「腎功能需調整」接受 1')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

@@ -34,7 +34,7 @@ watch(tab, () => (selId.value = undefined))
 const selIv = computed(() => (isOrderTab.value ? undefined : ivs.value.find((x) => x.id === selId.value)))
 const item = computed(() => data.value?.items.find((x) => x.order.id === (isOrderTab.value ? selId.value : selIv.value?.orderId)))
 
-const KIND_TONE = { ineffective: 'red', overlap: 'red', deescalate: 'yellow', ivpo: 'blue', duration: 'yellow' } as const
+const KIND_TONE = { ineffective: 'red', overlap: 'red', renal: 'red', deescalate: 'yellow', ivpo: 'blue', duration: 'yellow' } as const
 const STATUS_TONE = { sent: 'blue', accepted: 'green', declined: 'red', dismissed: 'gray' } as const
 
 const acting = ref<{ f: StewardFindingView; kind: 'sent' | 'dismissed' }>()
@@ -49,7 +49,7 @@ async function confirmAct(note: string) {
 const presets = computed(() => {
   const f = acting.value?.f
   if (acting.value?.kind === 'dismissed') return ['已和主治討論，維持原用藥', '感染部位需較長療程', '病人仍在發燒、尚未穩定']
-  return f?.kind === 'ineffective' ? ['藥敏抗藥，建議依藥敏改藥'] : f?.kind === 'overlap' ? ['範圍重疊，建議停用較窄效的那一支'] : f?.kind === 'deescalate' ? ['培養結果已出，建議降階'] : f?.kind === 'ivpo' ? ['臨床穩定、可進食，建議改口服'] : ['療程已足，建議停藥']
+  return f?.kind === 'ineffective' ? ['藥敏抗藥，建議依藥敏改藥'] : f?.kind === 'overlap' ? ['範圍重疊，建議停用較窄效的那一支'] : f?.kind === 'renal' ? ['腎功能下降，建議依 CrCl 調整頻率'] : f?.kind === 'deescalate' ? ['培養結果已出，建議降階'] : f?.kind === 'ivpo' ? ['臨床穩定、可進食，建議改口服'] : ['療程已足，建議停藥']
 })
 </script>
 
@@ -120,6 +120,7 @@ const presets = computed(() => {
           <div v-if="item.labs.length" class="mt-1 space-y-0.5 text-xs text-slate-600">
             <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10) }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
           </div>
+          <div v-if="item.renal" class="mt-1 text-xs text-slate-600">{{ item.renal }}</div>
           <div class="mt-2 text-xs text-slate-700"><b>目前的抗生素：</b>{{ item.antibiotics.join('；') }}</div>
         </UCard>
 

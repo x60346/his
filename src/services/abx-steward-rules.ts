@@ -1,7 +1,8 @@
 // 抗生素管理（每日審視，純函式＋靜態主檔）：院內抗生素的分類（β-lactam 等）與窄廣效順序、可改口服的藥、
 // 療程從哪天算起（停藥 48 小時內再開接續；修改醫囑沿用）、換同類的提示、每日審視的五條規則。
 // 感染科每日審視頁、主治的建議、首頁待辦、開醫囑的提示、測試都用這一份
-import type { AbxAdviceKind, CultureIsolate, DietKind, SirResult } from '@/types'
+import type { AbxAdviceKind, CultureIsolate, DietKind, RenalBand, SirResult } from '@/types'
+import { renalAdjust } from './renal-rules'
 import { parseDate } from '@/utils/date'
 import { abxDay } from './abx-rules'
 import { astKeyOfDrug, AST_DRUGS, mdroOf, organismName } from './culture-rules'
@@ -9,12 +10,13 @@ import { astKeyOfDrug, AST_DRUGS, mdroOf, organismName } from './culture-rules'
 export const ABX_ADVICE_LABEL: Record<AbxAdviceKind, string> = {
   ineffective: '藥敏無效',
   overlap: '抗菌範圍重疊',
+  renal: '腎功能需調整',
   deescalate: '可降階',
   ivpo: '可改口服',
   duration: '療程超過 7 天',
 }
 /** 顯示順序：無效、重疊最要緊 */
-export const ABX_ADVICE_KINDS: AbxAdviceKind[] = ['ineffective', 'overlap', 'deescalate', 'ivpo', 'duration']
+export const ABX_ADVICE_KINDS: AbxAdviceKind[] = ['ineffective', 'overlap', 'renal', 'deescalate', 'ivpo', 'duration']
 export const ABX_INTERVENTION_STATUS: Record<'sent' | 'accepted' | 'declined' | 'dismissed', string> = { sent: '待主治回覆', accepted: '已接受', declined: '不接受', dismissed: '不用介入' }
 
 /** 停藥後多久內再開同一支，接續原療程（不重新算第 1 天） */
@@ -112,6 +114,7 @@ export interface StewardOrder {
   id: string
   drugId: string
   route?: string
+  freq?: string
   /** 療程第一天（abxCourseStart；管制性抗生素用 abx.courseStart） */
   courseStart: string
   startAt: string
@@ -134,9 +137,18 @@ export interface StewardFinding {
  *  - 可降階：沒有抗藥、藥敏有更窄效的敏感藥
  *  - 可改口服：靜脈注射滿 72 小時、能進食（飲食醫囑不是禁食）、有敏感的口服藥（沒有培養就用經驗對照）
  *  - 療程超過 7 天：今天第 8 天以上（感染科核准過更長的、已經無效的不算）
+ *  - 腎功能需調整：CrCl 算得出、主檔有腎功能分級、目前的頻率比建議的多（已經無效的不提）
  *  - 抗菌範圍重疊：兩支同類（例：兩支 β-lactam）同時在用——兩筆都標，審視者決定建議停哪一支
  */
-export function stewardFindings(x: { orders: StewardOrder[]; isolates: Pick<CultureIsolate, 'organism' | 'ast'>[]; diet?: DietKind; now: string; drugName: (id: string) => string }): StewardFinding[] {
+export function stewardFindings(x: {
+  orders: StewardOrder[]
+  isolates: Pick<CultureIsolate, 'organism' | 'ast'>[]
+  diet?: DietKind
+  now: string
+  drugName: (id: string) => string
+  /** 腎功能（沒給或算不出就不看）：CrCl、藥品的分級、頻率每天幾次 */
+  renal?: { crcl: number | null; bandsOf: (drugId: string) => RenalBand[] | undefined; perDay: (code: string) => number | undefined }
+}): StewardFinding[] {
   const out: StewardFinding[] = []
   const names = (ids: string[]) => ids.map(x.drugName).join('、')
   // 敏感的藥可能有四五支：只寫最窄效的兩支（drugIds 有全部）
@@ -154,6 +166,8 @@ export function stewardFindings(x: { orders: StewardOrder[]; isolates: Pick<Cult
       const narrower = k && k in BREADTH ? sens.filter((id) => BREADTH[astKeyOfDrug(id)!] < BREADTH[k]) : []
       if (narrower.length) out.push({ orderId: o.id, kind: 'deescalate', text: `藥敏有較窄效的敏感藥：${few(narrower)}（目前 ${name}）`, drugIds: narrower })
     }
+    const adj = x.renal && !resist.length ? renalAdjust(x.renal.bandsOf(o.drugId), o.freq, x.renal.crcl, x.renal.perDay) : undefined
+    if (adj) out.push({ orderId: o.id, kind: 'renal', text: adj.text })
     const ivH = o.route === 'IV' ? hoursBetween(o.courseStart, x.now) : 0
     if (ivH >= ABX_IVPO_HOURS && x.diet && x.diet !== 'npo' && !resist.length) {
       const oral = x.isolates.length ? susceptibleDrugs(x.isolates, (id) => !!ABX_PROFILE[id]?.oral) : ABX_ORAL_SWITCH[o.drugId] ?? []

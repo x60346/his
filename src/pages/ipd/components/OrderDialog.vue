@@ -7,7 +7,7 @@
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, renalApi, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -137,6 +137,11 @@ const { data: abxHint } = useQuery(
   async () => (open.value && props.admission && form.category === 'medication' && form.drug ? abxStewardApi.abxCourseHintOf(props.admission.id, form.drug.id) : null),
   [() => form.drug?.id, open, () => form.category, () => props.admission?.id],
 )
+// 腎功能：主檔有分級的藥，提示 CrCl 與建議頻率（算不出也說原因）
+const { data: renalHint } = useQuery(
+  async () => (open.value && props.admission && form.category === 'medication' && form.drug ? renalApi.renalHintOf(props.admission.id, form.drug.id) : null),
+  [() => form.drug?.id, open, () => form.category, () => props.admission?.id],
+)
 // 交互作用、成分／同類重複：和這位病人執行中的其他給藥醫囑比（選了藥就提醒，送出前逐項確認）
 const { data: rxAlerts } = useQuery(
   async () => (open.value && props.admission && form.category === 'medication' && form.drug ? ipdApi.orderRxAlerts(props.admission.id, form.drug.id) : []),
@@ -231,6 +236,7 @@ ${doseNote(drug, input.dose ?? 0)}。
           已選：<b>{{ form.drug.name }}</b><UBadge v-if="form.drug.highAlert" tone="purple">高警訊</UBadge><UBadge v-if="form.drug.restrictedAbx" tone="yellow">管制性抗生素</UBadge>
         </div>
         <RxAlertList :alerts="rxAlerts ?? []" />
+        <p v-if="renalHint" :class="['rounded border px-2 py-1 text-xs', renalHint.advice ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-700']" role="status">腎功能：{{ renalHint.text }}<template v-if="renalHint.advice">。{{ renalHint.advice }}</template></p>
         <p v-if="abxHint" class="rounded border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-900" role="status">抗生素療程：{{ abxHint.text }}</p>
         <section v-if="canIv" class="space-y-2 rounded-md border border-sky-200 bg-sky-50/50 px-3 py-2 text-sm">
           <UCheckbox v-model="iv.on" label="點滴（連續輸注：護理師接上、換瓶，不排給藥時間）" />

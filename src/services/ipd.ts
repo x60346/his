@@ -23,6 +23,8 @@ import { activeLines } from './line-work'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
 import { acceptAdviceOn, adviceOfOrder, medHistory, type AbxAdviceView } from './abx-steward-work'
 import { abxCourseStart } from './abx-steward-rules'
+import { renalAlertOf, tdmOf } from './renal-work'
+import type { TdmState } from './renal-rules'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -73,6 +75,10 @@ export interface OrderView extends IpdOrder {
   abxInfo?: AbxInfo
   /** 感染科每日審視發出、待主治回覆的建議（停止或修改這筆＝接受；不接受要寫原因） */
   abxAdvice?: AbxAdviceView[]
+  /** 腎功能：目前的頻率比 CrCl 建議的多（只提醒） */
+  renalAlert?: string
+  /** Vancomycin 谷濃度：該抽、待報告、過高、過低、在範圍 */
+  tdm?: TdmState
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -91,6 +97,8 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(drug && residualOf(drug, o.dose) ? { residualQty: residualOf(drug, o.dose)!.residual } : {}),
     ...(drug && o.dose && !Number.isInteger(o.dose) && doseStrengthText(drug, o.dose) ? { doseStrength: doseStrengthText(drug, o.dose) } : {}),
     ...(o.abx && o.status === 'active' ? { abxInfo: abxInfoOf(o.abx) } : {}),
+    ...((r) => (r ? { renalAlert: r } : {}))(renalAlertOf(o)),
+    ...((x) => (x ? { tdm: x } : {}))(tdmOf(o)),
     ...(o.status === 'active' && o.category === 'medication' && adviceOfOrder(o.id).length ? { abxAdvice: adviceOfOrder(o.id) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }

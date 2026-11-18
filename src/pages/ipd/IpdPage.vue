@@ -129,6 +129,12 @@ const declineAdvice = useAction(abxStewardApi.declineAbxAdvice, { success: '已�
 async function confirmDecline(note: string) {
   if (declining.value && (await declineAdvice.run(declining.value.advice.id, note))) declining.value = undefined
 }
+// Vancomycin 谷濃度：過高、過低 → 上方紅條（修改＝新醫囑，重新算）；該抽了 → 醫囑列一鍵開檢驗
+const tdmBad = computed(() => (orders.value ?? []).filter((o) => o.tdm?.status === 'high' || o.tdm?.status === 'low'))
+const orderTrough = useAction(ipdApi.addOrder, { success: '已開 Vancomycin 谷濃度（下一劑前抽血）' })
+function onOrderTrough(o: OrderView) {
+  orderTrough.run({ admissionId: o.admissionId, type: 'stat', category: 'procedure', procId: 'P060', content: '' })
+}
 const lastReject = (o: OrderView) => o.abxInfo?.steps.filter((s) => s.action === 'reject').at(-1)
 const ackConsult = useAction(ipdApi.ackConsultOrders, { success: (r) => `已閱 ${r.count} 筆會診醫囑` })
 const longOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'long'))
@@ -410,6 +416,13 @@ async function submitNote() {
           <span class="min-w-0 flex-1"><b>抗生素核准天數{{ o.abxInfo!.extend === 'over' ? '已超過' : '快到了' }}：</b>{{ o.content }}，{{ o.abxInfo!.text }}。要續用請申請；不用了請停止。</span>
           <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'extend' }">申請續用</UButton>
         </div>
+        <div v-for="o in tdmBad" :key="`tdm-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert">
+          <span class="min-w-0 flex-1"><b>Vancomycin {{ o.tdm!.status === 'high' ? '谷濃度過高' : '谷濃度過低' }}：</b>{{ o.content }}，{{ o.tdm!.text }}<template v-if="o.renalAlert">；{{ o.renalAlert }}</template>。修改劑量或頻率後要再抽一次。</span>
+          <template v-if="!isAdmin">
+            <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改</UButton>
+            <UButton size="sm" variant="danger" @click="onStop(o)">停止</UButton>
+          </template>
+        </div>
         <div v-for="x in abxAdvice" :key="`abxa-${x.advice.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900" role="status">
           <span class="min-w-0 flex-1"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5) }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
           <template v-if="!isAdmin">
@@ -438,6 +451,11 @@ async function submitNote() {
                       <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>
                     </div>
                     <div v-if="o.abxInfo" :class="['text-xs', o.abx?.status === 'rejected' || o.abxInfo.overdue ? 'font-semibold text-red-700' : o.abx?.status === 'pending' ? 'text-amber-800' : 'text-emerald-700']" :title="o.abxInfo.reasonText">管制性抗生素・{{ o.abxInfo.text }}</div>
+                    <div v-if="o.renalAlert" class="text-xs font-medium text-amber-800">腎功能：{{ o.renalAlert }}</div>
+                    <div v-if="o.tdm" :class="['flex flex-wrap items-center gap-2 text-xs', o.tdm.status === 'high' || o.tdm.status === 'low' ? 'font-semibold text-red-700' : o.tdm.status === 'due' ? 'text-amber-800' : 'text-slate-600']">
+                      {{ o.tdm.text }}
+                      <UButton v-if="o.tdm.status === 'due' && !isAdmin" size="sm" variant="secondary" :loading="orderTrough.pending.value" @click="onOrderTrough(o)">開谷濃度</UButton>
+                    </div>
                     <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}<template v-if="o.doseStrength">（{{ o.doseStrength }}）</template>・{{ o.freq }}（{{ o.freqLabel }}）・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template><span v-if="o.timingSet" class="ml-1 rounded bg-sky-100 px-1 text-sky-800">醫師指定</span></div>
                     <div v-if="o.replacesText" class="text-xs text-sky-700" :title="o.reviseReason">修改自：{{ o.replacesText }}（{{ o.reviseReason }}）</div>
                     <div v-if="o.replacedByText" class="text-xs no-underline">已修改為：{{ o.replacedByText }}</div>

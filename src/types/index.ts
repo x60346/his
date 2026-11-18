@@ -743,6 +743,13 @@ export interface PriceChange extends DatedChange {
   selfPrice: number
 }
 
+/** 腎功能分級：CrCl（ml/min）低於 below 時，建議頻率改成 freq（頻率代碼），text 是給醫師看的建議 */
+export interface RenalBand {
+  below: number
+  freq: string
+  text: string
+}
+
 export interface Drug {
   id: string
   /** 健保藥品代碼 */
@@ -779,6 +786,8 @@ export interface Drug {
    */
   ddd?: number
   dddUnitG?: number
+  /** 腎功能劑量調整（依仿單簡化）：CrCl 低於門檻時建議的頻率；只提醒、不擋開立 */
+  renal?: RenalBand[]
   /** 病人自控止痛（PCA）用的藥袋：一袋多少 mg、多少 ml（只能在住院醫囑「PCA」開，不能當一般醫囑或處方） */
   pca?: { totalMg: number; volumeMl: number }
   /** 急救車用藥（腎上腺素、Amiodarone）：只能在急救紀錄給（自動開臨時醫囑、扣病房常備或住院藥局） */
@@ -1345,9 +1354,9 @@ export interface AbxRequest {
 }
 
 /**
- * 抗生素管理的建議類型（每日審視，系統依規則標出）：藥敏無效、抗菌範圍重疊、可降階、可改口服、療程超過 7 天
+ * 抗生素管理的建議類型（每日審視，系統依規則標出）：藥敏無效、抗菌範圍重疊、腎功能需調整、可降階、可改口服、療程超過 7 天
  */
-export type AbxAdviceKind = 'ineffective' | 'overlap' | 'deescalate' | 'ivpo' | 'duration'
+export type AbxAdviceKind = 'ineffective' | 'overlap' | 'renal' | 'deescalate' | 'ivpo' | 'duration'
 /**
  * 抗生素管理介入（感染科每日審視）：對某一筆抗生素醫囑的某一類建議，發出建議或標「不用介入」。
  * 主治停止或修改這筆醫囑＝接受（系統自動記）；不接受要寫原因

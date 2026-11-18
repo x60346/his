@@ -6,6 +6,7 @@ import { addDays, now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { ABX_DEFAULT_DAYS, ABX_MAX_DAYS, abxDay, abxState, abxText } from './abx-rules'
 import { courseStartOf } from './abx-steward-work'
+import { renalOf } from './renal-work'
 import { abxInfoOf, activeAbxOrders, isAntibiotic, isInfectious, type AbxInfo } from './abx-work'
 import { orderView, type OrderView } from './ipd'
 import { flagsOf, type PatientFlags } from './flag-work'
@@ -24,6 +25,8 @@ export interface AbxPatientPart {
   attendingName: string
   deptName: string
   allergies: string[]
+  /** 腎功能：「CrCl 32 ml/min（肌酸酐 1.8、60 kg、60 歲女性）」或算不出的原因 */
+  renal: string
   flags: PatientFlags
   latestVitals?: VitalRecord
   /** 最近的檢驗（每種一份，最新的在前，最多 4 份）：有異常的值 */
@@ -58,7 +61,7 @@ export function abxPatientPart(admissionId: string, t: string): AbxPatientPart {
   return {
     admissionId: a.id, admitNo: a.admitNo, bedNo: find.bed(a.bedId ?? '')?.bedNo ?? '',
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', age: p ? `${new Date(t).getFullYear() - Number(p.birthDate.slice(0, 4))} 歲` : '',
-    diagnosis: a.diagnosis, attendingName: nameOf.doctor(a.doctorId), deptName: nameOf.dept(a.deptId), allergies: p?.allergies ?? [], flags: flagsOf(a.patientId),
+    diagnosis: a.diagnosis, attendingName: nameOf.doctor(a.doctorId), deptName: nameOf.dept(a.deptId), allergies: p?.allergies ?? [], flags: flagsOf(a.patientId), renal: renalOf(a.id, t).text,
     ...(latest ? { latestVitals: latest } : {}), labs, antibiotics,
   }
 }

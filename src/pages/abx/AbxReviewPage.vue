@@ -90,7 +90,8 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
           <div v-if="item.labs.length" class="mt-1 space-y-0.5 text-xs text-slate-600">
             <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10) }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
           </div>
-          <div class="mt-2 text-xs text-slate-700"><b>目前的抗生素：</b>{{ item.antibiotics.join('；') }}</div>
+          <div v-if="item.renal" class="mt-1 text-xs text-slate-600">{{ item.renal }}</div>
+        <div class="mt-2 text-xs text-slate-700"><b>目前的抗生素：</b>{{ item.antibiotics.join('；') }}</div>
         </UCard>
 
         <UCard :title="`${item.order.content}　每次 ${item.order.dose} ${item.order.unit} ${item.order.freq} ${item.order.route}`" :subtitle="item.abx.text">
