@@ -5,8 +5,8 @@ import type { Specimen } from '@/types'
 import { commitIfPossible, db } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
-import { checkRejectReason, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
-import { collectRecord, isLabOrder, labOrderStage, newSpecimen, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
+import { addonCheck, ADDON_HOURS, checkRejectReason, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
+import { addonSpecimenOf, collectRecord, isLabOrder, labOrderStage, newSpecimen, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
 import { ensureLabDraws } from './ipd'
 import { find, nameOf } from './views'
 
@@ -159,6 +159,31 @@ export function rejectSpecimen(barcode: string, reason: string): Promise<Specime
 }
 
 /** 檢驗清單、登打用：這筆住院檢驗醫囑的檢體還沒收件 */
+export interface AddonOption {
+  tube: string
+  tubeLabel: string
+  /** 可以加做（用 specimen） */
+  ok: boolean
+  /** 不能加做的原因（要重新採檢） */
+  reason?: string
+  specimen?: { id: string; barcode: string; collectedAt: string; until: string; tests: string[] }
+}
+
+/** 開臨時檢驗時：這位住院病人有沒有可以加做的檢體（同管別、已收件、在時限內：紅頭紫頭 24 小時、尿液 2 小時） */
+export function addonOptions(admissionId: string, procId: string): Promise<AddonOption | undefined> {
+  return query(() => {
+    requireUser('doctor', 'nurse', 'lab')
+    const p = find.procedure(procId)
+    if (!p?.labItems?.length) return undefined
+    const tube = p.tube ?? 'red'
+    const sp = addonSpecimenOf(admissionId, tube)
+    const c = addonCheck(sp, tube, now())
+    const base = { tube, tubeLabel: TUBE_LABEL[tube] + (ADDON_HOURS[tube] ? `（可加做 ${ADDON_HOURS[tube]} 小時）` : '') }
+    if (!c.ok) return { ...base, ok: false, reason: c.reason }
+    return { ...base, ok: true, specimen: { id: sp!.id, barcode: sp!.barcode, collectedAt: sp!.collectedAt!, until: c.until, tests: view(sp!).tests } }
+  })
+}
+
 export const awaitingReceipt = (orderId: string) => {
   const o = db.ipdOrders.find((x) => x.id === orderId)
   return !!o && o.status === 'done' && labOrderStage(o) === 'collected' ? specimenOfOrder(orderId) : undefined

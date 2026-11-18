@@ -30,6 +30,8 @@ export interface LabWorkItem {
   awaitingReceipt?: string
   /** 儀器結果沒通過自動審核、等醫檢師在「儀器」審核（人工登打擋住） */
   analyzerHeld?: boolean
+  /** 加做（住院）：掛在已收件的這支檢體（條碼）上，不用再抽 */
+  addon?: string
   /** 檢驗值的定義（畫面用同一個 judgeLab 即時標示偏高偏低）＋這位病人的參考範圍文字 */
   items: (LabItemDef & { ref: string })[]
 }
@@ -72,7 +74,7 @@ export function pendingLabWork(): LabWorkItem[] {
     const bed = a.bedId ? find.bed(a.bedId) : undefined
     list.push(workItem({
       key: `O:${o.id}`, source: 'ipd', procId: o.procId, patientId: a.patientId, where: bed ? `${bed.ward} ${bed.bedNo}` : '住院',
-      doctorName: nameOf.doctor(o.doctorId), orderedAt: o.createdAt, ...(o.status === 'active' ? { awaitingCollection: true } : labOrderStage(o) === 'collected' ? { awaitingReceipt: specimenOfOrder(o.id)?.barcode ?? '' } : {}),
+      doctorName: nameOf.doctor(o.doctorId), orderedAt: o.createdAt, ...(o.addonOf ? { addon: db.specimens.find((s) => s.id === o.addonOf)?.barcode ?? '' } : {}), ...(o.status === 'active' ? { awaitingCollection: true } : labOrderStage(o) === 'collected' ? { awaitingReceipt: specimenOfOrder(o.id)?.barcode ?? '' } : {}),
     }))
   }
   return list.sort((a, b) => a.orderedAt.localeCompare(b.orderedAt))

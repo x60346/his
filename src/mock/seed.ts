@@ -3148,6 +3148,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 檢驗加做（示範）：腦梗塞病人今天上機過的紅頭（肌酸酐）20 分鐘前加做 GPT，不用再抽血，待檢驗
+  {
+    const sp = specimens.find((x) => x.id === 'SP-AN-2')
+    const a = sp && admissions.find((x) => x.id === sp.admissionId)
+    if (sp && a) {
+      const t0 = [addMinutes(nowStr, -20), sp.receivedAt!].sort().at(-1)!
+      ipdOrders.push({ id: 'IO-ADD-1', admissionId: a.id, type: 'stat', category: 'procedure', procId: 'P009', content: procMap.get('P009')!.name, startAt: t0, status: 'done', stopAt: t0, doctorId: a.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201', addonOf: sp.id })
+      sp.orderIds.push('IO-ADD-1')
+    }
+  }
+
   // 危急值通報（示範，不抽亂數）：過去的危急值報告都通報過（住院給護理師、門診給開立醫師；一筆門診 45 分鐘才通報＝逾時）；
   // 今天糖尿病病人臨時血糖 32（低血糖危急值）50 分鐘前發出，還沒通報（逾時，檢驗科首頁紅色）
   {

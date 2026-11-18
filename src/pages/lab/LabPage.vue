@@ -134,6 +134,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
               <UBadge v-if="w.awaitingCollection" tone="gray">待採檢</UBadge>
               <UBadge v-else-if="w.awaitingReceipt !== undefined" tone="yellow">待收件</UBadge>
               <UBadge v-else-if="w.analyzerHeld" tone="red">儀器待審核</UBadge>
+              <UBadge v-else-if="w.addon" tone="green" :title="`加做：條碼 ${w.addon}`">加做</UBadge>
               <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
           </li>

@@ -26,3 +26,19 @@ export function groupByTube<T extends { tube: TubeKind }>(xs: T[]): { tube: Tube
 
 /** 退件原因要選或寫 */
 export const checkRejectReason = (reason: string | undefined): Record<string, string> => (reason?.trim() ? {} : { reason: '請寫退件原因（例：溶血、檢體量不足）' })
+
+/** 加做：已收件的檢體在採檢後幾小時內，可以加開同管別的檢驗不用再抽（主檔依管別；沒列的管別不能加做） */
+export const ADDON_HOURS: Partial<Record<TubeKind, number>> = { red: 24, purple: 24, urine: 2 }
+/**
+ * 這支檢體能不能加做這個管別的檢驗：同管別、已收件、沒退件、在時限內。
+ * 回傳 until（可加做到幾點）或不行的原因
+ */
+export function addonCheck(sp: Pick<Specimen, 'tube' | 'collectedAt' | 'receivedAt' | 'rejected'> | undefined, tube: TubeKind, t: string): { ok: true; until: string } | { ok: false; reason: string } {
+  const h = ADDON_HOURS[tube]
+  if (!h) return { ok: false, reason: `${TUBE_LABEL[tube]}不能加做，要重新採檢` }
+  if (!sp || sp.rejected || !sp.receivedAt || !sp.collectedAt) return { ok: false, reason: `這位病人沒有已收件的${TUBE_LABEL[tube]}檢體可以加做` }
+  if (sp.tube !== tube) return { ok: false, reason: `管別不符（檢體是${TUBE_LABEL[sp.tube]}，這項要${TUBE_LABEL[tube]}）` }
+  const until = addMinutes(sp.collectedAt, h * 60)
+  if (t > until) return { ok: false, reason: `超過可加做時限（${TUBE_LABEL[tube]} ${h} 小時，採檢 ${sp.collectedAt.slice(5)}）：要重新採檢` }
+  return { ok: true, until }
+}

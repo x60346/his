@@ -58,3 +58,7 @@ export function toRecollect(admissionId?: string): Specimen[] {
     })
   })
 }
+
+/** 這位住院病人可以拿來加做這個管別的檢體：最新一支同管別、已收件、沒退件的（時限另外看 addonCheck） */
+export const addonSpecimenOf = (admissionId: string, tube: TubeKind) =>
+  db.specimens.filter((s) => s.admissionId === admissionId && s.tube === tube && s.receivedAt && !s.rejected).sort((a, b) => (a.collectedAt ?? '').localeCompare(b.collectedAt ?? '')).at(-1)

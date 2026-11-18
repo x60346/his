@@ -1487,6 +1487,8 @@ export interface IpdOrder {
   labSchedule?: { every: 'daily' | 'qod' | 'mwf' | 'weekly'; time: string }
   /** 由長期檢驗醫囑產生的那一次採檢 */
   parentOrderId?: string
+  /** 加做：掛在這支已收件的檢體上（不用再抽血），開立時就算已採檢 */
+  addonOf?: string
 }
 
 /** 檢驗品管一次（一個項目、兩個濃度）：Westgard 判定；拒絕後重做要寫矯正措施 */

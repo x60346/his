@@ -5,9 +5,10 @@
 // 否則切換類別後殘留的欄位（例如先選了藥又改成飲食）會被一起送出。
 // 長期給藥：服用時機預設照主檔、可另外指定；下方預覽「每天幾點給」（和服務層排程同一個 marTimes）。
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
+// 臨時檢驗：有同管別、已收件、還在時限內的檢體，可以選「用現有檢體加做」（不用再抽血；規則在 specimen-rules.addonCheck）。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, renalApi, LAB_EVERY_LABEL, type LabEvery, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, renalApi, LAB_EVERY_LABEL, type LabEvery, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, specimenApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -51,6 +52,13 @@ const form = reactive({
   proc: null as Procedure | null,
   content: '',
 })
+// 加做：選了臨時檢驗就查這位病人有沒有可以加做的檢體；有的話預設用它（少抽一次血）
+const addonUse = ref(true)
+const { data: addon } = useQuery(
+  async () => (form.category === 'procedure' && form.type === 'stat' && form.proc?.labItems?.length && props.admission ? specimenApi.addonOptions(props.admission.id, form.proc.id) : undefined),
+  [() => form.category, () => form.type, () => form.proc?.id, () => props.admission?.id],
+)
+watch(() => form.proc?.id, () => (addonUse.value = true))
 const abx = reactive({ reason: '' as AbxReason | '', site: '' as string | number | undefined, organism: '', note: '' })
 const ABX_REASONS = Object.keys(ABX_REASON_LABEL) as AbxReason[]
 
@@ -127,7 +135,7 @@ function buildInput(): OrderInput | string {
       }
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
-      return { ...base, content: '', procId: form.proc.id, ...(form.type === 'long' ? { labSchedule: { every: String(labSched.every) as LabEvery, time: labSched.time } } : {}) }
+      return { ...base, content: '', procId: form.proc.id, ...(form.type === 'long' ? { labSchedule: { every: String(labSched.every) as LabEvery, time: labSched.time } } : {}), ...(form.type === 'stat' && addon.value?.ok && addonUse.value ? { addonSpecimenId: addon.value.specimen!.id } : {}) }
     case 'diet':
       if (!dietKind.value) return '請選飲食種類'
       return { ...base, content: '', diet: { kind: dietKind.value, note: form.content.trim(), ...(dietKind.value === 'tube' ? { tube: tubePlan.value } : {}) } }
@@ -320,6 +328,13 @@ ${doseNote(drug, input.dose ?? 0)}。
           <USelect v-model="labSched.every" label="頻率" :options="Object.entries(LAB_EVERY_LABEL).map(([k, l]) => ({ label: l, value: k }))" :error="save.fieldErrors.value.labEvery" />
           <UInput v-model="labSched.time" type="time" label="抽血時間" :error="save.fieldErrors.value.labTime" />
           <p class="col-span-2 text-xs text-slate-600">長期的處置只能開檢驗；每一次到期會出現在護理站「檢體」待採檢，每次一份報告。</p>
+        </div>
+        <div v-if="form.type === 'stat' && addon" :class="['space-y-1 rounded-md border p-2 text-xs', addon.ok ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50']">
+          <template v-if="addon.ok">
+            <UCheckbox v-model="addonUse" :label="`用現有檢體加做（${addon.tubeLabel}，條碼 ${addon.specimen!.barcode}，採檢 ${addon.specimen!.collectedAt.slice(5)}）`" />
+            <p class="text-slate-600">這支檢體在驗：{{ addon.specimen!.tests.join('、') }}；可加做到 {{ addon.specimen!.until.slice(5) }}。勾選就不用再抽血，檢驗科直接驗；不勾＝護理站重新採檢。</p>
+          </template>
+          <p v-else class="text-slate-600">不能加做：{{ addon.reason }}（護理站會重新採檢）</p>
         </div>
         <UTextarea v-model="form.content" label="備註（選填）" :rows="2" />
       </template>

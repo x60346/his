@@ -11787,6 +11787,73 @@ try {
     ok(!db().imagingExams.find((e) => e.id === sepEx.id).metforminAlert, '沒用 Metformin：做完不提醒')
   }
 
+  // 檢驗加做：管別與時限、可加做的檢體、開立時掛上檢體（不用再抽）、檢驗科直接驗或上機、各種擋
+  console.log('\n[檢驗加做]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    // 純函式
+    const sp = { tube: 'red', collectedAt: '2026-11-17 10:00', receivedAt: '2026-11-17 10:20' }
+    const ck = (x, tube, t) => api.addonCheck(x, tube, t)
+    ok(ck(sp, 'red', '2026-11-18 10:00').ok && ck(sp, 'red', '2026-11-18 10:00').until === '2026-11-18 10:00' && !ck(sp, 'red', '2026-11-18 10:01').ok && ck(sp, 'red', '2026-11-18 10:01').reason.includes('時限'), '紅頭 24 小時內可以加做（剛好 24 小時可以、超過一分鐘不行）')
+    ok(ck({ ...sp, tube: 'urine' }, 'urine', '2026-11-17 12:00').ok && !ck({ ...sp, tube: 'urine' }, 'urine', '2026-11-17 12:01').ok, '尿液 2 小時')
+    ok(ck(sp, 'purple', '2026-11-17 11:00').reason.includes('沒有已收件') === false && ck(sp, 'purple', '2026-11-17 11:00').reason.includes('管別不符'), '管別不符擋')
+    ok(ck({ ...sp, receivedAt: undefined }, 'red', '2026-11-17 11:00').reason.includes('沒有已收件') && ck({ ...sp, rejected: {} }, 'red', '2026-11-17 11:00').reason.includes('沒有已收件') && ck(undefined, 'red', 'x').reason.includes('沒有已收件'), '還沒收件、退件、沒有檢體 → 不能加做')
+    ok(ck({ ...sp, tube: 'gas' }, 'gas', '2026-11-17 10:05').reason.includes('不能加做') && !api.ADDON_HOURS.culture, '血液氣體、培養不能加做')
+
+    // 種子：腦梗塞紅頭加做 GPT
+    await as('lab01')
+    const w0 = (await api.labApi.listLabWork()).find((w) => w.key === 'O:IO-ADD-1')
+    const spAn2 = db().specimens.find((x) => x.id === 'SP-AN-2')
+    ok(w0?.addon === spAn2.barcode && !w0.awaitingCollection && w0.awaitingReceipt === undefined && spAn2.orderIds.includes('IO-ADD-1'), '種子：加做的 GPT 掛在今天的紅頭上、不用採檢收件就能驗')
+
+    // 開立加做：骨折病人今天的紫頭（CBC）加做糖化血色素
+    const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    const purple = db().specimens.find((x) => x.id === 'SP-AN-1')
+    await as(userOf(fx.doctorId))
+    const opt = await api.specimenApi.addonOptions(fx.id, 'P005')
+    ok(opt.ok && opt.specimen.id === purple.id && opt.specimen.tests.some((t) => t.includes('CBC')) && opt.specimen.until === dateUtil.addMinutes(purple.collectedAt, 24 * 60), `可加做：${opt.tubeLabel} ${opt.specimen?.barcode}，到 ${opt.specimen?.until}`)
+    const optRed = await api.specimenApi.addonOptions(fx.id, 'P004')
+    ok(!optRed.ok && optRed.reason.includes('沒有已收件的紅頭'), `這位病人沒有紅頭 → 「${optRed.reason}」`)
+    ok((await api.specimenApi.addonOptions(fx.id, 'P013')) === undefined, '影像不是檢驗：沒有加做選項')
+    const add = (procId, x = {}) => api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId, content: '', addonSpecimenId: purple.id, ...x })
+    let msg = await errOf(() => add('P004'))
+    ok(msg.includes('管別不符'), `紫頭加做紅頭的檢驗 → 「${msg}」`)
+    msg = await errOf(() => add('P005', { type: 'long', labSchedule: { every: 'daily', time: '06:00' } }))
+    ok(msg.includes('臨時檢驗'), '長期醫囑不能加做')
+    msg = await errOf(() => add('P005', { addonSpecimenId: spAn2.id }))
+    ok(msg.includes('不是這位病人'), '別人的檢體不能用')
+    const o = await add('P005')
+    ok(o.status === 'done' && !('addonSpecimenId' in db().ipdOrders.find((x) => x.id === o.id)) && db().ipdOrders.find((x) => x.id === o.id).addonOf === purple.id && db().specimens.find((x) => x.id === purple.id).orderIds.includes(o.id) && db().auditLogs[0].detail.includes('加做'), '加做：醫囑視同已採檢、掛上檢體（醫囑不留 addonSpecimenId 輸入欄位）、稽核記條碼')
+    await as('nurse01')
+    const ws = await api.specimenApi.wardSpecimens(fx.id)
+    ok(!ws.toPrint.some((g) => g.orders.some((x) => x.id === o.id)), '護理站不用再印條碼採檢')
+    await as('lab01')
+    const w1 = (await api.labApi.listLabWork()).find((w) => w.key === `O:${o.id}`)
+    ok(w1?.addon === purple.barcode, '檢驗科看到「加做」')
+    const ld = await api.analyzerApi.loadAnalyzer(purple.barcode, { P005: { HbA1c: '6.1' } })
+    ok(ld.results.length === 1 && ld.results[0].procId === 'P005' && db().labReports.some((r) => r.orderId === o.id), '同一支再上機：只跑加做的那一項（CBC 已發過）')
+
+    // 超過時限
+    await as(userOf(fx.doctorId))
+    db().specimens.find((x) => x.id === purple.id).collectedAt = dateUtil.addMinutes(nowStr(), -25 * 60) // 測試：當作 25 小時前採的
+    const late = await api.specimenApi.addonOptions(fx.id, 'P003')
+    ok(!late.ok && late.reason.includes('超過'), `超過 24 小時 → 「${late.reason}」`)
+    msg = await errOf(() => add('P003'))
+    ok(msg.includes('超過'), '超過時限開立時也擋（要重新採檢）')
+    const plain = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+    ok(plain.status === 'active' && !db().ipdOrders.find((x) => x.id === plain.id).addonOf, '不加做：照常待護理站採檢')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

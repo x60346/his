@@ -1,6 +1,6 @@
 // 住院醫囑與病程紀錄。
 // 開立長期給藥醫囑時依頻率的給藥時間點產生 MAR（給藥排程），護理站立即看得到。
-import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote, MedicationOrder, TubeFormula } from '@/types'
+import type { DischargeSummary, DrugTiming, IpdOrder, MarRecord, ProgressNote, MedicationOrder, TubeFormula, Specimen } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
 import { addDays, addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, requirePermission } from './http'
@@ -15,6 +15,7 @@ import { checkLabSchedule, labDrawAt, labScheduleText } from './lab-schedule-rul
 import { homeMedPlanProblems } from './medrec-rules'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { contrastCheck, hydrationRate, HYDRATION } from './exam-rules'
+import { addonCheck } from './specimen-rules'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
@@ -177,6 +178,8 @@ export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'd
   rxAlertReasons?: Record<string, string>
   /** 管制性抗生素的使用申請（理由、感染部位、菌種、說明）；修改醫囑不用填（沿用） */
   abx?: { reason: NonNullable<IpdOrder['abx']>['reason']; site: string; organism?: string; note?: string }
+  /** 加做：用這支已收件的檢體（同管別、時限內），不用再抽血 */
+  addonSpecimenId?: string
 }
 
 /** 開醫囑前查詢：這個藥和病人執行中的其他給藥醫囑之間的交互作用、成分／同類重複（同一種藥另有 listActiveSameDrug） */
@@ -346,9 +349,25 @@ export function addOrder(input: OrderInput): Promise<OrderView> {
     const user = requirePermission('order.write')
     const a = activeAdmission(input.admissionId)
     const role = requireCare(user.doctorId, a, '開這位病人的醫囑', { consult: true })
-    const o = createOrder(user, a, input, now(), role.kind === 'consult' ? { consultId: role.consult.id } : {})
+    const t = now()
+    // 加做：臨時檢驗掛在已收件的檢體上（同管別、時限內），開立時就算已採檢、不用護理師再抽
+    let addon: Specimen | undefined
+    if (input.addonSpecimenId) {
+      const p = find.procedure(input.procId ?? '')
+      if (input.type !== 'stat' || input.category !== 'procedure' || !p?.labItems?.length) fail('只有臨時檢驗可以加做', 'CONFLICT')
+      addon = must(db.specimens.find((s) => s.id === input.addonSpecimenId), '檢體')
+      if (addon.admissionId !== a.id) fail('不是這位病人這次住院的檢體', 'CONFLICT')
+      const c = addonCheck(addon, p!.tube ?? 'red', t)
+      if (!c.ok) fail(c.reason, 'CONFLICT')
+    }
+    const { addonSpecimenId: _addon, ...orderInput } = input
+    const o = createOrder(user, a, orderInput, t, role.kind === 'consult' ? { consultId: role.consult.id } : {})
+    if (addon) {
+      Object.assign(o, { status: 'done', stopAt: t, addonOf: addon.id })
+      addon.orderIds.push(o.id)
+    }
     const severe = (o.rxAlerts ?? []).filter((x) => x.level === 'severe')
-    audit('開立住院醫囑', `${a.admitNo} ${o.content}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((x) => `${x.title}（${x.reason}）`).join('、')}` : ''}`)
+    audit('開立住院醫囑', `${a.admitNo} ${o.content}${addon ? `（加做：條碼 ${addon.barcode}）` : ''}${role.kind === 'consult' ? `（會診：${nameOf.dept(role.consult.toDeptId)}）` : ''}${severe.length ? `；嚴重交互作用仍開立：${severe.map((x) => `${x.title}（${x.reason}）`).join('、')}` : ''}`)
     return orderView(o)
   })
 }
