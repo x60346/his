@@ -7,7 +7,7 @@
 // 管制性抗生素：多一區填使用理由、感染部位（依培養結果要寫菌種）——先用後審，感染科 48 小時內審核。
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, USearchSelect, USelect, UTextarea } from '@/components/ui'
-import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, renalApi, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
+import { DIET_KINDS, hoursPerBag, tubeApi, tubeNutrients, tubePlanText, ABX_REASON_LABEL, ABX_REVIEW_HOURS, ABX_SITES, abxStewardApi, renalApi, LAB_EVERY_LABEL, type LabEvery, doseLevel, doseNote, doseStrengthText, doseUnitOf, residualOf, DRUG_TIMINGS, effectiveTiming, ipdApi, marTimes, masterApi, opdApi, timingApplies, TIMING_SHORT, type AdmissionView } from '@/services'
 import type { OrderInput } from '@/services/ipd'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -17,6 +17,8 @@ import type { AbxReason, Drug, DrugTiming, IpdOrderCategory, Procedure, DietKind
 
 const open = defineModel<boolean>({ default: false })
 // preset：從別處帶入的給藥（例：用藥整合「續用」帶入居家用藥的藥、劑量、頻率），打開時填好，醫師確認後開立
+// 長期檢驗的排程（只有處置・檢驗選「長期」時用）
+const labSched = reactive({ every: 'daily' as string | number | undefined, time: '06:00' })
 const props = defineProps<{ admission?: AdmissionView; preset?: { drugId: string; dose?: number; freq?: string; route?: string } }>()
 const ui = useUi()
 
@@ -125,7 +127,7 @@ function buildInput(): OrderInput | string {
       }
     case 'procedure':
       if (!form.proc) return '請選擇處置或檢驗項目'
-      return { ...base, content: '', procId: form.proc.id }
+      return { ...base, content: '', procId: form.proc.id, ...(form.type === 'long' ? { labSchedule: { every: String(labSched.every) as LabEvery, time: labSched.time } } : {}) }
     case 'diet':
       if (!dietKind.value) return '請選飲食種類'
       return { ...base, content: '', diet: { kind: dietKind.value, note: form.content.trim(), ...(dietKind.value === 'tube' ? { tube: tubePlan.value } : {}) } }
@@ -313,6 +315,12 @@ ${doseNote(drug, input.dose ?? 0)}。
           :search-empty="true"
           @select="(p) => (form.proc = p)"
         />
+        <!-- 長期：只有檢驗（每日血糖、每週一三五 CBC）；每一次到期會出現在護理站「檢體」待採檢 -->
+        <div v-if="form.type === 'long'" class="grid grid-cols-2 gap-3 rounded-md border border-sky-200 bg-sky-50/50 p-2">
+          <USelect v-model="labSched.every" label="頻率" :options="Object.entries(LAB_EVERY_LABEL).map(([k, l]) => ({ label: l, value: k }))" :error="save.fieldErrors.value.labEvery" />
+          <UInput v-model="labSched.time" type="time" label="抽血時間" :error="save.fieldErrors.value.labTime" />
+          <p class="col-span-2 text-xs text-slate-600">長期的處置只能開檢驗；每一次到期會出現在護理站「檢體」待採檢，每次一份報告。</p>
+        </div>
         <UTextarea v-model="form.content" label="備註（選填）" :rows="2" />
       </template>
 

@@ -10977,6 +10977,75 @@ try {
     ok(nsp && nsp.id !== purSp.id && nsp.collectedAt && !w.recollect.some((x) => x.id === purSp.id), '沒印條碼直接執行：建一支新的已採檢檢體，重新採檢的提醒消失')
   }
 
+  // 住院長期檢驗醫囑：頻率與抽血時間、每一次產生臨時檢驗（不重複）、出現在檢體待採檢、醫師清單只看長期那筆、停止取消沒採的、種子
+  console.log('\n[住院長期檢驗醫囑]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.ipdApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式（2026-11-16 是週一）
+    const d = (every, time = '06:00') => ({ every, time })
+    ok(api.labDrawAt(d('daily'), '2026-11-16 05:00', '2026-11-16') === '2026-11-16 06:00' && !api.labDrawAt(d('daily'), '2026-11-16 10:00', '2026-11-16') && api.labDrawAt(d('daily'), '2026-11-16 10:00', '2026-11-17') === '2026-11-17 06:00' && !api.labDrawAt(d('daily'), '2026-11-16 05:00', '2026-11-15'), '每日：開立前的那一次不算（10:00 開 06:00 的從明天起）')
+    ok(api.labDrawAt(d('qod'), '2026-11-16 05:00', '2026-11-18') && !api.labDrawAt(d('qod'), '2026-11-16 05:00', '2026-11-17'), '每兩天：從開立那天算')
+    ok(api.labDrawAt(d('mwf'), '2026-11-16 05:00', '2026-11-18') && !api.labDrawAt(d('mwf'), '2026-11-16 05:00', '2026-11-17') && api.labDrawAt(d('mwf'), '2026-11-16 05:00', '2026-11-20'), '每週一三五')
+    ok(api.labDrawAt(d('weekly'), '2026-11-16 05:00', '2026-11-23') && !api.labDrawAt(d('weekly'), '2026-11-16 05:00', '2026-11-22'), '每週一次：開立那天的星期')
+    const ce = api.checkLabSchedule({ every: 'x', time: '25:00' })
+    ok(ce.labEvery && ce.labTime && !Object.keys(api.checkLabSchedule(d('daily', '07:30'))).length && api.labScheduleText(d('mwf', '07:00')) === '每週一三五 07:00', '輸入檢查與顯示')
+
+    // 種子：糖尿病每日 06:00 飯前血糖
+    const dm = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    await as(userOf(dm.doctorId))
+    let ords = await I.listOrders(dm.id)
+    const par = ords.find((o) => o.id === 'IO-LAB-L1')
+    ok(par?.labSchedule.every === 'daily' && par.labDraws.collected >= 1 && !ords.some((o) => o.parentOrderId), `種子：長期檢驗只列一筆（已採檢 ${par?.labDraws.collected} 次、下一次 ${par?.labDraws.next ?? '—'}），每一次的臨時檢驗不另列`)
+    const kids = db().ipdOrders.filter((o) => o.parentOrderId === 'IO-LAB-L1')
+    ok(kids.filter((o) => o.status === 'done').every((o) => db().labReports.some((r) => r.orderId === o.id)) && kids.some((o) => o.status === 'active' && o.startAt === `${T} 06:00`), '種子：每一次一份報告；今天 06:00 這次待採檢')
+    const labs = await api.labApi.patientLabs(dm.patientId)
+    ok(labs.reports.filter((r) => r.procId === 'P004').length >= kids.filter((o) => o.status === 'done').length, '病歷的檢驗報告：每天的血糖都在（趨勢連續）')
+
+    // 開立
+    const base = { admissionId: dm.id, type: 'long', category: 'procedure', content: '' }
+    let msg = await errOf(() => I.addOrder({ ...base, procId: 'P013', labSchedule: d('daily') }))
+    ok(msg.includes('只能開檢驗'), `長期的影像 → 「${msg}」`)
+    let f = await fieldsOf(() => I.addOrder({ ...base, procId: 'P008' }))
+    ok(f.labEvery && f.labTime, '長期檢驗要頻率與抽血時間')
+    const lo = await I.addOrder({ ...base, procId: 'P008', labSchedule: d('daily', '07:00') })
+    ok(lo.content === '肌酸酐 Creatinine（每日 07:00）' && lo.labSchedule.time === '07:00' && !('allergyConfirmed' in db().ipdOrders.find((o) => o.id === lo.id)), `開立：「${lo.content}」（確認用的欄位不會存進醫囑）`)
+    // 讓它從昨天開始：今天 07:00 這次到期
+    Object.assign(db().ipdOrders.find((o) => o.id === lo.id), { startAt: `${addDaysT(-1)} 00:00` })
+    await as('nurse01')
+    let w = await api.specimenApi.wardSpecimens(dm.id)
+    const kid = db().ipdOrders.filter((o) => o.parentOrderId === lo.id)
+    ok(kid.length === 1 && kid[0].startAt === `${T} 07:00` && kid[0].ackAt && w.toPrint.some((g) => g.tube === 'red' && g.orders.some((o) => o.id === kid[0].id)), '今天 07:00 到期：產生一筆臨時檢驗（不用再核對），出現在檢體待印條碼（紅頭）')
+    await api.specimenApi.wardSpecimens(dm.id)
+    const dash = await api.dashboardApi.getDashboard()
+    ok(db().ipdOrders.filter((o) => o.parentOrderId === lo.id).length === 1 && dash.labToCollect >= 2, `再查一次不會重複產生；護理站首頁「今天待採檢」${dash.labToCollect}`)
+    // 停止：還沒採的取消
+    await as(userOf(dm.doctorId))
+    await I.stopOrder(lo.id)
+    ok(db().ipdOrders.find((o) => o.id === kid[0].id).status === 'stopped', '停止長期檢驗：今天還沒採的那次一起取消')
+    await as('nurse01')
+    w = await api.specimenApi.wardSpecimens(dm.id)
+    ok(!w.toPrint.some((g) => g.orders.some((o) => o.id === kid[0].id)) && db().ipdOrders.filter((o) => o.parentOrderId === lo.id).length === 1, '取消的不在待採檢、也不會再產生')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

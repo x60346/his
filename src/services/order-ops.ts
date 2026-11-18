@@ -15,6 +15,8 @@ export function stopOrderRecord(o: IpdOrder, userId: string, t: string): OrderQu
   if (q) Object.assign(q, { replyBy: userId, replyAt: t, reply: '已停止此醫囑', resolution: 'stopped' })
   // 藥師疑義也一起結案（修改的在呼叫前已記成 modified）
   settlePharmOnChange(o, 'stopped', userId, t)
+  // 長期檢驗：還沒採檢的那幾次一起取消（已採檢的照常出報告）
+  if (o.labSchedule) for (const c of db.ipdOrders.filter((x) => x.parentOrderId === o.id && x.status === 'active')) Object.assign(c, { status: 'stopped', stopAt: t })
   return q
 }
 

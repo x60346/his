@@ -2926,6 +2926,32 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     counters[`specimen:${day}`] = n
   }
 
+  // 長期檢驗（示範，不抽亂數）：糖尿病病人「飯前血糖 每日 06:00」，最近幾天每天一份報告（採檢、收件都記錄），今天 06:00 這一次待採檢
+  {
+    const dm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    if (dm) {
+      const later = (a: string, b: string) => (a > b ? a : b)
+      const start = later(`${addDays(T, -3)} 05:30`, addMinutes(dm.admittedAt!, 30))
+      const pt = patients.find((p) => p.id === dm.patientId)!
+      const parent: IpdOrder = { id: 'IO-LAB-L1', admissionId: dm.id, type: 'long', category: 'procedure', procId: 'P004', content: `${procMap.get('P004')!.name}（每日 06:00）`, labSchedule: { every: 'daily', time: '06:00' }, startAt: start, status: 'active', doctorId: dm.doctorId, createdAt: start, ackAt: addMinutes(start, 10), ackBy: 'U201' }
+      ipdOrders.push(parent)
+      const glu = ['168', '152', '139']
+      let k = 0
+      for (let d = start.slice(0, 10); d <= T; d = addDays(d, 1)) {
+        const at = `${d} 06:00`
+        if (at < start) continue
+        const id = `IO-LAB-L1-${d.slice(5).replace('-', '')}`
+        const past = d < T
+        ipdOrders.push({ id, admissionId: dm.id, type: 'stat', category: 'procedure', procId: 'P004', content: `${procMap.get('P004')!.name}（每日 06:00）`, startAt: at, status: past ? 'done' : 'active', ...(past ? { stopAt: at } : {}), doctorId: dm.doctorId, createdAt: at, ackAt: at, ackBy: 'U201', parentOrderId: parent.id })
+        if (!past) continue
+        const day = d.replace(/-/g, '')
+        specimens.push({ id: `SP-LAB-${++k}`, barcode: `S${day}9${String(k).padStart(3, '0')}`, admissionId: dm.id, patientId: dm.patientId, tube: 'red', orderIds: [id], createdAt: addMinutes(at, -20), printedAt: addMinutes(at, -20), printedBy: 'U201', collectedAt: at, collectedBy: 'U201', receivedAt: addMinutes(at, 25), receivedBy: 'U601' })
+        const rep = addMinutes(at, 70)
+        labReports.push({ id: `LR-LAB-${k}`, no: `L${day}96${String(k).padStart(2, '0')}`, patientId: dm.patientId, procId: 'P004', orderId: id, admissionId: dm.id, doctorId: dm.doctorId, orderedAt: at, values: buildLabValues(procMap.get('P004')!.labItems!, { 'GLU-AC': glu[(k - 1) % glu.length] }, pt.gender).values, reportedBy: 'U601', reportedAt: rep })
+      }
+    }
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {

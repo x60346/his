@@ -1,5 +1,5 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
-import { db } from '@/mock/db'
+import { commitIfPossible, db } from '@/mock/db'
 import { riskStateOf } from './risk-work'
 import { isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today, addMinutes } from '@/utils/date'
@@ -43,6 +43,8 @@ import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { specimenLate, specimenStage } from './specimen-rules'
 import { toRecollect } from './specimen-work'
+import { ensureLabDraws } from './ipd'
+import { isLabOrder } from './specimen-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -183,6 +185,8 @@ export interface DashboardStats {
   specimenToReceive?: number
   specimenLate?: number
   specimenRecollect?: number
+  /** 護理師：今天待採檢的住院檢驗（含長期檢驗今天到期的） */
+  labToCollect?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -212,6 +216,15 @@ export interface DashboardStats {
   returnToShip?: number
   byDept: { deptName: string; count: number }[]
   trend: { date: string; count: number }[]
+}
+
+/** 今天待採檢：先補齊長期檢驗今天到期的那一次，再數住院中還沒採檢的檢驗醫囑（今天以前開的） */
+function labToCollectToday(): number {
+  const d = today()
+  let added = false
+  for (const a of db.admissions.filter((x) => x.status === 'admitted')) added = ensureLabDraws(a.id, d) || added
+  if (added) commitIfPossible()
+  return db.ipdOrders.filter((o) => o.status === 'active' && isLabOrder(o) && o.startAt.slice(0, 10) <= d && db.admissions.some((a) => a.id === o.admissionId && a.status === 'admitted')).length
 }
 
 export function getDashboard(): Promise<DashboardStats> {
@@ -258,7 +271,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
-      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); return { specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length } : {}))(sessionRole()),
+      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); return { specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,

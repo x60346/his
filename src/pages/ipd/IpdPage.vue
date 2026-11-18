@@ -500,6 +500,7 @@ async function submitNote() {
                       <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>
                     </div>
                     <div v-if="o.abxInfo" :class="['text-xs', o.abx?.status === 'rejected' || o.abxInfo.overdue ? 'font-semibold text-red-700' : o.abx?.status === 'pending' ? 'text-amber-800' : 'text-emerald-700']" :title="o.abxInfo.reasonText">管制性抗生素・{{ o.abxInfo.text }}</div>
+                    <div v-if="o.labDraws" class="tabular text-xs text-sky-800">長期檢驗：已採檢 {{ o.labDraws.collected }} 次<template v-if="o.labDraws.next">・下一次 {{ o.labDraws.next.slice(5) }}</template></div>
                     <div v-if="o.renalAlert" class="text-xs font-medium text-amber-800">腎功能：{{ o.renalAlert }}</div>
                     <div v-if="o.tdm" :class="['flex flex-wrap items-center gap-2 text-xs', o.tdm.status === 'high' || o.tdm.status === 'low' ? 'font-semibold text-red-700' : o.tdm.status === 'due' ? 'text-amber-800' : 'text-slate-600']">
                       {{ o.tdm.text }}

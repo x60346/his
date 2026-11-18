@@ -2,11 +2,12 @@
 // 檢驗科「收件」（掃條碼）後才能發報告；檢體有問題「退件」（溶血、量不足…），那幾筆醫囑回到待採檢、護理站提醒重新採檢。
 // 門診的檢驗在檢驗科窗口抽血，不走這裡。規則在 specimen-rules
 import type { Specimen } from '@/types'
-import { db } from '@/mock/db'
+import { commitIfPossible, db } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
 import { checkRejectReason, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
 import { collectRecord, isLabOrder, labOrderStage, newSpecimen, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
+import { ensureLabDraws } from './ipd'
 import { find, nameOf } from './views'
 
 export interface SpecimenView extends Specimen {
@@ -58,6 +59,8 @@ export function wardSpecimens(admissionId: string): Promise<WardSpecimens> {
     requireUser('nurse', 'doctor')
     const a = must(find.admission(admissionId), '住院紀錄')
     const t = now()
+    // 長期檢驗今天到期的那一次（還沒產生的補上）
+    if (a.status === 'admitted' && ensureLabDraws(a.id, t.slice(0, 10))) commitIfPossible()
     const toPrint = groupByTube(activeLabOrders(a.id).filter((o) => labOrderStage(o) === 'toCollect').map((o) => ({ tube: tubeOfOrder(o), o })))
     const mine = db.specimens.filter((s) => s.admissionId === a.id)
     const since = addMinutes(t, -24 * 60)

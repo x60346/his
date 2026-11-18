@@ -1386,6 +1386,10 @@ export interface IpdOrder {
   pharm?: PharmReview
   /** 病人有過敏紀錄、醫師確認仍要開的過敏原（藥師審核看得到） */
   allergyOverride?: string[]
+  /** 長期檢驗醫囑的排程（每日 06:00…）：每一次到期產生一筆臨時檢驗醫囑（parentOrderId 指回來），走檢體條碼與報告 */
+  labSchedule?: { every: 'daily' | 'qod' | 'mwf' | 'weekly'; time: string }
+  /** 由長期檢驗醫囑產生的那一次採檢 */
+  parentOrderId?: string
 }
 
 export type PharmCareKind = 'dose' | 'monitor' | 'interaction' | 'deprescribe' | 'other'

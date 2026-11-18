@@ -11,6 +11,7 @@ import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
 import { checkAllergies } from './allergy'
+import { checkLabSchedule, labDrawAt, labScheduleText } from './lab-schedule-rules'
 import { homeMedPlanProblems } from './medrec-rules'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
@@ -36,9 +37,26 @@ function activeAdmission(admissionId: string) {
   return a
 }
 
-/** 補齊某日的給藥排程（只處理有固定時間點的長期給藥醫囑），回傳是否有新增。服務層內部使用 */
-export function ensureMar(admissionId: string, date: string): boolean {
+/**
+ * 長期檢驗醫囑：補齊某日到期的那一次（產生一筆臨時檢驗醫囑，parentOrderId 指回長期醫囑），回傳是否有新增。
+ * 只補今天以前的（明天的到明天才出現在待採檢）；長期醫囑停止後的不補。服務層內部使用
+ */
+export function ensureLabDraws(admissionId: string, date: string): boolean {
+  if (date > now().slice(0, 10)) return false
   let added = false
+  for (const p of db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'procedure' && o.type === 'long' && o.labSchedule)) {
+    const at = labDrawAt(p.labSchedule!, p.startAt, date)
+    if (!at || (p.stopAt && at >= p.stopAt) || db.ipdOrders.some((o) => o.parentOrderId === p.id && o.startAt === at)) continue
+    // 每一次採檢不用再核對（核對的是長期醫囑），不用再審
+    db.ipdOrders.push({ id: newId('IO'), admissionId, type: 'stat', category: 'procedure', procId: p.procId, content: `${find.procedure(p.procId ?? '')?.name ?? p.content}（${labScheduleText(p.labSchedule!)}）`, startAt: at, status: 'active', doctorId: p.doctorId, createdAt: at, ackAt: at, ackBy: p.ackBy ?? p.doctorId, parentOrderId: p.id })
+    added = true
+  }
+  return added
+}
+
+/** 補齊某日的給藥排程（只處理有固定時間點的長期給藥醫囑）與到期的長期檢驗，回傳是否有新增。服務層內部使用 */
+export function ensureMar(admissionId: string, date: string): boolean {
+  let added = ensureLabDraws(admissionId, date)
   // 點滴（連續輸注）不排給藥時間：由護理師接上、換瓶（infusion.ts）
   const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long' && !o.infusion)
   for (const o of orders) {
@@ -86,6 +104,8 @@ export interface OrderView extends IpdOrder {
   /** 藥師審核：待審、疑義待回覆（已審或功能上線前的不給） */
   pharmStatus?: 'pending' | 'query'
   pharmQuery?: { text: string; byName: string; at: string }
+  /** 長期檢驗：已採檢幾次、下一次幾點（一週內） */
+  labDraws?: { collected: number; next?: string }
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -106,11 +126,25 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(o.abx && o.status === 'active' ? { abxInfo: abxInfoOf(o.abx) } : {}),
     ...((r) => (r ? { renalAlert: r } : {}))(renalAlertOf(o)),
     ...((x) => (x ? { tdm: x } : {}))(tdmOf(o)),
+    ...(o.labSchedule ? { labDraws: labDrawsOf(o) } : {}),
     ...(o.pharm && o.pharm.status !== 'approved' && o.status === 'active' ? { pharmStatus: o.pharm.status } : {}),
     ...((pq) => (pq && o.status === 'active' ? { pharmQuery: { text: pq.text, byName: nameOf.user(pq.by), at: pq.at } } : {}))(openPharmQuery(o.pharm)),
     ...(o.status === 'active' && o.category === 'medication' && adviceOfOrder(o.id).length ? { abxAdvice: adviceOfOrder(o.id) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
+}
+
+/** 長期檢驗：已採檢幾次（每一次產生的臨時檢驗已完成的）、下一次（今天以後一週內第一個還沒產生的） */
+function labDrawsOf(o: IpdOrder): { collected: number; next?: string } {
+  const kids = db.ipdOrders.filter((x) => x.parentOrderId === o.id)
+  const collected = kids.filter((x) => x.status === 'done').length
+  if (o.status !== 'active') return { collected }
+  const t = now()
+  for (let i = 0; i < 8; i++) {
+    const at = labDrawAt(o.labSchedule!, o.startAt, addDays(t.slice(0, 10), i))
+    if (at && at >= t.slice(0, 10) && !kids.some((x) => x.startAt === at && x.status !== 'active')) return { collected, next: at }
+  }
+  return { collected }
 }
 
 function summaryOf(orderId: string): string {
@@ -119,16 +153,17 @@ function summaryOf(orderId: string): string {
   return x ? orderSummary(x, d ? doseUnitOf(d) : '') : ''
 }
 
+/** 醫師的醫囑清單：長期檢驗每一次產生的臨時檢驗不另列（看長期醫囑那一列的「已採幾次、下一次」） */
 export function listOrders(admissionId: string): Promise<OrderView[]> {
   return query(() =>
     db.ipdOrders
-      .filter((o) => o.admissionId === admissionId)
+      .filter((o) => o.admissionId === admissionId && !o.parentOrderId)
       .sort((a, b) => Number(a.status !== 'active') - Number(b.status !== 'active') || b.createdAt.localeCompare(a.createdAt))
       .map(orderView),
   )
 }
 
-export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route' | 'diet' | 'infusion'> & {
+export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'drugId' | 'procId' | 'content' | 'dose' | 'freq' | 'route' | 'diet' | 'infusion' | 'labSchedule'> & {
   /** 醫師指定的服用時機（空＝照主檔）；開立時會把有效時機存在醫囑上 */
   timing?: DrugTiming | ''
   /** 已有執行中的同藥醫囑時，醫師確認仍要再開一筆 */
@@ -233,6 +268,12 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     } else if (input.category === 'procedure') {
       const proc = usable.procedure(input.procId ?? '')
       content = content || proc.name
+      // 長期的處置只有檢驗（每日血糖、每週一三五 CBC）：要頻率與抽血時間，每一次到期產生一筆臨時檢驗（ensureLabDraws）
+      if (input.type === 'long') {
+        if (!proc.labItems?.length) fail('長期的處置只能開檢驗（例：每日飯前血糖）；其他處置請開臨時醫囑')
+        failFields(checkLabSchedule(input.labSchedule))
+        content = `${proc.name}（${labScheduleText(input.labSchedule!)}）`
+      }
     } else if (input.category === 'diet') {
       // 飲食醫囑選種類（伙食費、送餐清單、術前禁食都看種類）；只寫文字的（舊的呼叫方式）依關鍵字推斷
       if (input.diet) {
@@ -258,13 +299,14 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     }
 
     // allowDuplicate 是「這次送出的確認」，不是醫囑本身的資料，不能存進資料庫
-    const { allowDuplicate: _dup, confirmHighDose: _high, timing: _timing, rxAlertReasons: _rx, abx: _abx, diet: _diet, infusion: _inf, ...fields } = input
+    const { allowDuplicate: _dup, confirmHighDose: _high, allergyConfirmed: _ac, timing: _timing, rxAlertReasons: _rx, abx: _abx, diet: _diet, infusion: _inf, labSchedule: _ls, ...fields } = input
     const o: IpdOrder = {
       ...fields,
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
       ...(abx ? { abx } : {}),
       ...(allergyOverride ? { allergyOverride } : {}),
+      ...(input.category === 'procedure' && input.type === 'long' && input.labSchedule ? { labSchedule: { every: input.labSchedule.every, time: input.labSchedule.time } } : {}),
       // 給藥醫囑都要藥師審核（修改＝新醫囑，重新送審）
       ...(input.category === 'medication' ? { pharm: newPharm(t) } : {}),
       ...(dietValue ? { diet: dietValue } : {}),
