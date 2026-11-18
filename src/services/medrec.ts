@@ -7,6 +7,9 @@ import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole } from './http'
 import { checkHomeMedDecision, HOME_MED_DECISION_LABEL, homeMedsFromOpd, medRecState, type MedRecState } from './medrec-rules'
 import { doseUnitOf } from './billing'
+import { checkRxAlerts, type RxAlert } from './interaction-rules'
+import { drugRefs } from './rx-alert-work'
+import { timingText } from './drug-rules'
 import { requireCare } from './care-team'
 import { find, nameOf } from './views'
 
@@ -139,5 +142,83 @@ export function decideHomeMed(admissionId: string, itemId: string, input: { deci
     if (m!.items.every((i) => i.decision)) Object.assign(m!, { completedAt: t, completedBy: u.id })
     audit('用藥整合', `${a.admitNo} ${x.name}：${HOME_MED_DECISION_LABEL[input.decision!]}${input.reason?.trim() ? `（${input.reason.trim()}）` : ''}${m!.completedAt === t ? '；整合完成' : ''}`)
     return getMedRecSync(a.id)
+  })
+}
+
+// ---------- 出院用藥整合 ----------
+
+export interface DischargeRecon {
+  admissionId: string
+  /** 居家用藥（入院時怎麼決定的），出院要逐項決定恢復或停用 */
+  home: (HomeMedView & { admitText: string })[]
+  /** 住院中在用、沒有帶回家的（不是居家用藥、也不在出院帶藥）：只提醒 */
+  inpatientOnly: { drugId: string; text: string }[]
+  /** 出院帶藥和恢復的居家藥之間：成分重複、同類重複、交互作用 */
+  alerts: RxAlert[]
+}
+
+/** 出院病摘的對照表：畫面上正在編的出院帶藥、選了恢復的居家藥（還沒存檔也要即時比） */
+export function dischargeReconOf(admissionId: string, x: { dischargeDrugIds: string[]; resumeHomeIds: string[] }): Promise<DischargeRecon> {
+  return query(() => {
+    requireUser('doctor', 'nurse', 'pharmacist')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    const items = a.medRec?.items ?? []
+    const homeDrugs = new Set(items.map((i) => i.drugId).filter(Boolean))
+    const dis = new Set(x.dischargeDrugIds ?? [])
+    const inpatientOnly = db.ipdOrders
+      .filter((o) => o.admissionId === a.id && o.status === 'active' && o.category === 'medication' && o.type === 'long' && o.freq !== 'PRN' && o.drugId && !homeDrugs.has(o.drugId) && !dis.has(o.drugId))
+      .map((o) => ({ drugId: o.drugId!, text: `${o.content} 每次 ${o.dose} ${o.freq} ${o.route}` }))
+    const resumed = items.filter((i) => i.drugId && (x.resumeHomeIds ?? []).includes(i.id)).map((i) => find.drug(i.drugId!)).filter((d): d is NonNullable<typeof d> => !!d)
+    // 同一個藥（恢復＋出院又開一份）是補藥，不算重複；不同藥才比
+    // 規則把沒有用藥期限的「病人在用的藥」標成「執行中」（住院醫囑的說法）：這裡是居家藥，改成看得懂的字
+    const alerts = checkRxAlerts(drugRefs([...dis]), resumed.filter((d) => !dis.has(d.id)).map((d) => ({ drug: { id: d.id, name: d.name, generic: d.generic }, source: '居家用藥' })))
+      .map((x) => ({ ...x, title: x.title.replace('（執行中）', '（居家用藥，出院後恢復）'), ...(x.other ? { other: x.other.replace('居家用藥 開的', '居家用藥（恢復）') } : {}) }))
+    return {
+      admissionId: a.id,
+      home: items.map((i) => ({ ...itemView(a.id, i), admitText: i.decision ? `入院時${HOME_MED_DECISION_LABEL[i.decision]}${i.reason ? `（${i.reason}）` : ''}` : '入院時未決定' })),
+      inpatientOnly, alerts,
+    }
+  })
+}
+
+export interface DischargeMedList {
+  patientName: string
+  chartNo: string
+  admitNo: string
+  allergies: string[]
+  dischargedOn: string
+  doctorName: string
+  /** 出院帶藥：藥名、怎麼吃、幾天 */
+  meds: { name: string; nameZh: string; how: string; days: number }[]
+  /** 恢復吃的居家藥（家裡的藥照原本吃） */
+  resume: { name: string; how: string }[]
+  /** 停用：不要再吃 */
+  stop: { name: string; reason: string }[]
+}
+
+/** 給病人的「出院用藥清單」（列印）：出院帶藥、繼續吃家裡的藥、停用的藥 */
+export function dischargeMedList(admissionId: string): Promise<DischargeMedList> {
+  return query(() => {
+    requireUser('doctor', 'nurse', 'pharmacist')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    const ds = a.dischargeSummary
+    if (!ds) fail('還沒有出院病摘', 'CONFLICT')
+    const p = find.patient(a.patientId)
+    const how = (dose?: number, freq?: string, drugId?: string) => {
+      const d = drugId ? find.drug(drugId) : undefined
+      return [dose ? `每次 ${dose} ${d ? doseUnitOf(d) : ''}` : '', freq ? find.freq(freq)?.label ?? freq : ''].filter(Boolean).join('，')
+    }
+    const plan = ds!.homeMedPlan ?? {}
+    const items = a.medRec?.items ?? []
+    return {
+      patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', admitNo: a.admitNo, allergies: p?.allergies ?? [], dischargedOn: (a.dischargedAt ?? ds!.signedAt ?? ds!.writtenAt).slice(0, 10), doctorName: nameOf.doctor(ds!.doctorId),
+      meds: (ds!.meds ?? []).map((m) => {
+        const d = find.drug(m.drugId)
+        const tm = d ? timingText(m.timing ?? d.timing, m.freq, m.route) : ''
+        return { name: d?.name ?? m.drugId, nameZh: d?.nameZh ?? '', how: [how(m.dose, m.freq, m.drugId), tm].filter(Boolean).join('，'), days: m.days }
+      }),
+      resume: items.filter((i) => plan[i.id]?.resume).map((i) => ({ name: i.drugId ? find.drug(i.drugId)?.name ?? i.name : i.name, how: how(i.dose, i.freq, i.drugId) })),
+      stop: items.filter((i) => plan[i.id] && !plan[i.id].resume).map((i) => ({ name: i.drugId ? find.drug(i.drugId)?.name ?? i.name : i.name, reason: plan[i.id].reason ?? '' })),
+    }
   })
 }

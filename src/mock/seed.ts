@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2861,6 +2861,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         items.push(hm({ drugId: 'M013', name: drugMap.get('M013')!.name, dose: 1, freq: 'QD', route: 'PO', source: 'opd', lastDate: addDays(a.admittedAt!.slice(0, 10), -14), decidedBy: docUser(a.doctorId), decidedAt, decision: 'hold', reason: '急性腦梗塞，容許較高血壓，降壓藥暫停' }))
       }
       a.medRec = { builtBy: 'U201', builtAt, items, completedAt: items.length ? decidedAt : builtAt, completedBy: items.length ? docUser(a.doctorId) : 'U201' }
+    }
+  }
+
+  // 出院用藥整合（示範，不抽亂數）：腦梗塞病人主治寫了出院病摘草稿，居家用藥大多決定了，Losartan 還沒決定恢復或停用 → 簽署會擋
+  {
+    const st = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    if (st?.medRec && !st.dischargeSummary) {
+      const plan: NonNullable<DischargeSummary['homeMedPlan']> = {}
+      for (const x of st.medRec.items) if (x.drugId !== 'M013') plan[x.id] = x.decision === 'continue' ? { resume: true } : { resume: false, reason: x.reason ?? '住院期間已停用' }
+      st.dischargeSummary = {
+        diagnosis: st.diagnosis, course: '入院後給予抗血小板、復健；住院中導尿管相關泌尿道感染，依培養調整抗生素。', condition: '右側肢體肌力 4 分，可助行器行走', followUp: '兩週後神經內科門診、持續復健',
+        dischargeType: '治癒出院', doctorId: st.doctorId, writtenAt: addMinutes(nowStr, -60), ...(Object.keys(plan).length ? { homeMedPlan: plan } : {}),
+      }
     }
   }
 

@@ -1201,6 +1201,8 @@ export interface DischargeSummary {
   meds?: MedicationOrder[]
   /** 慢性病：出院帶藥天數上限 30 天（一般 7 天，規則 dose-rules.dischargeRxDaysProblem） */
   chronicRx?: boolean
+  /** 出院用藥整合：每一項居家用藥（HomeMed.id）出院後恢復或停用（停用要原因） */
+  homeMedPlan?: Record<string, { resume: boolean; reason?: string }>
 }
 
 export type IpdOrderCategory = 'medication' | 'nursing' | 'diet' | 'procedure'

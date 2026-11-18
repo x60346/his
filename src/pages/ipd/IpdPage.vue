@@ -28,6 +28,8 @@ import BloodPanel from '@/components/blood/BloodPanel.vue'
 import AbxTimeline from '@/components/AbxTimeline.vue'
 import AdrPanel from '@/components/AdrPanel.vue'
 import MedRecPanel from '@/components/MedRecPanel.vue'
+import DischargeMedListPrint from '@/components/DischargeMedListPrint.vue'
+import type { DischargeMedList } from '@/services'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
@@ -247,6 +249,9 @@ const dischargeTypes = masterApi.staticCodes.dischargeTypes
 const dsForm = reactive({ diagnosis: '', course: '', condition: '', followUp: '', dischargeType: '' as string | number })
 // 出院帶藥：和門診開藥同一個編輯元件（劑量、頻率、天數、總量自動換算）；天數上限、劑量檢查在服務層
 const dsMeds = ref<MedRow[]>([])
+// 出院用藥整合：居家用藥每一項出院後恢復或停用（停用寫原因）；對照表即時比對畫面上的出院帶藥
+const dsPlan = ref<Record<string, { resume: boolean; reason: string }>>({})
+const resumeIds = computed(() => Object.entries(dsPlan.value).filter(([, v]) => v.resume).map(([k]) => k).join(','))
 const dsChronic = ref(false)
 const { data: drugList } = useQuery(() => masterApi.listDrugs({ includeInactive: true }))
 const { data: freqList } = useQuery(() => masterApi.listFrequencies())
@@ -263,6 +268,7 @@ watch(
       ? { diagnosis: d.diagnosis, course: d.course, condition: d.condition, followUp: d.followUp, dischargeType: d.dischargeType }
       : { diagnosis: adm.value?.diagnosis ?? '', course: '', condition: '', followUp: '', dischargeType: '' })
     dsMeds.value = (d?.meds ?? []).map((m) => ({ ...m }))
+    dsPlan.value = Object.fromEntries(Object.entries(d?.homeMedPlan ?? {}).map(([k, v]) => [k, { resume: v.resume, reason: v.reason ?? '' }]))
     dsChronic.value = !!d?.chronicRx
   },
   { immediate: true },
@@ -274,7 +280,17 @@ async function onSaveDs(sign: boolean) {
   const high = dsMeds.value.map((m) => ({ m, d: drugMap.value.get(m.drugId) })).filter((x) => x.d && doseLevel(x.d, x.m.dose) === 'high')
   if (sign && high.length && !(await ui.confirm({ title: '出院帶藥劑量偏高', message: `${high.map((x) => `・${x.d!.name}：${doseNote(x.d!, x.m.dose)}`).join('\n')}\n\n確定劑量無誤？`, okText: '劑量無誤', danger: true }))) return
   const meds = dsMeds.value.map(({ _manual: _m, _qtyStale: _q, ...m }) => m)
-  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType), meds, chronicRx: dsChronic.value, ...(high.length ? { confirmHighDose: true } : {}) }, sign)
+  const homeMedPlan = Object.fromEntries(Object.entries(dsPlan.value).map(([k, v]) => [k, { resume: v.resume, ...(!v.resume && v.reason.trim() ? { reason: v.reason.trim() } : {}) }]))
+  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType), meds, chronicRx: dsChronic.value, homeMedPlan, ...(high.length ? { confirmHighDose: true } : {}) }, sign)
+}
+const { data: recon } = useQuery(async () => (adm.value && tab.value === 'discharge' && !isAdmin ? medrecApi.dischargeReconOf(adm.value.id, { dischargeDrugIds: medKey.value ? medKey.value.split(',') : [], resumeHomeIds: resumeIds.value ? resumeIds.value.split(',') : [] }) : undefined), [medKey, resumeIds, () => adm.value?.id, tab])
+const setPlan = (id: string, resume: boolean) => (dsPlan.value = { ...dsPlan.value, [id]: { resume, reason: dsPlan.value[id]?.reason ?? '' } })
+// 列印給病人的出院用藥清單（存檔後的內容）
+const medList = ref<DischargeMedList>()
+const doPrint = () => window.print()
+async function printMedList() {
+  if (!adm.value) return
+  medList.value = await medrecApi.dischargeMedList(adm.value.id)
 }
 const cancelOpen = ref(false)
 const cancelReason = ref('')
@@ -542,7 +558,8 @@ async function submitNote() {
           <template v-if="ds?.signedAt">
             <div class="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <LogOut class="h-4 w-4" />已准予出院，等住院中心辦理手續。
-              <UButton class="ml-auto" size="sm" variant="secondary" @click="openCancel">取消准予出院</UButton>
+              <UButton class="ml-auto" size="sm" variant="ghost" @click="printMedList">列印出院用藥清單</UButton>
+              <UButton size="sm" variant="secondary" @click="openCancel">取消准予出院</UButton>
             </div>
             <DischargeSummaryView :summary="ds" :doctor-name="adm.summaryDoctorName" :med-texts="adm.dischargeMedTexts" :rx-status="adm.dischargeRxStatus" />
           </template>
@@ -558,6 +575,24 @@ async function submitNote() {
             <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" @keydown="phrase.onKey($event, (v) => (dsForm.course = v))" />
             <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" @keydown="phrase.onKey($event, (v) => (dsForm.condition = v))" />
             <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" @keydown="phrase.onKey($event, (v) => (dsForm.followUp = v))" />
+            <!-- 出院用藥整合：居家用藥恢復或停用（簽署時每一項都要決定）；住院中在用沒帶回的、和出院帶藥重複的提醒 -->
+            <section v-if="recon && (recon.home.length || recon.inpatientOnly.length || recon.alerts.length)" class="space-y-2 rounded-md border border-sky-200 bg-sky-50/40 p-3 text-sm">
+              <h4 class="font-semibold text-slate-700">出院用藥整合</h4>
+              <ul v-if="recon.home.length" class="divide-y divide-sky-100 rounded border border-sky-100 bg-white">
+                <li v-for="x in recon.home" :key="x.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
+                  <span class="min-w-[12rem] flex-1"><b>{{ x.drugName }}</b> <span class="text-xs text-slate-600">{{ x.doseText }}</span><span class="block text-xs text-slate-500">居家用藥・{{ x.admitText }}</span></span>
+                  <label class="flex items-center gap-1 text-xs"><input type="radio" :name="`hm-${x.id}`" :checked="dsPlan[x.id]?.resume === true" @change="setPlan(x.id, true)" />恢復</label>
+                  <label class="flex items-center gap-1 text-xs"><input type="radio" :name="`hm-${x.id}`" :checked="dsPlan[x.id]?.resume === false" @change="setPlan(x.id, false)" />停用</label>
+                  <input v-if="dsPlan[x.id]?.resume === false" v-model="dsPlan[x.id].reason" class="form-control h-8 w-56 text-xs" placeholder="停用原因（例：住院改用其他藥）" :aria-label="`${x.drugName} 停用原因`" />
+                  <span v-if="!dsPlan[x.id]" class="text-xs text-amber-700">未決定</span>
+                </li>
+              </ul>
+              <p v-if="saveDs.fieldErrors.value.homeMedPlan" class="text-xs text-red-600">{{ saveDs.fieldErrors.value.homeMedPlan }}</p>
+              <p v-if="recon.inpatientOnly.length" class="text-xs text-slate-600"><b>住院中在用、沒有帶回家：</b>{{ recon.inpatientOnly.map((x) => x.text).join('；') }}（要帶回請加進出院帶藥）</p>
+              <ul v-if="recon.alerts.length" class="space-y-0.5 text-xs">
+                <li v-for="a in recon.alerts" :key="a.key" :class="a.level === 'severe' ? 'text-red-700' : 'text-amber-800'">出院帶藥與恢復的居家藥：{{ a.title }}——{{ a.text }}</li>
+              </ul>
+            </section>
             <!-- 出院帶藥：簽署時一起確認；住院藥局調劑扣帳後列入住院帳單 -->
             <section class="space-y-2 rounded-md border border-slate-200 p-3">
               <div class="flex flex-wrap items-center gap-3">
@@ -574,6 +609,7 @@ async function submitNote() {
             </section>
             <PhraseHint :phrase="phrase" />
             <div class="flex justify-end gap-2">
+              <UButton v-if="ds" variant="ghost" @click="printMedList">列印出院用藥清單</UButton>
               <UButton variant="secondary" :loading="saveDs.pending.value" @click="onSaveDs(false)">儲存草稿</UButton>
               <UButton :icon="LogOut" :loading="saveDs.pending.value" @click="onSaveDs(true)">簽署並准予出院</UButton>
             </div>
@@ -622,6 +658,13 @@ async function submitNote() {
       :error="reply.fieldErrors.value.reply"
       @confirm="confirmReply"
     />
+    <UDialog :model-value="!!medList" title="出院用藥清單" size="lg" @update:model-value="(v: boolean) => !v && (medList = undefined)">
+      <DischargeMedListPrint v-if="medList" :m="medList" />
+      <template #footer>
+        <UButton variant="secondary" @click="medList = undefined">關閉</UButton>
+        <UButton @click="doPrint">列印</UButton>
+      </template>
+    </UDialog>
     <OrderDialog v-model="orderOpen" :admission="adm" :preset="orderPreset" />
     <ReviseOrderDialog :order="revising" @close="revising = null" />
     <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />

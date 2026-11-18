@@ -37,3 +37,15 @@ export function checkHomeMedDecision(item: Pick<HomeMed, 'drugId'>, x: { decisio
 
 /** 出院時提醒：入院時暫停的居家藥（要不要恢復由醫師決定） */
 export const heldHomeMeds = (m: MedRec | undefined) => (m?.items ?? []).filter((x) => x.decision === 'hold')
+
+/**
+ * 出院用藥整合：每一項居家用藥都要決定「恢復」或「停用」（停用要寫原因，例：住院改用其他藥）。
+ * 回傳沒決定的、停用沒寫原因的（簽署出院病摘時擋；沒有居家用藥清單的病人不擋）
+ */
+export function homeMedPlanProblems(items: Pick<HomeMed, 'id' | 'name'>[], plan: Record<string, { resume: boolean; reason?: string }> | undefined): { undecided: string[]; noReason: string[] } {
+  const p = plan ?? {}
+  return {
+    undecided: items.filter((x) => !p[x.id]).map((x) => x.name),
+    noReason: items.filter((x) => p[x.id] && !p[x.id].resume && !p[x.id].reason?.trim()).map((x) => x.name),
+  }
+}

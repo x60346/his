@@ -11,6 +11,7 @@ import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
 import { checkAllergies } from './allergy'
+import { homeMedPlanProblems } from './medrec-rules'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
@@ -499,7 +500,7 @@ export function addProgressNote(input: Pick<ProgressNote, 'admissionId' | 'subje
 }
 
 // ---------- 出院病摘（醫師） ----------
-export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType' | 'meds' | 'chronicRx'> & {
+export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType' | 'meds' | 'chronicRx' | 'homeMedPlan'> & {
   /** 出院帶藥有劑量偏高的，醫師已確認（不存進病摘） */
   confirmHighDose?: boolean
 }
@@ -531,6 +532,13 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     if (sign && openDeptTransfer(a)) fail(`轉科申請中（轉${find.dept(openDeptTransfer(a)!.toDeptId)?.name}），不能准予出院；要出院請先撤回轉科申請`, 'CONFLICT')
     if (sign) failFields(dischargeSummaryProblems(input))
     else if (![input.diagnosis, input.course, input.condition, input.followUp].some((x) => x.trim())) fail('病摘是空白的，不需要儲存')
+    // 出院用藥整合：有居家用藥清單的，每一項都要決定恢復或停用（停用寫原因）才能簽署
+    const homeItems = a.medRec?.items ?? []
+    if (sign && homeItems.length) {
+      const { undecided, noReason } = homeMedPlanProblems(homeItems, input.homeMedPlan)
+      if (undecided.length || noReason.length) failField('homeMedPlan', [undecided.length ? `居家用藥還沒決定出院後恢復或停用：${undecided.join('、')}` : '', noReason.length ? `停用要寫原因：${noReason.join('、')}` : ''].filter(Boolean).join('；'))
+    }
+    const plan = Object.fromEntries(Object.entries(input.homeMedPlan ?? {}).filter(([id]) => homeItems.some((x) => x.id === id)).map(([id, v]) => [id, { resume: !!v.resume, ...(!v.resume && v.reason?.trim() ? { reason: v.reason.trim() } : {}) }]))
     const meds = dischargeMeds(input, sign)
     const t = now()
     const trim = (x: string) => x.trim()
@@ -538,6 +546,7 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
       diagnosis: trim(input.diagnosis), course: trim(input.course), condition: trim(input.condition), followUp: trim(input.followUp),
       dischargeType: input.dischargeType, doctorId: user.doctorId ?? a.doctorId, writtenAt: t, ...(sign ? { signedAt: t } : {}),
       ...(meds.length ? { meds, ...(input.chronicRx ? { chronicRx: true } : {}) } : {}),
+      ...(Object.keys(plan).length ? { homeMedPlan: plan } : {}),
     }
     audit(sign ? '准予出院' : '出院病摘草稿', `${a.admitNo} ${find.patient(a.patientId)?.name}${sign ? `（${input.dischargeType}）` : ''}`)
     return a.dischargeSummary

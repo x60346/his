@@ -48,6 +48,13 @@ try {
   const http = await load('/src/services/http.ts')
   const dbm = await load('/src/mock/db.ts')
   const api = await load('/src/services/index.ts')
+  // 出院用藥整合：簽署出院病摘時每一項居家用藥都要決定恢復或停用。其他段落測的是別的規則，沒帶 homeMedPlan 的一律「全部恢復」；
+  // 要測這條規則的段落自己帶 homeMedPlan（帶空物件 {} 就是什麼都沒決定）
+  {
+    const save = api.ipdApi.saveDischargeSummary
+    api.ipdApi.saveDischargeSummary = (id, input, sign) =>
+      save(id, input?.homeMedPlan ? input : { ...input, homeMedPlan: Object.fromEntries((dbm.db.admissions.find((x) => x.id === id)?.medRec?.items ?? []).map((x) => [x.id, { resume: true }])) }, sign)
+  }
   /**
    * 重建展示資料。給藥條碼核對（預設開）只在「[給藥條碼核對]」那段測；其他段測的是別的規則，重建後先關掉掃描，
    * 不然每一筆給藥都要先掃腕帶與藥品
@@ -10729,6 +10736,63 @@ try {
     await as('ph01')
     v = await M.buildMedRec(ap.id, [])
     ok(v.state === 'done' && !v.items.length, '藥師記錄「無居家用藥」：直接完成')
+  }
+
+  // 出院用藥整合：居家用藥逐項恢復或停用（簽署擋）、對照表（住院中沒帶回、和出院帶藥的重複）、出院用藥清單
+  console.log('\n[出院用藥整合]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const M = api.medrecApi
+    const I = api.ipdApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const items = [{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }, { id: 'c', name: '丙' }]
+    const pp = api.homeMedPlanProblems(items, { a: { resume: true }, b: { resume: false } })
+    ok(pp.undecided.join() === '丙' && pp.noReason.join() === '乙' && !api.homeMedPlanProblems(items, { a: { resume: true }, b: { resume: false, reason: 'x' }, c: { resume: true } }).undecided.length, '規則：每項都要決定、停用要原因')
+
+    // 種子：腦梗塞病摘草稿，Losartan 還沒決定
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const los = st.medRec.items.find((x) => x.drugId === 'M013')
+    ok(st.dischargeSummary && !st.dischargeSummary.signedAt && !st.dischargeSummary.homeMedPlan?.[los.id] && Object.keys(st.dischargeSummary.homeMedPlan ?? {}).length === st.medRec.items.length - 1, '種子：腦梗塞出院病摘草稿，居家用藥只剩 Losartan 沒決定')
+    await as(userOf(st.doctorId))
+    let rc = await M.dischargeReconOf(st.id, { dischargeDrugIds: [], resumeHomeIds: [] })
+    ok(rc.home.find((x) => x.id === los.id)?.admitText.startsWith('入院時暫停') && rc.inpatientOnly.length > 0, `對照表：居家用藥（Losartan「${rc.home.find((x) => x.id === los.id)?.admitText}」）、住院中在用沒帶回 ${rc.inpatientOnly.length} 項`)
+    // 腦梗塞的示範還有一張轉復健科申請（轉科中不能准予出院）：先撤回
+    await api.admissionApi.cancelDeptTransfer(st.id)
+    const ds = st.dischargeSummary
+    const plan0 = ds.homeMedPlan ?? {} // 這位病人的居家用藥可能只有 Losartan：計畫是空的（不能傳 undefined，測試的預設會變成「全部恢復」）
+    const input = { diagnosis: ds.diagnosis, course: ds.course, condition: ds.condition, followUp: ds.followUp, dischargeType: ds.dischargeType, meds: [] }
+    let f = await fieldsOf(() => I.saveDischargeSummary(st.id, { ...input, homeMedPlan: plan0 }, true))
+    ok(f.homeMedPlan?.includes('Losartan'), `簽署：Losartan 沒決定 → 「${f.homeMedPlan}」`)
+    f = await fieldsOf(() => I.saveDischargeSummary(st.id, { ...input, homeMedPlan: { ...plan0, [los.id]: { resume: false } } }, true))
+    ok(f.homeMedPlan?.includes('停用要寫原因'), '停用沒寫原因 → 擋')
+    await I.saveDischargeSummary(st.id, { ...input, homeMedPlan: { ...plan0, [los.id]: { resume: false, reason: '中風後血壓控制改用 Amlodipine' } } }, false)
+    ok(db().admissions.find((a) => a.id === st.id).dischargeSummary.homeMedPlan[los.id].reason.includes('Amlodipine') && !db().admissions.find((a) => a.id === st.id).dischargeSummary.signedAt, '存草稿：計畫存下來（不擋）')
+    const amlo = { drugId: 'M012', dose: 1, freq: 'QD', route: 'PO', days: 7, qty: 7, selfPay: false }
+    const signed = await I.saveDischargeSummary(st.id, { ...input, meds: [amlo], homeMedPlan: { ...plan0, [los.id]: { resume: false, reason: '中風後血壓控制改用 Amlodipine' } } }, true)
+    ok(signed.signedAt && signed.homeMedPlan[los.id].resume === false, '全部決定：簽署准予出院')
+    const ml = await M.dischargeMedList(st.id)
+    ok(ml.meds[0]?.name.startsWith('Amlodipine') && ml.meds[0].how.includes('每日一次') && ml.stop.some((x) => x.name.startsWith('Losartan') && x.reason.includes('Amlodipine')) && ml.resume.length === Object.values(signed.homeMedPlan).filter((v) => v.resume).length, `出院用藥清單：帶藥「${ml.meds[0]?.how}」、停用 Losartan（不要再吃）、繼續吃 ${ml.resume.length} 項`)
+
+    // 重複：出院帶藥和恢復的居家藥
+    const fr = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    db().admissions.find((a) => a.id === fr.id).medRec = { builtBy: 'U201', builtAt: nowStr(), items: [{ id: 'HMT1', drugId: 'M030', name: 'Celecoxib 200mg', dose: 1, freq: 'BID', route: 'PO', source: 'opd', decision: 'continue' }] }
+    await as(userOf(fr.doctorId))
+    rc = await M.dischargeReconOf(fr.id, { dischargeDrugIds: ['M002'], resumeHomeIds: ['HMT1'] })
+    ok(rc.alerts.some((a) => a.kind === 'class'), `出院帶 Ibuprofen、居家 Celecoxib 恢復：${rc.alerts.map((a) => a.title).join('、')}`)
+    ok(!(await M.dischargeReconOf(fr.id, { dischargeDrugIds: ['M002'], resumeHomeIds: [] })).alerts.length && !(await M.dischargeReconOf(fr.id, { dischargeDrugIds: ['M030'], resumeHomeIds: ['HMT1'] })).alerts.length, '居家的停用、或出院帶的是同一個藥（補藥）：不提醒')
+    // 沒有居家用藥清單：不擋
+    delete db().admissions.find((a) => a.id === fr.id).medRec
+    const nos = await I.saveDischargeSummary(fr.id, { diagnosis: fr.diagnosis, course: '復位固定', condition: '穩定', followUp: '骨科門診', dischargeType: '治癒出院', meds: [], homeMedPlan: {} }, true)
+    ok(nos.signedAt, '沒有居家用藥清單的病人：照常簽署')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
