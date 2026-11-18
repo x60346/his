@@ -36,6 +36,7 @@ import { activeVent, rassStateOf, ventTodosOf } from './vent-work'
 import { recentIcuOut } from './icu-move-work'
 import { autoCallRrt, newsStateOf, openRrt } from './news-work'
 import type { NewsLevel } from './news-rules'
+import { ppeOf } from './iso-rules'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -99,6 +100,8 @@ export interface WardPatient extends AdmissionView {
   /** 一般病房：最近一次算得出的 NEWS2（中、高要 1 小時內再量）；快速反應小組呼叫了、還沒到場評估 */
   news?: { score: number; level: NewsLevel; red: boolean; at: string; recheck?: 'upcoming' | 'overdue' }
   rrtPending: boolean
+  /** 隔離中要的防護用品（N95、外科口罩、手套、隔離衣） */
+  ppe: string[]
 }
 
 /** 最新一筆生命徵象：時間只到分鐘，同一分鐘量了兩次時取「後寫入」的那筆（以前排序取到先寫入的舊值） */
@@ -156,7 +159,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           ...(() => {
             const s = newsStateOf(a, t)
-            return { rrtPending: !!openRrt(a.id), ...(s ? { news: { score: s.last.news.total, level: s.last.news.level, red: s.last.news.red, at: s.last.v.at, ...(s.recheck ? { recheck: s.recheck.status } : {}) } } : {}) }
+            return { ppe: ppeOf(activeIsolations(a.patientId).map((i) => i.kind)), rrtPending: !!openRrt(a.id), ...(s ? { news: { score: s.last.news.total, level: s.last.news.level, red: s.last.news.red, at: s.last.v.at, ...(s.recheck ? { recheck: s.recheck.status } : {}) } } : {}) }
           })(),
           ...(() => {
             const o = recentIcuOut(a, t)

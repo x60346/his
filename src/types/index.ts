@@ -1219,6 +1219,9 @@ export interface IpdOrder {
   vent?: VentSetting
   /** 急救時自動開的（急救藥、CPR 處置費）：口頭醫囑記在帶領醫師名下，執行完成 */
   codeBlueId?: string
+  /** 隔離連動開的（哪一筆隔離、建議清單的哪一項） */
+  isolationId?: string
+  isoKey?: string
   /** 長期 / 臨時（STAT / 單次） */
   type: 'long' | 'stat'
   category: IpdOrderCategory
@@ -1977,7 +1980,8 @@ export interface Isolation {
   /** 最近一次檢討（確認延續） */
   reviewedAt?: string
   reviewedBy?: string
-  ended?: { at: string; by: string; reason: string }
+  /** 解除：exception＝沒達到解除條件，醫師寫原因例外解除 */
+  ended?: { at: string; by: string; reason: string; exception?: boolean }
 }
 
 /** DNR 文件：本人意願書、最近親屬同意書、預立醫療決定書（病人自主權利法） */

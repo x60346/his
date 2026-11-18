@@ -7,6 +7,8 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { checkDnrInput, DNR_DOC_LABEL, dnrText, ISOLATION_KIND_LABEL, isolationReviewDue, isoText, normalizeOrganism, type IsolationReview } from './flag-rules'
 import { activeDnr, activeIsolations, placementFor } from './flag-work'
 import { find, nameOf } from './views'
+import { requireCare } from './care-team'
+import { ISO_BUNDLES, ISO_PPE, releaseCheck, type IsoBundleItem } from './iso-rules'
 
 export interface IsolationView extends Isolation {
   startedByName: string
@@ -16,6 +18,12 @@ export interface IsolationView extends Isolation {
   days: number
   /** 要檢討：前次就醫開的（這次住院要確認）、滿 14 天 */
   review?: IsolationReview
+  /** 隔離中：解除條件達到了沒（依隔離後的檢驗） */
+  release?: { met: boolean; text: string }
+  /** 隔離中：建議醫囑（ordered＝這筆隔離已經開過） */
+  bundle?: (IsoBundleItem & { ordered: boolean })[]
+  /** 防護用品 */
+  ppe: string[]
 }
 export interface DnrView extends DnrRecord {
   docLabel: string
@@ -43,13 +51,25 @@ const currentAdmission = (patientId: string): Admission | undefined => db.admiss
 function isoView(i: Isolation, t: string): IsolationView {
   const days = Math.max(1, Math.floor((Date.parse((i.ended?.at ?? t).replace(' ', 'T')) - Date.parse(`${i.startedAt.slice(0, 10)}T00:00`)) / 86400000) + 1)
   const review = i.ended ? undefined : isolationReviewDue(i, currentAdmission(i.patientId)?.admittedAt, t)
+  const ordered = new Set(db.ipdOrders.filter((o) => o.isolationId === i.id).map((o) => o.isoKey))
   return {
-    ...i, days, startedByName: nameOf.user(i.startedBy),
+    ...i, days, startedByName: nameOf.user(i.startedBy), ppe: ISO_PPE[i.kind],
+    ...(i.ended ? {} : { release: releaseOf(i), bundle: ISO_BUNDLES[i.kind].map((b) => ({ ...b, ordered: ordered.has(b.key) })) }),
     ...(i.reviewedBy ? { reviewedByName: nameOf.user(i.reviewedBy) } : {}),
     ...(i.ended ? { endedByName: nameOf.user(i.ended.by) } : {}),
     ...(review ? { review } : {}),
   }
 }
+/** 隔離後的檢驗結果（抗酸菌塗片、快篩、培養） */
+function labsSince(patientId: string, since: string) {
+  const pick = (procs: string[], code: string[]) => db.labReports.filter((r) => r.patientId === patientId && procs.includes(r.procId) && r.reportedAt >= since).flatMap((r) => r.values.filter((v) => code.includes(v.code)).map((v) => ({ at: r.reportedAt, value: v.value })))
+  const rapidRaw = db.labReports.filter((r) => r.patientId === patientId && ['P012', 'P058'].includes(r.procId) && r.reportedAt >= since)
+  // 流感快篩 A、B 都陰性才算陰性
+  const rapid = rapidRaw.map((r) => ({ at: r.reportedAt, value: r.values.every((v) => v.value === '陰性') ? '陰性' : '陽性' }))
+  return { afb: pick(['P057'], ['AFB']), rapid, culture: pick(['P059'], ['CULT']) }
+}
+const releaseOf = (i: Isolation, symptomFree24h = false) => releaseCheck(i.kind, i.organism, { ...labsSince(i.patientId, i.startedAt), symptomFree24h })
+
 function dnrView(d: DnrRecord): DnrView {
   return {
     ...d, docLabel: DNR_DOC_LABEL[d.doc], ...dnrText(d.withhold), recordedByName: nameOf.user(d.recordedBy),
@@ -135,16 +155,47 @@ export function reviewIsolation(id: string, note = ''): Promise<IsolationView> {
   })
 }
 
-/** 解除隔離（只限醫師，要原因）：紀錄留著 */
-export function endIsolation(id: string, reason: string): Promise<IsolationView> {
+/**
+ * 解除隔離（只限醫師，要原因）：紀錄留著。要達到解除條件（空氣：抗酸菌連續三套陰性；飛沫：快篩陰性或症狀緩解 24 小時；
+ * MRSA、CRE、VRE：培養連續兩套無菌生長）；沒達到要勾「例外解除」並寫原因
+ */
+export function endIsolation(id: string, reason: string, opts: { exception?: boolean; symptomFree24h?: boolean } = {}): Promise<IsolationView> {
   return mutate(() => {
     const u = requireUser('doctor')
     const i = must(db.isolations.find((x) => x.id === id), '隔離紀錄')
     if (i.ended) fail('這筆隔離已經解除了', 'CONFLICT')
     if (!reason?.trim()) failField('reason', '請寫解除原因（例：培養三套陰性、治療滿 14 天）')
+    const r = releaseOf(i, !!opts.symptomFree24h)
+    if (!r.met && !opts.exception) fail(`還沒達到解除條件：${r.text}（確定要解除請勾「例外解除」並寫原因）`, 'CONFLICT')
     const t = now()
-    i.ended = { at: t, by: u.id, reason: reason.trim() }
-    audit('解除隔離', `${nameOf.patient(i.patientId)}：${isoText([i])}；${reason.trim()}`)
+    i.ended = { at: t, by: u.id, reason: reason.trim(), ...(!r.met ? { exception: true } : {}) }
+    audit(!r.met ? '例外解除隔離' : '解除隔離', `${nameOf.patient(i.patientId)}：${isoText([i])}；${reason.trim()}${r.met ? `（${r.text}）` : ''}`)
+    return isoView(i, t)
+  })
+}
+
+/** 開隔離的建議醫囑（醫師勾選後一次開）：檢驗開臨時醫囑（抗酸菌塗片三套）、防護開長期護理醫囑；同一筆隔離同一項不重複開 */
+export function orderIsolationBundle(isolationId: string, keys: string[]): Promise<IsolationView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const i = must(db.isolations.find((x) => x.id === isolationId), '隔離紀錄')
+    if (i.ended) fail('這筆隔離已經解除了', 'CONFLICT')
+    const a = currentAdmission(i.patientId)
+    if (!a) fail('病人沒有在住院中（門診開的隔離不帶醫囑）', 'CONFLICT')
+    requireCare(u.doctorId, a!, '開隔離相關醫囑', { consult: false })
+    const items = ISO_BUNDLES[i.kind].filter((b) => keys.includes(b.key))
+    if (!items.length) failField('keys', '請勾選要開的醫囑')
+    const done = new Set(db.ipdOrders.filter((o) => o.isolationId === i.id).map((o) => o.isoKey))
+    const dup = items.find((b) => done.has(b.key))
+    if (dup) fail(`「${dup.label}」已經開過了`, 'CONFLICT')
+    const t = now()
+    for (const b of items) {
+      if (b.procId) {
+        const proc = must(find.procedure(b.procId), '醫令')
+        for (let k = 0; k < (b.count ?? 1); k++) db.ipdOrders.push({ id: newId('IO'), admissionId: a!.id, type: 'stat', category: 'procedure', procId: proc.id, content: `${proc.name}${(b.count ?? 1) > 1 ? `（第 ${k + 1} 套）` : ''}`, startAt: t, status: 'active', doctorId: u.doctorId!, createdAt: t, isolationId: i.id, isoKey: b.key })
+      } else db.ipdOrders.push({ id: newId('IO'), admissionId: a!.id, type: 'long', category: 'nursing', content: b.nursing!, startAt: t, status: 'active', doctorId: u.doctorId!, createdAt: t, isolationId: i.id, isoKey: b.key })
+    }
+    audit('隔離連動醫囑', `${nameOf.patient(i.patientId)}：${items.map((b) => b.label).join('、')}`)
     return isoView(i, t)
   })
 }

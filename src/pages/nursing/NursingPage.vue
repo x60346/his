@@ -232,6 +232,7 @@ const wardTotals = computed(() => ({
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />
                   <span class="ml-auto flex flex-wrap justify-end gap-1">
+                    <UBadge v-if="p.ppe.length" tone="red" :title="`防護：${p.ppe.join('、')}`">{{ p.ppe.includes('N95') ? 'N95' : p.ppe.includes('外科口罩') ? '口罩' : '隔離衣' }}</UBadge>
                     <UBadge v-if="p.death" tone="gray" title="已宣告死亡：遺體護理、送太平間">已宣告死亡</UBadge>
                     <UBadge v-if="p.rrtPending" tone="red" title="已呼叫快速反應小組，等到場評估">快速反應</UBadge>
                     <UBadge v-if="p.news && p.news.level !== 'low'" :tone="p.news.level === 'high' || p.news.recheck === 'overdue' ? 'red' : 'yellow'" :title="`NEWS2 ${p.news.score} 分（${p.news.at.slice(11)}）：${p.news.recheck === 'overdue' ? '1 小時內再量已逾時' : '1 小時內再量'}`">NEWS {{ p.news.score }}</UBadge>
@@ -284,6 +285,7 @@ const wardTotals = computed(() => ({
             <UButton size="sm" :variant="adm.wristband ? 'ghost' : 'secondary'" :class="!adm.wristband && 'text-red-700'" @click="wristbandOpen = true">{{ adm.wristband ? '重印腕帶' : '未印腕帶：列印' }}</UButton>
           </PatientBanner>
           <WristbandDialog v-model="wristbandOpen" :admission-id="adm.id" />
+          <p v-if="adm.ppe.length" class="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-800">隔離中：進病室前穿戴 {{ adm.ppe.join('、') }}</p>
           <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
           <!-- 留觀中不顯示住院費用：留觀結束才算（離院在批價、收住院併入住院帳單） -->
           <IpdFeeStrip v-if="adm.obsStage !== 'open'" :admission-id="adm.id" />

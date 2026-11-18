@@ -428,6 +428,9 @@ const labItemsOf: Record<string, LabItemDef[]> = {
     { code: 'HCO3', name: '碳酸氫根', unit: 'mmol/L', low: 22, high: 26, critLow: 10, critHigh: 40 },
   ],
   P053: [{ code: 'T-BIL', name: '總膽紅素', unit: 'mg/dL', low: 0.2, high: 1.2, critHigh: 15 }],
+  P057: [{ code: 'AFB', name: '抗酸菌', options: ['陰性', '1+', '2+', '3+', '4+'], normal: ['陰性'] }],
+  P058: [{ code: 'COVID', name: '新冠病毒抗原', options: ['陰性', '陽性'], normal: ['陰性'] }],
+  P059: [{ code: 'CULT', name: '培養結果', options: ['無菌生長', 'MRSA', 'CRE', 'VRE', '其他細菌'], normal: ['無菌生長'] }],
   P012: [
     { code: 'FLU-A', name: 'A 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
     { code: 'FLU-B', name: 'B 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
@@ -499,6 +502,10 @@ const procedureBase: Procedure[] = [
   // 急救：開始 CPR 時自動開一筆（一次急救收一次）。點數為展示用近似值
   { id: 'P054', code: '47029C', name: '心肺復甦術 CPR', category: '處置', points: 2240, selfPrice: 3500, codeBlue: true, active: true },
   { id: 'P055', code: '09021C', name: '電解質（鈉、鉀）', category: '檢驗', points: 80, selfPrice: 150, active: true },
+  // 隔離相關檢驗：抗酸菌塗片（疑似肺結核，連續三套陰性才解除空氣隔離）、新冠快篩、細菌培養（MRSA、CRE 等連續兩套陰性才解除接觸隔離）
+  { id: 'P057', code: '13025C', name: '痰液抗酸菌塗片 AFB', category: '檢驗', points: 150, selfPrice: 250, active: true },
+  { id: 'P058', code: '14084C', name: '新冠病毒快篩', category: '檢驗', points: 300, selfPrice: 500, active: true },
+  { id: 'P059', code: '13007C', name: '細菌培養（傷口、尿液）', category: '檢驗', points: 200, selfPrice: 350, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]

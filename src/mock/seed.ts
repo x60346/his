@@ -2581,6 +2581,42 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 隔離連動（示範，不抽亂數）：
+  //   - 肺炎（疑似肺結核、空氣隔離）：主治開了抗酸菌塗片三套＋N95 護理醫囑；兩套陰性、第三套還沒採檢 → 還不能解除
+  //   - 蜂窩性組織炎（MRSA、接觸隔離）：開了培養＋手套隔離衣；一套無菌生長 → 還要一套
+  {
+    const procMap = new Map(codes.procedures.map((p) => [p.id, p]))
+    let k = 0
+    const report = (a: Admission, o: IpdOrder, procId: string, at: string, input: Record<string, string>) => {
+      const pt = patients.find((x) => x.id === a.patientId)!
+      labReports.push({ id: `LR-ISO-${++k}`, no: `L${at.slice(0, 10).replace(/-/g, '')}${9700 + k}`, patientId: a.patientId, procId, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+    }
+    const pn = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('J18'))
+    const pnIso = pn && isolations.find((i) => i.patientId === pn.patientId && i.kind === 'airborne' && !i.ended)
+    if (pn && pnIso) {
+      const ordAt = addMinutes(pnIso.startedAt, 30)
+      const mk = (n: number, done?: string): IpdOrder => ({ id: `IO-AFB-${n}`, admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P057', content: `痰液抗酸菌塗片 AFB（第 ${n} 套）`, startAt: ordAt, ...(done ? { stopAt: done, status: 'done' as const } : { status: 'active' as const }), doctorId: pn.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: pnIso.id, isoKey: 'afb' })
+      // 依隔離開始的時間往後排（不寫死日期）：採檢後 3 小時出報告，兩套間隔 8 小時
+      const c1 = addMinutes(ordAt, 30)
+      const c2 = addMinutes(c1, 8 * 60)
+      const o1 = mk(1, c1 < nowStr ? c1 : undefined)
+      const o2 = mk(2, c2 < nowStr ? c2 : undefined)
+      ipdOrders.push(o1, o2, mk(3))
+      ipdOrders.push({ id: 'IO-AFB-N95', admissionId: pn.id, type: 'long', category: 'nursing', content: '空氣隔離：進出戴 N95 口罩；負壓室門保持關閉；病人離開病室戴外科口罩', startAt: ordAt, status: 'active', doctorId: pn.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: pnIso.id, isoKey: 'n95' })
+      if (addMinutes(c1, 180) < nowStr) report(pn, o1, 'P057', addMinutes(c1, 180), { AFB: '陰性' })
+      if (addMinutes(c2, 180) < nowStr) report(pn, o2, 'P057', addMinutes(c2, 180), { AFB: '陰性' })
+    }
+    const cell = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('L03'))
+    const cellIso = cell && isolations.find((i) => i.patientId === cell.patientId && i.kind === 'contact' && !i.ended)
+    if (cell && cellIso) {
+      const ordAt = addMinutes(cellIso.startedAt, 20)
+      const done = addMinutes(ordAt, 60)
+      const o: IpdOrder = { id: 'IO-CULT-1', admissionId: cell.id, type: 'stat', category: 'procedure', procId: 'P059', content: '細菌培養（傷口、尿液）', startAt: ordAt, stopAt: done, status: 'done', doctorId: cell.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: cellIso.id, isoKey: 'culture' }
+      ipdOrders.push(o, { id: 'IO-CULT-GOWN', admissionId: cell.id, type: 'long', category: 'nursing', content: '接觸隔離：接觸病人與環境戴手套、穿隔離衣；聽診器、血壓計專用；出病室前脫除並洗手', startAt: ordAt, status: 'active', doctorId: cell.doctorId, createdAt: ordAt, ackAt: addMinutes(ordAt, 10), ackBy: 'U201', isolationId: cellIso.id, isoKey: 'gown' })
+      if (addMinutes(done, 18 * 60) < nowStr) report(cell, o, 'P059', addMinutes(done, 18 * 60), { CULT: '無菌生長' })
+    }
+  }
+
   // 負壓壓差紀錄（示範，不抽亂數）：過去兩天每班一筆（班開始後 30 分鐘）；705 都正常；ICU9 這一班 −1.8（負壓不足、已通知工務）
   {
     const shiftStarts = ['00:00', '08:00', '16:00']

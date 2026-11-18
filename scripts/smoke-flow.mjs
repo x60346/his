@@ -6099,9 +6099,10 @@ try {
     f = await fieldsOf(() => F.endIsolation(pv.flags.isolations.length && db().isolations.find((i) => i.patientId === pneu.patientId).id, ' '))
     ok(!!f.reason, '解除要寫原因')
     const pIso = db().isolations.find((i) => i.patientId === pneu.patientId)
-    await F.endIsolation(pIso.id, '痰液抗酸菌塗片三套陰性')
+    // 種子只有兩套陰性（第三套還沒採檢）：解除條件還沒到，這裡用例外解除（解除條件另外測）
+    await F.endIsolation(pIso.id, '感染科會診排除肺結核', { exception: true })
     const pd = await F.getPatientFlags(pneu.patientId)
-    ok(!pd.isolations.length && pd.ended[0]?.ended.reason.includes('三套陰性') && pd.ended[0].endedByName && !(await A.getAdmission(pneu.id)).flags.isolations.length, '醫師解除：紀錄留在「已解除」、病人資訊列不再標')
+    ok(!pd.isolations.length && pd.ended[0]?.ended.reason.includes('排除肺結核') && pd.ended[0].ended.exception && pd.ended[0].endedByName && !(await A.getAdmission(pneu.id)).flags.isolations.length, '醫師解除：紀錄留在「已解除」、病人資訊列不再標')
     msg = await errOf(() => F.endIsolation(pIso.id, '再一次'))
     ok(msg.includes('已經解除'), '已解除的不能再解除')
     // 解除後還住單人房：解除那天起收差額（把解除時間改成昨天來看）
@@ -9763,6 +9764,81 @@ try {
     await as('nurse01')
     rooms = await NP.listNegativeRooms(ICU)
     ok(rooms.length === 1 && rooms[0].occupied && rooms[0].patientName, '加護病房的負壓室：住進去了')
+  }
+
+  // 隔離連動醫囑與解除條件：建議醫囑（勾選開立、不重複、權限）、防護用品、解除條件（抗酸菌三套、快篩或症狀 24 小時、MDRO 培養兩套）、例外解除
+  console.log('\n[隔離連動醫囑與解除條件]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const F = api.flagApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    const L = (vals) => vals.map((v, i) => ({ at: `2026-11-1${i} 06:00`, value: v }))
+    ok(api.ISO_BUNDLES.airborne.some((b) => b.procId === 'P057' && b.count === 3) && api.ppeOf(['airborne', 'contact']).join() === 'N95,手套,隔離衣' && api.isMdro('MRSA（傷口）') && !api.isMdro('疥瘡'), '建議醫囑（空氣：抗酸菌三套）、防護用品、多重抗藥性菌')
+    const empty = { afb: [], rapid: [], culture: [] }
+    let r = api.releaseCheck('airborne', '疑似肺結核', { ...empty, afb: L(['陰性', '陰性']) })
+    ok(!r.met && r.text.includes('2 套'), `空氣隔離：兩套陰性還不行（${r.text}）`)
+    ok(api.releaseCheck('airborne', 'x', { ...empty, afb: L(['1+', '陰性', '陰性', '陰性']) }).met && !api.releaseCheck('airborne', 'x', { ...empty, afb: L(['陰性', '陰性', '1+']) }).met, '最近連續三套陰性才可以（之前陽性不影響、最後一套陽性不行）')
+    ok(api.releaseCheck('droplet', '流感', { ...empty, rapid: L(['陰性']) }).met && api.releaseCheck('droplet', '流感', { ...empty, symptomFree24h: true }).met && !api.releaseCheck('droplet', '流感', empty).met, '飛沫隔離：快篩陰性或症狀緩解 24 小時')
+    ok(!api.releaseCheck('contact', 'MRSA', { ...empty, culture: L(['無菌生長']) }).met && api.releaseCheck('contact', 'MRSA', { ...empty, culture: L(['MRSA', '無菌生長', '無菌生長']) }).met && api.releaseCheck('contact', '疥瘡', empty).met, '接觸隔離：MRSA 連續兩套無菌生長；非多重抗藥性菌沒有檢驗條件')
+
+    // 種子
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    await as('nurse01')
+    let fl = await F.getPatientFlags(pn.patientId)
+    const pnIso = fl.isolations.find((i) => i.kind === 'airborne')
+    ok(pnIso.ppe.join() === 'N95' && !pnIso.release.met && pnIso.bundle.every((b) => b.ordered) && db().ipdOrders.filter((o) => o.isolationId === pnIso.id && o.procId === 'P057').length === 3, `種子：肺炎空氣隔離（N95）、抗酸菌三套已開，解除條件未達到（${pnIso.release.text}）`)
+    const cfl = await F.getPatientFlags(cell.patientId)
+    const cellIso = cfl.isolations.find((i) => i.kind === 'contact')
+    ok(cellIso.ppe.join() === '手套,隔離衣' && !cellIso.release.met && cellIso.release.text.includes('1 套'), `種子：MRSA 接觸隔離，培養一套無菌生長（${cellIso.release.text}）`)
+    const wp = await api.nursingApi.listWardPatients(db().beds.find((b) => b.id === pn.bedId).ward)
+    ok(wp.find((p) => p.id === pn.id).ppe.join() === 'N95' && wp.find((p) => p.id === cell.id)?.ppe.join() === '手套,隔離衣', '護理站病人清單：防護用品')
+    // 解除條件
+    await as(db().users.find((u) => u.doctorId === pn.doctorId).username)
+    let msg = await errOf(() => F.endIsolation(pnIso.id, '三套陰性'))
+    ok(msg.includes('還沒達到解除條件') && msg.includes('例外解除'), `抗酸菌兩套陰性就解除 → 「${msg}」`)
+    // 第三套陰性（檢驗發報告）
+    const proto = db().labReports.find((x) => x.patientId === pn.patientId && x.procId === 'P057')
+    db().labReports.push({ ...structuredClone(proto), id: 'LR-TEST-AFB3', no: 'LTEST0003', orderId: 'IO-AFB-3', reportedAt: dateUtil.now() })
+    fl = await F.getPatientFlags(pn.patientId)
+    ok(fl.isolations.find((i) => i.id === pnIso.id).release.met, '第三套陰性：解除條件達到')
+    const ended = await F.endIsolation(pnIso.id, '痰液抗酸菌塗片三套陰性')
+    ok(ended.ended && !ended.ended.exception && db().auditLogs[0].action === '解除隔離', '解除（不是例外）')
+    // 例外解除
+    await as(db().users.find((u) => u.doctorId === cell.doctorId).username)
+    msg = await errOf(() => F.endIsolation(cellIso.id, '傷口癒合'))
+    ok(msg.includes('連續兩套'), `MRSA 一套陰性就解除 → 「${msg}」`)
+    const ex = await F.endIsolation(cellIso.id, '傷口已癒合、轉長照機構前感染科同意解除', { exception: true })
+    ok(ex.ended.exception && db().auditLogs[0].action === '例外解除隔離', '勾例外解除、寫原因：可以解除（標例外、稽核）')
+    // 飛沫隔離：建議醫囑開立
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as('nurse01')
+    const sr = await F.startIsolation({ patientId: st.patientId, kind: 'droplet', organism: '流感' })
+    const did = sr.isolation.id
+    msg = await errOf(() => F.orderIsolationBundle(did, ['flu']))
+    ok(msg.includes('權限') || msg.includes('醫師'), '護理師不能開隔離連動醫囑')
+    await as(db().users.find((u) => u.doctorId === st.doctorId).username)
+    msg = await errOf(() => F.orderIsolationBundle(did, []))
+    ok(msg.includes('勾選'), '沒勾不能開')
+    let v = await F.orderIsolationBundle(did, ['flu', 'mask'])
+    const os = db().ipdOrders.filter((o) => o.isolationId === did)
+    ok(os.length === 2 && os.some((o) => o.procId === 'P012' && o.type === 'stat' && o.status === 'active') && os.some((o) => o.category === 'nursing' && o.content.includes('外科口罩')) && v.bundle.filter((b) => b.ordered).map((b) => b.key).join() === 'flu,mask' && db().auditLogs[0].action === '隔離連動醫囑', '勾流感快篩、外科口罩：開臨時檢驗與護理醫囑（標記已開、稽核）')
+    msg = await errOf(() => F.orderIsolationBundle(did, ['flu']))
+    ok(msg.includes('已經開過'), '同一項不重複開')
+    msg = await errOf(() => F.endIsolation(did, '退燒'))
+    ok(msg.includes('快篩陰性'), '飛沫隔離沒有快篩陰性、沒確認症狀：擋')
+    v = await F.endIsolation(did, '退燒 24 小時、咳嗽改善', { symptomFree24h: true })
+    ok(v.ended && !v.ended.exception, '醫師確認症狀緩解 24 小時：可以解除（不是例外）')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

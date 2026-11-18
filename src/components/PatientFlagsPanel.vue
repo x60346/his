@@ -47,9 +47,22 @@ async function submitIso() {
 const review = useAction(flagApi.reviewIsolation, { success: '已確認延續隔離（重新起算 14 天）' })
 const ending = ref<IsolationView>()
 const endOpen = computed({ get: () => !!ending.value, set: (v) => !v && (ending.value = undefined) })
-const end = useAction(flagApi.endIsolation, { success: '已解除隔離' })
-async function confirmEnd(reason: string) {
-  if (ending.value && (await end.run(ending.value.id, reason))) ending.value = undefined
+const end = useAction(flagApi.endIsolation, { success: (i) => (i.ended?.exception ? '已例外解除隔離' : '已解除隔離') })
+const endF = reactive({ reason: '', exception: false, symptomFree24h: false })
+function openEnd(i: IsolationView) {
+  Object.assign(endF, { reason: '', exception: false, symptomFree24h: false })
+  end.fieldErrors.value = {}
+  ending.value = i
+}
+async function confirmEnd() {
+  if (ending.value && (await end.run(ending.value.id, endF.reason, { exception: endF.exception, symptomFree24h: endF.symptomFree24h }))) ending.value = undefined
+}
+// 建議醫囑：勾選後一次開（同一筆隔離開過的不能再勾）
+const picks = reactive<Record<string, string[]>>({})
+const togglePick = (isoId: string, key: string, on: boolean) => (picks[isoId] = on ? [...new Set([...(picks[isoId] ?? []), key])] : (picks[isoId] ?? []).filter((k) => k !== key))
+const bundleAct = useAction(flagApi.orderIsolationBundle, { success: '已開立隔離相關醫囑（護理站核對後執行）' })
+async function orderBundle(i: IsolationView) {
+  if (await bundleAct.run(i.id, picks[i.id] ?? [])) picks[i.id] = []
 }
 
 // ---------- DNR ----------
@@ -108,9 +121,17 @@ const docWho = (d: DnrView) =>
                 <p v-if="i.note" class="mt-0.5 text-xs text-slate-600">{{ i.note }}</p>
                 <p v-if="i.reviewedAt" class="text-xs text-slate-500">上次檢討：{{ i.reviewedAt.slice(5) }} {{ i.reviewedByName }}</p>
                 <p v-if="i.review" class="mt-1 text-xs font-semibold text-amber-800">{{ ISOLATION_REVIEW_TEXT[i.review] }}</p>
+                <p class="mt-1 text-xs text-slate-700">防護：<b>{{ i.ppe.join('、') }}</b><template v-if="i.release">　解除條件：<span :class="i.release.met ? 'text-emerald-700' : 'text-amber-800'">{{ i.release.met ? '已達到' : '未達到' }}（{{ i.release.text }}）</span></template></p>
+                <div v-if="i.bundle && isDoctor && i.admissionId" class="mt-1 rounded bg-white/70 px-2 py-1 text-xs">
+                  <div class="font-semibold text-slate-600">建議醫囑</div>
+                  <div class="flex flex-wrap gap-x-4">
+                    <UCheckbox v-for="b in i.bundle" :key="b.key" :model-value="b.ordered || (picks[i.id] ?? []).includes(b.key)" :disabled="b.ordered" :label="b.ordered ? `${b.label}（已開）` : b.label" @update:model-value="(x: boolean) => togglePick(i.id, b.key, x)" />
+                  </div>
+                  <UButton v-if="i.bundle.some((b) => !b.ordered)" class="mt-1" size="sm" variant="secondary" :disabled="!(picks[i.id] ?? []).length" :loading="bundleAct.pending.value" @click="orderBundle(i)">開立勾選的醫囑</UButton>
+                </div>
                 <div class="mt-1.5 flex gap-2">
                   <UButton v-if="canIsolate" size="sm" :variant="i.review ? 'primary' : 'secondary'" :loading="review.pending.value" @click="review.run(i.id)">確認延續</UButton>
-                  <UButton v-if="isDoctor" size="sm" variant="secondary" @click="ending = i">解除隔離</UButton>
+                  <UButton v-if="isDoctor" size="sm" variant="secondary" @click="openEnd(i)">解除隔離</UButton>
                 </div>
               </li>
             </ul>
@@ -214,17 +235,19 @@ const docWho = (d: DnrView) =>
       </template>
     </UDialog>
 
-    <ReasonDialog
-      v-model="endOpen"
-      title="解除隔離"
-      :subject="ending ? `${ISOLATION_KIND_LABEL[ending.kind]}（${ending.organism}），第 ${ending.days} 天` : ''"
-      label="解除原因（紀錄會留著）"
-      :presets="['培養連續三套陰性', '痰液抗酸菌塗片三套陰性', '治療滿療程、症狀緩解', '排除感染']"
-      ok-text="解除"
-      :pending="end.pending.value"
-      :error="end.fieldErrors.value.reason"
-      @confirm="confirmEnd"
-    />
+    <UDialog v-model="endOpen" title="解除隔離" size="sm" @submit="confirmEnd">
+      <div v-if="ending" class="space-y-2 text-sm">
+        <p class="text-slate-700">{{ ISOLATION_KIND_LABEL[ending.kind] }}（{{ ending.organism }}），第 {{ ending.days }} 天</p>
+        <p v-if="ending.release" :class="ending.release.met ? 'text-emerald-700' : 'text-amber-800'">解除條件：{{ ending.release.met ? '已達到' : '未達到' }}（{{ ending.release.text }}）</p>
+        <UCheckbox v-if="ending.kind === 'droplet' && !ending.release?.met" v-model="endF.symptomFree24h" label="我確認症狀緩解已滿 24 小時" />
+        <UCheckbox v-if="!ending.release?.met && !(ending.kind === 'droplet' && endF.symptomFree24h)" v-model="endF.exception" label="例外解除（沒達到條件，原因寫在下面）" />
+        <UInput v-model="endF.reason" label="解除原因（紀錄會留著）" :error="end.fieldErrors.value.reason" placeholder="例：痰液抗酸菌塗片三套陰性" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="endOpen = false">取消</UButton>
+        <UButton type="submit" :loading="end.pending.value">解除</UButton>
+      </template>
+    </UDialog>
     <ReasonDialog
       v-model="revokeOpen"
       title="撤回 DNR"
