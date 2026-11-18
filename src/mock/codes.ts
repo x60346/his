@@ -499,6 +499,8 @@ const procedureBase: Procedure[] = [
   // 急救：開始 CPR 時自動開一筆（一次急救收一次）。點數為展示用近似值
   { id: 'P054', code: '47029C', name: '心肺復甦術 CPR', category: '處置', points: 2240, selfPrice: 3500, codeBlue: true, active: true },
   { id: 'P055', code: '09021C', name: '電解質（鈉、鉀）', category: '檢驗', points: 80, selfPrice: 150, active: true },
+  // 安寧共同照護：每次訪視一次（點數為展示用近似值）
+  { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

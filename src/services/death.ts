@@ -31,7 +31,7 @@ const deathOf = (a: Admission) => {
   return a.death!
 }
 /** 安寧收案（第十二輪 ②）：預期死亡也算 */
-const palliativeOf = (a: Admission) => !!(db as { palliativeCases?: { admissionId: string; status: string }[] }).palliativeCases?.some((p) => p.admissionId === a.id && p.status === 'enrolled')
+const palliativeOf = (a: Admission) => db.palliativeCases.some((p) => p.admissionId === a.id && p.status === 'enrolled')
 
 export interface DeathView extends DeathRecord {
   declaredByName: string

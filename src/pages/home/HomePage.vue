@@ -64,6 +64,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'PCA 警示待處理', count: s.value.pcaAlerts ?? 0, hint: 'PCA 使用中的病人鎮靜過深或呼吸過慢：請處理（住院醫囑「PCA」分頁）', route: 'ipd', icon: Droplet, urgent: true },
+    { roles: ['doctor'], label: '安寧照會待收案', count: s.value.palliativeRequests ?? 0, hint: '主治提出的安寧共照照會：末期評估後收案或婉拒（「安寧」頁）', route: 'palliative', icon: Droplet, urgent: true },
+    { roles: ['doctor'], label: '安寧訪視到期', count: s.value.palliativeVisitDue ?? 0, hint: '收案的病人每週至少訪視一次：症狀評估、照護目標（「安寧」頁）', route: 'palliative', icon: Droplet },
     { roles: ['doctor'], label: '快速反應待到場', count: s.value.rrtPending ?? 0, hint: '一般病房 NEWS2 ≥7 自動呼叫、或護理師手動呼叫：到場評估，留原病房或申請轉加護病房（「快速反應」頁）', route: 'rrt', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: 'NEWS2 警示', count: s.value.newsAlerts ?? 0, hint: '你的一般病房病人最近一次 NEWS2 中（5–6 分或單項 3 分）或高（≥7 分）：請評估（住院醫囑「加護病房」分頁看分數與趨勢）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '加護病房轉入待處理', count: s.value.icuRequestsPending ?? 0, hint: '轉入加護病房的申請：同意（選床）或不同意；同意了在候床的有床再排（「加護病房」頁）', route: 'icu', icon: Droplet, urgent: true },

@@ -38,6 +38,9 @@ export function newsStateOf(a: Admission, t: string): NewsState | undefined {
   return { last, ...(due ? { recheck: { dueAt: due, status: t > due ? 'overdue' : 'upcoming' } } : {}) }
 }
 
+/** 安寧收案中 */
+export const palliativeEnrolled = (admissionId: string) => db.palliativeCases.some((c) => c.admissionId === admissionId && c.status === 'enrolled')
+
 /** 還沒評估的呼叫 */
 export const openRrt = (admissionId: string) => db.rrtCalls.find((c) => c.admissionId === admissionId && c.status === 'pending')
 
@@ -50,6 +53,8 @@ export function autoCallRrt(a: Admission, v: VitalRecord, t: string): RrtCall | 
   const s = newsScore(v)
   if (!isNews(s) || s.level !== 'high') return undefined
   if (openRrt(a.id) || openRequest(a.id)) return undefined
+  // 安寧收案：以舒適為目標，不自動呼叫快速反應小組（主治首頁仍有 NEWS2 警示）
+  if (palliativeEnrolled(a.id)) return undefined
   const c: RrtCall = { id: newId('RRT'), admissionId: a.id, trigger: 'auto', vitalId: v.id, score: s.total, calledBy: v.nurseId, calledAt: t, status: 'pending' }
   db.rrtCalls.push(c)
   return c

@@ -123,7 +123,7 @@ try {
   // 依執行時間，今天可能已經沒有開放的診次（例如深夜），就改掛明天
   const open = (list) => list.find((s) => !s.full && !s.closed)
   const session = open(sessions) ?? open(await api.scheduleApi.listSessions({ date: (await load('/src/utils/date.ts')).addDays(T, 1) }))
-  const patient = dbm.db.patients.find((p) => p.allergies.length === 0 && !dbm.db.visits.some((v) => v.sessionId === session.id && v.patientId === p.id))
+  const patient = dbm.db.patients.find((p) => !p.deceasedAt && p.allergies.length === 0 && !dbm.db.visits.some((v) => v.sessionId === session.id && v.patientId === p.id))
   // 現場掛號：病人在櫃台，掛號同時報到（掛到明天的就不能報到，叫號前另外處理）
   const visit = await api.bookingApi.register({ patientId: patient.id, sessionId: session.id, identityCode: '01', caseType: '01', checkIn: session.date === T })
   ok(visit.status === 'registered', `${patient.name} 掛 ${session.deptName} ${session.doctorName}，看診號 ${visit.seqNo}`)
@@ -329,10 +329,10 @@ try {
   // B6：上次案件分類（掛號頁提示慢性病回診用）：今天以前、看過診的最近一次，不含退掛與還沒看的掛號
   {
     const seen = (p) => dbm.db.visits.filter((v) => v.patientId === p.id && v.date <= T && !['cancelled', 'registered'].includes(v.status)).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
-    const chronic = dbm.db.patients.find((p) => seen(p)[0]?.caseType === '04')
+    const chronic = dbm.db.patients.find((p) => !p.deceasedAt && seen(p)[0]?.caseType === '04')
     const r = await api.bookingApi.lastCaseType(chronic.id)
     ok(r?.caseType === '04' && r.date === seen(chronic)[0].date, `上次案件分類：${chronic.name} 上次（${r?.date}）為 04 慢性病`)
-    const nobody = dbm.db.patients.find((p) => !seen(p).length)
+    const nobody = dbm.db.patients.find((p) => !p.deceasedAt && !seen(p).length)
     ok(!nobody || (await api.bookingApi.lastCaseType(nobody.id)) === null, '沒有看過診的病人：沒有上次案件分類')
   }
 
@@ -341,7 +341,7 @@ try {
     const { addDays } = await load('/src/utils/date.ts')
     const later = (await api.scheduleApi.listSessions({ date: addDays(T, 2) })).filter((s) => s.bookable)
     const [s1, s2] = later
-    const who = dbm.db.patients.find((p) => !dbm.db.visits.some((v) => v.patientId === p.id && v.date >= T && v.status === 'registered') && !dbm.db.visits.some((v) => [s1.id, s2.id].includes(v.sessionId) && v.patientId === p.id))
+    const who = dbm.db.patients.find((p) => !p.deceasedAt && !dbm.db.visits.some((v) => v.patientId === p.id && v.date >= T && v.status === 'registered') && !dbm.db.visits.some((v) => [s1.id, s2.id].includes(v.sessionId) && v.patientId === p.id))
     const orig = await api.bookingApi.register({ patientId: who.id, sessionId: s1.id, identityCode: '02', caseType: '04' })
     // 新診次額滿：整筆回滾，原掛號不受影響
     const s2Obj = dbm.db.sessions.find((s) => s.id === s2.id)
@@ -403,7 +403,7 @@ try {
 
   // U15：看診中新增過敏（只能新增、限清單、寫稽核）；新增後過敏比對立刻生效
   {
-    const who = dbm.db.patients.find((p) => !p.allergies.includes('Penicillin'))
+    const who = dbm.db.patients.find((p) => !p.deceasedAt && !p.allergies.includes('Penicillin'))
     await as('ph01')
     await expectError(() => api.patientApi.addAllergy(who.id, 'Penicillin'), '藥師新增過敏')
     await as('dr01')
@@ -888,7 +888,7 @@ try {
     return !v.er && ((dn === '小兒科' && age >= 18) || (dn !== '小兒科' && age < 13) || (dn === '婦產科' && p.gender !== 'F'))
   })
   ok(misfit.length === 0, `門診掛號的科別符合病人年齡與性別（違規 ${misfit.length} 筆${misfit.length ? '，例：' + misfit.slice(0, 2).map((v) => `${dbm.db.patients.find((p) => p.id === v.patientId).name}→${deptName(v.deptId)}`).join('、') : ''}）`)
-  const allergic = dbm.db.patients.find((p) => p.allergies.includes('Penicillin'))
+  const allergic = dbm.db.patients.find((p) => !p.deceasedAt && p.allergies.includes('Penicillin'))
   const warns = await api.opdApi.allergyWarnings(allergic.id, ['M003', 'M004', 'M001'])
   ok(warns.length === 2, `${allergic.name}（Penicillin 過敏）開 Amoxicillin、Augmentin、Acetaminophen → ${warns.length} 筆警示`)
   const el = await api.preventApi.eligibilityFor(dbm.db.patients[0].id)
@@ -915,7 +915,7 @@ try {
   ok(incomplete.length === 0, `種子資料中「正常／異常」的預防保健紀錄欄位皆填齊（缺漏 ${incomplete.length} 筆）`)
 
   await as('clerk01')
-  const male = dbm.db.patients.find((p) => p.gender === 'M' && p.birthDate < '1990-01-01')
+  const male = dbm.db.patients.find((p) => !p.deceasedAt && p.gender === 'M' && p.birthDate < '1990-01-01')
   const pmSession = (await api.scheduleApi.listSessions({ date: dbm.db.visits.find((v) => v.date > new Date().toISOString().slice(0, 10))?.date ?? '' }))[0]
   if (pmSession) await expectError(() => api.bookingApi.register({ patientId: male.id, sessionId: pmSession.id, identityCode: '01', caseType: '01', preventItems: ['CERVIX'] }), `${male.name}（男）掛號勾子宮頸抹片（服務層也要判斷資格）`)
 
@@ -991,7 +991,7 @@ try {
     ok(pr.checkFieldFormat('血壓', '128 / 82') === null && pr.checkFieldFormat('體重', '62.5') === null, '合理值（含空白的血壓、小數體重）可通過')
     ok(pr.calcBmi('170', '65') === '22.5' && pr.calcBmi('abc', '65') === undefined, 'BMI = 體重 ÷ 身高²（170 cm、65 kg → 22.5）；身高不合理時不計算')
     ok(pr.withDerivedFields({ 身高: '170', 體重: '65', BMI: '99' }).BMI === '22.5', '手動填的 BMI 會被系統計算值覆蓋')
-    const who = dbm.db.patients.find((x) => pr.checkEligibility(x, adult, dbm.db.preventRecords, T).eligible)
+    const who = dbm.db.patients.find((x) => !x.deceasedAt && pr.checkEligibility(x, adult, dbm.db.preventRecords, T).eligible)
     const rec = await api.preventApi.addPreventRecord({ patientId: who.id, itemCode: 'ADULT', result: '正常', data: { 血壓: '120/80', 空腹血糖: '95', 總膽固醇: '180', 身高: '170', 體重: '65' }, doctorId: 'DR01' })
     ok(rec.data.BMI === '22.5', `登錄成人預防保健，BMI 自動算出並存入（${rec.data.BMI}）`)
     const badSeedFmt = dbm.db.preventRecords.filter((r) => r.result !== '待報告' && !r.voided && Object.entries(r.data).some(([k, v]) => pr.checkFieldFormat(k, v)))
@@ -1025,7 +1025,7 @@ try {
     // 自己建一筆待報告（不依賴種子資料剛好還剩一筆），確保這段一定會執行
     let combo
     for (const it of dbm.db.preventItems.filter((i) => i.needsReport && i.active !== false)) {
-      const who = dbm.db.patients.find((x) => pr.checkEligibility(x, it, dbm.db.preventRecords, T).eligible)
+      const who = dbm.db.patients.find((x) => !x.deceasedAt && pr.checkEligibility(x, it, dbm.db.preventRecords, T).eligible)
       if (who) { combo = { it, who }; break }
     }
     ok(!!combo, '找得到可登錄「待報告」的病人與項目')
@@ -1059,7 +1059,7 @@ try {
     const otherResv = resvList.find((r) => r.id !== resv.id)
     if (otherResv) await expectError(() => api.admissionApi.checkIn(otherResv.id, bed.id), `別的病人報到在保留給 ${resv.patientName} 的床`)
     // 新建一筆預約、保留一床，再取消預約：保留的床要放回空床
-    const someone = dbm.db.patients.find((p) => !dbm.db.admissions.some((a) => a.patientId === p.id && ['reserved', 'admitted'].includes(a.status)) && p.birthDate < '2000-01-01')
+    const someone = dbm.db.patients.find((p) => !p.deceasedAt && !dbm.db.admissions.some((a) => a.patientId === p.id && ['reserved', 'admitted'].includes(a.status)) && p.birthDate < '2000-01-01')
     const r2 = await api.admissionApi.reserve({ patientId: someone.id, deptId: resv.deptId, doctorId: resv.doctorId, preferBedClass: '健保床', reason: '測試', diagnosis: 'J18.9 肺炎', expectedDate: T })
     const third = dbm.db.beds.find((b) => b.status === 'empty' && b.id !== bed.id && b.id !== spare.id)
     await api.admissionApi.setBedStatus(third.id, 'reserved', r2.id)
@@ -1977,7 +1977,7 @@ try {
     const fut = dbm.db.visits.find((v) => v.date > T && v.status === 'registered')
     await expectError(() => B.checkIn(fut.id), '預約下週的掛號今天報到')
     const freeS = (await api.scheduleApi.listSessions({ date: addDays(T, 2) })).find((x) => x.bookable)
-    const someone = dbm.db.patients.find((p) => !dbm.db.visits.some((v) => v.sessionId === freeS.id && v.patientId === p.id))
+    const someone = dbm.db.patients.find((p) => !p.deceasedAt && !dbm.db.visits.some((v) => v.sessionId === freeS.id && v.patientId === p.id))
     try {
       await B.register({ patientId: someone.id, sessionId: freeS.id, identityCode: '01', caseType: '01', checkIn: true })
       ok(false, '掛後天的門診同時報到應被擋下')
@@ -2009,7 +2009,7 @@ try {
     await as('clerk01')
     // 今天現場掛號同時報到；已報到的人當場改掛今天別的診，不必再報到
     const todayS = (await api.scheduleApi.listSessions({ date: T })).filter((x) => x.bookable)
-    const walkIn = dbm.db.patients.find((p) => !dbm.db.visits.some((v) => v.date === T && v.patientId === p.id))
+    const walkIn = dbm.db.patients.find((p) => !p.deceasedAt && !dbm.db.visits.some((v) => v.date === T && v.patientId === p.id))
     const w = await B.register({ patientId: walkIn.id, sessionId: todayS[0].id, identityCode: '01', caseType: '01', checkIn: true })
     ok(!!w.checkedInAt && dbm.db.auditLogs[0].detail.includes('已報到'), '現場掛號勾「同時報到」：掛號即報到')
     const moved = await B.rescheduleVisit(w.id, { sessionId: todayS[1].id, identityCode: '01', caseType: '01' })
@@ -3285,7 +3285,7 @@ try {
     const db = () => dbm.db
     const vOf = (id) => db().visits.find((v) => v.id === id)
     const openSession = async (date) => (await api.scheduleApi.listSessions({ date })).find((x) => !x.full && !x.closed && !x.suspended)
-    const freePatient = (date) => db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === date && v.patientId === x.id))
+    const freePatient = (date) => db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === date && v.patientId === x.id))
     const see = async (visitId) => {
       const v = vOf(visitId)
       await as(db().users.find((u) => u.doctorId === v.doctorId).username)
@@ -3412,7 +3412,7 @@ try {
     ok(db().permissionSettings['visit.register'].join() === 'clerk' && db().auditLogs[0].detail === '掛號、退掛、改期：掛號批價、護理師 → 掛號批價（大醫院掛號集中在櫃台）', '調整後存下設定、稽核寫出前後與原因')
     await as('nurse01')
     const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended)
-    const pt = db().patients.find((x) => !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    const pt = db().patients.find((x) => !x.deceasedAt && !db().visits.some((v) => v.date === T && v.patientId === x.id))
     try {
       await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
       ok(false, '護理師應不能掛號')
@@ -3568,7 +3568,7 @@ try {
     ok(!('subjective' in x) && !('objective' in x) && !('vitals' in x), 'S 主訴、O 客觀、生命徵象不帶（本次的事實不能沿用上次的）')
     x.medications[0].dose = 99
     ok(e0.medications.every((m) => m.dose !== 99), '回傳的是複本，改它不會改到舊病歷')
-    const other = db.patients.find((p) => p.id !== e0.patientId)
+    const other = db.patients.find((p) => !p.deceasedAt && p.id !== e0.patientId)
     await expectError(() => api.opdApi.expandEncounter(e0.id, other.id), '把別的病人的病歷帶進本次')
     off.active = true
     Object.assign(e0, JSON.parse(saved))
@@ -3682,7 +3682,7 @@ try {
         await as('clerk01')
         const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
         const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
-        const pt = dbm.db.patients.find((x) => !x.allergies.length && !dbm.db.visits.some((v) => v.date === sess.date && v.patientId === x.id))
+        const pt = dbm.db.patients.find((x) => !x.allergies.length && !x.deceasedAt && !dbm.db.visits.some((v) => v.date === sess.date && v.patientId === x.id))
         const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
         await as(dbm.db.users.find((u) => u.doctorId === sess.doctorId).username)
         const e = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
@@ -4470,7 +4470,7 @@ try {
       await as('clerk01')
       const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
-      const pt2 = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const pt2 = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
       const v2 = await api.bookingApi.register({ patientId: pt2.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
       await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
       const e2 = await api.opdApi.startConsult(v2.id, { allowParallel: true, allowNotCheckedIn: true })
@@ -4556,7 +4556,7 @@ try {
       await as('clerk01')
       const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDays(T, 1) }))]
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
-      const ptx = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const ptx = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
       const vv = await api.bookingApi.register({ patientId: ptx.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
       const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
       await as(drUser)
@@ -4604,7 +4604,7 @@ try {
       await as('clerk01')
       const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
-      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
       const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
       await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
       const e = await api.opdApi.startConsult(v.id, { allowParallel: true, allowNotCheckedIn: true })
@@ -4699,7 +4699,7 @@ try {
     // 今天、別科（不是內科）的診次：看完診的病人
     await as('clerk01')
     const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended && x.deptId !== 'D02' && userOf(x.doctorId))
-    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === T && v.patientId === x.id))
     const v = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
     const requester = userOf(sess.doctorId)
     await as(requester)
@@ -4896,7 +4896,7 @@ try {
       await as('clerk01')
       const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
-      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+      const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
       const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
       doc(sess.doctorId).controlledLicense = { no: 'C99-TEST', validUntil: addDaysT(365) }
       await as(db().users.find((u) => u.doctorId === sess.doctorId).username)
@@ -5139,7 +5139,7 @@ try {
     await as('clerk01')
     const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
     const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
-    const pt = db().patients.find((x) => x.gender === 'F' && !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+    const pt = db().patients.find((x) => !x.deceasedAt && x.gender === 'F' && !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
     const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
     const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
     await as(drUser)
@@ -5296,7 +5296,7 @@ try {
     await as('clerk01')
     const ss = [...(await api.scheduleApi.listSessions({ date: T })), ...(await api.scheduleApi.listSessions({ date: addDaysT(1) }))]
     const sess = ss.find((x) => !x.full && !x.closed && !x.suspended && x.date === T) ?? ss.find((x) => !x.full && !x.closed && !x.suspended)
-    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
+    const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === sess.date && v.patientId === x.id))
     const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
     const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
     await as(drUser)
@@ -5759,7 +5759,7 @@ try {
       const ss = await api.scheduleApi.listSessions({ date: T })
       const sess = ss.find((x) => !x.full && !x.closed && !x.suspended)
       const usedDrug = (pid) => !!avoidDrug && db().encounters.some((e) => db().visits.find((v) => v.id === e.visitId)?.patientId === pid && e.medications.some((m) => m.drugId === avoidDrug))
-      const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date >= T && v.patientId === x.id) && !usedDrug(x.id))
+      const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date >= T && v.patientId === x.id) && !usedDrug(x.id))
       const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: pt.defaultIdentity, caseType })
       return { vv, sess, pt, drUser: db().users.find((u) => u.doctorId === sess.doctorId).username }
     }
@@ -6574,7 +6574,7 @@ try {
     ok(db().procedures.filter((p) => p.recordCopy).length === 2 && !(await api.masterApi.listProcedures({})).some((p) => p.recordCopy), '主檔有基本費、每頁兩項；開立選單沒有')
 
     // 找一位有完成門診、有檢驗報告的病人
-    const pt = db().patients.find((p) => db().encounters.some((x) => x.patientId === p.id && x.status === 'completed') && db().labReports.some((r) => r.patientId === p.id))
+    const pt = db().patients.find((p) => !p.deceasedAt && db().encounters.some((x) => x.patientId === p.id && x.status === 'completed') && db().labReports.some((r) => r.patientId === p.id))
     await as('nurse01')
     let msg = await errOf(() => C.copySources(pt.id))
     ok(msg.includes('權限'), `護理師預設沒有病歷影本權限：「${msg}」`)
@@ -6715,7 +6715,7 @@ try {
 
     // 新的收入會反映：病歷影本算「其他」
     await as('clerk01')
-    const pt = db().patients.find((p) => db().labReports.some((x) => x.patientId === p.id))
+    const pt = db().patients.find((p) => !p.deceasedAt && db().labReports.some((x) => x.patientId === p.id))
     const src = await api.copyApi.copySources(pt.id)
     await api.copyApi.createRecordCopy({ patientId: pt.id, applicant: { kind: 'self', name: pt.name, idNo: pt.idNo }, purpose: '個人保存', items: [{ kind: src.sources[0].kind, refId: src.sources[0].refId }], payMethod: 'card' })
     await as('admin')
@@ -7049,7 +7049,15 @@ try {
     // 檢傷掛號
     const busy = new Set([...db().visits.filter((v) => v.date === T).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
     // 健保一般身分（榮民等免部分負擔的不收急診部分負擔，另外測）
-    const [p1, p2, p3] = db().patients.filter((p) => !busy.has(p.id) && p.defaultIdentity === '01')
+    const free01 = db().patients.filter((p) => !busy.has(p.id) && !p.deceasedAt && p.defaultIdentity === '01')
+    // 種子剩下的空閒病人不夠時自己建（不依賴種子剛好剩幾位：死亡、安寧的示範病人也從空閒病人裡挑）
+    for (let k = 0; free01.length < 3; k++) {
+      const v = await load('/src/utils/validators.ts')
+      await as('clerk01')
+      free01.push(await api.patientApi.createPatient({ gender: k % 2 ? 'F' : 'M', birthDate: '1975-05-05', phone: '', defaultIdentity: '01', allergies: [], familyHistory: [], smoking: false, betelNut: false, bloodType: '', address: '', emergencyContact: '', emergencyPhone: '', name: `急診測試${k + 1}`, idNo: v.makeIdNo('E', k % 2 ? 'F' : 'M', 7770001 + k) }))
+      await as('nurse01')
+    }
+    const [p1, p2, p3] = free01
     await as('clerk01')
     await expectError(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 2 }), '櫃台不能檢傷')
     await as('nurse01')
@@ -7182,7 +7190,7 @@ try {
 
     // 決定留觀 → 排床
     const busy = new Set([...db().visits.filter((v) => v.date === T || (v.er && v.status !== 'cancelled')).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
-    const [p1, p2] = db().patients.filter((p) => !busy.has(p.id) && p.defaultIdentity === '01' && !p.allergies.length)
+    const [p1, p2] = db().patients.filter((p) => !p.deceasedAt && !busy.has(p.id) && p.defaultIdentity === '01' && !p.allergies.length)
     const v1 = await E.triageAndRegister({ patientId: p1.id, complaint: '腹痛', vitals: N, level: 3 })
     const v2 = await E.triageAndRegister({ patientId: p2.id, complaint: '頭暈', vitals: N, level: 3 })
     await as('dr12')
@@ -7269,7 +7277,14 @@ try {
     // 直接收住院的急診也併入住院帳單
     await as('nurse01')
     const busy2 = new Set([...db().visits.filter((v) => v.date === T || v.er).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
-    const p3 = db().patients.find((p) => !busy2.has(p.id) && p.defaultIdentity === '01')
+    let p3 = db().patients.find((p) => !p.deceasedAt && !busy2.has(p.id) && p.defaultIdentity === '01')
+    if (!p3) {
+      // 空閒病人不夠：自己建一位（不依賴種子剛好剩幾位）
+      const vv = await load('/src/utils/validators.ts')
+      await as('clerk01')
+      p3 = await api.patientApi.createPatient({ gender: 'M', birthDate: '1968-02-02', phone: '', defaultIdentity: '01', allergies: [], familyHistory: [], smoking: false, betelNut: false, bloodType: '', address: '', emergencyContact: '', emergencyPhone: '', name: '急診測試胸痛', idNo: vv.makeIdNo('E', 'M', 7770011) })
+      await as('nurse01')
+    }
     const v3 = await E.triageAndRegister({ patientId: p3.id, complaint: '胸痛', vitals: N, level: 2 })
     await as('dr12')
     await see(v3)
@@ -7862,11 +7877,11 @@ try {
     await as(dutyUser.username)
     let v = await S.getAssignments(W)
     ok(v.canAssign && v.shift === shiftNow && v.patients.length && v.patients.every((p) => p.nurseId && duty.includes(p.nurseId)), `種子：${shiftNow} 5A 病人都分給上班的護理師`)
-    const myIds = v.patients.filter((p) => p.nurseId === dutyUser.id).map((p) => p.admissionId)
+    const myIds = v.patients.filter((p) => !p.deceasedAt && p.nurseId === dutyUser.id).map((p) => p.admissionId)
     const wp = await api.nursingApi.listWardPatients(W)
     ok(wp.filter((p) => p.nurseId === dutyUser.id).length === myIds.length && wp.every((p) => p.nurseName), '護理站清單：每位病人標責任護理師')
     // 首頁只算自己的病人：造一個別人病人的約束查核逾時
-    const other = v.patients.find((p) => p.nurseId !== dutyUser.id)
+    const other = v.patients.find((p) => !p.deceasedAt && p.nurseId !== dutyUser.id)
     if (other) {
       db().restraints.push({ id: 'RS-T1', admissionId: other.admissionId, reason: 'x', sites: ['左手'], method: '約束帶', startedAt: dateUtil.addMinutes(nowStr(), -300), startedBy: 'U201', emergency: false, orders: [{ by: 'U201', at: dateUtil.addMinutes(nowStr(), -300), until: dateUtil.addMinutes(nowStr(), 600) }], checks: [] })
       const mine = (await api.dashboardApi.getDashboard()).restraintCheckOverdue
@@ -7879,9 +7894,9 @@ try {
       f = await fieldsOf(() => S.assignPatients(W, { [other.admissionId]: offUser.id }))
       ok(f.nurseId?.includes('沒有排'), '只能分給這班在這個病房上班的人')
       v = await S.assignPatients(W, { [other.admissionId]: dutyUser.id })
-      ok(v.patients.find((p) => p.admissionId === other.admissionId).nurseId === dutyUser.id, '重分：改由我照顧')
+      ok(v.patients.find((p) => !p.deceasedAt && p.admissionId === other.admissionId).nurseId === dutyUser.id, '重分：改由我照顧')
       v = await S.assignPatients(W, { [other.admissionId]: '' })
-      ok(!v.patients.find((p) => p.admissionId === other.admissionId).nurseId && !(await api.nursingApi.listWardPatients(W)).find((p) => p.id === other.admissionId).nurseId, '取消：未分床')
+      ok(!v.patients.find((p) => !p.deceasedAt && p.admissionId === other.admissionId).nurseId && !(await api.nursingApi.listWardPatients(W)).find((p) => p.id === other.admissionId).nurseId, '取消：未分床')
     }
 
     // 交班帶出接班人
@@ -9486,6 +9501,107 @@ try {
     ok(msg.includes('死亡'), `死亡的病人預約住院 → 「${msg}」`)
   }
 
+  // 安寧共同照護：照會（主治、不重複）→ 安寧醫師收案（末期疾病別、兩位專科醫師、照護目標）或婉拒；訪視（症狀 0–10、共照費）、
+  // 每週訪視到期、家屬會議；權限；收案的 NEWS2 高分不自動呼叫快速反應、死亡算預期
+  console.log('\n[安寧共同照護]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const P = api.palliativeApi
+    const { addMinutes, now } = dateUtil
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.checkPalliativeRequest({}).reason && !Object.keys(api.checkPalliativeRequest({ reason: 'x' })).length, '照會要寫原因')
+    let e = api.checkPalliativeDecision({ accept: true })
+    ok(e.disease && e.doctorIds && e.goals, '收案：末期疾病別、兩位專科醫師、照護目標')
+    ok(api.checkPalliativeDecision({ accept: true, disease: '癌症', doctorIds: ['DR01', 'DR01'], goals: 'x' }).doctorIds && api.checkPalliativeDecision({ accept: false }).declineReason, '兩位要不同的醫師；婉拒要原因')
+    e = api.checkPalliativeVisit({ symptoms: { pain: 11, dyspnea: 3, nausea: 0, anxiety: 0 }, note: '' })
+    ok(e.pain && e.delirium && e.note && !e.dyspnea, '訪視：五項症狀 0–10、要寫評估與處置')
+    ok(api.checkFamilyMeeting({ date: '2099-01-01', participants: 'x', conclusion: 'x' }, '2026-11-18').date?.includes('未來') && api.checkFamilyMeeting({}, '2026-11-18').participants, '家屬會議：日期不能是未來、參與者與結論')
+    const base = { status: 'enrolled', decidedAt: '2026-11-10 10:00', visits: [] }
+    ok(api.visitDueOf(base, '2026-11-12 10:00').status === 'ok' && api.visitDueOf(base, '2026-11-16 12:00').status === 'due' && api.visitDueOf(base, '2026-11-17 10:01').status === 'overdue' && api.visitDueOf({ ...base, visits: [{ at: '2026-11-16 09:00' }] }, '2026-11-17 10:01').status === 'ok' && !api.visitDueOf({ ...base, status: 'requested' }, '2026-11-17 10:00'), '每週訪視：7 天內、最後一天到期、過了逾時；訪視後重算')
+
+    // 種子
+    const pal = db().admissions.find((a) => a.id === 'A-PAL-1')
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    ok(pal?.status === 'admitted' && db().palliativeCases.find((c) => c.id === 'PAL-SEED-1')?.status === 'enrolled' && db().palliativeCases.find((c) => c.id === 'PAL-SEED-2')?.admissionId === sep.id && db().users.find((u) => u.username === 'dr01').grants.join() === 'phrase.hospital,palliative', '種子：大腸癌末期收案中、敗血症待收案；dr01 被指定安寧（原本的全院片語保留）')
+    await as('dr01')
+    const dash = await api.dashboardApi.getDashboard()
+    ok(dash.palliativeRequests === 1 && dash.palliativeVisitDue === 1, '安寧醫師首頁：照會待收案 1、訪視到期 1')
+    let w = await P.listPalliative()
+    ok(w.canAct && w.requested.length === 1 && w.enrolled.length === 1 && w.enrolled[0].visitDue.status === 'due' && w.enrolled[0].latest.pain === 6 && w.stats.visits30 === 2 && w.stats.meetings30 === 1, '安寧頁：待收案 1、收案中 1（訪視到期、最近疼痛 6）、30 天訪視 2 次、家屬會議 1')
+    // 收案的病人：NEWS2 高分不自動呼叫
+    await as('nurse01')
+    ok((await api.rrtApi.patientNews(pal.id)).palliative, '生命徵象頁標出安寧收案')
+    let v = await api.nursingApi.addVitals({ admissionId: pal.id, temp: 38.2, pulse: 124, resp: 28, sbp: 92, dbp: 56, spo2: 88, o2: 4, avpu: 'V' })
+    ok(!v.rrtCalled && !db().rrtCalls.some((c) => c.admissionId === pal.id), '安寧收案：NEWS2 很高也不自動呼叫快速反應小組')
+    await expectError(() => P.requestPalliative(cell.id, { reason: 'x' }), '護理師提出安寧照會')
+    // 照會、權限
+    await as('dr02')
+    let msg = await errOf(() => P.requestPalliative(sep.id, { reason: 'x' }))
+    ok(msg.includes('已經有'), `重複照會 → 「${msg}」`)
+    msg = await errOf(() => P.decidePalliative('PAL-SEED-2', { accept: false, declineReason: 'x' }))
+    ok(msg.includes('安寧共同照護'), `沒有安寧權限的醫師收案 → 「${msg}」`)
+    await as('admin')
+    msg = await errOf(() => P.decidePalliative('PAL-SEED-2', { accept: false, declineReason: 'x' }))
+    ok(msg.includes('安寧醫師'), `管理員收案 → 「${msg}」`)
+    await as('dr01')
+    let f = await fieldsOf(() => P.decidePalliative('PAL-SEED-2', { accept: true }))
+    ok(f.disease && f.doctorIds && f.goals, '收案欄位一次標出')
+    let c = await P.decidePalliative('PAL-SEED-2', { accept: false, declineReason: '病人仍在積極治療，休克改善中；家屬會議後再評估' })
+    ok(c.status === 'declined' && db().auditLogs[0].action === '安寧婉拒', '婉拒（寫原因、稽核）')
+    await as('dr02')
+    c = await P.requestPalliative(sep.id, { reason: '家屬會議後希望以舒適為主' })
+    ok(c.status === 'requested' && (await P.patientPalliative(sep.id)).past.length === 1, '婉拒後可以再照會（以前的列在下面）')
+    await as('dr01')
+    c = await P.decidePalliative(c.id, { accept: true, disease: '慢性腎衰竭', doctorIds: ['DR02', 'DR03'], goals: '減少不必要的侵入性處置，家屬陪伴' })
+    ok(c.status === 'enrolled' && c.terminalDoctorNames.length === 2 && c.visitDue.status === 'ok', '收案：末期評估、照護目標、下次訪視 7 天內')
+    // 訪視
+    f = await fieldsOf(() => P.addPalliativeVisit('PAL-SEED-1', { symptoms: { pain: 11 }, note: '' }))
+    ok(f.pain && f.dyspnea && f.note, '訪視欄位一次標出')
+    const o0 = db().ipdOrders.length
+    c = await P.addPalliativeVisit('PAL-SEED-1', { symptoms: { pain: 4, dyspnea: 7, nausea: 1, anxiety: 3, delirium: 0 }, note: '呼吸困難 7：嗎啡皮下 2 mg Q4H PRN', spiritual: '想見孫子', goals: '控制呼吸困難；安排孫子探視' })
+    const fee = db().ipdOrders.slice(o0).find((o) => o.procId === 'P056')
+    ok(fee?.status === 'done' && fee.doctorId === 'DR01' && c.visitDue.status === 'ok' && c.visitsView.at(-1).severe.join() === '呼吸困難' && c.goals.includes('孫子'), '訪視：帶入共照費（安寧醫師名下）、訪視到期解除、標出嚴重症狀、更新照護目標')
+    await as('dr02')
+    msg = await errOf(() => api.ipdApi.addOrder({ admissionId: pal.id, type: 'stat', category: 'procedure', procId: 'P056', content: '' }))
+    ok(msg.includes('安寧共同照護計費項目'), `一般醫囑開共照費 → 「${msg}」`)
+    msg = await errOf(() => P.addPalliativeVisit('PAL-SEED-1', { symptoms: { pain: 1, dyspnea: 1, nausea: 1, anxiety: 1, delirium: 1 }, note: 'x' }))
+    ok(msg.includes('安寧共同照護'), '主治不能記安寧訪視')
+    // 家屬會議：主治可以記；別科醫師不行
+    f = await fieldsOf(() => P.addFamilyMeeting('PAL-SEED-1', { date: '2099-01-01', participants: '', conclusion: '' }))
+    ok(f.date && f.participants && f.conclusion, '家屬會議欄位一次標出')
+    c = await P.addFamilyMeeting('PAL-SEED-1', { date: dateUtil.today(), participants: '配偶、長子、主治、社工', conclusion: '同意返家安寧，安排居家安寧轉介' })
+    ok(c.meetingsView.length === 2, '主治記家屬會議')
+    await as('dr07')
+    msg = await errOf(() => P.addFamilyMeeting('PAL-SEED-1', { date: dateUtil.today(), participants: 'x', conclusion: 'x' }))
+    ok(msg.includes('安寧醫師或主治'), `別科醫師記家屬會議 → 「${msg}」`)
+    // 撤回：只有待收案的
+    await as('dr01')
+    c = await P.requestPalliative(cell.id, { reason: 'MRSA 蜂窩性組織炎合併多重器官衰竭，家屬希望舒適照護' })
+    await P.decidePalliative(c.id, { accept: true, disease: '其他大腦變質', doctorIds: ['DR01', 'DR02'], goals: '舒適照護' })
+    msg = await errOf(() => P.cancelPalliative(c.id))
+    ok(msg.includes('已經處理過'), '收案後不能撤回')
+    ok((await api.deathApi.patientDeath(cell.id)).expected, '沒有 DNR、但安寧收案：死亡算預期')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
@@ -9943,7 +10059,7 @@ try {
     await as('clerk01')
     const sess = (await api.scheduleApi.listSessions({ date: T })).filter((x) => !x.full && !x.closed && !x.suspended)
     const s1 = sess.find((x) => x.deptId === 'D01') ?? sess[0]
-    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.patientId === x.id && v.date >= T) && db().identities.find((i) => i.code === x.defaultIdentity && !i.selfPay && !i.copayExempt))
+    const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.patientId === x.id && v.date >= T) && db().identities.find((i) => i.code === x.defaultIdentity && !i.selfPay && !i.copayExempt))
     const est0 = await api.bookingApi.estimateFee('01', '01', false, T)
     const est1 = await api.bookingApi.estimateFee('01', '01', false, T, true)
     ok(est0.total - est1.total === 30 && est1.lines.some((l) => l.name.includes('經轉診')), `掛號預估：持轉診單少 30 元（${est0.total} → ${est1.total}）`)
@@ -10027,7 +10143,7 @@ try {
     // 轉出
     // 要「別的醫師」看的診（下面測別的醫師不能開）：同一位醫師一天有兩個診時，以前會抽到他自己的另一診
     const s2 = sess.find((x) => x.doctorId !== s1.doctorId && x.deptId === s1.deptId) ?? sess.find((x) => x.doctorId !== s1.doctorId)
-    const pt2 = db().patients.find((x) => x.id !== pt.id && !db().visits.some((v) => v.patientId === x.id && v.date >= T))
+    const pt2 = db().patients.find((x) => !x.deceasedAt && x.id !== pt.id && !db().visits.some((v) => v.patientId === x.id && v.date >= T))
     const v2 = await api.bookingApi.register({ patientId: pt2.id, sessionId: s2.id, identityCode: '01', caseType: '01' })
     const dr2 = db().users.find((u) => u.doctorId === s2.doctorId).username
     await as(dr2)
@@ -10115,7 +10231,7 @@ try {
     const sessions = (await api.scheduleApi.listSessions({ date: T })).filter((x) => !x.full && !x.closed && !x.suspended)
     const s1 = sessions[0]
     const s2 = sessions.find((x) => x.deptId !== s1.deptId)
-    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.patientId === x.id) && !db().admissions.some((a) => a.patientId === x.id))
+    const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.patientId === x.id) && !db().admissions.some((a) => a.patientId === x.id))
     const med = (drugId, days = 7, freq = 'QD') => ({ drugId, dose: 1, freq, route: 'PO', days, qty: 0, selfPay: false })
     const draftOf = (meds) => ({ subjective: 's', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'K21.9', name: '胃食道逆流', primary: true }], medications: meds, procedures: [], refillTimes: 0, admissionRequested: false })
     const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
@@ -10227,7 +10343,7 @@ try {
     // 門診：看完診開立
     await as('clerk01')
     const sess = (await api.scheduleApi.listSessions({ date: T })).find((x) => !x.full && !x.closed && !x.suspended)
-    const pt = db().patients.find((x) => !x.allergies.length && !db().visits.some((v) => v.date === T && v.patientId === x.id))
+    const pt = db().patients.find((x) => !x.allergies.length && !x.deceasedAt && !db().visits.some((v) => v.date === T && v.patientId === x.id))
     const vv = await api.bookingApi.register({ patientId: pt.id, sessionId: sess.id, identityCode: '01', caseType: '01' })
     const drUser = db().users.find((u) => u.doctorId === sess.doctorId).username
     await as(drUser)

@@ -819,6 +819,8 @@ export interface Procedure {
   icu?: boolean
   /** 急救計費項目（心肺復甦術）：急救紀錄開始 CPR 時自動開，醫囑不能另外開 */
   codeBlue?: boolean
+  /** 安寧共同照護費：安寧訪視時自動開，醫囑不能另外開 */
+  palliative?: boolean
   /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
   blood?: BloodProduct | 'crossmatch'
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
@@ -1564,6 +1566,30 @@ export interface DeathRecord {
   cert?: { no: string; copies: number; issuedAt: string; by: string; printed?: { at: string; by: string }[] }
   morgueAt?: string
   morgueBy?: string
+}
+
+/** 安寧症狀評估（0–10）：疼痛、呼吸困難、噁心嘔吐、焦慮、譫妄 */
+export type SymptomKey = 'pain' | 'dyspnea' | 'nausea' | 'anxiety' | 'delirium'
+/**
+ * 安寧共同照護：主治提出照會 → 安寧醫師（權限 palliative）評估末期（疾病別、兩位專科醫師確認）收案、或婉拒 →
+ * 收案後每週至少訪視一次（症狀評估、照護目標、靈性與社會需求；每次計一次共照費）、家屬會議
+ */
+export interface PalliativeCase {
+  id: string
+  admissionId: string
+  status: 'requested' | 'enrolled' | 'declined' | 'cancelled'
+  requestedBy: string
+  requestedAt: string
+  reason: string
+  decidedBy?: string
+  decidedAt?: string
+  declineReason?: string
+  /** 末期評估：疾病別、兩位專科醫師（醫師代碼） */
+  terminal?: { disease: string; doctorIds: string[]; note?: string }
+  /** 照護目標（收案時寫，訪視可以更新） */
+  goals?: string
+  visits: { id: string; at: string; by: string; symptoms: Record<SymptomKey, number>; note: string; spiritual?: string; social?: string; orderId?: string }[]
+  meetings: { id: string; date: string; participants: string; conclusion: string; by: string; at: string }[]
 }
 
 /** 瞳孔光反射：靈敏、遲鈍、無反應 */

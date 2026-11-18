@@ -13,7 +13,7 @@ import { inIcu } from './icu-work'
 import { openRequest } from './icu-move-work'
 import { checkIcuRequest, icuCategoryLabel } from './icu-score-rules'
 import { checkRrtAssessment, checkRrtCall, isNews, newsScore, type NewsLevel, type NewsResult } from './news-rules'
-import { minutesBetween, newsStateOf, openRrt, rrtStats, scoredVitals } from './news-work'
+import { minutesBetween, newsStateOf, openRrt, palliativeEnrolled, rrtStats, scoredVitals } from './news-work'
 
 const admittedOf = (id: string) => {
   const a = must(find.admission(id), '住院紀錄')
@@ -139,6 +139,8 @@ export interface PatientNews {
   open?: RrtView
   calls: RrtView[]
   canCall: boolean
+  /** 安寧收案：高分不自動呼叫 */
+  palliative: boolean
 }
 /** 病人的 NEWS2 與快速反應紀錄（生命徵象頁、住院醫囑「加護病房」分頁） */
 export function patientNews(admissionId: string): Promise<PatientNews> {
@@ -161,6 +163,7 @@ export function patientNews(admissionId: string): Promise<PatientNews> {
       ...(open ? { open: view(open, t) } : {}),
       calls: db.rrtCalls.filter((c) => c.admissionId === a.id).sort((x, y) => y.calledAt.localeCompare(x.calledAt)).map((c) => view(c, t)),
       canCall: a.status === 'admitted' && !inIcu(a) && !open && (role === 'nurse' || role === 'doctor'),
+      palliative: palliativeEnrolled(a.id),
     }
   })
 }

@@ -30,6 +30,7 @@ export type PermKey =
   | 'infection.control'
   | 'icu.attending'
   | 'rrt'
+  | 'palliative'
   | 'charge.approveDiscount'
   | 'order.write'
   | 'mar.give'
@@ -74,6 +75,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'discharge.plan', group: '住院', label: '出院準備', covers: '出院準備篩選、需求評估、長照與居家轉介、出院後電話追蹤', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師；要只交給出院準備個管師：先指定給個人（示範 nurse03），再把角色取消' },
   { key: 'icu.attending', group: '住院', label: '加護病房主治', covers: '同意或不同意轉入加護病房、排加護病房的床、看全院的轉入申請', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給加護病房主治醫師：指定給個人（示範 dr03）。管理員只能看，同意要醫師' },
   { key: 'rrt', group: '住院', label: '快速反應小組', covers: '看全院的快速反應呼叫（NEWS2 ≥7 自動、護理師手動）、到場評估（留原病房或申請轉加護病房）', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給快速反應小組的醫師（多半是加護病房團隊）：指定給個人（示範 dr03）。管理員只能看，評估要醫師' },
+  { key: 'palliative', group: '住院', label: '安寧共同照護', covers: '看全院的安寧照會、末期評估與收案（或婉拒）、安寧訪視（症狀評估、共照費）、家屬會議', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給安寧共照醫師：指定給個人（示範 dr01 家醫科）。管理員只能看，收案、訪視要醫師' },
   { key: 'infection.control', group: '住院', label: '感染管制', covers: '判定院內感染個案成立或不成立、看全院感染個案', candidates: ['doctor', 'nurse', 'admin'], defaults: ['admin'], grantable: true, note: '交給感染科醫師與感管護理師：指定給個人（示範 dr11 感染科）' },
   { key: 'order.write', group: '住院', label: '開立／修改／停止醫囑、完成看診', covers: '門診完成看診（處方）、住院醫囑開立修改停止', candidates: ['doctor'], defaults: ['doctor'], fixed: true, note: '醫療紀錄要記在有執業資格的醫師名下' },
   { key: 'mar.give', group: '住院', label: '給藥', covers: '執行給藥、暫停、拒絕、補登', candidates: ['nurse'], defaults: ['nurse'], fixed: true, note: '給藥紀錄要記在執行的護理師名下' },

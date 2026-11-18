@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -227,8 +227,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     ...codes.doctors.map((d, i): User => ({
       id: `U1${String(i + 1).padStart(2, '0')}`, username: `dr${String(i + 1).padStart(2, '0')}`, password: '1234',
       name: d.name, roles: ['doctor'], doctorId: d.id, active: true,
-      // dr01：被指定維護全院（醫師）片語（示範：醫療部主任）
-      ...(i === 0 ? { grants: ['phrase.hospital'] } : {}),
+      // dr01：被指定維護全院（醫師）片語（示範：醫療部主任）、安寧共同照護（家醫科）
+      ...(i === 0 ? { grants: ['phrase.hospital', 'palliative'] } : {}),
       // dr11（感染科）：被指定「感染管制」，判定院內感染個案
       ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
       // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
@@ -2090,6 +2090,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const icuRequests: IcuRequest[] = []
   const rrtCalls: RrtCall[] = []
   const codeBlues: CodeBlue[] = []
+  const palliativeCases: PalliativeCase[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2427,7 +2428,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 帳單還沒結，等家屬到櫃台（住院結帳清單「死亡出院」）。病人挑沒住過院、之後沒有掛號的（死亡後不能掛號）裡最年長的
   {
     const busy = new Set([...admissions.map((a) => a.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
-    const pt = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate))[0] // 最年長的
+    const pt = (() => { const free = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate)); return free.find((p) => p.defaultIdentity !== '01') ?? free[0] })() // 健保一般身分的留給其他示範與測試（急診檢傷要三位） // 最年長的
     const bed = beds.find((b) => b.ward === codes.wards[0] && b.status !== 'occupied')
     if (pt && bed) {
       const doc = users.find((u) => u.doctorId === 'DR03')!.id
@@ -2457,6 +2458,62 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       })
       pt.deceasedAt = died
     }
+  }
+
+  // 安寧（示範，不抽亂數）：
+  //   - 大腸癌末期住院 10 天（家屬簽 DNR），9 天前 dr01 收案；最近一次訪視 6 天半前（疼痛 6、呼吸困難 5）→ 每週訪視快到期；
+  //     30 分鐘前 NEWS2 很高，但安寧收案不自動呼叫快速反應小組
+  //   - 敗血症（加護病房、部分 DNR）：主治 2 小時前提出安寧照會，待收案
+  {
+    const busy = new Set([...admissions.map((x) => x.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
+    const pt = (() => { const free = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate)); return free.find((p) => p.defaultIdentity !== '01') ?? free[0] })() // 健保一般身分的留給其他示範與測試（急診檢傷要三位）
+    const used = new Set(admissions.flatMap((x) => (x.bedHistory ?? []).map((h) => h.bedId)))
+    const bed = beds.find((b) => b.ward === codes.wards[0] && b.status === 'empty' && !used.has(b.id))
+    const dr01 = users.find((u) => u.doctorId === 'DR01')!.id
+    const dr02 = users.find((u) => u.doctorId === 'DR02')!.id
+    if (pt && bed) {
+      const id = 'A-PAL-1'
+      const adAt = addMinutes(nowStr, -10 * 24 * 60)
+      const d = (h: number) => addMinutes(nowStr, -h * 60)
+      Object.assign(bed, { status: 'occupied', admissionId: id })
+      admissions.push({
+        id, admitNo: `I${adAt.slice(2, 10).replace(/-/g, '')}${String(next('admitNo')).padStart(3, '0')}`, patientId: pt.id, deptId: 'D02', doctorId: 'DR02',
+        bedId: bed.id, bedHistory: [{ bedId: bed.id, from: adAt }], preferBedClass: '健保床', reason: '腹痛、進食差、喘', diagnosis: 'C18.9 大腸癌末期併肝、肺轉移',
+        status: 'admitted', reservedAt: addMinutes(adAt, -20 * 60), expectedDate: adAt.slice(0, 10), admittedAt: adAt,
+        wristband: { printedAt: adAt, printedBy: 'U201', reprints: [] },
+      })
+      ipdOrders.push(
+        { id: 'IO-PAL-1', admissionId: id, type: 'long', category: 'diet', diet: { kind: 'soft' }, content: '軟質飲食', startAt: adAt, status: 'active', doctorId: 'DR02', createdAt: adAt, ackAt: addMinutes(adAt, 10), ackBy: 'U201' },
+        { id: 'IO-PAL-2', admissionId: id, type: 'long', category: 'nursing', content: 'Vital signs Q8H；呼吸困難時抬高床頭、給氧；以舒適為主', startAt: adAt, status: 'active', doctorId: 'DR02', createdAt: adAt, ackAt: addMinutes(adAt, 10), ackBy: 'U201' },
+      )
+      // 分床：5A 已經分好的每一班，都分給那一班的第一位護理師
+      const shifts = new Map(nurseAssignments.filter((x) => x.ward === bed.ward).map((x) => [`${x.date}|${x.shift}`, x]))
+      for (const x of shifts.values()) nurseAssignments.push({ ...x, id: `NAS-PAL-${x.date}-${x.shift}`, admissionId: id })
+      for (const [scale, answers] of [['fall', { history: 0, secondary: 15, aid: 0, iv: 0, gait: 10, mental: 0 }], ['pressure', { sensory: 3, moisture: 3, activity: 2, mobility: 2, nutrition: 2, friction: 2 }]] as const) {
+        const score = riskScore(scale, answers).score
+        riskAssessments.push({ id: `RA-PAL-${scale}`, admissionId: id, scale, at: d(20), nurseId: 'U201', answers, score, level: riskLevel(scale, score), reason: 'routine' })
+      }
+      dnrRecords.push({ id: 'DNR-PAL-1', patientId: pt.id, doc: 'family', signedAt: d(5 * 24).slice(0, 10), signerName: '陳美玲', relation: '配偶', doctorIds: ['DR02', 'DR01'], withhold: ['compress', 'intubation', 'defib', 'ventilation'], nhiCard: true, recordedBy: dr02, recordedAt: d(5 * 24) })
+      vitals.push(
+        { id: 'VS-PAL-1', admissionId: id, at: d(8), temp: 37.6, pulse: 104, resp: 22, sbp: 104, dbp: 64, spo2: 93, o2: 2, avpu: 'A', pain: 5, painAction: '嗎啡口服液 5 mg', nurseId: 'U202' },
+        { id: 'VS-PAL-2', admissionId: id, at: d(0.5), temp: 37.8, pulse: 112, resp: 26, sbp: 98, dbp: 60, spo2: 90, o2: 3, avpu: 'A', pain: 3, nurseId: 'U201' },
+      )
+      const v1 = addMinutes(d(9 * 24), 120)
+      const v2 = d(6.5 * 24)
+      const fee = (no: number, at: string) => ({ id: `IO-PAL-FEE-${no}`, admissionId: id, type: 'stat' as const, category: 'procedure' as const, procId: 'P056', content: '安寧共同照護費', startAt: at, stopAt: at, status: 'done' as const, doctorId: 'DR01', createdAt: at, ackAt: at, ackBy: dr01 })
+      ipdOrders.push(fee(1, v1), fee(2, v2))
+      palliativeCases.push({
+        id: 'PAL-SEED-1', admissionId: id, status: 'enrolled', requestedBy: dr02, requestedAt: d(9.5 * 24), reason: '大腸癌末期併肝、肺轉移，不再化療；疼痛與呼吸困難，家屬希望以舒適為主',
+        decidedBy: dr01, decidedAt: d(9 * 24), terminal: { disease: '癌症', doctorIds: ['DR02', 'DR01'], note: '多處轉移，體能狀態 ECOG 4' }, goals: '控制疼痛與呼吸困難，讓病人在家屬陪伴下舒適；評估返家安寧',
+        visits: [
+          { id: 'PV-SEED-1', at: v1, by: dr01, symptoms: { pain: 7, dyspnea: 6, nausea: 3, anxiety: 5, delirium: 0 }, note: '疼痛 7：嗎啡口服液 5 mg Q4H、突發痛加 2.5 mg；呼吸困難：床頭抬高、電風扇、低劑量嗎啡', spiritual: '病人擔心拖累家人', social: '配偶照顧，兒子在外地工作', orderId: 'IO-PAL-FEE-1' },
+          { id: 'PV-SEED-2', at: v2, by: dr01, symptoms: { pain: 6, dyspnea: 5, nausea: 2, anxiety: 4, delirium: 0 }, note: '疼痛稍改善；噁心減少；家屬會議後焦慮下降', orderId: 'IO-PAL-FEE-2' },
+        ],
+        meetings: [{ id: 'FM-SEED-1', date: d(5 * 24).slice(0, 10), participants: '病人、配偶、長子、主治陳映如、安寧醫師林子謙、社工', conclusion: '家屬同意以舒適照護為主、簽署 DNR；症狀穩定後評估返家安寧', by: dr01, at: d(5 * 24) }],
+      })
+    }
+    const sep = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('A41'))
+    if (sep) palliativeCases.push({ id: 'PAL-SEED-2', admissionId: sep.id, status: 'requested', requestedBy: dr02, requestedAt: addMinutes(nowStr, -120), reason: '敗血性休克插管、升壓劑中，家屬已簽部分 DNR，詢問安寧與撤除維生醫療', visits: [], meetings: [] })
   }
 
   return {
@@ -2523,6 +2580,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     icuRequests,
     rrtCalls,
     codeBlues,
+    palliativeCases,
     dischargePlans,
     vitals,
     nursingNotes,

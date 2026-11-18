@@ -44,6 +44,7 @@ async function submitCall() {
       </div>
       <p class="mt-1 text-xs text-slate-600">{{ NEWS_ADVICE[v.last.level] }}</p>
     </template>
+    <p v-if="v.palliative" class="mt-1 text-xs text-slate-600">安寧收案中：NEWS2 高分不自動呼叫快速反應小組（以舒適為目標；擔心病人仍可手動呼叫）</p>
     <p v-if="v.missing" class="mt-1 text-xs text-amber-800">最近一筆生命徵象缺「{{ v.missing.join('、') }}」，算不出 NEWS2</p>
     <div v-if="v.trend.length > 1" class="tabular mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
       趨勢
