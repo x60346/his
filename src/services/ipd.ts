@@ -357,6 +357,8 @@ export function stopOrder(orderId: string): Promise<OrderView> {
     const user = requirePermission('order.write')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     if (o.status !== 'active') fail('此醫囑已停止或完成')
+    // 升壓劑：在「加護病房」分頁停（劑量還高要先調降或寫原因），一般醫囑的停止不走這條
+    if (o.infusion?.vaso) fail('升壓劑請在「加護病房」分頁停止（劑量還高要先逐步調降或寫原因）', 'CONFLICT')
     const role = requireCare(user.doctorId, must(find.admission(o.admissionId), '住院紀錄'), '停止這位病人的醫囑', { consult: true })
     if (role.kind === 'consult' && o.doctorId !== user.doctorId) fail('會診醫師只能停止自己開的醫囑', 'FORBIDDEN')
     // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）

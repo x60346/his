@@ -180,7 +180,8 @@ export function patientIcu(admissionId: string): Promise<PatientIcu> {
         const from = [`${d} 00:00`, since].sort().pop()!
         // 一整天：從 00:00 起都在加護病房、而且這一天過完了（轉入那天只住半天，尿量不能拿來算腎臟分數）
         const full = d < today() && from === `${d} 00:00`
-        const s = sofaScore(sofaInputOf(a, from, full ? `${addDays(d, 1)} 00:00` : addMinutes(t, 1), full))
+        // 區間的結束：過完的那天到隔天 00:00（轉入那天只住半天也一樣，不能把之後幾天的資料算進來）；今天到現在
+        const s = sofaScore(sofaInputOf(a, from, d < today() ? `${addDays(d, 1)} 00:00` : addMinutes(t, 1), full))
         sofa.push({ date: d, total: s.total, parts: s.parts, missing: s.missing, partial: d === today() })
       }
     }

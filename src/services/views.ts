@@ -44,6 +44,7 @@ export const usable = {
     const d = must(find.drug(id), `藥品 ${id}`)
     if (!d.active) fail(`${d.name} 已停用，不能開立`)
     if (d.pca) fail(`${d.name}是病人自控止痛（PCA）藥袋：請在住院醫囑「PCA」分頁開立`)
+    if (d.vaso) fail(`${d.name}是升壓劑：請在住院醫囑「加護病房」分頁開立（劑量換算流速）`)
     if (d.crash) fail(`${d.name}是急救車用藥：請在「急救」分頁記錄（自動開醫囑、扣帳）`)
     return d
   },

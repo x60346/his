@@ -10,9 +10,12 @@ import { changeState, expectedEnd, hoursPerBag, infusedMl } from './infusion-rul
 import { infusionOrders, runningRun } from './infusion-work'
 import { activeLines } from './line-work'
 import { wardStockOut } from './stock-ledger'
+import { vasoDose, vasoRateProblem } from './vaso-rules'
 
 export interface InfusionView {
   order: IpdOrder & { doctorName: string }
+  /** 升壓劑：單位、目前流速換算的劑量（沒在滴用醫囑流速）、上限、目標 */
+  vaso?: { unit: string; dose: number; max: number; target: string; weightKg: number; perMl: number }
   hoursPerBag: number
   running?: InfusionRun & { infused: number; endAt: string; state: 'ok' | 'due' | 'overdue'; startByName: string; changes: string[] }
   /** 這張醫囑之前滴過的瓶（新的在前） */
@@ -22,8 +25,10 @@ export interface InfusionView {
 const viewOf = (o: IpdOrder, t: string): InfusionView => {
   const vol = o.infusion!.volumeMl
   const r = runningRun(o.id)
+  const vd = o.infusion!.vaso ? find.drug(o.drugId ?? '')?.vaso : undefined
   return {
     order: { ...o, doctorName: nameOf.doctor(o.doctorId) }, hoursPerBag: hoursPerBag(vol, o.infusion!.rateMlH),
+    ...(vd && o.infusion!.vaso ? { vaso: { unit: vd.unit, dose: vasoDose(vd, r?.rateMlH ?? o.infusion!.rateMlH, o.infusion!.vaso.weightKg), max: o.infusion!.vaso.max, target: o.infusion!.vaso.target, weightKg: o.infusion!.vaso.weightKg, perMl: vd.perMl } } : {}),
     ...(r ? (() => {
       const end = expectedEnd(r, vol)
       return { running: { ...r, infused: infusedMl(r, vol, t), endAt: end, state: changeState(end, t), startByName: nameOf.user(r.startBy), changes: r.rateChanges.map((c) => `${c.at.slice(5)} ${nameOf.user(c.by)}：${c.from} → ${c.to} ml/h（${c.reason}）`) } }
@@ -95,6 +100,7 @@ export function startInfusion(orderId: string, input: { patency: boolean }): Pro
     const o = activeInfusionOrder(orderId)
     if (runningRun(o.id)) fail('已經在滴了：要接下一瓶請按「換瓶」', 'CONFLICT')
     if (!activeLines(o.admissionId).some((l) => l.kind === 'pivc' || l.kind === 'cvc')) fail('病人沒有周邊留置針或 CVC：請先放置並在「管路」登錄', 'CONFLICT')
+    if (o.infusion!.vaso && !activeLines(o.admissionId).some((l) => l.kind === 'cvc')) fail('升壓劑要接中心靜脈導管（CVC）：病人沒有 CVC', 'CONFLICT')
     if (!input.patency) failField('patency', '請確認留置針通暢（回血、沒有腫脹、推注沒有阻力）')
     const t = now()
     const r = startBag(o, u.id, t)
@@ -140,7 +146,12 @@ export function adjustRate(orderId: string, input: { rateMlH: number; reason: st
     const o = activeInfusionOrder(orderId)
     const r = runningRun(o.id)
     if (!r) fail('沒有正在滴的', 'CONFLICT')
-    if (!(typeof input.rateMlH === 'number' && input.rateMlH >= 5 && input.rateMlH <= 500)) failField('rateMlH', '流速 5–500 ml/小時')
+    // 升壓劑：換算的劑量要在醫囑上限內、不低於最低劑量（流速可以很慢）；一般點滴 5–500 ml/h
+    const vd = o.infusion!.vaso ? find.drug(o.drugId ?? '')?.vaso : undefined
+    if (vd) {
+      const p = typeof input.rateMlH === 'number' ? vasoRateProblem(vd, o.infusion!.vaso!, input.rateMlH) : '請填流速'
+      if (p) failField('rateMlH', p)
+    } else if (!(typeof input.rateMlH === 'number' && input.rateMlH >= 5 && input.rateMlH <= 500)) failField('rateMlH', '流速 5–500 ml/小時')
     if (input.rateMlH === r!.rateMlH) failField('rateMlH', '流速沒有變')
     if (!input.reason?.trim()) failField('reason', '請寫調整原因')
     const t = now()

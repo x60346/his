@@ -8,6 +8,7 @@ import { isIcuBed } from './bed-work'
 import { icuSince } from './icu-work'
 import { activeVent } from './vent-work'
 import { gcsTotal, mapOf } from './icu-rules'
+import { activeVasoOrders, vasoMaxIn } from './vaso-work'
 import { icuStays, type ApacheInput, type SofaInput } from './icu-score-rules'
 
 /** 同意了、還沒排床的申請 */
@@ -35,6 +36,7 @@ export function icuMoveProblem(a: Admission, to: Pick<Bed, 'ward'>): string | un
   if (isIcuBed(to) && !isIcuBed(from) && !acceptedRequest(a.id)) return '轉入加護病房要先由主治申請、加護病房主治同意（住院醫囑「加護病房」分頁）'
   if (!isIcuBed(to) && isIcuBed(from)) {
     if (activeVent(a.id)) return '還接著呼吸器：不能轉出加護病房（請醫師先停止呼吸器）'
+    if (activeVasoOrders(a.id).length) return '還在用升壓劑：不能轉出加護病房（請醫師先停止升壓劑）'
     if (!icuSummaryOf(a)) return '轉出加護病房：請醫師先寫加護病房轉出摘要（住院醫囑「加護病房」分頁）'
   }
   return undefined
@@ -85,7 +87,9 @@ export function sofaInputOf(a: Admission, from: string, to: string, fullDay: boo
   const pfs = abgs(a, from, to).map((g) => ({ ratio: Math.round(g.pao2 / g.fio2), vent: g.vent }))
   const pf = pfs.length ? pfs.reduce((b, x) => (x.ratio < b.ratio ? x : b)) : undefined
   const outs = vs.filter((v) => v.output !== undefined)
+  const vaso = vasoMaxIn(a.id, from, to)
   return {
+    ...(vaso ? { vaso } : {}),
     ...(pf ? { pf } : {}),
     ...(min(labNums(a, 'PLT', from, to).map((x) => x.value)) !== undefined ? { plt: min(labNums(a, 'PLT', from, to).map((x) => x.value)) } : {}),
     ...(max(labNums(a, 'T-BIL', from, to).map((x) => x.value)) !== undefined ? { bili: max(labNums(a, 'T-BIL', from, to).map((x) => x.value)) } : {}),

@@ -246,6 +246,10 @@ const drugBase = [
   // 急救車用藥：只能在急救紀錄給（自動開臨時醫囑扣帳），放住院藥局（seed 另外開帳）
   { ...drug('M046', 'AC00046100', 'Epinephrine 1mg/ml Inj', 'Epinephrine', '1 mg/ml/amp', 'AMP', '注射', 15, 35, 200, 1, 'STAT', 'IV', true), safetyStock: 30, crash: true },
   { ...drug('M047', 'AC00047100', 'Amiodarone 150mg/3ml Inj', 'Amiodarone', '150 mg/3 ml/amp', 'AMP', '注射', 42, 90, 100, 2, 'STAT', 'IV', true), safetyStock: 20, crash: true },
+  // 升壓劑（預混點滴袋，加護病房）：劑量換算流速；放住院藥局（seed 另外開帳）
+  { ...drug('M048', 'AC00048100', 'Norepinephrine 4mg/250ml Premix', 'Norepinephrine', '4 mg/250 ml/袋（16 mcg/ml）', 'BAG', '注射', 380, 760, 60, 1, 'QD', 'IV', true), safetyStock: 10, vaso: { unit: 'mcg/kg/min' as const, perMl: 16, bagMl: 250, range: [0.01, 1] as [number, number], weanTo: 0.05 } },
+  { ...drug('M049', 'AC00049100', 'Dopamine 400mg/250ml Premix', 'Dopamine', '400 mg/250 ml/袋（1600 mcg/ml）', 'BAG', '注射', 220, 450, 60, 1, 'QD', 'IV', true), safetyStock: 10, vaso: { unit: 'mcg/kg/min' as const, perMl: 1600, bagMl: 250, range: [2, 20] as [number, number], weanTo: 5 } },
+  { ...drug('M050', 'AC00050100', 'Vasopressin 20U/100ml Premix', 'Vasopressin', '20 U/100 ml/袋（0.2 U/ml）', 'BAG', '注射', 1500, 2800, 30, 1, 'QD', 'IV', true), safetyStock: 5, vaso: { unit: 'U/min' as const, perMl: 0.2, bagMl: 100, range: [0.01, 0.04] as [number, number], weanTo: 0.01 } },
 ]
 
 /**
@@ -300,6 +304,9 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M045: ['術後止痛（病人自控止痛機）', '覺得痛再按，機器會限制次數；嗜睡、呼吸變慢請立即告知醫護人員；家屬不可代按'],
   M046: ['急救用強心劑', '急救時由醫護人員注射'],
   M047: ['急救用抗心律不整', '急救時由醫護人員注射'],
+  M048: ['升血壓（加護病房點滴）', '由醫護人員依血壓調整；注射處發白、疼痛請告知'],
+  M049: ['升血壓、強心（加護病房點滴）', '由醫護人員依血壓調整；心跳很快、胸悶請告知'],
+  M050: ['升血壓（加護病房點滴）', '由醫護人員依血壓調整；手腳發冷發白請告知'],
 }
 
 /**
@@ -366,6 +373,9 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M045: ['嗎啡病人自控止痛藥袋', ['PCA']],
   M046: ['腎上腺素注射劑', ['Bosmin']],
   M047: ['胺碘酮注射劑', ['Cordarone']],
+  M048: ['正腎上腺素點滴', ['Levophed']],
+  M049: ['多巴胺點滴', ['Dopamine']],
+  M050: ['血管加壓素點滴', ['Pitressin']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */
@@ -390,7 +400,13 @@ const labItemsOf: Record<string, LabItemDef[]> = {
   P003: [
     { code: 'WBC', name: '白血球', unit: '10³/µL', low: 4.0, high: 10.0, critLow: 2.0, critHigh: 30.0 },
     { code: 'Hb', name: '血色素', unit: 'g/dL', low: 13.5, high: 17.5, lowF: 12.0, highF: 16.0, critLow: 7.0, critHigh: 20.0 },
+    { code: 'HCT', name: '血比容', unit: '%', low: 40, high: 52, lowF: 36, highF: 46, critLow: 20, critHigh: 60 },
     { code: 'PLT', name: '血小板', unit: '10³/µL', low: 150, high: 400, critLow: 50, critHigh: 1000 },
+  ],
+  // 電解質（APACHE II 要鈉、鉀；低血鉀、高血鉀是危急值）
+  P055: [
+    { code: 'NA', name: '鈉', unit: 'mmol/L', low: 135, high: 145, critLow: 120, critHigh: 160 },
+    { code: 'K', name: '鉀', unit: 'mmol/L', low: 3.5, high: 5.1, critLow: 2.8, critHigh: 6.2 },
   ],
   P004: [{ code: 'GLU-AC', name: '飯前血糖', unit: 'mg/dL', low: 70, high: 99, critLow: 40, critHigh: 400 }],
   P005: [{ code: 'HbA1c', name: '糖化血色素', unit: '%', low: 4.0, high: 5.6 }],
@@ -482,6 +498,7 @@ const procedureBase: Procedure[] = [
   { id: 'P053', code: '09029C', name: '總膽紅素 T-Bilirubin', category: '檢驗', points: 40, selfPrice: 80, active: true },
   // 急救：開始 CPR 時自動開一筆（一次急救收一次）。點數為展示用近似值
   { id: 'P054', code: '47029C', name: '心肺復甦術 CPR', category: '處置', points: 2240, selfPrice: 3500, codeBlue: true, active: true },
+  { id: 'P055', code: '09021C', name: '電解質（鈉、鉀）', category: '檢驗', points: 80, selfPrice: 150, active: true },
 ]
 
 /** 影像檢查：判讀者與正常報告範本（判讀頁一鍵帶入再修改）。心電圖由開立醫師自己判讀 */

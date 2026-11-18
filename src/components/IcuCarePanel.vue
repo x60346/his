@@ -9,6 +9,7 @@ import { APACHE_LABEL, ICU_CATEGORIES, ICU_SUMMARY_FIELDS, icuMoveApi, SOFA_LABE
 import type { IcuCategory } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import NewsPanel from './NewsPanel.vue'
+import VasoPanel from './VasoPanel.vue'
 
 const props = defineProps<{ admissionId: string }>()
 const { data, loading, reload } = useQuery(() => icuMoveApi.patientIcu(props.admissionId), [() => props.admissionId])
@@ -90,6 +91,7 @@ const pts = (n: number | null) => (n === null ? '—' : n)
             <span class="font-semibold text-slate-700">加護病房</span>
             <span class="text-xs text-slate-500">{{ v.since?.slice(5, 16).replace('-', '/') }} 轉入</span>
           </div>
+          <VasoPanel :admission-id="admissionId" @changed="reload" />
           <!-- SOFA -->
           <section class="rounded-md border border-slate-200 p-3">
             <div class="mb-1 font-semibold text-slate-700">SOFA（每天，各項取當天最差）</div>
@@ -105,7 +107,7 @@ const pts = (n: number | null) => (n === null ? '—' : n)
                 </tbody>
               </table>
             </div>
-            <p class="mt-1 text-xs text-slate-500">「—」＝當天沒有資料（不硬算，總分後面的「＋」表示可能更高）。心血管只看 MAP（沒有升壓劑劑量）；呼吸要有動脈血液氣體分析，沒接呼吸器最多 2 分；插管的 GCS（言語 T）不算神經項。</p>
+            <p class="mt-1 text-xs text-slate-500">「—」＝當天沒有資料（不硬算，總分後面的「＋」表示可能更高）。心血管用升壓劑時依當天最高劑量（Norepinephrine ≤0.1 → 3、>0.1 → 4；Dopamine >5 → 3、>15 → 4；Vasopressin → 3），沒用才看 MAP；呼吸要有動脈血液氣體分析，沒接呼吸器最多 2 分；插管的 GCS（言語 T）不算神經項。</p>
           </section>
           <!-- APACHE II -->
           <section v-if="v.apache" class="rounded-md border border-slate-200 p-3">

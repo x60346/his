@@ -1176,7 +1176,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
   /** 不走一般庫存帳重播的藥（不抽亂數、不用流水號：加進來不會改變其他藥與後面的種子資料），在迴圈後另外開帳 */
-  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044', 'M045', 'M046', 'M047'])
+  const FIXED_STOCK = new Set(['M041', 'M042', 'M043', 'M044', 'M045', 'M046', 'M047', 'M048', 'M049', 'M050'])
   drugs.forEach((drug, di) => {
     if (FIXED_STOCK.has(drug.id)) return
     // 展示用：幾種藥庫存偏低、一種缺貨（codes 的安全庫存是依原庫存的 15% 設的，不調低的話永遠不會「偏低」）
@@ -1316,7 +1316,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 門診示範用的第二級管制藥（Morphine 錠）：只放門診藥局，期初一批、之後沒有異動。
   // 大型醫院期初一律進藥庫，當天整批撥給門診藥局（和其他藥一樣：藥局的批號都來自藥庫、撥出撥入成對）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx && !d.pca && !d.crash)) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && !d.restrictedAbx && !d.pca && !d.crash && !d.vaso)) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}M`
@@ -1342,7 +1342,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const pcas: PcaOrder[] = []
   const pcaAdm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('K35') && a.admittedAt && a.admittedAt < addMinutes(nowStr, -12 * 60))
   // PCA 藥袋（M045）也一樣只放住院藥局（大型：藥庫、住院藥局、門診藥局都有一點，照同一套撥補）
-  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && (d.restrictedAbx || d.pca || d.crash))) {
+  for (const drug of drugs.filter((d) => FIXED_STOCK.has(d.id) && (d.restrictedAbx || d.pca || d.crash || d.vaso))) {
     const year = Number(T.slice(0, 4))
     const at = `${addDays(T, -31)} 08:00`
     const lotNo = `L${String(year).slice(2)}${drug.id.slice(1)}V`
@@ -1702,7 +1702,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const orderedAt = `${addDays(T, -1)} 06:00`
       ipdOrders.push({ id: 'IO-SEED-LAB1', admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P003', content: '全套血液檢查 CBC', startAt: orderedAt, stopAt: `${addDays(T, -1)} 06:20`, status: 'done', doctorId: adm.doctorId, createdAt: orderedAt, ackAt: `${addDays(T, -1)} 06:10`, ackBy: 'U201' })
       const at = `${addDays(T, -1)} 07:05`
-      labReports.push({ id: 'LR-SEED-IPD1', no: labNo(at), patientId: adm.patientId, procId: 'P003', orderId: 'IO-SEED-LAB1', admissionId: adm.id, doctorId: adm.doctorId, orderedAt, values: buildLabValues(procMap.get('P003')!.labItems!, { WBC: '12.4', Hb: '6.8', PLT: '210' }, pt.gender).values, reportedBy: 'U601', reportedAt: at })
+      labReports.push({ id: 'LR-SEED-IPD1', no: labNo(at), patientId: adm.patientId, procId: 'P003', orderId: 'IO-SEED-LAB1', admissionId: adm.id, doctorId: adm.doctorId, orderedAt, values: buildLabValues(procMap.get('P003')!.labItems!, { WBC: '12.4', Hb: '6.8', HCT: '20.5', PLT: '210' }, pt.gender).values, reportedBy: 'U601', reportedAt: at })
     }
     for (const r of labReports) {
       if (r.values.some((v) => v.critical) && r !== dr01 && r.id !== 'LR-SEED-IPD1') {
@@ -2250,15 +2250,25 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       }
       const a1 = addMinutes(sep.admittedAt!, 90)
       lab('P052', a1, { pH: '7.24', PaCO2: '34', PaO2: '68', HCO3: '15' })
-      lab('P003', a1, { WBC: '18.6', Hb: '11.2', PLT: '128' })
+      lab('P003', a1, { WBC: '18.6', Hb: '11.2', HCT: '33.5', PLT: '128' })
       lab('P008', a1, { CRE: '2.1' })
       const a2 = later(`${addDays(T, -1)} 06:00`, addMinutes(sep.admittedAt!, 6 * 60))
       if (a2 < nowStr) {
         lab('P052', a2, { pH: '7.34', PaCO2: '40', PaO2: '82', HCO3: '21' })
-        lab('P003', a2, { WBC: '15.2', Hb: '10.6', PLT: '92' })
+        lab('P003', a2, { WBC: '15.2', Hb: '10.6', HCT: '31.8', PLT: '92' })
         lab('P053', a2, { 'T-BIL': '2.4' })
         lab('P008', a2, { CRE: '1.8' })
       }
+      // 電解質（APACHE II 的鈉、鉀；血比容在 CBC）：轉入 90 分鐘
+      lab('P055', a1, { NA: '132', K: '3.4' })
+      // 升壓劑（示範，不抽亂數）：敗血性休克接 norepinephrine（60 kg、上限 0.3、目標 MAP ≥65），起始 0.12（27 ml/h），
+      // 4 小時前血壓穩定調降到 0.08（18 ml/h）→ SOFA 心血管 3 分。種子這袋沒有扣帳異動（展示用）
+      const st = later(addMinutes(sep.admittedAt!, 60), addMinutes(nowStr, -9 * 60))
+      const down = later(addMinutes(st, 60), addMinutes(nowStr, -4 * 60))
+      const vaso = { dose: 0.12, max: 0.3, weightKg: 60, target: 'MAP ≥65 mmHg' }
+      ipdOrders.push({ id: 'IO-VASO-SEED-1', admissionId: sep.id, type: 'long', category: 'medication', drugId: 'M048', content: 'Norepinephrine 4mg/250ml Premix 0.12 mcg/kg/min（上限 0.3，60 kg）@ 27 ml/h，目標 MAP ≥65 mmHg', dose: 1, freq: 'QD', route: 'IV', startAt: addMinutes(st, -10), status: 'active', doctorId: sep.doctorId, createdAt: addMinutes(st, -10), ackAt: addMinutes(st, -5), ackBy: 'U213', infusion: { volumeMl: 250, rateMlH: 27, vaso } })
+      const dropped = down < nowStr
+      infusions.push({ id: 'INFU-VASO-SEED-1', orderId: 'IO-VASO-SEED-1', admissionId: sep.id, bagNo: 1, startAt: st, startBy: 'U213', rateMlH: dropped ? 18 : 27, rateChanges: dropped ? [{ at: down, by: 'U213', from: 27, to: 18, reason: 'MAP 高於目標，調降' }] : [], txnIds: [] })
     }
     // 糖尿病酮酸中毒：兩天前（或入院 2 小時後）申請轉入、加護病房主治 dr03 同意轉到 ICU2；現在穩定，等醫師寫轉出摘要再轉回病房
     const dka = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))

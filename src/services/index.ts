@@ -36,6 +36,7 @@ import * as vent from './vent'
 import * as icuMove from './icu-move'
 import * as rrt from './rrt'
 import * as code from './code'
+import * as vaso from './vaso'
 import * as er from './er'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
@@ -94,6 +95,7 @@ export const ventApi = overNetwork(vent)
 export const icuMoveApi = overNetwork(icuMove)
 export const rrtApi = overNetwork(rrt)
 export const codeApi = overNetwork(code)
+export const vasoApi = overNetwork(vaso)
 export const erApi = overNetwork(er)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
@@ -175,6 +177,7 @@ export * from './vent-rules'
 export * from './icu-score-rules'
 export * from './news-rules'
 export * from './code-rules'
+export * from './vaso-rules'
 export * from './er-rules'
 export * from './certificate-rules'
 export * from './referral-rules'
@@ -226,6 +229,7 @@ export type { PatientVent, VentOrderView } from './vent'
 export type { IcuRequestView, IcuWork, PatientIcu, SofaDay, IcuStats } from './icu-move'
 export type { RrtView, RrtWork, PatientNews } from './rrt'
 export type { CodeView, PatientCode } from './code'
+export type { PatientVaso, VasoItem } from './vaso'
 export type { PatientSafety, DeliriumView, RestraintView, CamInput, RestraintInput, WardSafetyStats } from './delirium'
 export type { FeedSlot } from './tube-work'
 export type { PatientNutrition, NutritionScreenView, NutritionAssessmentView, ScreenInput, AssessmentInput, NutritionWorkItem, MealRow } from './nutrition'

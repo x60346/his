@@ -775,6 +775,11 @@ export interface Drug {
   pca?: { totalMg: number; volumeMl: number }
   /** 急救車用藥（腎上腺素、Amiodarone）：只能在急救紀錄給（自動開臨時醫囑、扣病房常備或住院藥局） */
   crash?: boolean
+  /**
+   * 升壓劑（預混點滴袋）：劑量單位、每 ml 含多少（mcg 或 U）、劑量範圍、可以直接停的劑量（以下才算「調降完」）。
+   * 只能在加護病房、有中心靜脈導管時，從住院醫囑「加護病房」分頁開（不能當一般醫囑）
+   */
+  vaso?: { unit: 'mcg/kg/min' | 'U/min'; perMl: number; bagMl: number; range: [number, number]; weanTo: number }
   /** 作用或適應症（印在藥袋，病人看得懂的白話；藥師法規定的藥袋欄位） */
   indication: string
   /** 警語或副作用（印在藥袋；藥師法規定的藥袋欄位） */
@@ -1181,7 +1186,15 @@ export interface IpdOrder {
   /** 飲食醫囑：種類＋備註（content 是給人看的「糖尿病飲食・1800 kcal」）；舊資料沒有，依 content 推斷 */
   diet?: { kind: DietKind; note?: string; tube?: TubeFeedPlan }
   /** 點滴（連續輸注）：每瓶容量、每小時流速、加藥（例：KCl）；不排給藥時間，由護理師接上、換瓶、停止 */
-  infusion?: { volumeMl: number; rateMlH: number; additives?: { drugId: string; dose: number }[] }
+  infusion?: {
+    volumeMl: number
+    rateMlH: number
+    additives?: { drugId: string; dose: number }[]
+    /** 升壓劑：起始劑量、上限（護理師依血壓在範圍內調流速）、開立時的體重；流速由劑量換算 */
+    vaso?: { dose: number; max: number; weightKg: number; target: string }
+  }
+  /** 停止原因（升壓劑沒有逐步調降就直接停，要寫） */
+  stopReason?: string
   /** 呼吸器醫囑（長期、護理類）：模式與設定；改設定＝停掉舊的、開新的（changeReason 寫為什麼改） */
   vent?: VentSetting
   /** 急救時自動開的（急救藥、CPR 處置費）：口頭醫囑記在帶領醫師名下，執行完成 */

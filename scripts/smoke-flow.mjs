@@ -5120,7 +5120,7 @@ try {
     ok(j('P010', 'U-PRO', '陰性').flag === '' && j('P010', 'U-PRO', '2+').flag === 'A' && 'error' in j('P010', 'U-PRO', '很多'), '文字型：正常值以外標「異常」，不在選項裡的不收')
     ok(['', ' ', 'abc', '1,2', '-3', '1.2.3'].every((v) => 'error' in j('P004', 'GLU-AC', v)), '數值型：空白、文字、逗號、負數、格式錯都不收')
     const bv = LR.buildLabValues(proc('P003').labItems, { WBC: '5.1', Hb: '' }, 'M')
-    ok(Object.keys(bv.errors).sort().join() === 'Hb,PLT' && bv.values.length === 1, '一次標出所有沒填好的項目（不是一次一個）')
+    ok(Object.keys(bv.errors).sort().join() === 'HCT,Hb,PLT' && bv.values.length === 1, '一次標出所有沒填好的項目（不是一次一個）')
     ok(LR.labNeedsAck({ values: [{ critical: true }] }) && !LR.labNeedsAck({ values: [{ critical: true }], ackAt: 'x' }) && LR.labNeedsAck({ values: [{}], corrections: [{}] }) && !LR.labNeedsAck({ values: [{ flag: 'H' }] }), '要醫師確認：有危急值或更正過、還沒確認；只是偏高不用')
 
     // 種子
@@ -5177,12 +5177,12 @@ try {
     await api.chargeApi.markProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P003'), '病人未抽血即離開')
     await as('lab01')
     ok(!(await L.listLabWork()).some((w) => w.key === keyOf('P003')), '櫃台標「未執行」的檢驗不列在待檢驗')
-    msg = await errOf(() => L.reportLab({ key: keyOf('P003'), values: { WBC: '5', Hb: '13', PLT: '200' } }))
+    msg = await errOf(() => L.reportLab({ key: keyOf('P003'), values: { WBC: '5', Hb: '13', HCT: '40', PLT: '200' } }))
     ok(msg.includes('未執行'), `未執行的發報告 → 「${msg}」`)
     await as('clerk01')
     await api.chargeApi.unmarkProcedureNotDone(ch.id, enc().procedures.findIndex((x) => x.procId === 'P003'))
     await as('lab01')
-    const r2 = await L.reportLab({ key: keyOf('P003'), values: { WBC: '6.2', Hb: '12.5', PLT: '180' } })
+    const r2 = await L.reportLab({ key: keyOf('P003'), values: { WBC: '6.2', Hb: '12.5', HCT: '38', PLT: '180' } })
     ok(r2.values.every((v) => !v.flag && !v.critical) && !r2.needsAck, '撤銷未執行後可以發；女性血色素 12.5 正常、不需確認')
 
     // 醫師確認危急值
@@ -8876,7 +8876,7 @@ try {
       for (const v of db().vitals.filter((x) => x.admissionId === sep.id && x.at.startsWith(d0) && x.output !== undefined)) v.output = 0
       const first = (await M.patientIcu(sep.id)).sofa.find((s) => s.date === d0)
       ok(!first || first.parts.renal === 2, `轉入那一天不滿一整天：不看尿量（腎臟 ${first?.parts.renal}：只看肌酸酐 2.1，沒變成 4）`) }
-    ok(pi.apache && pi.apache.parts.oxy === 2 && pi.apache.parts.ph === 3 && pi.apache.parts.wbc === 1 && pi.apache.parts.cre === 3 && pi.apache.missing.includes('na') && !pi.apache.input.set, `敗血症 APACHE II ${pi.apache?.total}（缺 ${pi.apache?.missing.length} 項以 0 分計）`)
+    ok(pi.apache && pi.apache.parts.oxy === 2 && pi.apache.parts.ph === 3 && pi.apache.parts.wbc === 1 && pi.apache.parts.cre === 3 && !pi.apache.missing.includes('na') && !pi.apache.input.set, `敗血症 APACHE II ${pi.apache?.total}（缺 ${pi.apache?.missing.length} 項以 0 分計）`)
 
     // 申請：已經有一筆不能再申請；護理師不能申請
     await as(db().users.find((u) => u.doctorId === 'DR02').username)
@@ -9234,6 +9234,125 @@ try {
     ok(d.outcome === 'dnr' && !db().ipdOrders.some((o) => o.codeBlueId === d.id), '依 DNR 不施行急救：結束、沒有 CPR 處置費')
     const q = await C.codeQuality(30)
     ok(q.codes === 3 && q.dnr === 1 && q.resus === 2 && q.rosc === 2 && q.roscRate === 100, `品質指標：急救 ${q.codes}（依 DNR 不施行 ${q.dnr}）、ROSC ${q.rosc}/${q.resus}（${q.roscRate}%）`)
+  }
+
+  // 升壓劑與電解質：劑量 ↔ 流速換算、開立檢查（限加護病房、要 CVC、DNR、不重複、欄位）、護理師調流速在上限內、
+  // 停藥劑量還高要原因、一般醫囑開不出也停不了、還在用不能轉出、SOFA 心血管依劑量、APACHE II 有鈉鉀血比容
+  console.log('\n[升壓劑與電解質]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const V = api.vasoApi
+    const ICU = '3I 加護病房'
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const ne = db().drugs.find((d) => d.id === 'M048').vaso
+    const dopa = db().drugs.find((d) => d.id === 'M049').vaso
+    const vp = db().drugs.find((d) => d.id === 'M050').vaso
+    ok(api.vasoRate(ne, 0.08, 60) === 18 && api.vasoDose(ne, 18, 60) === 0.08 && api.vasoRate(dopa, 5, 70) === 13.1 && api.vasoRate(vp, 0.03, 60) === 9, '換算：Norepinephrine 0.08 × 60 kg → 18 ml/h（反算 0.08）、Dopamine 5 × 70 kg → 13.1、Vasopressin 0.03 U/min → 9')
+    let e = api.checkVasoOrder(ne, {})
+    ok(e.dose && e.max && e.weightKg && e.target, '開立：起始劑量、上限、體重、目標都要')
+    e = api.checkVasoOrder(ne, { dose: 0.2, max: 0.1, weightKg: 60, target: 'x' })
+    ok(e.max?.includes('不能小於') && !e.dose, '上限不能小於起始劑量')
+    e = api.checkVasoOrder(ne, { dose: 1, max: 1, weightKg: 200, target: 'x' })
+    ok(e.dose?.includes('超出幫浦範圍'), `換算流速超出範圍 → 「${e.dose}」`)
+    const ord = { max: 0.3, weightKg: 60 }
+    ok(!api.vasoRateProblem(ne, ord, 60) && api.vasoRateProblem(ne, ord, 70)?.includes('超過醫囑上限') && api.vasoRateProblem(ne, ord, 2)?.includes('低於最低劑量') && api.vasoRateProblem(ne, ord, 0.2)?.includes('0.5'), '調流速：上限內可以、超過上限、低於最低劑量、流速範圍')
+    ok(api.vasoStopNeedsReason(ne, 0.08) && !api.vasoStopNeedsReason(ne, 0.05) && !api.vasoStopNeedsReason(ne, undefined), '停藥：0.08 高於 0.05 要原因；已調降或沒在滴不用')
+    ok(api.sofaCardioByVaso({ ne: 0.08 }) === 3 && api.sofaCardioByVaso({ ne: 0.12 }) === 4 && api.sofaCardioByVaso({ dopa: 4 }) === 2 && api.sofaCardioByVaso({ dopa: 8 }) === 3 && api.sofaCardioByVaso({ dopa: 16 }) === 4 && api.sofaCardioByVaso({ vasopressin: true }) === 3, 'SOFA 心血管：NE ≤0.1 → 3、>0.1 → 4；Dopamine ≤5 → 2、>5 → 3、>15 → 4；Vasopressin → 3')
+    ok(api.sofaScore({ map: 80, vaso: { ne: 0.05 } }).parts.cardio === 3 && api.sofaScore({ map: 60 }).parts.cardio === 1, '用升壓劑就不看 MAP')
+
+    // 種子
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    const dka = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    await as('dr02')
+    let pv = await V.patientVaso(sep.id)
+    ok(pv.inIcu && pv.hasCvc && !pv.dnrBlocked && pv.items.length === 1 && pv.items[0].current?.dose === 0.08 && pv.items[0].current.rateMlH === 18 && pv.items[0].stopNeedsReason && pv.canOrder, `種子：敗血症 Norepinephrine 目前 ${pv.items[0]?.current?.dose} mcg/kg/min（18 ml/h）`)
+    let pi = await api.icuMoveApi.patientIcu(sep.id)
+    const today = pi.sofa.at(-1)
+    // 今天 0 點以後還在 0.12 的那段（清晨跑測試時）就是 4 分：依當天最高劑量
+    ok(today.parts.cardio >= 3 && !pi.apache.missing.includes('na') && !pi.apache.missing.includes('k') && !pi.apache.missing.includes('hct') && pi.apache.parts.na !== null, `SOFA 今天心血管 ${today.parts.cardio}（升壓劑，依當天最高劑量）；APACHE II 有鈉、鉀、血比容（缺 ${pi.apache.missing.length} 項）`)
+    { // 轉入那天只住半天：區間要到那天結束，不能把之後幾天的資料算進來（以前算到「現在」，升壓劑開始前的日子也被算成 4 分）
+      const vStart = db().infusions.find((x) => x.id === 'INFU-VASO-SEED-1').startAt.slice(0, 10)
+      const before = pi.sofa.filter((x) => x.date < vStart)
+      ok(before.every((x) => (x.parts.cardio ?? 0) <= 1), `升壓劑開始前的日子心血管只看 MAP：${before.map((x) => `${x.date.slice(5)} ${x.parts.cardio}`).join('、') || '（轉入當天就開始）'}`) }
+    // 一般醫囑開不出、停不了
+    let msg = await errOf(() => api.ipdApi.addOrder({ admissionId: sep.id, type: 'long', category: 'medication', drugId: 'M048', content: '', dose: 1, freq: 'QD', route: 'IV', infusion: { volumeMl: 250, rateMlH: 18 } }))
+    ok(msg.includes('升壓劑'), `一般醫囑開升壓劑 → 「${msg}」`)
+    msg = await errOf(() => api.ipdApi.stopOrder('IO-VASO-SEED-1'))
+    ok(msg.includes('加護病房」分頁'), `一般醫囑停止升壓劑 → 「${msg}」`)
+    // 開立的限制
+    msg = await errOf(() => V.orderVaso(sep.id, { drugId: 'M048', dose: 0.05, max: 0.2, weightKg: 60, target: 'MAP ≥65' }))
+    ok(msg.includes('已經有執行中'), `同一種重複開 → 「${msg}」`)
+    let f = await fieldsOf(() => V.orderVaso(sep.id, { drugId: 'M050' }))
+    ok(f.dose && f.max && f.weightKg && f.target, '欄位錯誤一次標出')
+    await as(db().users.find((u) => u.doctorId === cell.doctorId).username)
+    msg = await errOf(() => V.orderVaso(cell.id, { drugId: 'M048', dose: 0.05, max: 0.2, weightKg: 60, target: 'x' }))
+    ok(msg.includes('只能在加護病房'), `一般病房開升壓劑 → 「${msg}」`)
+    await as(db().users.find((u) => u.doctorId === dka.doctorId).username)
+    const dkaCvc = db().lines.some((l) => l.admissionId === dka.id && l.kind === 'cvc' && !l.removedAt)
+    msg = await errOf(() => V.orderVaso(dka.id, { drugId: 'M048', dose: 0.05, max: 0.2, weightKg: 60, target: 'x' }))
+    ok(dkaCvc || msg.includes('中心靜脈導管'), `沒有 CVC 開升壓劑 → 「${msg}」`)
+    const dnr = db().dnrRecords.find((d) => d.patientId === sep.patientId && !d.revoked)
+    dnr.withhold.push('drugs')
+    await as('dr02')
+    msg = await errOf(() => V.orderVaso(sep.id, { drugId: 'M050', dose: 0.03, max: 0.04, weightKg: 60, target: 'MAP ≥65' }))
+    ok(msg.includes('DNR') && (await V.patientVaso(sep.id)).dnrBlocked, `DNR 不施行急救藥物 → 「${msg}」`)
+    // 服務失敗時交易回滾會換掉整個資料物件：要重新抓一次再還原
+    const dnr2 = db().dnrRecords.find((d) => d.patientId === sep.patientId && !d.revoked)
+    dnr2.withhold = dnr2.withhold.filter((x) => x !== 'drugs')
+    const vpItem = await V.orderVaso(sep.id, { drugId: 'M050', dose: 0.03, max: 0.04, weightKg: 60, target: 'MAP ≥65 mmHg' })
+    ok(vpItem.order.infusion.rateMlH === 9 && vpItem.order.infusion.volumeMl === 100 && !vpItem.current && !vpItem.stopNeedsReason && db().auditLogs[0].action === '開立升壓劑', 'Vasopressin 0.03 U/min → 9 ml/h（一袋 100 ml，還沒接上）、寫稽核')
+    // 護理師：接上要 CVC、調流速在上限內
+    await as('nurse01')
+    let inf = await api.infusionApi.patientInfusions(sep.id)
+    const neView = inf.items.find((x) => x.order.id === 'IO-VASO-SEED-1')
+    ok(neView.vaso?.dose === 0.08 && neView.vaso.max === 0.3, '點滴分頁：升壓劑顯示換算劑量與上限')
+    f = await fieldsOf(() => api.infusionApi.adjustRate('IO-VASO-SEED-1', { rateMlH: 70, reason: 'MAP 低於目標，調升' }))
+    ok(f.rateMlH?.includes('超過醫囑上限'), `調到 70 ml/h → 「${f.rateMlH}」`)
+    f = await fieldsOf(() => api.infusionApi.adjustRate('IO-VASO-SEED-1', { rateMlH: 2, reason: 'x' }))
+    ok(f.rateMlH?.includes('低於最低劑量'), '調太低：要停藥請醫師停')
+    inf = await api.infusionApi.adjustRate('IO-VASO-SEED-1', { rateMlH: 60, reason: 'MAP 低於目標，調升' })
+    ok(inf.vaso.dose === 0.267 && inf.running.rateMlH === 60, '調到 60 ml/h（0.267 mcg/kg/min，上限內；升壓劑流速可以低於 5 ml/h 的一般下限）')
+    pi = await api.icuMoveApi.patientIcu(sep.id)
+    ok(pi.sofa.at(-1).parts.cardio === 4, 'SOFA 今天心血管變 4（最高 0.267 > 0.1）')
+    // 還在用升壓劑不能轉出（用酮酸中毒病人：沒接呼吸器）
+    db().lines.push({ id: 'LN-TEST-CVC', admissionId: dka.id, kind: 'cvc', site: '右鎖骨下', size: '7Fr', insertedAt: dateUtil.now(), placedBy: 'x', recordedBy: 'U201', recordedAt: dateUtil.now() })
+    await as(db().users.find((u) => u.doctorId === dka.doctorId).username)
+    await V.orderVaso(dka.id, { drugId: 'M049', dose: 5, max: 10, weightKg: 70, target: 'MAP ≥65' })
+    await as('clerk01')
+    const gen = db().beds.find((b) => b.ward !== ICU && b.ward !== '急診留觀區' && b.status === 'empty' && b.bedClass === '健保床')
+    msg = await errOf(() => api.admissionApi.transferBed(dka.id, gen.id))
+    ok(msg.includes('升壓劑'), `還在用升壓劑轉出加護病房 → 「${msg}」`)
+    // 停止：劑量還高要原因
+    await as('dr02')
+    f = await fieldsOf(() => V.stopVaso('IO-VASO-SEED-1'))
+    ok(f.reason?.includes('逐步調降'), `目前 0.267 直接停 → 「${f.reason}」`)
+    await V.stopVaso('IO-VASO-SEED-1', { reason: '血壓穩定，改用 Vasopressin 維持' })
+    const neo = db().ipdOrders.find((o) => o.id === 'IO-VASO-SEED-1')
+    ok(neo.status === 'stopped' && neo.stopReason?.includes('Vasopressin') && db().auditLogs[0].action === '停止升壓劑', '寫原因就能停：醫囑停止、記原因、寫稽核')
+    await V.stopVaso(vpItem.order.id)
+    ok(db().ipdOrders.find((o) => o.id === vpItem.order.id).status === 'stopped', '沒在滴的直接停（不用原因）')
+    await as('nurse01')
+    inf = await api.infusionApi.patientInfusions(sep.id)
+    ok(inf.orphans.some((x) => x.order.id === 'IO-VASO-SEED-1'), '護理站：醫囑停了還在滴，請停止點滴')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

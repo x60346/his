@@ -4,7 +4,14 @@
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
-import { INFUSION_RATE_REASONS, infusionApi, type InfusionView } from '@/services'
+import { INFUSION_RATE_REASONS, infusionApi, vasoDose, type InfusionView, type VasoDef } from '@/services'
+// 升壓劑：流速換算劑量（和服務層同一個公式）
+const doseAt = (x: InfusionView, rate: number | undefined) => {
+  const vs = x.vaso
+  if (!vs || rate === undefined || rate === null || Number.isNaN(Number(rate))) return undefined
+  return vasoDose({ unit: vs.unit, perMl: vs.perMl } as VasoDef, Number(rate), vs.weightKg)
+}
+const VASO_REASONS = ['MAP 低於目標，調升', 'MAP 高於目標，調降', '逐步調降準備停藥', '依醫師口頭指示']
 import { useAction, useQuery } from '@/composables/useService'
 
 const props = defineProps<{ admissionId: string }>()
@@ -67,6 +74,7 @@ async function onStop(reason: string) {
           <div class="flex flex-wrap items-center gap-2">
             <b class="text-slate-800">{{ x.order.content }}</b>
             <UBadge v-if="x.order.status !== 'active'" tone="red">醫囑已停止：請停止</UBadge>
+            <UBadge v-if="x.vaso" tone="purple" class="tabular">升壓劑 {{ x.vaso.dose }} {{ x.vaso.unit }}（上限 {{ x.vaso.max }}）・目標 {{ x.vaso.target }}</UBadge>
             <span class="text-xs text-slate-500">{{ x.order.doctorName }}・一瓶約 {{ x.hoursPerBag }} 小時</span>
           </div>
           <template v-if="x.running">
@@ -111,9 +119,9 @@ async function onStop(reason: string) {
 
     <UDialog v-model="rateOpen" title="調流速" size="sm" @submit="submitRate">
       <div class="space-y-3 text-sm">
-        <UInput v-model="rf.rateMlH" type="number" label="新的流速 ml/小時" :error="adj.fieldErrors.value.rateMlH" />
+        <UInput v-model="rf.rateMlH" type="number" step="any" label="新的流速 ml/小時" :error="adj.fieldErrors.value.rateMlH" :hint="rate?.vaso && doseAt(rate, rf.rateMlH) !== undefined ? `換算 ${doseAt(rate, rf.rateMlH)} ${rate.vaso.unit}（上限 ${rate.vaso.max}）` : undefined" />
         <UInput v-model="rf.reason" label="原因" required :error="adj.fieldErrors.value.reason" />
-        <div class="flex flex-wrap gap-1"><button v-for="r in INFUSION_RATE_REASONS" :key="r" type="button" class="rounded border border-slate-300 px-1.5 text-xs hover:bg-slate-100" @click="rf.reason = r">{{ r }}</button></div>
+        <div class="flex flex-wrap gap-1"><button v-for="r in rate?.vaso ? VASO_REASONS : INFUSION_RATE_REASONS" :key="r" type="button" class="rounded border border-slate-300 px-1.5 text-xs hover:bg-slate-100" @click="rf.reason = r">{{ r }}</button></div>
         <p class="text-xs text-slate-500">醫師要改醫囑上的流速請開新的醫囑；這裡是護理師依病人狀況臨時調整（留紀錄）。</p>
       </div>
       <template #footer>

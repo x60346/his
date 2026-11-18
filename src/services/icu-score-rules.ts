@@ -1,6 +1,7 @@
 // 加護病房轉入轉出與嚴重度（純函式）：轉入類別與申請檢查、SOFA（每天）、APACHE II（轉入 24 小時內）、
 // 加護病房住了哪幾段、48 小時內再轉回（bounce back）。分數頁、服務層、品質指標、測試都用這一份。
-// 都是簡化版：SOFA 心血管只看 MAP（沒有升壓劑劑量）；APACHE II 沒有的檢驗（鈉、鉀、血比容）以 0 分計並列出「缺」
+// 都是簡化版：SOFA 心血管用升壓劑時依當天最高劑量，沒用才看 MAP；APACHE II 沒抽的檢驗以 0 分計並列出「缺」
+import { sofaCardioByVaso, type VasoMax } from './vaso-rules'
 import type { IcuCategory } from '@/types'
 
 export const ICU_CATEGORIES: { key: IcuCategory; label: string }[] = [
@@ -42,6 +43,8 @@ export interface SofaInput {
   bili?: number
   /** MAP（最低） */
   map?: number
+  /** 升壓劑當天最高劑量（有用就依劑量給分，不看 MAP） */
+  vaso?: VasoMax
   /** GCS（最低） */
   gcs?: number
   /** 肌酸酐 mg/dL（最高） */
@@ -57,7 +60,8 @@ export function sofaScore(x: SofaInput): { total: number; parts: Record<SofaKey,
   })() : null
   const coag = x.plt === undefined ? null : x.plt >= 150 ? 0 : x.plt >= 100 ? 1 : x.plt >= 50 ? 2 : x.plt >= 20 ? 3 : 4
   const liver = x.bili === undefined ? null : x.bili < 1.2 ? 0 : x.bili < 2 ? 1 : x.bili < 6 ? 2 : x.bili < 12 ? 3 : 4
-  const cardio = x.map === undefined ? null : x.map >= 70 ? 0 : 1
+  const byVaso = x.vaso ? sofaCardioByVaso(x.vaso) : undefined
+  const cardio = byVaso ?? (x.map === undefined ? null : x.map >= 70 ? 0 : 1)
   const cns = x.gcs === undefined ? null : x.gcs >= 15 ? 0 : x.gcs >= 13 ? 1 : x.gcs >= 10 ? 2 : x.gcs >= 6 ? 3 : 4
   const byCre = x.cre === undefined ? null : x.cre < 1.2 ? 0 : x.cre < 2 ? 1 : x.cre < 3.5 ? 2 : x.cre < 5 ? 3 : 4
   const byUo = x.urine === undefined ? null : x.urine < 200 ? 4 : x.urine < 500 ? 3 : 0
