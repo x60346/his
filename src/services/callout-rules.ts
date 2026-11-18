@@ -1,0 +1,52 @@
+// 危急值通報（純函式）：報告有危急值，醫檢師要在發出後 30 分鐘內打電話通報（住院：病房護理師或主治；門診：開立醫師），
+// 記下受話者姓名、職稱、對方已複誦。逾時標紅；指標「通報時效達成率」。檢驗頁、首頁、種子、測試共用
+import type { LabReport } from '@/types'
+import { addMinutes } from '@/utils/date'
+
+/** 發出後幾分鐘內要通報 */
+export const CALLOUT_MINUTES = 30
+export const CALLOUT_ROLE_LABEL = { nurse: '護理師', doctor: '醫師' } as const
+
+type R = Pick<LabReport, 'values' | 'reportedAt' | 'corrections' | 'callout'>
+/** 危急值從什麼時候開始要通報：第一版就有危急值＝發出時間；更正後才變危急值＝那次更正的時間 */
+export function criticalSince(r: R): string | undefined {
+  if (!r.values.some((v) => v.critical)) return undefined
+  const versions = [...(r.corrections ?? []).map((c) => ({ at: c.at, before: c.before }))]
+  // 第一版的值：有更正的話是第一次更正前的值
+  const first = versions.length ? versions[0].before : r.values
+  if (first.some((v) => v.critical)) return r.reportedAt
+  // 找出最早讓目前變成危急值的那次更正（之後各版都是危急值）
+  let since = r.reportedAt
+  for (let i = 0; i < versions.length; i++) {
+    const after = i + 1 < versions.length ? versions[i + 1].before : r.values
+    const before = versions[i].before
+    if (after.some((v) => v.critical) && !before.some((v) => v.critical)) since = versions[i].at
+  }
+  return since
+}
+
+/** 通報狀態：none 沒有危急值；done 已通報（ontime 是否在時限內）；late 逾時還沒通報；pending 時限內還沒通報 */
+export function calloutStatus(r: R, now: string): { status: 'none' | 'done' | 'late' | 'pending'; due?: string; ontime?: boolean } {
+  const since = criticalSince(r)
+  if (!since) return { status: 'none' }
+  const due = addMinutes(since, CALLOUT_MINUTES)
+  if (r.callout) return { status: 'done', due, ontime: r.callout.at <= due }
+  return { status: now > due ? 'late' : 'pending', due }
+}
+
+/** 通報時效達成率：已到期（或已通報）的危急值報告裡，在時限內通報的比例 */
+export function calloutRate(rs: R[], now: string): { total: number; ontime: number; pct: number } {
+  const xs = rs.map((r) => calloutStatus(r, now)).filter((x) => x.status === 'done' || x.status === 'late')
+  const ontime = xs.filter((x) => x.ontime).length
+  return { total: xs.length, ontime, pct: xs.length ? Math.round((ontime / xs.length) * 100) : 100 }
+}
+
+/** 通報欄位檢查：受話者姓名、職稱、複誦（住院可選護理師或醫師；門診只有醫師） */
+export function checkCallout(x: { to?: string; toRole?: string; readBack?: boolean }, source: 'opd' | 'ipd'): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!x.to?.trim()) e.to = '請寫受話者姓名'
+  if (x.toRole !== 'nurse' && x.toRole !== 'doctor') e.toRole = '請選受話者職稱'
+  else if (source === 'opd' && x.toRole !== 'doctor') e.toRole = '門診危急值要通報開立醫師'
+  if (!x.readBack) e.readBack = '要請對方複誦病人姓名、項目與數值，並確認無誤'
+  return e
+}

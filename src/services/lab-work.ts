@@ -6,6 +6,8 @@ import { db } from '@/mock/db'
 import { find, nameOf } from './views'
 import { labOrderStage, opdSpecimenOf, specimenOfOrder } from './specimen-work'
 import { labNeedsAck, labRefText } from './lab-rules'
+import { calloutStatus } from './callout-rules'
+import { now } from '@/utils/date'
 
 export interface LabWorkItem {
   /** E:看診id:醫令id（門診）或 O:醫囑id（住院） */
@@ -91,3 +93,9 @@ export const labAckCount = (doctorId: string) => db.labReports.filter((r) => lab
 
 /** 抽血櫃台：今天要採檢的門診病人數（已批價、檢體還沒採檢或容器還沒交回的） */
 export const deskToCollectCount = () => new Set(pendingLabWork().filter((w) => w.source === 'opd' && w.awaitingCollection).map((w) => w.patientId)).size
+
+/** 危急值還沒通報的（其中已逾時的） */
+export function calloutCounts(t: string = now()): { pending: number; late: number } {
+  const xs = db.labReports.map((r) => calloutStatus(r, t).status).filter((s) => s === 'pending' || s === 'late')
+  return { pending: xs.length, late: xs.filter((s) => s === 'late').length }
+}

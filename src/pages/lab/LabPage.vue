@@ -14,6 +14,7 @@ import { genderLabel } from '@/utils/labels'
 import CultureForm from './components/CultureForm.vue'
 import CultureView from '@/components/CultureView.vue'
 import SpecimenReceiveCard from './components/SpecimenReceiveCard.vue'
+import CalloutCard from './components/CalloutCard.vue'
 import QcPanel from './components/QcPanel.vue'
 import LabDeskPanel from './components/LabDeskPanel.vue'
 import AnalyzerPanel from './components/AnalyzerPanel.vue'
@@ -113,6 +114,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
   <LabDeskPanel v-else-if="mode === 'desk'" />
   <AnalyzerPanel v-else-if="mode === 'analyzer'" />
   <template v-else>
+  <CalloutCard />
   <SpecimenReceiveCard />
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_1fr]">
     <UCard :padded="false" class="self-start">

@@ -13,6 +13,8 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser, s
 import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
+import { calloutRate, calloutStatus, checkCallout, CALLOUT_ROLE_LABEL } from './callout-rules'
+import { addDays } from '@/utils/date'
 import { canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
@@ -38,8 +40,25 @@ export interface LabReportView extends LabReport {
   chartNo: string
   gender: Gender
   ackByName?: string
+  /** 危急值通報：狀態、期限、通報人 */
+  calloutState: 'none' | 'done' | 'late' | 'pending'
+  calloutDue?: string
+  calloutOnTime?: boolean
+  calloutByName?: string
+  /** 住院：病房床號；門診：科別門診 */
+  where: string
   /** 檢驗值的定義＋這位病人的參考範圍（更正時畫面用來即時標示） */
   items: (LabItemDef & { ref: string })[]
+}
+
+const whereOf = (r: LabReport) => {
+  if (r.admissionId) {
+    const a = find.admission(r.admissionId)
+    const bed = a?.bedId ? find.bed(a.bedId) : undefined
+    return bed ? `${bed.ward} ${bed.bedNo}` : '住院'
+  }
+  const e = r.encounterId ? db.encounters.find((x) => x.id === r.encounterId) : undefined
+  return e ? `${nameOf.dept(e.deptId)}門診` : '門診'
 }
 
 function reportView(r: LabReport): LabReportView {
@@ -55,6 +74,9 @@ function reportView(r: LabReport): LabReportView {
     hasCritical: r.values.some((v) => v.critical),
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', gender: p?.gender ?? 'M',
     ...(r.ackBy ? { ackByName: nameOf.user(r.ackBy) } : {}),
+    ...((c) => ({ calloutState: c.status, ...(c.due ? { calloutDue: c.due } : {}), ...(c.ontime !== undefined ? { calloutOnTime: c.ontime } : {}) }))(calloutStatus(r, now())),
+    ...(r.callout ? { calloutByName: nameOf.user(r.callout.by) } : {}),
+    where: whereOf(r),
     items: procItems(r.procId).map((d) => ({ ...d, ref: labRefText(d, p?.gender ?? 'M') })),
   }
 }
@@ -145,6 +167,37 @@ export function patientLabs(patientId: string): Promise<{ reports: LabReportView
       }
     }
     return { reports: list.map(reportView), trends: [...trends.values()].map((t) => ({ ...t, points: t.points.slice(-6) })) }
+  })
+}
+
+/** 危急值通報：醫檢師打電話給病房護理師或主治（門診：開立醫師），記受話者、對方已複誦；逾時照樣可以補記（標逾時） */
+export function calloutLab(id: string, input: { to: string; toRole: 'nurse' | 'doctor'; readBack: boolean; note?: string }): Promise<LabReportView> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const r = must(db.labReports.find((x) => x.id === id), '檢驗報告')
+    if (!r.values.some((v) => v.critical)) fail('這份報告沒有危急值，不需要通報', 'CONFLICT')
+    if (r.callout) fail('這份報告已經通報過了', 'CONFLICT')
+    failFields(checkCallout(input ?? {}, r.admissionId ? 'ipd' : 'opd'))
+    const t = now()
+    const late = calloutStatus(r, t).status === 'late'
+    r.callout = { at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, readBack: true, ...(input.note?.trim() ? { note: input.note.trim() } : {}) }
+    audit(late ? '危急值通報（逾時）' : '危急值通報', `${r.no} ${nameOf.patient(r.patientId)}：${r.values.filter((v) => v.critical).map((v) => `${v.name} ${v.value}`).join('、')} → ${CALLOUT_ROLE_LABEL[input.toRole]} ${r.callout.to}（已複誦）`)
+    return reportView(r)
+  })
+}
+
+/** 危急值通報清單（檢驗科）：還沒通報的（逾時的在前）、今天通報過的、近 30 天通報時效達成率 */
+export function calloutBoard(): Promise<{ pending: LabReportView[]; doneToday: LabReportView[]; rate: { total: number; ontime: number; pct: number } }> {
+  return query(() => {
+    requireUser('lab', 'admin')
+    const t = now()
+    const since = addDays(t.slice(0, 10), -30)
+    const views = db.labReports.filter((r) => r.values.some((v) => v.critical)).map(reportView)
+    return {
+      pending: views.filter((v) => v.calloutState === 'pending' || v.calloutState === 'late').sort((a, b) => (a.calloutDue ?? '').localeCompare(b.calloutDue ?? '')),
+      doneToday: views.filter((v) => v.callout?.at.startsWith(t.slice(0, 10))).sort((a, b) => b.callout!.at.localeCompare(a.callout!.at)),
+      rate: calloutRate(db.labReports.filter((r) => r.reportedAt.slice(0, 10) >= since), t),
+    }
   })
 }
 

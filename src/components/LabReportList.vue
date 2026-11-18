@@ -52,6 +52,8 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
             <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ when(r.reportedAt) }}・{{ r.source === 'ipd' ? '住院' : '門診' }}・{{ r.doctorName }} 開立</span>
             <UBadge v-if="r.hasCritical" tone="red">危急值</UBadge>
             <UBadge v-if="r.corrections?.length" tone="yellow">已更正</UBadge>
+            <span v-if="r.callout" class="text-xs text-slate-500">檢驗科 {{ r.calloutByName }} {{ when(r.callout.at) }} 已電話通報 {{ r.callout.to }}{{ r.calloutOnTime ? '' : '（逾時）' }}</span>
+            <span v-else-if="r.hasCritical && r.calloutState !== 'none'" class="text-xs font-medium text-amber-800">檢驗科還沒電話通報</span>
             <span v-if="r.ackAt" class="text-xs text-slate-500">{{ r.ackByName }} {{ when(r.ackAt) }} 已確認</span>
             <UButton v-if="r.canAck" size="sm" variant="danger" class="ml-auto" :loading="ack.pending.value" @click="ack.run(r.id)">已知悉</UButton>
             <span v-else-if="r.needsAck" class="ml-auto text-xs font-medium text-red-700">待開立醫師確認</span>

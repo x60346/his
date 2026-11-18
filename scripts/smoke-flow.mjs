@@ -5207,7 +5207,7 @@ try {
     const pastIpd = db().ipdOrders.filter((o) => o.type === 'stat' && o.status === 'done' && proc(o.procId ?? '')?.labItems && o.stopAt.slice(0, 10) < T)
     ok(pastIpd.length > 0 && pastIpd.every((o) => db().labReports.some((r) => r.orderId === o.id)), `種子：今天以前採檢的住院檢驗都有報告（${pastIpd.length} 份）`)
     ok(db().labReports.every((r) => { const g = db().patients.find((p) => p.id === r.patientId).gender; const re = LR.buildLabValues(proc(r.procId).labItems, Object.fromEntries(r.values.map((v) => [v.code, v.value])), g).values; return JSON.stringify(re) === JSON.stringify(r.values) }), '種子報告的判讀和規則一致（重算一樣）')
-    const seedAcks = db().labReports.filter((r) => LR.labNeedsAck(r))
+    const seedAcks = db().labReports.filter((r) => LR.labNeedsAck(r) && r.id !== 'LR-CR-1') // LR-CR-1：危急值通報的示範（今天、還沒通報）
     ok(seedAcks.some((r) => r.orderId === 'IO-SEED-LAB1' && r.values.find((v) => v.code === 'Hb').critical) && seedAcks.some((r) => r.encounterId && (r.doctorId === 'DR01' || !db().labReports.some((x) => x.encounterId && x.doctorId === 'DR01' && ['P003', 'P004'].includes(x.procId)))) && seedAcks.length === 2, `種子：兩份危急值待確認（${seedAcks.map((r) => r.id).join(',')}；門診 ${seedAcks.find((r) => r.encounterId)?.doctorId}，優先 dr01；一位住院病人昨天的 CBC 血色素 6.8）`)
 
     // 門診：完成看診 → 批價後才出現在待檢驗
@@ -11594,6 +11594,86 @@ try {
     await E.arriveExam(e4.id)
     const r4 = await E.confirmExamPrep(e4.id, 'renal', true)
     ok(r4.prepItems.find((p) => p.id === 'renal').note.includes('另行確認'), '算不出時確認：記「腎功能已另行確認」')
+  }
+
+  // 危急值通報：何時起算（含更正後才變危急值）、30 分鐘時限、達成率、欄位檢查、種子、通報與稽核、權限、和醫師已知悉分開
+  console.log('\n[危急值通報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const L = api.labApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const C = (x) => [{ code: 'K', critical: x }]
+    const r0 = { reportedAt: '2026-11-18 10:00', values: C(true) }
+    ok(api.criticalSince(r0) === '2026-11-18 10:00' && api.criticalSince({ ...r0, values: C(false) }) === undefined, '起算：發出時就是危急值＝發出時間；沒有危急值不用通報')
+    ok(api.criticalSince({ ...r0, corrections: [{ at: '2026-11-18 11:00', before: C(false) }] }) === '2026-11-18 11:00' && api.criticalSince({ ...r0, corrections: [{ at: '2026-11-18 11:00', before: C(true) }] }) === '2026-11-18 10:00', '起算：更正後才變危急值＝更正時間；本來就是危急值不重算')
+    ok(api.calloutStatus(r0, '2026-11-18 10:30').status === 'pending' && api.calloutStatus(r0, '2026-11-18 10:31').status === 'late' && api.calloutStatus(r0, '2026-11-18 10:31').due === '2026-11-18 10:30', '時限：發出後 30 分鐘（剛好 30 分還沒逾時）')
+    ok(api.calloutStatus({ ...r0, callout: { at: '2026-11-18 10:30' } }, 'x').ontime && !api.calloutStatus({ ...r0, callout: { at: '2026-11-18 10:31' } }, 'x').ontime, '已通報：30 分鐘內算達成')
+    ok(api.calloutRate([r0, { ...r0, callout: { at: '2026-11-18 10:10' } }, { ...r0, callout: { at: '2026-11-18 11:00' } }], '2026-11-18 10:20').pct === 50 && api.calloutRate([], 'x').pct === 100, '達成率：還沒到期的不算分母')
+    ok(Object.keys(api.checkCallout({}, 'ipd')).sort().join() === 'readBack,to,toRole' && api.checkCallout({ to: 'A', toRole: 'nurse', readBack: true }, 'opd').toRole?.includes('開立醫師') && !Object.keys(api.checkCallout({ to: 'A', toRole: 'nurse', readBack: true }, 'ipd')).length, '欄位：姓名、職稱、複誦都要；門診只能通報醫師')
+
+    // 種子
+    await as('lab01')
+    let b = await L.calloutBoard()
+    const cr = b.pending.find((r) => r.id === 'LR-CR-1')
+    ok(cr && ['late', 'pending'].includes(cr.calloutState) && cr.values[0].value === '32' && cr.where.includes('ICU'), `種子：今天加護病房血糖 32 還沒通報（${cr?.calloutState}，期限 ${cr?.calloutDue}）`)
+    const old = db().labReports.filter((r) => r.values.some((v) => v.critical) && r.reportedAt < T)
+    ok(old.length >= 3 && old.every((r) => r.callout?.readBack) && old.some((r) => r.callout.toRole === 'doctor' && !r.admissionId) && b.rate.ontime === old.length - 1, `種子：過去 ${old.length} 份危急值都通報過（門診給開立醫師）、一份逾時；達成率 ${b.rate.ontime}/${b.rate.total}`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.calloutPending >= 1, `檢驗科首頁：危急值待通報 ${dash.calloutPending}（逾時 ${dash.calloutLate}）`)
+
+    // 權限
+    await as('nurse01')
+    let msg = await errOf(() => L.calloutLab('LR-CR-1', { to: 'x', toRole: 'nurse', readBack: true }))
+    ok(msg.includes('權限'), '護理師不能記通報')
+
+    // 通報
+    await as('lab01')
+    const plain = db().labReports.find((r) => !r.values.some((v) => v.critical))
+    msg = await errOf(() => L.calloutLab(plain.id, { to: 'x', toRole: 'nurse', readBack: true }))
+    ok(msg.includes('沒有危急值'), '沒有危急值不用通報')
+    let f = await fieldsOf(() => L.calloutLab('LR-CR-1', { to: ' ', toRole: 'nurse', readBack: false }))
+    ok(f.to && f.readBack, '沒寫受話者、沒勾複誦 → 標出')
+    const nurse = db().users.find((u) => u.roles.includes('nurse'))
+    const done = await L.calloutLab('LR-CR-1', { to: nurse.name, toRole: 'nurse', readBack: true, note: '值班醫師已到床邊' })
+    ok(done.callout?.to === nurse.name && done.calloutState === 'done' && done.calloutByName && db().auditLogs[0].action.startsWith('危急值通報') && db().auditLogs[0].detail.includes('已複誦'), `通報：記受話者、通報人、稽核（${db().auditLogs[0].action}）`)
+    msg = await errOf(() => L.calloutLab('LR-CR-1', { to: 'x', toRole: 'nurse', readBack: true }))
+    ok(msg.includes('已經通報'), '不能重複通報')
+    ok(done.needsAck, '通報不取代醫師「已知悉」（兩個都要有）')
+    b = await L.calloutBoard()
+    ok(!b.pending.some((r) => r.id === 'LR-CR-1') && b.doneToday.some((r) => r.id === 'LR-CR-1'), '通報後移到「今天已通報」')
+    await as('nurse01')
+    const pl = await L.patientLabs(done.patientId)
+    ok(pl.reports.find((r) => r.id === 'LR-CR-1')?.callout?.to === nurse.name, '護理站看報告也看得到通報紀錄')
+
+    // 新的危急值：發出時起算；門診只能通報醫師
+    await as('lab01')
+    const opd = db().labReports.find((r) => r.encounterId && r.values.some((v) => v.critical))
+    delete opd.callout // 測試：當作還沒通報
+    f = await fieldsOf(() => L.calloutLab(opd.id, { to: 'x', toRole: 'nurse', readBack: true }))
+    ok(f.toRole?.includes('開立醫師'), '門診危急值只能通報開立醫師（服務層也擋）')
+    // 更正後才變危急值：從更正時間起算
+    const cbcRep = db().labReports.find((r) => r.procId === 'P004' && !r.values.some((v) => v.critical) && !r.callout)
+    const fixed = await L.correctLab(cbcRep.id, { values: { 'GLU-AC': '450' }, reason: '登打錯誤' })
+    ok(fixed.calloutState === 'pending' && fixed.calloutDue === dateUtil.addMinutes(fixed.corrections.at(-1).at, 30), '更正後才變危急值：從更正時間起算 30 分鐘')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.calloutPending >= 1, '首頁待通報跟著增加')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

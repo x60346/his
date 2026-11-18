@@ -1054,6 +1054,8 @@ export interface LabReport {
   corrections?: { at: string; by: string; reason: string; before: LabValue[] }[]
   /** 儀器自動傳輸、通過自動審核直接發出（沒有人工審核） */
   autoVerified?: boolean
+  /** 危急值通報（醫檢師打電話）：通報給誰（姓名、職稱）、對方複誦確認、時間。和醫師「已知悉」分開，兩個都要有 */
+  callout?: { at: string; by: string; to: string; toRole: 'nurse' | 'doctor'; readBack: true; note?: string }
   /** 醫師確認（有危急值或更正過的才需要）：沒有＝待確認 */
   ackBy?: string
   ackAt?: string
