@@ -25,6 +25,8 @@ import { acceptAdviceOn, adviceOfOrder, medHistory, type AbxAdviceView } from '.
 import { abxCourseStart } from './abx-steward-rules'
 import { renalAlertOf, tdmOf } from './renal-work'
 import type { TdmState } from './renal-rules'
+import { openPharmQuery, pharmBlocksUd } from './pharm-rules'
+import { newPharm, settlePharmOnChange } from './pharm-work'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -79,6 +81,9 @@ export interface OrderView extends IpdOrder {
   renalAlert?: string
   /** Vancomycin 谷濃度：該抽、待報告、過高、過低、在範圍 */
   tdm?: TdmState
+  /** 藥師審核：待審、疑義待回覆（已審或功能上線前的不給） */
+  pharmStatus?: 'pending' | 'query'
+  pharmQuery?: { text: string; byName: string; at: string }
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -99,6 +104,8 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(o.abx && o.status === 'active' ? { abxInfo: abxInfoOf(o.abx) } : {}),
     ...((r) => (r ? { renalAlert: r } : {}))(renalAlertOf(o)),
     ...((x) => (x ? { tdm: x } : {}))(tdmOf(o)),
+    ...(o.pharm && o.pharm.status !== 'approved' && o.status === 'active' ? { pharmStatus: o.pharm.status } : {}),
+    ...((pq) => (pq && o.status === 'active' ? { pharmQuery: { text: pq.text, byName: nameOf.user(pq.by), at: pq.at } } : {}))(openPharmQuery(o.pharm)),
     ...(o.status === 'active' && o.category === 'medication' && adviceOfOrder(o.id).length ? { abxAdvice: adviceOfOrder(o.id) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
@@ -248,6 +255,8 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
       ...(abx ? { abx } : {}),
+      // 給藥醫囑都要藥師審核（修改＝新醫囑，重新送審）
+      ...(input.category === 'medication' ? { pharm: newPharm(t) } : {}),
       ...(dietValue ? { diet: dietValue } : {}),
       ...(infusionValue ? { infusion: infusionValue } : {}),
       content,
@@ -350,6 +359,7 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
     const handled = db.mar.filter((m) => m.orderId === old.id && m.status !== 'pending').map((m) => m.scheduledAt).sort().at(-1)
     const startAt = handled && addMinutes(handled, 1) > t ? addMinutes(handled, 1) : t
     const unit = doseUnitOf(must(find.drug(old.drugId!), '藥品'))
+    settlePharmOnChange(old, 'modified', user.id, t)
     stopOrderRecord(old, user.id, t)
     // 原本就有的同藥醫囑醫師開立時已確認過，修改不再問一次
     const o = createOrder(user, a, {
@@ -413,6 +423,8 @@ export interface MarView extends MarRecord {
   /** 管制性抗生素：「使用第 3 天」、審核未通過（只標示，不擋給藥——停不停藥是醫師的決定） */
   abxText?: string
   abxRejected?: boolean
+  /** 長期醫囑還沒通過藥師審核：藥局還不能調劑 */
+  pharmPending?: boolean
 }
 
 /** 組出某日的給藥紀錄檢視（服務層內部共用：不補排程、不包 query） */
@@ -426,7 +438,8 @@ export function marViews(admissionId: string, date: string): MarView[] {
       const q = o ? openQuery(o) : undefined
       return {
         ...m,
-        ...(q && m.status === 'pending' ? { queried: q.reason } : {}),
+        ...(q && m.status === 'pending' ? { queried: q.reason } : o && openPharmQuery(o.pharm) && m.status === 'pending' ? { queried: `藥師疑義：${openPharmQuery(o.pharm)!.text}` } : {}),
+        ...(m.status === 'pending' && o && pharmBlocksUd(o) && !m.udLineId ? { pharmPending: true } : {}),
         ...(m.status === 'pending' && o?.type === 'long' && udStage(m) !== 'verified' ? { awaitingUd: udStage(m) === 'prepared' ? ('checking' as const) : ('pending' as const) } : {}),
         ...(m.status === 'pending' && udDelivery(m) ? { udDelivery: udDelivery(m) } : {}),
         content: o?.content ?? '',

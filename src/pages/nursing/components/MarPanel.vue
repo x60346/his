@@ -276,6 +276,7 @@ async function complete(o: OrderView) {
                   <!-- 管制性抗生素：第幾天；感染科不核准只標示、不擋給藥（停不停藥是醫師的決定，有疑慮請聯絡醫師） -->
                   <UBadge v-if="m.abxText" :tone="m.abxRejected ? 'red' : 'gray'" :title="m.abxRejected ? '感染科審核未通過，等醫師處理（停藥、改藥或申覆）；照常可以給' : '管制性抗生素'">{{ m.abxRejected ? `${m.abxText.split('・')[0]}・審核未通過` : m.abxText.split('・')[0].split('（')[0] }}</UBadge>
                   <UBadge v-if="m.queried" tone="yellow" :title="`疑問：${m.queried}`">待醫師回覆</UBadge>
+                  <UBadge v-if="m.pharmPending" tone="gray" title="長期醫囑還沒通過藥師審核，藥局還不能調劑">待藥師審核</UBadge>
                   <UBadge v-if="m.stockFrom === 'pharmacy'" tone="purple" title="病房常備不夠，改由住院藥局直送（扣藥局的帳）">藥局直送</UBadge>
                   <UBadge v-if="m.udDelivery === 'notReceived'" tone="cyan" title="藥局已核對送出，病房還沒點收這一盒（「本班待辦」點收）；照樣可以給">藥車未點收</UBadge>
                   <UBadge v-else-if="m.udDelivery === 'issue'" tone="red" title="點收時回報不符，藥局處理中；請確認藥品正確再給">藥盒不符</UBadge>

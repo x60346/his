@@ -12,6 +12,6 @@ export function renalHintOf(admissionId: string, drugId: string): Promise<{ crcl
     if (!bands?.length || !db.admissions.some((a) => a.id === admissionId)) return null
     const r = renalOf(admissionId)
     const band = renalBandOf(bands, r.crcl)
-    return { crcl: r.crcl, text: r.text, ...(band ? { advice: `CrCl < ${band.below}：${band.text}（${band.freq}）` } : {}) }
+    return { crcl: r.crcl, text: r.text, ...(band ? { advice: `CrCl < ${band.below}：${band.text}${band.freq ? `（${band.freq}）` : ''}` } : {}) }
   })
 }

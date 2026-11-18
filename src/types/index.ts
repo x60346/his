@@ -743,10 +743,10 @@ export interface PriceChange extends DatedChange {
   selfPrice: number
 }
 
-/** 腎功能分級：CrCl（ml/min）低於 below 時，建議頻率改成 freq（頻率代碼），text 是給醫師看的建議 */
+/** 腎功能分級：CrCl（ml/min）低於 below 時，建議頻率改成 freq（頻率代碼；沒有＝建議停用），text 是給醫師看的建議 */
 export interface RenalBand {
   below: number
-  freq: string
+  freq?: string
   text: string
 }
 
@@ -1322,6 +1322,32 @@ export interface IpdOrder {
   consultSeenBy?: string
   /** 管制性抗生素的使用申請與感染科審核（修改醫囑沿用：療程、審核結果都跟著走） */
   abx?: AbxRequest
+  /**
+   * 藥師審核（給藥醫囑）：開立、修改後待審；長期排程的藥審核通過才能每日調劑，臨時與需要時先給後審。
+   * 沒有這個欄位＝功能上線前開的醫囑（視同已審）
+   */
+  pharm?: PharmReview
+}
+
+/** 藥師審核：pending 待審、approved 通過、query 疑義待醫師回覆（回覆「維持原醫囑」後回到待審） */
+export interface PharmReview {
+  status: 'pending' | 'approved' | 'query'
+  /** 送審（開立或修改）時間 */
+  at: string
+  by?: string
+  doneAt?: string
+  note?: string
+  queries?: PharmQuery[]
+}
+export interface PharmQuery {
+  by: string
+  at: string
+  text: string
+  replyBy?: string
+  replyAt?: string
+  reply?: string
+  /** kept＝醫師寫理由維持原醫囑；modified＝修改（新醫囑重新送審）；stopped＝停止 */
+  resolution?: 'kept' | 'modified' | 'stopped'
 }
 
 /** 管制性抗生素的使用理由：經驗性治療、依培養結果（要寫菌種）、手術預防 */

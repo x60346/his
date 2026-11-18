@@ -2785,6 +2785,30 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 藥師住院醫囑審核（示範，不抽亂數）：功能上線前的醫囑沒有 pharm（視同已審）；今天新開的三筆——
+  //   - 敗血症（CrCl 約 31）Famotidine 每日兩次：待審，系統列「腎功能：建議每日一次」
+  //   - 骨折（已在吃 Celecoxib）加開 Ibuprofen：待審，系統列「同類重複（NSAIDs）」
+  //   - 腦梗塞（已在吃 Aspirin）加開 Warfarin：藥師 3 小時前提出疑義，等主治回覆（回覆前暫停給藥）
+  {
+    const by = (dx: string) => admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith(dx))
+    const ph = 'U301'
+    const mk = (idx: number, a: Admission | undefined, drugId: string, freq: string, minsAgo: number, extra: Partial<IpdOrder> = {}) => {
+      if (!a) return
+      const d = drugMap.get(drugId)!
+      const at = addMinutes(nowStr, -minsAgo)
+      ipdOrders.push({
+        id: `IO-PH-${idx}`, admissionId: a.id, type: 'long', category: 'medication', drugId, content: d.name, dose: 1, freq, route: d.defaultRoute,
+        ...(timingApplies(freq, d.defaultRoute) ? { timing: effectiveTiming(d.timing, undefined) } : {}),
+        startAt: at, status: 'active', doctorId: a.doctorId, createdAt: at, ackAt: addMinutes(at, 10), ackBy: 'U201', pharm: { status: 'pending', at }, ...extra,
+      })
+    }
+    mk(1, by('A41'), 'M023', 'BID', 40)
+    mk(2, by('S52'), 'M002', 'TID', 120)
+    const st = by('I63')
+    const qAt = addMinutes(nowStr, -180)
+    mk(3, st, 'M021', 'QD', 300, { pharm: { status: 'query', at: addMinutes(nowStr, -300), queries: [{ by: ph, at: qAt, text: '病人已在使用 Aspirin，併用 Warfarin 出血風險大增；且無 INR 紀錄，請確認適應症與是否需併用' }] } })
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {

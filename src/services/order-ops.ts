@@ -3,6 +3,7 @@
 // 有疑問的醫囑疑問就此結案。
 import type { IpdOrder, OrderQuery, ProgressNote } from '@/types'
 import { db, newId } from '@/mock/db'
+import { settlePharmOnChange } from './pharm-work'
 import { openQuery } from './nursing-rules'
 
 /** 停止一筆醫囑；回傳被一併結案的疑問（沒有就 undefined） */
@@ -12,6 +13,8 @@ export function stopOrderRecord(o: IpdOrder, userId: string, t: string): OrderQu
   db.mar = db.mar.filter((m) => !(m.orderId === o.id && m.status === 'pending'))
   const q = openQuery(o)
   if (q) Object.assign(q, { replyBy: userId, replyAt: t, reply: '已停止此醫囑', resolution: 'stopped' })
+  // 藥師疑義也一起結案（修改的在呼叫前已記成 modified）
+  settlePharmOnChange(o, 'stopped', userId, t)
   return q
 }
 

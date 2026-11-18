@@ -196,7 +196,7 @@ const drug = (
 
 const drugBase = [
   drug('M001', 'AC00001100', 'Acetaminophen 500mg', 'Acetaminophen', '500 mg/tab', 'TAB', '口服', 2, 5, 3200, 1, 'TID', 'PO'),
-  drug('M002', 'AC00002100', 'Ibuprofen 400mg', 'Ibuprofen', '400 mg/tab', 'TAB', '口服', 2.5, 6, 1800, 1, 'TID', 'PO'),
+  { ...drug('M002', 'AC00002100', 'Ibuprofen 400mg', 'Ibuprofen', '400 mg/tab', 'TAB', '口服', 2.5, 6, 1800, 1, 'TID', 'PO'), renal: [{ below: 30, text: '建議停用（NSAID 會讓腎功能更差）' }] },
   // 抗生素的 WHO DDD（克）與每顆／每支相當幾克：用量統計（每千住院人日 DDD）用
   { ...drug('M003', 'AC00003100', 'Amoxicillin 500mg', 'Amoxicillin', '500 mg/cap', 'CAP', '口服', 3.2, 8, 1500, 1, 'TID', 'PO'), ddd: 1.5, dddUnitG: 0.5, renal: [{ below: 30, freq: 'BID', text: '建議改每 12 小時' }] },
   { ...drug('M004', 'AC00004100', 'Augmentin 625mg', 'Amoxicillin/Clavulanate', '625 mg/tab', 'TAB', '口服', 9.8, 22, 900, 1, 'BID', 'PO'), ddd: 1.5, dddUnitG: 0.5 },
@@ -210,7 +210,8 @@ const drugBase = [
   drug('M012', 'AC00012100', 'Amlodipine 5mg', 'Amlodipine', '5 mg/tab', 'TAB', '口服', 3.6, 8, 3000, 1, 'QD', 'PO'),
   drug('M013', 'AC00013100', 'Losartan 50mg', 'Losartan', '50 mg/tab', 'TAB', '口服', 5.2, 12, 2500, 1, 'QD', 'PO'),
   drug('M014', 'AC00014100', 'Bisoprolol 5mg', 'Bisoprolol', '5 mg/tab', 'TAB', '口服', 4.4, 10, 1200, 1, 'QD', 'PO'),
-  drug('M015', 'AC00015100', 'Metformin 500mg', 'Metformin', '500 mg/tab', 'TAB', '口服', 2, 5, 4200, 1, 'BID', 'PO'),
+  // 非抗生素的腎功能分級（依仿單精神簡化）：Metformin、NSAID、Famotidine、Tramadol
+  { ...drug('M015', 'AC00015100', 'Metformin 500mg', 'Metformin', '500 mg/tab', 'TAB', '口服', 2, 5, 4200, 1, 'BID', 'PO'), renal: [{ below: 45, freq: 'QD', text: '建議減量（每日最多 1000 mg）' }, { below: 30, text: '建議停用（乳酸中毒風險）' }] },
   drug('M016', 'AC00016100', 'Glimepiride 2mg', 'Glimepiride', '2 mg/tab', 'TAB', '口服', 3, 7, 1600, 1, 'QD', 'PO'),
   drug('M017', 'AC00017100', 'Sitagliptin 100mg', 'Sitagliptin', '100 mg/tab', 'TAB', '口服', 19, 40, 900, 1, 'QD', 'PO'),
   drug('M018', 'AC00018100', 'Atorvastatin 20mg', 'Atorvastatin', '20 mg/tab', 'TAB', '口服', 8.5, 18, 2100, 1, 'HS', 'PO'),
@@ -218,15 +219,15 @@ const drugBase = [
   drug('M020', 'AC00020100', 'Clopidogrel 75mg', 'Clopidogrel', '75 mg/tab', 'TAB', '口服', 15, 32, 800, 1, 'QD', 'PO'),
   drug('M021', 'AC00021100', 'Warfarin 5mg', 'Warfarin', '5 mg/tab', 'TAB', '口服', 2.2, 5, 300, 1, 'QD', 'PO', true),
   drug('M022', 'AC00022100', 'Omeprazole 20mg', 'Omeprazole', '20 mg/cap', 'CAP', '口服', 6, 14, 1700, 1, 'QD', 'PO'),
-  drug('M023', 'AC00023100', 'Famotidine 20mg', 'Famotidine', '20 mg/tab', 'TAB', '口服', 1.8, 4, 1800, 1, 'BID', 'PO'),
+  { ...drug('M023', 'AC00023100', 'Famotidine 20mg', 'Famotidine', '20 mg/tab', 'TAB', '口服', 1.8, 4, 1800, 1, 'BID', 'PO'), renal: [{ below: 50, freq: 'QD', text: '建議減為每日一次' }] },
   drug('M024', 'AC00024100', 'Magnesium Oxide 250mg', 'Magnesium oxide', '250 mg/tab', 'TAB', '口服', 1.5, 3, 3000, 1, 'TID', 'PO'),
   drug('M025', 'AC00025100', 'Domperidone 10mg', 'Domperidone', '10 mg/tab', 'TAB', '口服', 1.5, 3, 1900, 1, 'TID', 'PO'),
   drug('M026', 'AC00026100', 'Loperamide 2mg', 'Loperamide', '2 mg/cap', 'CAP', '口服', 1.5, 3, 900, 1, 'PRN', 'PO'),
   drug('M027', 'AC00027100', 'Levothyroxine 50mcg', 'Levothyroxine', '50 mcg/tab', 'TAB', '口服', 2.4, 5, 700, 1, 'QD', 'PO'),
   drug('M028', 'AC00028100', 'Zolpidem 10mg', 'Zolpidem', '10 mg/tab', 'TAB', '口服', 6.5, 15, 400, 1, 'HS', 'PO', true),
   drug('M029', 'AC00029100', 'Alprazolam 0.5mg', 'Alprazolam', '0.5 mg/tab', 'TAB', '口服', 1.8, 4, 600, 1, 'HS', 'PO'),
-  drug('M030', 'AC00030100', 'Celecoxib 200mg', 'Celecoxib', '200 mg/cap', 'CAP', '口服', 11, 25, 1000, 1, 'BID', 'PO'),
-  drug('M031', 'AC00031100', 'Tramadol 50mg', 'Tramadol', '50 mg/cap', 'CAP', '口服', 3.5, 8, 800, 1, 'PRN', 'PO'),
+  { ...drug('M030', 'AC00030100', 'Celecoxib 200mg', 'Celecoxib', '200 mg/cap', 'CAP', '口服', 11, 25, 1000, 1, 'BID', 'PO'), renal: [{ below: 30, text: '建議停用（NSAID 會讓腎功能更差）' }] },
+  { ...drug('M031', 'AC00031100', 'Tramadol 50mg', 'Tramadol', '50 mg/cap', 'CAP', '口服', 3.5, 8, 800, 1, 'PRN', 'PO'), renal: [{ below: 30, freq: 'BID', text: '建議改每 12 小時（每日最多 200 mg）' }] },
   drug('M032', 'AC00032100', 'Diclofenac Gel 1%', 'Diclofenac', '1% 20 g/tube', 'TUBE', '外用', 45, 90, 300, 1, 'TID', 'EXT', false, '次'),
   drug('M033', 'AC00033100', 'Betamethasone Cream', 'Betamethasone', '0.05% 5 g/tube', 'TUBE', '外用', 18, 40, 400, 1, 'BID', 'EXT', false, '次'),
   drug('M034', 'AC00034100', 'Gentamicin Eye Drop', 'Gentamicin', '0.3% 5 ml/btl', 'BTL', '眼用', 22, 50, 260, 1, 'QID', 'OU', false, '滴'),

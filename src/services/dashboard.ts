@@ -16,6 +16,7 @@ import { imagingAckCount, imagingWorkCount } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { openAdvice, stewardTodoCount } from './abx-steward-work'
 import { tdmAlerts } from './renal-work'
+import { pharmPending, pharmQueried } from './pharm-work'
 import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
@@ -160,6 +161,11 @@ export interface DashboardStats {
   opRecordsDue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
+  /** 藥師：住院醫囑待審核（其中臨時醫囑） */
+  pharmReview?: number
+  pharmReviewStat?: number
+  /** 醫師：我的病人的藥師疑義待回覆 */
+  pharmQueries?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -235,6 +241,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
+      ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
@@ -274,6 +281,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           abxAdvice: openAdvice(me.doctorId).length,
           tdmAlerts: tdmAlerts(me.doctorId).length,
+          pharmQueries: pharmQueried(me.doctorId).length,
           prophylaxisDue: prophylaxisOverdue(now(), me.doctorId).length,
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,
           transferIncoming: db.admissions.filter((a) => {

@@ -36,6 +36,7 @@ import { activeVent, rassStateOf, ventTodosOf } from './vent-work'
 import { recentIcuOut } from './icu-move-work'
 import { autoCallRrt, newsStateOf, openRrt } from './news-work'
 import type { NewsLevel } from './news-rules'
+import { openPharmQuery } from './pharm-rules'
 import { ppeOf } from './iso-rules'
 
 export interface WardPatient extends AdmissionView {
@@ -542,10 +543,12 @@ function residualCheck(o: IpdOrder, nurseId: string, token?: string) {
  * 沒有疑問回傳 undefined。給藥（排程、PRN）與臨時醫囑的執行共用這一條。
  */
 function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefined {
+  // 護理師的疑問或藥師的疑義都要等醫師回覆
   const q = openQuery(o)
-  if (!q) return undefined
+  const pq = openPharmQuery(o.pharm)
+  if (!q && !pq) return undefined
   const why = force?.reason?.trim()
-  if (!why) fail(`這筆醫囑有疑問、待醫師回覆（${q.reason}）；執行暫停，緊急時請寫原因強制執行`, 'CONFLICT', 'query')
+  if (!why) fail(`這筆醫囑${q ? `有疑問、待醫師回覆（${q.reason}）` : `有藥師疑義、待醫師回覆（${pq!.text}）`}；執行暫停，緊急時請寫原因強制執行`, 'CONFLICT', 'query')
   return why
 }
 

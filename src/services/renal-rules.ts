@@ -29,6 +29,8 @@ export function renalBandOf(bands: RenalBand[] | undefined, crcl: number | null)
 export function renalAdjust(bands: RenalBand[] | undefined, freq: string | undefined, crcl: number | null, perDay: (code: string) => number | undefined): { band: RenalBand; text: string } | undefined {
   const band = renalBandOf(bands, crcl)
   if (!band || !freq) return undefined
+  // 沒有建議頻率＝建議停用：還在用就提醒
+  if (!band.freq) return { band, text: `CrCl ${crcl} ml/min（< ${band.below}）：${band.text}` }
   const now = perDay(freq)
   const want = perDay(band.freq)
   if (now === undefined || want === undefined || now <= want) return undefined

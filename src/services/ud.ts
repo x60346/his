@@ -21,6 +21,7 @@ import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
 import { checkUdIssue, UD_RETURN_CAUSE, udPerDose, udVerifyBlocker, type UdReturnCause } from './ud-rules'
 import { pendingReturn, udBoxWard, udCandidate, udLineHome, type PendingReturn } from './ud-work'
+import { pharmBlocksUd } from './pharm-rules'
 import { admissionView, find, nameOf, stockLoc } from './views'
 
 export interface UdWorkLine {
@@ -117,6 +118,8 @@ export interface UdDispenseView {
 }
 
 export interface UdWork {
+  /** 長期醫囑還沒通過藥師審核（不會出現在調劑清單） */
+  awaitingReview: number
   locationId: string
   locationName: string
   today: string
@@ -295,6 +298,7 @@ export function getUdWork(): Promise<UdWork> {
       verify: verifyBoxes(u.id),
       returns: returnRows('sent'),
       awaitingWard: returnRows('waiting'),
+      awaitingReview: db.ipdOrders.filter((o) => o.status === 'active' && o.category === 'medication' && pharmBlocksUd(o) && find.admission(o.admissionId)?.status === 'admitted').length,
       issues: issueRows(),
       recent: [...db.udDispenses]
         .sort((x, y) => y.dispensedAt.localeCompare(x.dispensedAt))

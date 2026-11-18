@@ -6,18 +6,26 @@
 //   - 待退藥：病房送回來的（暫停、拒絕、醫囑停止、出院）由藥師點收入庫；還沒送回的另外列出供參考
 //   - 病房回報：藥車點收時發現不符（短少、破損、不是這位病人的），藥師處理後寫說明（補發走上面的調劑流程）
 // 每劑幾個、哪些要退都由服務層算（ud-rules、ud-work）；頁面送出的是畫面上看得到的那幾劑。
+// 上方切換「調劑」與「醫囑審核」（藥師審核住院給藥醫囑，PharmReviewPanel；首頁帶 ?tab=review）：長期醫囑審核通過才會出現在調劑清單
 import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Printer, Undo2 } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState } from '@/components/ui'
+import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UTabs } from '@/components/ui'
 import { udApi, type UdIssueRow, type UdReturnRow, type UdVerifyBox, type UdWorkGroup } from '@/services'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WardRefillCard from './components/WardRefillCard.vue'
 import DischargeRxCard from './components/DischargeRxCard.vue'
 import UdCartSheetDialog from './components/UdCartSheetDialog.vue'
+import PharmReviewPanel from './components/PharmReviewPanel.vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 
 const ui = useUi()
+const route = useRoute()
+const router = useRouter()
+const mode = ref<'ud' | 'review'>(route.query.tab === 'review' ? 'review' : 'ud')
+watch(mode, (m) => router.replace({ query: m === 'review' ? { tab: 'review' } : {} }))
+const modes = computed(() => [{ key: 'ud', label: '調劑' }, { key: 'review', label: '醫囑審核', count: w.value?.awaitingReview || undefined }])
 const { data: w, loading } = useQuery(() => udApi.getUdWork(), [])
 const md = (s: string) => s.slice(5, 10).replace('-', '/')
 
@@ -97,11 +105,14 @@ function openSheet(id: string) {
 
 <template>
   <div class="space-y-4">
-    <UQueryState :loading="loading && !w" :ready="!!w">
+    <UTabs v-model="mode" :tabs="modes" />
+    <PharmReviewPanel v-if="mode === 'review'" />
+    <UQueryState v-else :loading="loading && !w" :ready="!!w">
       <template v-if="w">
         <p class="text-sm text-slate-600">
           扣帳地點：<b>{{ w.locationName }}</b>・PRN 與臨時（STAT）給藥用病房常備藥，護理師給藥時直接扣，不在這裡調劑
         </p>
+        <p v-if="w.awaitingReview" class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">還有 <b>{{ w.awaitingReview }}</b> 筆長期醫囑待藥師審核（或疑義待醫師回覆），通過後才會出現在下面的調劑清單。<UButton size="sm" variant="secondary" class="ml-2" @click="mode = 'review'">去審核</UButton></p>
 
         <!-- 出院帶藥：調好櫃台才能住院結帳，放最上面 -->
         <DischargeRxCard />

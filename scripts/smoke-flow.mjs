@@ -99,8 +99,16 @@ try {
     if (!r.ok) throw new Error(`第二人確認失敗：${r.message}`)
     return r.token
   }
-  /** 住院調劑＋核對送出（雙人核對預設關閉，同一位藥師即可）；給藥測試要先有這一步 */
+  /** 藥師審核通過這幾劑的醫囑（新開的長期醫囑要先審才能調劑；呼叫時要是藥師） */
+  const pharmOk = async (marIds) => {
+    for (const id of new Set(marIds.map((m) => dbm.db.mar.find((x) => x.id === m)?.orderId))) {
+      const o = dbm.db.ipdOrders.find((x) => x.id === id)
+      if (o?.pharm && o.pharm.status === 'pending') await api.pharmApi.approvePharm(o.id)
+    }
+  }
+  /** 住院調劑＋核對送出（雙人核對預設關閉，同一位藥師即可）；給藥測試要先有這一步（新醫囑先由藥師審核通過） */
   const udSupply = async (kind, marIds, qtys) => {
+    await pharmOk(marIds)
     const r = await api.udApi.dispenseUd({ kind, marIds, qtys })
     const d = dbm.db.udDispenses.find((x) => x.no === r.no)
     for (const b of d.boxes) await api.udApi.verifyUdBox(d.id, b.admissionId)
@@ -10420,6 +10428,120 @@ try {
     ok(msg.includes('醫師'), `護理師不能看時間軸 → 「${msg}」`)
   }
 
+  // 藥師住院醫囑審核：新給藥醫囑待審、長期的審過才調劑、臨時先給後審、疑義（暫停給藥、醫師維持／修改／停止）、
+  // 系統列出的問題（腎功能、同類重複、交互作用）、首頁待辦、非抗生素腎功能分級（Metformin 停用）
+  console.log('\n[藥師住院醫囑審核]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.pharmApi
+    const I = api.ipdApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.pharmBlocksUd({ pharm: { status: 'pending' }, type: 'long', freq: 'BID' }) && !api.pharmBlocksUd({ pharm: { status: 'approved' }, type: 'long', freq: 'BID' }) && !api.pharmBlocksUd({ pharm: { status: 'pending' }, type: 'stat', freq: 'STAT' }) && !api.pharmBlocksUd({ pharm: { status: 'pending' }, type: 'long', freq: 'PRN' }) && !api.pharmBlocksUd({ type: 'long', freq: 'BID' }), '只擋還沒審過的長期排程醫囑；臨時、需要時先給後審；上線前的醫囑（沒有 pharm）不擋')
+    ok(api.openPharmQuery({ queries: [{ text: 'a', replyAt: 'x' }, { text: 'b' }] })?.text === 'b' && !api.openPharmQuery({ queries: [{ text: 'a', replyAt: 'x' }] }), '待回覆＝最後一筆疑義還沒回覆')
+    const met = db().drugs.find((d) => d.id === 'M015').renal
+    const pd = (c) => db().frequencies.find((f) => f.code === c)?.timesPerDay
+    ok(api.renalAdjust(met, 'BID', 25, pd)?.text.includes('建議停用') && api.renalAdjust(met, 'QD', 25, pd) && api.renalAdjust(met, 'BID', 40, pd)?.text.includes('減量') && !api.renalAdjust(met, 'QD', 40, pd) && !api.renalAdjust(met, 'BID', 60, pd), 'Metformin：CrCl<30 建議停用（不管頻率）、30–45 減為每日一次、≥45 不提')
+
+    // 種子
+    await as('ph01')
+    let list = await P.listPharmReview()
+    const famo = list.pending.find((x) => x.order.id === 'IO-PH-1')
+    const ibu = list.pending.find((x) => x.order.id === 'IO-PH-2')
+    const war = list.queried.find((x) => x.order.id === 'IO-PH-3')
+    ok(famo?.issues.some((i) => i.kind === '腎功能' && i.text.includes('QD')) && famo.renal.startsWith('CrCl'), `種子：敗血症 Famotidine 待審，「${famo?.issues[0]?.text}」`)
+    ok(ibu?.issues.some((i) => i.kind === '同類重複'), `種子：骨折 Ibuprofen 待審（已在吃 Celecoxib）：${ibu?.issues.map((i) => i.kind).join('、')}`)
+    ok(war?.queries.length === 1 && !war.queries[0].replyAt && war.issues.some((i) => i.level === 'severe' && i.kind === '交互作用'), '種子：腦梗塞 Warfarin 疑義待回覆（系統也列 Aspirin 交互作用、嚴重）')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.pharmReview === list.pending.length && dash.pharmReview >= 2, `藥師首頁「住院醫囑待審核」${dash.pharmReview}`)
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(st.doctorId))
+    dash = await api.dashboardApi.getDashboard()
+    let ov = (await I.listOrders(st.id)).find((o) => o.id === 'IO-PH-3')
+    ok(dash.pharmQueries >= 1 && ov.pharmStatus === 'query' && ov.pharmQuery.text.includes('Aspirin'), '主治首頁「藥師疑義待回覆」、醫囑列標疑義')
+
+    // 新開長期醫囑：待審、不進調劑清單、給藥列標「待藥師審核」
+    const om = await I.addOrder(await withRxOk({ admissionId: st.id, type: 'long', category: 'medication', drugId: 'M022', content: '', dose: 1, freq: 'QD', route: 'PO' }))
+    ok(om.pharm?.status === 'pending' && om.pharmStatus === 'pending', '新開給藥醫囑：待藥師審核')
+    await as('ph01')
+    let w = await api.udApi.getUdWork()
+    ok(![...w.extra, ...w.daily].flatMap((g) => g.lines).some((l) => l.orderId === om.id) && w.awaitingReview >= 3, `沒審的長期醫囑不在調劑清單（${w.awaitingReview} 筆待審）`)
+    await as('nurse01')
+    const tmr = addDaysT(1)
+    ok((await I.listMar(st.id, tmr)).some((m) => m.orderId === om.id && m.pharmPending), '給藥列標「待藥師審核」')
+    let msg0 = await errOf(() => P.approvePharm(om.id))
+    ok(msg0.includes('藥師'), `護理師不能審核 → 「${msg0}」`)
+    await as('ph01')
+    await P.approvePharm(om.id, '已確認')
+    w = await api.udApi.getUdWork()
+    ok([...w.extra, ...w.daily].flatMap((g) => g.lines).some((l) => l.orderId === om.id) && db().auditLogs[0].action === '藥師審核通過', '通過：進調劑清單、寫稽核')
+    msg0 = await errOf(() => P.approvePharm(om.id))
+    ok(msg0.includes('已經'), '不能重複通過')
+
+    // 臨時醫囑：先給後審；疑義：給藥暫停
+    await as(userOf(st.doctorId))
+    const stat = await I.addOrder(await withRxOk({ admissionId: st.id, type: 'stat', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'STAT', route: 'PO' }))
+    const sm = db().mar.find((m) => m.orderId === stat.id)
+    await as('nurse01')
+    await api.nursingApi.executeMar(sm.id, 'given')
+    ok(db().mar.find((m) => m.id === sm.id).status === 'given', '臨時醫囑：還沒審也能給（先給後審）')
+    await as('ph01')
+    list = await P.listPharmReview()
+    ok(list.pending[0]?.order.type === 'stat' && list.pending.find((x) => x.order.id === stat.id)?.givenBeforeReview === 1, '待審清單臨時醫囑排前面、標「已給 1 劑」')
+    let f
+    let msg = await errOf(() => P.queryPharm(om.id, '再問'))
+    ok(msg.includes('已經審核通過'), '已通過的不能提疑義')
+    // 另開一筆需要時（PRN）來測疑義暫停給藥
+    await as(userOf(st.doctorId))
+    const prn = await I.addOrder(await withRxOk({ admissionId: st.id, type: 'long', category: 'medication', drugId: 'M031', content: '', dose: 1, freq: 'PRN', route: 'PO' }))
+    await as('ph01')
+    f = await fieldsOf(() => P.queryPharm(prn.id, ' '))
+    ok(f.text, '疑義要寫內容')
+    await P.queryPharm(prn.id, '病人 75 歲以上，Tramadol 每日最多 300 mg，請寫明間隔')
+    msg = await errOf(() => P.approvePharm(prn.id))
+    ok(msg.includes('疑義還沒回覆'), '疑義沒回覆不能通過')
+    await as('nurse01')
+    const blocked = await errOf(() => api.nursingApi.givePrn(prn.id, '疼痛 6 分'))
+    ok(blocked.includes('藥師疑義') && blocked.includes('Tramadol'), `有藥師疑義：需要時給藥暫停 → 「${blocked}」`)
+    const forced = await api.nursingApi.givePrn(prn.id, '疼痛 8 分', { reason: '病人劇痛，已電話請示醫師' })
+    ok(forced.status === 'given', '緊急時寫原因可以強制給（比照護理師疑問）')
+    // 醫師回覆：維持原醫囑 → 回到待審 → 藥師通過
+    await as(userOf(st.doctorId))
+    f = await fieldsOf(() => P.replyPharmQuery(prn.id, ''))
+    ok(f.reply, '維持原醫囑要寫理由')
+    const kept = await P.replyPharmQuery(prn.id, '已寫明每 8 小時最多一次')
+    ok(kept.pharm.status === 'pending' && kept.pharm.queries[0].resolution === 'kept' && !kept.pharmQuery, '維持原醫囑：疑義結案、回到待審')
+    await as('ph01')
+    ok((await P.approvePharm(prn.id)).pharm.status === 'approved', '藥師看了理由後通過')
+    // 修改＝結案（新醫囑重新送審）；停止＝結案
+    await as(userOf(st.doctorId))
+    const rv = await I.reviseOrder('IO-PH-3', { dose: 0.5, freq: 'QD', route: 'PO', reason: '依藥師建議減量、追蹤 INR' })
+    const old = db().ipdOrders.find((o) => o.id === 'IO-PH-3')
+    ok(old.pharm.queries[0].resolution === 'modified' && rv.pharm.status === 'pending' && !(await api.dashboardApi.getDashboard()).pharmQueries, '修改：疑義記「已修改」、新醫囑重新送審、主治待辦清掉')
+    await as('ph01')
+    await P.queryPharm(rv.id, '仍建議先停 Aspirin')
+    await as(userOf(st.doctorId))
+    await I.stopOrder(rv.id)
+    ok(db().ipdOrders.find((o) => o.id === rv.id).pharm.queries[0].resolution === 'stopped', '停止：疑義記「已停止」')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
@@ -11119,6 +11241,7 @@ try {
     const rv = await api.ipdApi.reviseOrder(wf.id, { dose: 0.5, freq: 'QD', route: 'PO', reason: '依 INR 調整' })
     ok(rv.rxAlerts?.[0].reason.includes('心臟科'), '修改劑量：沿用開立時的確認，不必再問一次')
     await as('ph01')
+    await api.pharmApi.approvePharm(rv.id) // 新醫囑要先過藥師審核才進調劑清單
     const work = await api.udApi.getUdWork()
     const line = [...work.extra, ...work.daily].flatMap((g) => g.lines).find((l) => l.orderId === rv.id)
     ok(line?.rxAlerts?.[0].level === 'severe', '住院藥局調劑清單看得到這筆醫囑的提醒與原因')
@@ -11563,6 +11686,7 @@ try {
     await api.pharmacyApi.saveDispensePolicy(false)
     await as('ph01')
     await expectError(() => U.dispenseUd({ kind: 'daily', marIds: dailyIds, qtys: { [insulin.orderId]: 0 } }), '同幾劑再調劑一次（畫面過期）')
+    await pharmOk(db().mar.filter((m) => m.orderId === fresh.id).map((m) => m.id)) // 新醫囑要先過藥師審核才進調劑清單
     w = await U.getUdWork()
     const freshExtra = w.extra.flatMap((g) => g.lines).find((l) => l.orderId === fresh.id)
     const freshDaily = w.daily.flatMap((g) => g.lines).find((l) => l.orderId === fresh.id)

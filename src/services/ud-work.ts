@@ -3,6 +3,7 @@
 import type { IpdOrder, MarRecord, UdBox, UdDispense, UdLine } from '@/types'
 import { db } from '@/mock/db'
 import type { UdReturnCause } from './ud-rules'
+import { pharmBlocksUd } from './pharm-rules'
 import { find } from './views'
 
 const isUdOrder = (o: IpdOrder | undefined): o is IpdOrder => !!o && o.category === 'medication' && o.type === 'long' && o.status === 'active' && !!o.drugId && o.freq !== 'PRN'
@@ -12,6 +13,8 @@ export function udCandidate(m: MarRecord): IpdOrder | undefined {
   if (m.status !== 'pending' || m.udLineId) return undefined
   const o = db.ipdOrders.find((x) => x.id === m.orderId)
   if (!isUdOrder(o)) return undefined
+  // 藥師還沒審核通過的長期醫囑不能調劑
+  if (pharmBlocksUd(o)) return undefined
   return find.admission(m.admissionId)?.status === 'admitted' ? o : undefined
 }
 
