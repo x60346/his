@@ -67,6 +67,22 @@ try {
       return labRaw[k](input)
     }
   }
+  // 影像檢查排程：影像要在檢查室做完才能判讀。其他段落測的是判讀本身，發報告前沒做檢查的直接補一筆「已完成」的檢查紀錄
+  // （測試輔助、直接寫資料；要測排程把關的段落用 imagingRaw）
+  const imagingRaw = { reportImaging: api.imagingApi.reportImaging }
+  api.imagingApi.reportImaging = async (input) => {
+    const [kind, id] = (input?.key ?? '').split(':')
+    const done = dbm.db.imagingExams.find((e) => e.key === input.key && e.doneAt)
+    const o = kind === 'O' ? dbm.db.ipdOrders.find((x) => x.id === id) : undefined
+    if (!done && (kind === 'E' || (o && (o.status === 'active' || dbm.db.imagingExams.some((e) => e.key === input.key))))) {
+      const t = dateUtil.now()
+      dbm.db.imagingExams = dbm.db.imagingExams.filter((e) => e.key !== input.key)
+      const pid = kind === 'E' ? dbm.db.encounters.find((e) => e.id === id)?.patientId : dbm.db.admissions.find((a) => a.id === o?.admissionId)?.patientId
+      dbm.db.imagingExams.push({ id: `EX-T-${dbm.db.imagingExams.length}`, key: input.key, patientId: pid, procId: kind === 'E' ? input.key.split(':')[2] : o.procId, room: 'XR', start: t, minutes: 10, scheduledBy: 'U101', scheduledAt: t, arrivedAt: t, arrivedBy: 'U101', doneAt: t, doneBy: 'U101', ...(o ? { orderId: o.id, admissionId: o.admissionId } : {}) })
+      if (o && o.status === 'active') Object.assign(o, { status: 'done', stopAt: t })
+    }
+    return imagingRaw.reportImaging(input)
+  }
   // 出院用藥整合：簽署出院病摘時每一項居家用藥都要決定恢復或停用。其他段落測的是別的規則，沒帶 homeMedPlan 的一律「全部恢復」；
   // 要測這條規則的段落自己帶 homeMedPlan（帶空物件 {} 就是什麼都沒決定）
   {
@@ -1455,7 +1471,8 @@ try {
   for (const [table, rows] of Object.entries(dbm.db)) {
     if (!Array.isArray(rows)) continue
     for (const r of rows) for (const [k, v] of Object.entries(r)) {
-      if (k === 'scheduledAt' || typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) continue
+      // 排程類：給藥排程、影像檢查排的時間
+      if (k === 'scheduledAt' || (table === 'imagingExams' && k === 'start') || typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) continue
       if (v > nowS) futureHits.push(`${table}.${k}=${v}`)
     }
   }
@@ -5419,7 +5436,7 @@ try {
     await as(drUser)
     ok((await IM.myImagingAcks()).some((r) => r.id === r1.id && r.addenda.length), '補充後回到開立醫師的待確認')
 
-    // 住院：入院胸部 X 光（今天以前的已判讀）；新的臨時醫囑要護理師執行後才能判讀
+    // 住院：入院胸部 X 光（今天以前的已判讀）；新的臨時醫囑要檢查室做完才能判讀
     const adm = db().admissions.find((a) => a.status === 'admitted')
     const att = db().users.find((u) => u.doctorId === adm.doctorId).username
     await as(att)
@@ -5427,13 +5444,20 @@ try {
     await as('dr10')
     const w1 = (await IM.listImagingWork()).find((w) => w.key === `O:${io.id}`)
     ok(w1?.awaitingExam && w1.clinical === adm.diagnosis, '住院影像：還沒做列出「待檢查」，臨床資訊是入院診斷')
-    msg = await errOf(() => IM.reportImaging({ key: `O:${io.id}`, findings: 'x', impression: 'y' }))
+    msg = await errOf(() => imagingRaw.reportImaging({ key: `O:${io.id}`, findings: 'x', impression: 'y' }))
     ok(msg.includes('還沒做檢查'), `還沒做就判讀 → 「${msg}」`)
     await as('nurse01')
-    await api.nursingApi.completeStatOrder(io.id)
+    msg = await errOf(() => api.nursingApi.completeStatOrder(io.id))
+    ok(msg.includes('檢查室'), `影像醫囑不由護理師執行 → 「${msg}」`)
+    // 檢查室：排程（明天 09:00）→ 報到 → 完成，醫囑一起完成
+    await as('clerk01')
+    const ex = await api.examApi.scheduleExam(`O:${io.id}`, `${addDaysT(1)} 09:00`)
+    await api.examApi.arriveExam(ex.id)
+    await api.examApi.completeExam(ex.id)
+    ok(db().ipdOrders.find((o) => o.id === io.id).status === 'done', '檢查室完成：住院醫囑一起完成')
     await as('dr10')
     const r3 = await IM.reportImaging({ key: `O:${io.id}`, ...proc('P016').imaging.normal })
-    ok(r3.admissionId === adm.id && r3.source === 'ipd' && !r3.needsAck, '護理師執行後可判讀；住院報告記在這次住院')
+    ok(r3.admissionId === adm.id && r3.source === 'ipd' && !r3.needsAck, '檢查完成後可判讀；住院報告記在這次住院')
     // 種子的重要發現：主治確認
     const seedSig = db().imagingReports.find((r) => r.id === 'IR-SEED-IPD1')
     const sAtt = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === seedSig.admissionId).doctorId).username
@@ -11136,6 +11160,91 @@ try {
     await as('nurse01')
     msg = await errOf(() => Q.recordQc({ analyte: 'K', values: [3, 6] }))
     ok(msg.includes('權限'), '護理師不能登打品管')
+  }
+
+  // 影像檢查排程與檢查室：開放時段、撞期、報到、完成（住院醫囑一起完成）才能判讀、權限、護理站看檢查與給藥衝突、種子
+  console.log('\n[影像檢查排程]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.examStage({}) === 'scheduled' && api.examStage({ arrivedAt: 'x' }) === 'arrived' && api.examStage({ arrivedAt: 'x', doneAt: 'y' }) === 'done', '檢查階段：排程 → 報到 → 完成')
+    const now0 = '2026-11-18 10:00'
+    ok(api.checkExamSlot('2026-11-18 09:00', 10, now0).start?.includes('過去') && api.checkExamSlot('2026-11-18 16:55', 10, now0).start?.includes('08:00') && api.checkExamSlot('2026-11-19 07:50', 10, now0).start && !Object.keys(api.checkExamSlot('2026-11-18 16:50', 10, now0)).length, '時段：不能排過去、要在 08:00–17:00 內（結束也要在 17:00 前）')
+    const ex0 = [{ id: 'a', room: 'US', start: '2026-11-19 09:00', minutes: 20 }]
+    ok(api.examClash(ex0, { room: 'US', start: '2026-11-19 09:10', minutes: 20 }) && !api.examClash(ex0, { room: 'US', start: '2026-11-19 09:20', minutes: 20 }) && !api.examClash(ex0, { room: 'XR', start: '2026-11-19 09:10', minutes: 10 }) && !api.examClash(ex0, { id: 'a', room: 'US', start: '2026-11-19 09:10', minutes: 20 }), '撞期：同一間重疊才算（接著排、別間、自己改時間都可以）')
+    ok(api.marConflicts({ start: '2026-11-19 09:00', minutes: 10 }, ['2026-11-19 08:30', '2026-11-19 09:40', '2026-11-19 09:41', '2026-11-19 08:29']).join() === '2026-11-19 08:30,2026-11-19 09:40', '給藥衝突：檢查前後 30 分鐘內')
+
+    // 種子
+    await as('clerk01')
+    let b = await E.examBoard(T)
+    const xr = b.rooms.find((r) => r.room === 'XR').exams
+    ok(b.canSchedule && ['done', 'arrived', 'scheduled'].every((st) => xr.some((e) => e.stage === st)) && b.toSchedule.some((w) => w.key === 'O:IO-EX-4' && w.room === 'US'), '種子：今天 X 光室三位（做完、報到、還沒到）；闌尾炎腹部超音波待排程')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.examToSchedule >= 1, `櫃台首頁「影像待排程」${dash.examToSchedule}`)
+    await as('dr10')
+    const work = await api.imagingApi.listImagingWork()
+    ok(work.find((w) => w.key === 'O:IO-EX-1')?.awaitingExam === undefined && work.find((w) => w.key === 'O:IO-EX-2')?.awaitingExam && work.find((w) => w.key === 'O:IO-EX-2').exam.stage === 'arrived', '判讀清單：做完的可以判讀、報到中的還不行（標檢查進度）')
+
+    // 排程
+    const ap = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('K35'))
+    const tmr = addDaysT(1)
+    await as('nurse01')
+    let msg = await errOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 09:00`))
+    ok(msg.includes('權限'), '護理師不能排程（看得到）')
+    await as(userOf(ap.doctorId))
+    msg = await errOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 09:00`))
+    ok(msg.includes('櫃台或放射科'), `一般醫師不能排程 → 「${msg}」`)
+    await as('clerk01')
+    let f = await fieldsOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 18:00`))
+    ok(f.start?.includes('08:00'), '開放時段外擋')
+    const e4 = await E.scheduleExam('O:IO-EX-4', `${tmr} 09:00`)
+    ok(e4.room === 'US' && e4.minutes === 20 && e4.end === `${tmr} 09:20` && db().auditLogs[0].action === '影像檢查排程', '排進超音波室（20 分鐘）、寫稽核')
+    const other = db().admissions.find((a) => a.status === 'admitted' && a.id !== ap.id && !a.diagnosis.startsWith('A41'))
+    await as(userOf(other.doctorId))
+    const ou = await api.ipdApi.addOrder({ admissionId: other.id, type: 'stat', category: 'procedure', procId: 'P016', content: '' })
+    await as('clerk01')
+    msg = await errOf(() => E.scheduleExam(`O:${ou.id}`, `${tmr} 09:10`))
+    ok(msg.includes('已排'), `同一間撞期 → 「${msg}」`)
+    const eo = await E.scheduleExam(`O:${ou.id}`, `${tmr} 09:20`)
+    ok(eo.start === `${tmr} 09:20`, '接著排可以')
+    // 護理站：檢查與給藥衝突
+    await as('nurse01')
+    await api.ipdApi.listMar(ap.id, tmr)
+    const ae = await E.admissionExams(ap.id)
+    ok(ae.exams.some((x) => x.id === e4.id && x.marConflicts.some((t) => t.startsWith(tmr))), `護理站：明天 09:00 超音波，前後 30 分鐘的給藥 ${ae.exams.find((x) => x.id === e4.id)?.marConflicts.map((t) => t.slice(11)).join('、')}`)
+    // 報到、完成
+    await as('clerk01')
+    msg = await errOf(() => E.completeExam(e4.id))
+    ok(msg.includes('還沒報到'), '還沒報到不能完成')
+    await E.arriveExam(e4.id)
+    msg = await errOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 10:00`))
+    ok(msg.includes('報到'), '報到後不能改時間')
+    await E.completeExam(e4.id)
+    ok(db().ipdOrders.find((o) => o.id === 'IO-EX-4').status === 'done', '完成：住院醫囑一起完成')
+    await as('dr10')
+    const r = await imagingRaw.reportImaging({ key: 'O:IO-EX-4', ...db().procedures.find((p) => p.id === 'P016').imaging.normal })
+    ok(r.orderId === 'IO-EX-4', '完成後可以判讀發報告')
+    msg = await errOf(() => imagingRaw.reportImaging({ key: `O:${ou.id}`, findings: 'x', impression: 'y' }))
+    ok(msg.includes('還沒做檢查'), '排了但還沒做：不能判讀')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

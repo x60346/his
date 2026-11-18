@@ -58,6 +58,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'infection', name: 'infection', component: () => import('@/pages/infection/InfectionPage.vue'), meta: { title: '感染管制', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'admin'], permission: 'infection.control' } },
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
   { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },
+  { path: 'exam', name: 'exam', component: () => import('@/pages/exam/ExamRoomPage.vue'), meta: { title: '影像檢查室', icon: ScanLine, group: '其他', roles: ['clerk', 'doctor', 'nurse'] } },
   { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '其他', roles: ['doctor'] } },
   { path: 'abx', name: 'abx', component: () => import('@/pages/abx/AbxReviewPage.vue'), meta: { title: '抗生素審核', icon: Bug, group: '其他', roles: ['doctor'] } },
   { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },

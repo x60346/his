@@ -562,6 +562,7 @@ export function completeStatOrder(orderId: string, force?: { reason: string }): 
     admitted(o.admissionId)
     if (o.type !== 'stat' || o.status !== 'active') fail('此醫囑無需執行')
     if (o.category === 'medication') fail('給藥醫囑請由給藥紀錄執行')
+    if (o.procId && find.procedure(o.procId)?.imaging) fail('影像檢查由檢查室排程、報到、完成（完成後醫囑自動完成）', 'CONFLICT')
     const forced = holdForQuery(o, force)
     const t = now()
     // 檢驗醫囑：「執行」＝採檢。已印條碼的就採那一支（同管的一起完成）；沒印的當場建一支已採檢的檢體（等檢驗科收件）

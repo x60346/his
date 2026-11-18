@@ -46,6 +46,7 @@ import { toRecollect } from './specimen-work'
 import { ensureLabDraws } from './ipd'
 import { isLabOrder } from './specimen-work'
 import { QC_ANALYTES, qcStatusToday } from './qc-rules'
+import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -191,6 +192,9 @@ export interface DashboardStats {
   /** 檢驗科：今天品管還沒通過的項目（其中被拒絕的） */
   qcPending?: number
   qcRejected?: number
+  /** 櫃台、放射科醫師：影像待排程；今天已排還沒完成的 */
+  examToSchedule?: number
+  examToday?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -276,6 +280,7 @@ export function getDashboard(): Promise<DashboardStats> {
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
       ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); return { specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
+      ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt).length } : {}))(sessionRole()),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,

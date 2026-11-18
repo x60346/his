@@ -837,6 +837,30 @@ export interface Specimen {
   rejected?: { at: string; by: string; reason: string }
 }
 
+/** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
+export type ExamRoom = 'XR' | 'CT' | 'US' | 'ECG'
+/**
+ * 影像檢查（排程與執行）：一筆待做的影像（門診 E:看診:醫令、住院 O:醫囑）排到檢查室與時間 → 報到 → 完成（住院醫囑一起完成），
+ * 完成後才進判讀清單
+ */
+export interface ImagingExam {
+  id: string
+  key: string
+  patientId: string
+  procId: string
+  admissionId?: string
+  orderId?: string
+  room: ExamRoom
+  start: string
+  minutes: number
+  scheduledBy: string
+  scheduledAt: string
+  arrivedAt?: string
+  arrivedBy?: string
+  doneAt?: string
+  doneBy?: string
+}
+
 export interface Procedure {
   id: string
   code: string
@@ -874,7 +898,7 @@ export interface Procedure {
   /** 麻醉費：哪一種麻醉（手術做完依麻醉方式帶入；局部麻醉不另收） */
   anesthesiaFee?: AnesthesiaType
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
-  imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string } }
+  imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string }; room?: ExamRoom; minutes?: number }
   active: boolean
 }
 

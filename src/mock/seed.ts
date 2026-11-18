@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2973,6 +2973,56 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 影像檢查排程（示範，不抽亂數）：
+  //   - 功能上線前就在等判讀的門診影像：補一筆「已完成」的檢查紀錄（開立後 30 分鐘做完），判讀清單照舊
+  //   - 今天 X 光室：腦梗塞胸部 X 光 2 小時前做完（待判讀）、肺炎胸部 X 光已報到、蜂窩性組織炎胸部 X 光 1 小時後；
+  //     闌尾炎腹部超音波還沒排（待排程）
+  const imagingExams: ImagingExam[] = []
+  {
+    const room = (procId: string) => (procMap.get(procId)?.imaging?.room ?? 'XR') as ImagingExam['room']
+    const mins = (procId: string) => procMap.get(procId)?.imaging?.minutes ?? 10
+    let k = 0
+    for (const e of encounters.filter((x) => x.status === 'completed')) {
+      const v = visits.find((x) => x.id === e.visitId)
+      if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
+      for (const x of e.procedures) {
+        if (!procMap.get(x.procId)?.imaging || x.notDone || imagingReports.some((r) => r.encounterId === e.id && r.procId === x.procId)) continue
+        const at = addMinutes(e.completedAt ?? `${e.date} 09:00`, 30)
+        imagingExams.push({ id: `EX-OLD-${++k}`, key: `E:${e.id}:${x.procId}`, patientId: e.patientId, procId: x.procId, room: room(x.procId), start: at, minutes: mins(x.procId), scheduledBy: 'U101', scheduledAt: at, arrivedAt: at, arrivedBy: 'U101', doneAt: addMinutes(at, mins(x.procId)), doneBy: 'U101' })
+      }
+    }
+    const by = (dx: string) => admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith(dx))
+    const later = (a: string, b: string) => (a > b ? a : b)
+    const order = (id: string, a: Admission, procId: string, at: string, done?: string): IpdOrder => {
+      const o: IpdOrder = { id, admissionId: a.id, type: 'stat', category: 'procedure', procId, content: procMap.get(procId)!.name, startAt: at, status: done ? 'done' : 'active', ...(done ? { stopAt: done } : {}), doctorId: a.doctorId, createdAt: at, ackAt: addMinutes(at, 5), ackBy: 'U201' }
+      ipdOrders.push(o)
+      return o
+    }
+    const ex = (o: IpdOrder, start: string, x: Partial<ImagingExam> = {}) =>
+      imagingExams.push({ id: `EX-SEED-${o.id.slice(-1)}`, key: `O:${o.id}`, patientId: admissions.find((a) => a.id === o.admissionId)!.patientId, procId: o.procId!, admissionId: o.admissionId, orderId: o.id, room: room(o.procId!), start, minutes: mins(o.procId!), scheduledBy: 'U101', scheduledAt: addMinutes(o.createdAt, 10), ...x })
+    const day0 = `${T} 00:00`
+    const st = by('I63')
+    if (st) {
+      const s0 = later(addMinutes(nowStr, -120), day0)
+      const o = order('IO-EX-1', st, 'P013', later(addMinutes(s0, -60), day0), addMinutes(s0, 10))
+      ex(o, s0, { arrivedAt: addMinutes(s0, -5), arrivedBy: 'U101', doneAt: addMinutes(s0, 10), doneBy: 'U101' })
+    }
+    const pn = by('J18')
+    if (pn) {
+      const s1 = later(addMinutes(nowStr, -15), day0)
+      const o = order('IO-EX-2', pn, 'P013', later(addMinutes(s1, -90), day0))
+      ex(o, s1, { arrivedAt: later(addMinutes(nowStr, -5), s1), arrivedBy: 'U101' })
+    }
+    const cell = by('L03')
+    if (cell) {
+      const s2 = [addMinutes(nowStr, 60), `${T} 23:40`].sort()[0]
+      const o = order('IO-EX-3', cell, 'P013', addMinutes(nowStr, -60))
+      ex(o, s2)
+    }
+    const ap = by('K35')
+    if (ap) order('IO-EX-4', ap, 'P016', addMinutes(nowStr, -45))
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -3065,6 +3115,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     pharmCareNotes,
     specimens,
     qcRuns,
+    imagingExams,
     dischargePlans,
     vitals,
     nursingNotes,

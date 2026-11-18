@@ -30,6 +30,7 @@ import AdrPanel from '@/components/AdrPanel.vue'
 import MedRecPanel from '@/components/MedRecPanel.vue'
 import PharmCareList from '@/components/PharmCareList.vue'
 import SpecimenPanel from '@/components/SpecimenPanel.vue'
+import AdmissionExams from '@/components/AdmissionExams.vue'
 import DischargeMedListPrint from '@/components/DischargeMedListPrint.vue'
 import type { DischargeMedList } from '@/services'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
@@ -216,6 +217,7 @@ const tabs = computed(() => [
   { key: 'notes', label: '病程紀錄', count: notes.value?.length },
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
   { key: 'specimen', label: '檢體' },
+  { key: 'exams', label: '檢查' },
   { key: 'abx', label: '抗生素' },
   { key: 'adr', label: '不良反應' },
   { key: 'medrec', label: '用藥整合' },
@@ -532,6 +534,7 @@ async function submitNote() {
 
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
+        <div v-else-if="tab === 'exams'" class="p-4"><AdmissionExams :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>

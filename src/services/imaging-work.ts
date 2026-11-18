@@ -1,7 +1,8 @@
 // 影像檢查的內部計算（index 不匯出，不會被包成 API）：待判讀清單、誰能判讀、誰能確認、首頁數量。
 // 待判讀不另存，由醫令推算（同檢驗）：
 //   門診：完成看診、已批價的影像醫令；櫃台標「未執行」的不列
-//   住院：影像的臨時醫囑，護理師執行（已檢查）後才能判讀；還沒執行的列出但不能寫
+//   住院：影像的臨時醫囑
+// 都要在檢查室排程、報到、完成（exam.ts）後才能判讀；還沒做的列出但不能寫（住院已完成卻沒有檢查紀錄的是舊資料，視同做過）
 // 判讀者：主檔 imaging.reader——radiology＝放射科醫師（科別代碼 RAD）；orderer＝開立醫師自己（心電圖）
 import type { ImagingReport } from '@/types'
 import { db } from '@/mock/db'
@@ -25,12 +26,20 @@ export interface ImagingWorkItem {
   orderedAt: string
   /** 臨床資訊：診斷（判讀時參考） */
   clinical: string
-  /** 住院：還沒做（臨時醫囑還沒執行） */
+  /** 還沒做檢查（檢查室還沒完成） */
   awaitingExam?: boolean
+  /** 檢查排程：檢查室、時間、走到哪 */
+  exam?: { room: string; start: string; stage: 'scheduled' | 'arrived' | 'done' }
   normal: { findings: string; impression: string }
 }
 
 export const imagingOf = (procId: string) => find.procedure(procId)?.imaging
+/** 這筆影像的檢查排程（一筆影像一個） */
+export const examOfKey = (key: string) => db.imagingExams.find((e) => e.key === key)
+const examInfo = (key: string) => {
+  const e = examOfKey(key)
+  return e ? { exam: { room: e.room, start: e.start, stage: e.doneAt ? ('done' as const) : e.arrivedAt ? ('arrived' as const) : ('scheduled' as const) } } : {}
+}
 export const reportedImagingOpd = (encounterId: string, procId: string) => db.imagingReports.some((r) => r.encounterId === encounterId && r.procId === procId)
 export const reportedImagingIpd = (orderId: string) => db.imagingReports.some((r) => r.orderId === orderId)
 
@@ -62,6 +71,7 @@ export function pendingImagingWork(): ImagingWorkItem[] {
         key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, procName: find.procedure(x.procId)?.name ?? x.procId, reader: im.reader, ...base(e.patientId),
         where: `${nameOf.dept(e.deptId)}門診`, doctorId: e.doctorId, doctorName: nameOf.doctor(e.doctorId), orderedAt: e.completedAt ?? e.date,
         clinical: e.diagnoses.map((d) => `${d.icd} ${d.name}`).join('、'), normal: im.normal,
+        ...(examOfKey(`E:${e.id}:${x.procId}`)?.doneAt ? {} : { awaitingExam: true }), ...examInfo(`E:${e.id}:${x.procId}`),
       })
     }
   }
@@ -74,7 +84,7 @@ export function pendingImagingWork(): ImagingWorkItem[] {
     list.push({
       key: `O:${o.id}`, source: 'ipd', procId: o.procId!, procName: find.procedure(o.procId!)?.name ?? o.procId!, reader: im.reader, ...base(a.patientId),
       where: bed ? `${bed.ward} ${bed.bedNo}` : '住院', doctorId: o.doctorId, doctorName: nameOf.doctor(o.doctorId), orderedAt: o.createdAt,
-      clinical: a.diagnosis, normal: im.normal, ...(o.status === 'active' ? { awaitingExam: true } : {}),
+      clinical: a.diagnosis, normal: im.normal, ...((o.status === 'active' || (examOfKey(`O:${o.id}`) && !examOfKey(`O:${o.id}`)!.doneAt)) ? { awaitingExam: true } : {}), ...examInfo(`O:${o.id}`),
     })
   }
   return list.sort((a, b) => a.orderedAt.localeCompare(b.orderedAt))

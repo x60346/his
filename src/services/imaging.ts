@@ -69,7 +69,7 @@ export function reportImaging(input: { key: string; findings: string; impression
       if ((kind === 'E' && reportedImagingOpd(a, b)) || (kind === 'O' && reportedImagingIpd(a))) fail('這項已經發過報告了；要補充請用「補充報告」', 'CONFLICT')
       fail('找不到這筆影像檢查（可能還沒批價、已標未執行或醫囑已停止），請重新整理', 'CONFLICT')
     }
-    if (w!.awaitingExam) fail('還沒做檢查（臨時醫囑還沒執行），不能發報告', 'CONFLICT')
+    if (w!.awaitingExam) fail('還沒做檢查（檢查室完成檢查後才能判讀），不能發報告', 'CONFLICT')
     if (!canReadImaging(w!, u.doctorId)) fail(w!.reader === 'radiology' ? '這項由放射科醫師判讀' : '心電圖由開立醫師判讀', 'FORBIDDEN')
     const findings = input.findings?.trim() ?? ''
     const impression = input.impression?.trim() ?? ''

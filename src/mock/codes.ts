@@ -2,6 +2,7 @@
 // 皆為展示用資料：藥品代碼、醫令點數為近似值，不代表現行健保給付標準。
 import type {
   TubeKind,
+  ExamRoom,
   BillingSettings,
   DiscountRule,
   Department,
@@ -529,7 +530,9 @@ const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
 
 /** 檢驗的檢體容器（沒列的檢驗用紅頭生化管） */
 const tubeOf: Record<string, TubeKind> = { P003: 'purple', P005: 'purple', P010: 'urine', P012: 'swab', P052: 'gas', P057: 'sputum', P058: 'swab', P059: 'culture' }
-export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red' } : {}), ...(imagingOf[p.id] ? { imaging: imagingOf[p.id] } : {}) }))
+/** 影像在哪個檢查室做、大約幾分鐘（排程用） */
+const examOf: Record<string, { room: ExamRoom; minutes: number }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20 }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 } }
+export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red' } : {}), ...(imagingOf[p.id] ? { imaging: { ...imagingOf[p.id], ...examOf[p.id] } } : {}) }))
 
 export const preventItems: PreventItem[] = [
   { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },
