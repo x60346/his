@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2890,6 +2890,42 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (fr) pharmCareNotes.push({ id: 'PC-SEED-2', admissionId: fr.id, patientId: fr.patientId, kind: 'deprescribe', text: '病人已有 Celecoxib，又加開 Ibuprofen：兩種 NSAID 併用增加腸胃出血與腎損傷風險，建議擇一（保留 Celecoxib）', by: 'U301', at: addMinutes(nowStr, -90), status: 'sent' })
   }
 
+  // 住院檢體與條碼（示範，不抽亂數）：
+  //   - 腦梗塞 CBC：90 分鐘前採檢，檢驗科還沒收件（逾時）
+  //   - 敗血症電解質：2 小時前被退件（溶血），醫囑回到待採檢 → 護理站重新採檢
+  //   - 骨折 CRP：20 分鐘前印了條碼，還沒採檢
+  // 功能上線前已完成的檢驗醫囑沒有檢體，視同已收件
+  const specimens: Specimen[] = []
+  {
+    const by = (dx: string) => admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith(dx))
+    const day = T.replace(/-/g, '')
+    let n = 0
+    const sp = (a: Admission, tube: Specimen['tube'], orderId: string, x: Partial<Specimen>) =>
+      specimens.push({ id: `SP-SEED-${++n}`, barcode: `S${day}${String(n).padStart(4, '0')}`, admissionId: a.id, patientId: a.patientId, tube, orderIds: [orderId], createdAt: x.printedAt!, ...x })
+    const lab = (id: string, a: Admission, procId: string, at: string, done?: string): IpdOrder => {
+      const o: IpdOrder = { id, admissionId: a.id, type: 'stat', category: 'procedure', procId, content: procMap.get(procId)!.name, startAt: at, status: done ? 'done' : 'active', ...(done ? { stopAt: done } : {}), doctorId: a.doctorId, createdAt: at, ackAt: addMinutes(at, 5), ackBy: 'U201' }
+      ipdOrders.push(o)
+      return o
+    }
+    const st = by('I63')
+    if (st) {
+      const c = addMinutes(nowStr, -90)
+      const o = lab('IO-SP-1', st, 'P003', addMinutes(nowStr, -120), c)
+      sp(st, 'purple', o.id, { printedAt: addMinutes(c, -10), printedBy: 'U202', collectedAt: c, collectedBy: 'U202' })
+    }
+    const sep = by('A41')
+    if (sep) {
+      const o = lab('IO-SP-2', sep, 'P055', addMinutes(nowStr, -180))
+      sp(sep, 'red', o.id, { printedAt: addMinutes(nowStr, -160), printedBy: 'U213', collectedAt: addMinutes(nowStr, -150), collectedBy: 'U213', receivedAt: addMinutes(nowStr, -130), receivedBy: 'U601', rejected: { at: addMinutes(nowStr, -120), by: 'U601', reason: '溶血' } })
+    }
+    const fr = by('S52')
+    if (fr) {
+      const o = lab('IO-SP-3', fr, 'P011', addMinutes(nowStr, -40))
+      sp(fr, 'red', o.id, { printedAt: addMinutes(nowStr, -20), printedBy: 'U201' })
+    }
+    counters[`specimen:${day}`] = n
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -2980,6 +3016,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     abxInterventions,
     adrReports,
     pharmCareNotes,
+    specimens,
     dischargePlans,
     vitals,
     nursingNotes,

@@ -37,6 +37,7 @@ import { recentIcuOut } from './icu-move-work'
 import { autoCallRrt, newsStateOf, openRrt } from './news-work'
 import type { NewsLevel } from './news-rules'
 import { openPharmQuery } from './pharm-rules'
+import { collectRecord, isLabOrder, newSpecimen, specimenOfOrder, tubeOfOrder } from './specimen-work'
 import { ppeOf } from './iso-rules'
 
 export interface WardPatient extends AdmissionView {
@@ -556,14 +557,23 @@ function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefin
 /** 回傳 { ok: true }：讓呼叫端分得出「成功」與「失敗被擋」（void 的話兩者都是 undefined） */
 export function completeStatOrder(orderId: string, force?: { reason: string }): Promise<{ ok: true }> {
   return mutate(() => {
-    requirePermission('mar.give')
+    const nurse = requirePermission('mar.give')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
     admitted(o.admissionId)
     if (o.type !== 'stat' || o.status !== 'active') fail('此醫囑無需執行')
     if (o.category === 'medication') fail('給藥醫囑請由給藥紀錄執行')
     const forced = holdForQuery(o, force)
+    const t = now()
+    // 檢驗醫囑：「執行」＝採檢。已印條碼的就採那一支（同管的一起完成）；沒印的當場建一支已採檢的檢體（等檢驗科收件）
+    if (isLabOrder(o)) {
+      const s = specimenOfOrder(o.id)
+      const sp = s && !s.collectedAt ? s : newSpecimen(must(find.admission(o.admissionId), '住院紀錄'), tubeOfOrder(o), [o.id], nurse.id, t, true)
+      const os = collectRecord(sp, nurse.id, t)
+      audit(forced ? '疑問期間仍執行' : '採檢', `${sp.barcode} ${os.map((x) => x.content).join('、')}${forced ? `：${forced}` : ''}`)
+      return { ok: true as const }
+    }
     o.status = 'done'
-    o.stopAt = now()
+    o.stopAt = t
     audit(forced ? '疑問期間仍執行' : '執行臨時醫囑', `${o.content}${forced ? `：${forced}` : ''}`)
     return { ok: true as const }
   })

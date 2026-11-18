@@ -41,6 +41,8 @@ import { needsMortalityReview } from './mortality-work'
 import { rassOutCount, weanDueCount } from './vent-work'
 import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
+import { specimenLate, specimenStage } from './specimen-rules'
+import { toRecollect } from './specimen-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -177,6 +179,10 @@ export interface DashboardStats {
   medRecLate?: number
   /** 醫師：我的病人的藥師建議（藥事照護）待回覆 */
   pharmCareToReply?: number
+  /** 檢驗科：已採檢待收件（其中採檢超過 60 分鐘）；護理師：被退件要重新採檢的檢體 */
+  specimenToReceive?: number
+  specimenLate?: number
+  specimenRecollect?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -252,6 +258,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
+      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); return { specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length } : {}))(sessionRole()),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,

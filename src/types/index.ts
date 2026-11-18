@@ -814,6 +814,29 @@ export interface Drug {
 
 export type ProcedureCategory = '診察' | '檢驗' | '影像' | '處置' | '復健'
 
+/** 檢體容器：紫頭（EDTA，血球）、紅頭（生化）、動脈血氣體、尿杯、拭子、痰盒、培養 */
+export type TubeKind = 'purple' | 'red' | 'gas' | 'urine' | 'swab' | 'sputum' | 'culture'
+/**
+ * 住院檢體（一支條碼）：同一位病人、同管別的檢驗醫囑合併。護理師印條碼 → 採檢（掃條碼或勾選）→ 檢驗科收件後才能發報告；
+ * 退件（溶血、量不足…）＝那幾筆醫囑回到待採檢
+ */
+export interface Specimen {
+  id: string
+  barcode: string
+  admissionId: string
+  patientId: string
+  tube: TubeKind
+  orderIds: string[]
+  createdAt: string
+  printedAt?: string
+  printedBy?: string
+  collectedAt?: string
+  collectedBy?: string
+  receivedAt?: string
+  receivedBy?: string
+  rejected?: { at: string; by: string; reason: string }
+}
+
 export interface Procedure {
   id: string
   code: string
@@ -827,6 +850,8 @@ export interface Procedure {
   priceChanges?: (DatedChange & { points: number; selfPrice: number })[]
   /** 檢驗醫令包含哪些檢驗值（CBC＝WBC、Hb、PLT）：報告逐項登打，依參考範圍、危急值判讀 */
   labItems?: LabItemDef[]
+  /** 檢體容器（試管別）：同一位病人同管別的檢驗合併成一支條碼 */
+  tube?: TubeKind
   /** 住院每日計費的項目（病房費、護理費、住院診察費）：出院結帳依住院天數自動帶入，門診與醫囑都不能開 */
   dailyFee?: boolean
   /** 每日計費依病床：generalBed 一般病床的病房費、護理費（住加護病房的那幾天不收）；icu 加護病床的（只收住加護病房的那幾天）。都沒標的（住院診察費）每天都收 */

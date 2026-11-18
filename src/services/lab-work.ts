@@ -4,6 +4,7 @@
 import type { Gender, LabItemDef, LabReport } from '@/types'
 import { db } from '@/mock/db'
 import { find, nameOf } from './views'
+import { labOrderStage, specimenOfOrder } from './specimen-work'
 import { labNeedsAck, labRefText } from './lab-rules'
 
 export interface LabWorkItem {
@@ -23,6 +24,8 @@ export interface LabWorkItem {
   orderedAt: string
   /** 住院：護理師還沒採檢（還沒執行這筆臨時醫囑）——不能發報告 */
   awaitingCollection?: boolean
+  /** 住院：已採檢、檢驗科還沒收件（條碼）——收件後才能發報告 */
+  awaitingReceipt?: string
   /** 檢驗值的定義（畫面用同一個 judgeLab 即時標示偏高偏低）＋這位病人的參考範圍文字 */
   items: (LabItemDef & { ref: string })[]
 }
@@ -62,7 +65,7 @@ export function pendingLabWork(): LabWorkItem[] {
     const bed = a.bedId ? find.bed(a.bedId) : undefined
     list.push(workItem({
       key: `O:${o.id}`, source: 'ipd', procId: o.procId, patientId: a.patientId, where: bed ? `${bed.ward} ${bed.bedNo}` : '住院',
-      doctorName: nameOf.doctor(o.doctorId), orderedAt: o.createdAt, ...(o.status === 'active' ? { awaitingCollection: true } : {}),
+      doctorName: nameOf.doctor(o.doctorId), orderedAt: o.createdAt, ...(o.status === 'active' ? { awaitingCollection: true } : labOrderStage(o) === 'collected' ? { awaitingReceipt: specimenOfOrder(o.id)?.barcode ?? '' } : {}),
     }))
   }
   return list.sort((a, b) => a.orderedAt.localeCompare(b.orderedAt))
@@ -75,6 +78,6 @@ export function canAckLab(r: LabReport, doctorId?: string): boolean {
   return !!r.admissionId && find.admission(r.admissionId)?.doctorId === doctorId
 }
 
-/** 首頁：可以登打的待檢驗（住院還沒採檢的不算）；某醫師待確認的報告份數 */
-export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection).length
+/** 首頁：可以登打的待檢驗（住院還沒採檢、還沒收件的不算）；某醫師待確認的報告份數 */
+export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined).length
 export const labAckCount = (doctorId: string) => db.labReports.filter((r) => labNeedsAck(r) && canAckLab(r, doctorId)).length

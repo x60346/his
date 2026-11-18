@@ -13,14 +13,17 @@ import { ageText, today } from '@/utils/date'
 import { genderLabel } from '@/utils/labels'
 import CultureForm from './components/CultureForm.vue'
 import CultureView from '@/components/CultureView.vue'
+import SpecimenReceiveCard from './components/SpecimenReceiveCard.vue'
 
 const tab = ref<'work' | 'done'>('work')
+// 住院檢驗：還沒採檢、或已採檢但檢驗科還沒收件（條碼）的，列在清單上但不能登打
+const blocked = (w: { awaitingCollection?: boolean; awaitingReceipt?: string }) => !!w.awaitingCollection || w.awaitingReceipt !== undefined
 const date = ref(today())
 const todayStr = followToday(date)
 const { data: work, loading } = useQuery(() => labApi.listLabWork())
 const { data: done, loading: doneLoading } = useQuery(() => labApi.listLabReports({ date: date.value }), [date])
 const tabs = computed(() => [
-  { key: 'work', label: '待檢驗', count: work.value?.filter((w) => !w.awaitingCollection).length },
+  { key: 'work', label: '待檢驗', count: work.value?.filter((w) => !blocked(w)).length },
   { key: 'done', label: '已報告', count: done.value?.length },
 ])
 
@@ -76,7 +79,7 @@ const submit = useAction(labApi.reportLab, { success: (r) => `已發報告 ${r.n
 const fix = useAction(labApi.correctLab, { success: (r) => `已更正 ${r.no}，醫師會收到通知` })
 async function onSubmit() {
   if (!item.value) return
-  if (await submit.run({ key: item.value.key, values: values.value })) selKey.value = work.value?.find((w) => w.key !== item.value?.key && !w.awaitingCollection)?.key
+  if (await submit.run({ key: item.value.key, values: values.value })) selKey.value = work.value?.find((w) => w.key !== item.value?.key && !blocked(w))?.key
 }
 async function onFix() {
   if (report.value && (await fix.run(report.value.id, { values: values.value, reason: reason.value }))) correcting.value = false
@@ -85,15 +88,17 @@ const errors = computed(() => ({ ...submit.fieldErrors.value, ...fix.fieldErrors
 // 細菌培養：用培養表單（沒有逐項的檢驗值、不做更正）
 const isCulture = computed(() => (item.value?.procId ?? report.value?.procId) === 'P059')
 function onCultureDone() {
-  selKey.value = work.value?.find((w) => w.key !== item.value?.key && !w.awaitingCollection)?.key
+  selKey.value = work.value?.find((w) => w.key !== item.value?.key && !blocked(w))?.key
 }
-const editable = computed(() => (!!item.value && !item.value.awaitingCollection) || correcting.value)
+const editable = computed(() => (!!item.value && !blocked(item.value)) || correcting.value)
 
 const flagTone = (f: string, critical?: boolean) => (critical ? 'text-red-700 font-bold' : f ? 'text-amber-800 font-semibold' : 'text-slate-800')
 const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
 </script>
 
 <template>
+  <div class="space-y-4">
+  <SpecimenReceiveCard />
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_1fr]">
     <UCard :padded="false" class="self-start">
       <template #title><span class="flex items-center gap-2 text-sm font-semibold text-slate-800"><FlaskConical class="h-4 w-4" />檢驗</span></template>
@@ -103,13 +108,14 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
       <UQueryState v-if="tab === 'work'" :loading="loading && !work" :ready="!!work?.length" empty-title="沒有待檢驗的項目" empty-description="門診批價後、住院採檢後會出現在這裡">
         <ul class="max-h-[calc(100vh-14rem)] divide-y divide-slate-100 overflow-y-auto">
           <li v-for="w in work" :key="w.key">
-            <button :class="['flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-slate-50', w.key === selKey && '!bg-brand-50', w.awaitingCollection && 'opacity-60']" @click="selKey = w.key">
+            <button :class="['flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-slate-50', w.key === selKey && '!bg-brand-50', blocked(w) && 'opacity-60']" @click="selKey = w.key">
               <span class="min-w-0 flex-1">
                 <span class="block font-medium text-slate-800">{{ w.patientName }} <span class="tabular text-xs font-normal text-slate-500">{{ w.chartNo }}</span></span>
                 <span class="block text-sm text-slate-700">{{ w.procName }}</span>
                 <span class="block text-xs text-slate-500">{{ w.where }}・{{ w.doctorName }}・{{ whenText(w.orderedAt) }} 開立</span>
               </span>
               <UBadge v-if="w.awaitingCollection" tone="gray">待採檢</UBadge>
+              <UBadge v-else-if="w.awaitingReceipt !== undefined" tone="yellow">待收件</UBadge>
               <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
           </li>
@@ -135,7 +141,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
       </UQueryState>
     </UCard>
 
-    <UCard v-if="!item && !report" data-detail><UEmpty title="請從左邊選一筆檢驗" :description="tab === 'work' ? '舊的在前；住院的要護理師採檢後才能登打' : '已發出的報告可以更正（寫原因）'" /></UCard>
+    <UCard v-if="!item && !report" data-detail><UEmpty title="請從左邊選一筆檢驗" :description="tab === 'work' ? '舊的在前；住院的要護理師採檢、檢驗科收件後才能登打' : '已發出的報告可以更正（寫原因）'" /></UCard>
     <UCard v-else data-detail :padded="false">
       <template #title>
         <div class="text-base font-semibold text-slate-800">{{ (item ?? report)!.patientName }}
@@ -147,11 +153,12 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
         </div>
       </template>
       <div v-if="item?.awaitingCollection" class="mx-4 mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600" role="status">護理師還沒採檢（臨時醫囑還沒執行），採檢後才能登打。</div>
+      <div v-else-if="item && item.awaitingReceipt !== undefined" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">檢體已採檢（條碼 {{ item.awaitingReceipt }}），請先在「住院檢體待收件」收件後才能登打。</div>
       <div v-if="report?.needsAck" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">醫師還沒確認（{{ report.hasCritical ? '危急值' : '更正過' }}）：已出現在醫師首頁。</div>
       <div v-else-if="report?.ackAt" class="mx-4 mt-3 text-xs text-slate-500">醫師 {{ report.ackByName }} 已於 {{ whenText(report.ackAt) }} 確認</div>
 
       <!-- 細菌培養：結構化登打（檢體、菌種、藥敏）與報告 -->
-      <CultureForm v-if="isCulture && item && !item.awaitingCollection" :item-key="item.key" @done="onCultureDone" />
+      <CultureForm v-if="isCulture && item && !blocked(item)" :item-key="item.key" @done="onCultureDone" />
       <div v-else-if="report?.culture" class="px-4 pt-3"><CultureView :culture="report.culture" /></div>
       <table v-if="!isCulture" class="tabular mt-2 w-full text-sm">
         <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
@@ -197,7 +204,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
         </p>
         <UTextarea v-if="correcting" v-model="reason" label="更正原因" :rows="2" placeholder="例：檢體溶血重驗、登打錯誤" required :error="errors.reason" />
         <div v-if="!isCulture" class="flex justify-end gap-2">
-          <UButton v-if="item && !item.awaitingCollection" :icon="Send" :loading="submit.pending.value" @click="onSubmit">發報告</UButton>
+          <UButton v-if="item && !blocked(item)" :icon="Send" :loading="submit.pending.value" @click="onSubmit">發報告</UButton>
           <template v-if="report">
             <UButton v-if="!correcting" variant="secondary" :icon="Pencil" @click="correcting = true">更正</UButton>
             <template v-else>
@@ -208,5 +215,6 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
         </div>
       </div>
     </UCard>
+  </div>
   </div>
 </template>

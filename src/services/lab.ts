@@ -12,6 +12,7 @@ import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
 import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
+import { awaitingReceipt } from './specimen'
 import { canAckLab, pendingLabWork, procItems, reportedIpd, reportedOpd, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
@@ -83,6 +84,8 @@ function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' | 'docto
       if (o.category !== 'procedure' || !o.procId) fail('這不是檢驗醫囑')
       if (o.status === 'active') fail('護理師還沒採檢（臨時醫囑還沒執行），不能發報告', 'CONFLICT')
       if (o.status === 'stopped') fail('醫囑已停止，不能發報告', 'CONFLICT')
+      const waitSp = awaitingReceipt(o.id)
+      if (waitSp) fail(`檢體還沒收件（條碼 ${waitSp.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')
       if (reportedIpd(o.id)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
       base = { patientId: must(find.admission(o.admissionId), '住院').patientId, procId: o.procId!, doctorId: o.doctorId, orderedAt: o.createdAt, orderId: o.id, admissionId: o.admissionId }
     } else {

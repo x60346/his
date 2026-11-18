@@ -30,6 +30,7 @@ import PcaPanel from '@/components/PcaPanel.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
 import AdrPanel from '@/components/AdrPanel.vue'
 import MedRecPanel from '@/components/MedRecPanel.vue'
+import SpecimenPanel from '@/components/SpecimenPanel.vue'
 import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
@@ -147,6 +148,7 @@ const tabs = computed(() =>
         { key: 'infection', label: '感染通報' },
         { key: 'adr', label: '不良反應' },
         { key: 'medrec', label: '用藥整合' },
+        { key: 'specimen', label: '檢體' },
         { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
         ...(adm.value.infusion ? [{ key: 'infusion', label: '點滴', count: adm.value.infusion.todo || undefined }] : []),
         ...(adm.value.pca ? [{ key: 'pca', label: 'PCA', count: (adm.value.pca.status === 'ordered' || adm.value.pca.record !== 'ok' || adm.value.pca.alert ? 1 : 0) || undefined }] : []),
@@ -324,6 +326,7 @@ const wardTotals = computed(() => ({
           <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
           <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
           <div v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" /></div>
+          <div v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
           <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
           <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" @open-risk="tab = 'risk'" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />

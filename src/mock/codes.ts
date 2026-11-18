@@ -1,6 +1,7 @@
 // 參考代碼表（科別、身分、ICD-10、藥品、醫令、頻率、預防保健項目）。
 // 皆為展示用資料：藥品代碼、醫令點數為近似值，不代表現行健保給付標準。
 import type {
+  TubeKind,
   BillingSettings,
   DiscountRule,
   Department,
@@ -526,7 +527,9 @@ const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
   P018: { reader: 'radiology', normal: { findings: '腦實質無出血、梗塞或腫塊，腦室大小正常，中線無偏移。', impression: '頭部電腦斷層無明顯異常。' } },
 }
 
-export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id] } : {}), ...(imagingOf[p.id] ? { imaging: imagingOf[p.id] } : {}) }))
+/** 檢驗的檢體容器（沒列的檢驗用紅頭生化管） */
+const tubeOf: Record<string, TubeKind> = { P003: 'purple', P005: 'purple', P010: 'urine', P012: 'swab', P052: 'gas', P057: 'sputum', P058: 'swab', P059: 'culture' }
+export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red' } : {}), ...(imagingOf[p.id] ? { imaging: imagingOf[p.id] } : {}) }))
 
 export const preventItems: PreventItem[] = [
   { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },
