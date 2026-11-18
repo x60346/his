@@ -8,6 +8,9 @@ import { find } from './views'
 export const isLabOrder = (o: IpdOrder) => o.category === 'procedure' && o.type === 'stat' && !!o.procId && !!find.procedure(o.procId)?.labItems?.length
 export const tubeOfOrder = (o: IpdOrder): TubeKind => find.procedure(o.procId ?? '')?.tube ?? 'red'
 
+/** 門診這一項檢驗（E:看診:醫令）目前的檢體（沒被退件的最新一支） */
+export const opdSpecimenOf = (key: string) => db.specimens.filter((s) => s.opdKeys?.includes(key) && !s.rejected).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)
+
 /** 這筆醫囑目前的檢體（沒被退件的最新一支） */
 export const specimenOfOrder = (orderId: string) => db.specimens.filter((s) => s.orderIds.includes(orderId) && !s.rejected).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)
 
@@ -23,7 +26,7 @@ export function labOrderStage(o: IpdOrder): 'toCollect' | 'printed' | 'collected
 }
 
 /** 條碼號：S＋日期＋當天流水號（Code 39 可印） */
-function nextBarcode(t: string): string {
+export function nextBarcode(t: string): string {
   const day = t.slice(0, 10).replace(/-/g, '')
   const key = `specimen:${day}`
   db.counters[key] = (db.counters[key] ?? 0) + 1
@@ -48,7 +51,7 @@ export function collectRecord(s: Specimen, by: string, t: string): IpdOrder[] {
 export function toRecollect(admissionId?: string): Specimen[] {
   return db.specimens.filter((s) => {
     if (!s.rejected || (admissionId && s.admissionId !== admissionId)) return false
-    if (find.admission(s.admissionId)?.status !== 'admitted') return false
+    if (!s.admissionId || find.admission(s.admissionId)?.status !== 'admitted') return false
     return s.orderIds.some((id) => {
       const o = db.ipdOrders.find((x) => x.id === id)
       return o?.status === 'active' && !specimenOfOrder(id)

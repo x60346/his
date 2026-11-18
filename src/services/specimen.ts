@@ -26,13 +26,13 @@ export interface SpecimenView extends Specimen {
   rejectedByName?: string
 }
 function view(s: Specimen, t: string = now()): SpecimenView {
-  const a = find.admission(s.admissionId)
+  const a = s.admissionId ? find.admission(s.admissionId) : undefined
   const p = find.patient(s.patientId)
   const bed = find.bed(a?.bedId ?? '')
   const stage = specimenStage(s)
   return {
-    ...s, stage, stageLabel: SPECIMEN_STAGE_LABEL[stage], tubeLabel: TUBE_LABEL[s.tube], patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', bedNo: bed?.bedNo ?? '', ward: bed?.ward ?? '',
-    tests: s.orderIds.map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id), late: specimenLate(s, t),
+    ...s, stage, stageLabel: SPECIMEN_STAGE_LABEL[stage], tubeLabel: TUBE_LABEL[s.tube], patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', bedNo: bed?.bedNo ?? (s.admissionId ? '' : '門診'), ward: bed?.ward ?? '',
+    tests: [...s.orderIds.map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id), ...(s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name ?? k)], late: specimenLate(s, t),
     ...(s.collectedBy ? { collectedByName: nameOf.user(s.collectedBy) } : {}), ...(s.receivedBy ? { receivedByName: nameOf.user(s.receivedBy) } : {}), ...(s.rejected ? { rejectedByName: nameOf.user(s.rejected.by) } : {}),
   }
 }
@@ -98,7 +98,8 @@ export function collectSpecimen(barcode: string): Promise<SpecimenView> {
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}，不能再採檢`, 'CONFLICT')
-    if (find.admission(s.admissionId)?.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
+    if (!s.admissionId) fail('門診檢體在抽血櫃台採檢', 'CONFLICT')
+    if (find.admission(s.admissionId!)?.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
     const t = now()
     const os = collectRecord(s, u.id, t)
     if (!os.length) fail('這支檢體的醫囑都停止了，不用採檢', 'CONFLICT')
@@ -141,7 +142,7 @@ export function rejectSpecimen(barcode: string, reason: string): Promise<Specime
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'collected' && st !== 'received') fail(st === 'printed' ? '這支檢體還沒採檢' : '這支檢體已經退件了', 'CONFLICT')
-    if (s.orderIds.some((id) => db.labReports.some((r) => r.orderId === id))) fail('已經發了報告，不能退件（有問題請更正報告）', 'CONFLICT')
+    if (s.orderIds.some((id) => db.labReports.some((r) => r.orderId === id)) || (s.opdKeys ?? []).some((k) => db.labReports.some((r) => r.encounterId === k.split(':')[1] && r.procId === k.split(':')[2]))) fail('已經發了報告，不能退件（有問題請更正報告）', 'CONFLICT')
     failFields(checkRejectReason(reason))
     const t = now()
     s.rejected = { at: t, by: u.id, reason: reason.trim() }

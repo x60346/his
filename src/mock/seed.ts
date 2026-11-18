@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -3023,6 +3023,36 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (ap) order('IO-EX-4', ap, 'P016', addMinutes(nowStr, -45))
   }
 
+  // 門診抽血櫃台（示範，不抽亂數）：今天三位已批價的門診病人加開檢驗（重算收據，日結照樣對得起來）——
+  //   第 1 位 CBC：剛報到、還沒印條碼；第 2 位飯前血糖＋肌酸酐（同是紅頭一支）：已採檢、待檢驗科收件；
+  //   第 3 位尿液常規：容器已發，等病人交回
+  const labCheckins: LabCheckin[] = []
+  {
+    const busy = new Set(admissions.filter((a) => a.status === 'admitted').map((a) => a.patientId))
+    const paid = visits
+      .filter((v) => v.date === T && (v.status === 'charged' || v.status === 'dispensed') && !busy.has(v.patientId))
+      .map((v) => ({ v, e: encounters.find((x) => x.visitId === v.id && x.status === 'completed'), c: charges.find((x) => x.visitId === v.id && !x.voided) }))
+      .filter((x): x is { v: Visit; e: Encounter; c: Charge } => !!x.e && !!x.c && !x.e.procedures.some((p) => procMap.get(p.procId)?.labItems))
+      .filter((x, i, arr) => arr.findIndex((y) => y.v.patientId === x.v.patientId) === i)
+      .slice(0, 3)
+    const plan = [['P003'], ['P004', 'P008'], ['P010']]
+    const day = T.replace(/-/g, '')
+    let n = 0
+    paid.forEach((x, i) => {
+      x.e.procedures.push(...plan[i].map((procId) => ({ procId, qty: 1, selfPay: false })))
+      const lines = calcChargeLines(x.v, x.e, { identity: codes.identities.find((d) => d.code === x.v.identityCode)!, settings: codes.billingSettings, drug: (id) => drugMap.get(id), procedure: (id) => procMap.get(id) })
+      const sum = summarize(lines)
+      const received = Math.ceil(sum.patientTotal / 100) * 100
+      Object.assign(x.c, { lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal, received, change: received - sum.patientTotal })
+      const t0 = addMinutes(nowStr, -60 + i * 10), at = x.c.paidAt > t0 ? x.c.paidAt : t0
+      labCheckins.push({ id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601' })
+      const keys = plan[i].map((p) => `E:${x.e.id}:${p}`)
+      if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601' })
+      if (i === 2) specimens.push({ id: 'SP-OPD-3', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'urine', orderIds: [], opdKeys: keys, selfCollect: true, createdAt: addMinutes(at, 2), printedAt: addMinutes(at, 2), printedBy: 'U601' })
+    })
+    counters[`labdesk:${T}`] = paid.length
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -3116,6 +3146,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     specimens,
     qcRuns,
     imagingExams,
+    labCheckins,
     dischargePlans,
     vitals,
     nursingNotes,

@@ -4,7 +4,7 @@
 import type { Gender, LabItemDef, LabReport } from '@/types'
 import { db } from '@/mock/db'
 import { find, nameOf } from './views'
-import { labOrderStage, specimenOfOrder } from './specimen-work'
+import { labOrderStage, opdSpecimenOf, specimenOfOrder } from './specimen-work'
 import { labNeedsAck, labRefText } from './lab-rules'
 
 export interface LabWorkItem {
@@ -22,7 +22,7 @@ export interface LabWorkItem {
   where: string
   doctorName: string
   orderedAt: string
-  /** 住院：護理師還沒採檢（還沒執行這筆臨時醫囑）——不能發報告 */
+  /** 還沒採檢（住院：護理師還沒執行這筆臨時醫囑；門診：還沒在抽血櫃台採檢）——不能發報告 */
   awaitingCollection?: boolean
   /** 住院：已採檢、檢驗科還沒收件（條碼）——收件後才能發報告 */
   awaitingReceipt?: string
@@ -54,7 +54,9 @@ export function pendingLabWork(): LabWorkItem[] {
     if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
     for (const x of e.procedures) {
       if (x.notDone || !procItems(x.procId).length || reportedOpd(e.id, x.procId)) continue
-      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: e.completedAt ?? e.date }))
+      // 門診：抽血櫃台採檢（或病人交回容器）、檢驗科收件後才能登打
+      const sp = opdSpecimenOf(`E:${e.id}:${x.procId}`)
+      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: e.completedAt ?? e.date, ...(!sp?.collectedAt ? { awaitingCollection: true } : !sp.receivedAt ? { awaitingReceipt: sp.barcode } : {}) }))
     }
   }
   for (const o of db.ipdOrders) {
@@ -81,3 +83,6 @@ export function canAckLab(r: LabReport, doctorId?: string): boolean {
 /** 首頁：可以登打的待檢驗（住院還沒採檢、還沒收件的不算）；某醫師待確認的報告份數 */
 export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined).length
 export const labAckCount = (doctorId: string) => db.labReports.filter((r) => labNeedsAck(r) && canAckLab(r, doctorId)).length
+
+/** 抽血櫃台：今天要採檢的門診病人數（已批價、檢體還沒採檢或容器還沒交回的） */
+export const deskToCollectCount = () => new Set(pendingLabWork().filter((w) => w.source === 'opd' && w.awaitingCollection).map((w) => w.patientId)).size

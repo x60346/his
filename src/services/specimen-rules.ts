@@ -6,6 +6,8 @@ import { addMinutes } from '@/utils/date'
 export const TUBE_LABEL: Record<TubeKind, string> = { purple: '紫頭（EDTA）', red: '紅頭（生化）', gas: '動脈血氣體', urine: '尿杯', swab: '拭子', sputum: '痰盒', culture: '培養容器' }
 /** 標籤上的顏色（Tailwind class） */
 export const TUBE_COLOR: Record<TubeKind, string> = { purple: 'bg-purple-500', red: 'bg-red-500', gas: 'bg-sky-500', urine: 'bg-yellow-400', swab: 'bg-slate-400', sputum: 'bg-emerald-500', culture: 'bg-orange-500' }
+/** 病人自行收集的容器（門診）：發給病人、交回才算採檢 */
+export const SELF_COLLECT_TUBES: TubeKind[] = ['urine', 'sputum']
 export const SPECIMEN_REJECT_REASONS = ['溶血', '檢體量不足', '凝固', '標籤錯誤', '容器錯誤']
 /** 採檢後多久沒收件算逾時（首頁標紅）：住院檢驗都是臨時醫囑，視同急件 */
 export const SPECIMEN_LATE_MIN = 60

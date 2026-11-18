@@ -823,10 +823,15 @@ export type TubeKind = 'purple' | 'red' | 'gas' | 'urine' | 'swab' | 'sputum' | 
 export interface Specimen {
   id: string
   barcode: string
-  admissionId: string
+  /** 住院檢體才有；門診的是 opdKeys */
+  admissionId?: string
   patientId: string
   tube: TubeKind
   orderIds: string[]
+  /** 門診檢體：裡面的檢驗（E:看診id:醫令id） */
+  opdKeys?: string[]
+  /** 病人自行收集（尿液、痰液）：printedAt＝發容器、collectedAt＝病人交回 */
+  selfCollect?: boolean
   createdAt: string
   printedAt?: string
   printedBy?: string
@@ -859,6 +864,16 @@ export interface ImagingExam {
   arrivedBy?: string
   doneAt?: string
   doneBy?: string
+}
+
+/** 門診抽血櫃台報到（一天一位病人一號） */
+export interface LabCheckin {
+  id: string
+  no: number
+  patientId: string
+  date: string
+  at: string
+  by: string
 }
 
 export interface Procedure {

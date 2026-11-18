@@ -57,6 +57,18 @@ try {
       const [kind, id] = (input?.key ?? '').split(':')
       const sp = kind === 'O' && dbm.db.specimens.find((x) => x.orderIds.includes(id) && !x.rejected && x.collectedAt && !x.receivedAt)
       if (sp) await api.specimenApi.receiveSpecimen(sp.barcode)
+      // 門診檢驗要在抽血櫃台採檢、檢驗科收件；其他段落測的是發報告本身，還沒採檢的直接補一支「已收件」的門診檢體（測試輔助）
+      if (kind === 'E') {
+        const k = input.key
+        const cur = dbm.db.specimens.filter((x) => x.opdKeys?.includes(k) && !x.rejected).at(-1)
+        const e = dbm.db.encounters.find((x) => x.id === id)
+        if (cur?.collectedAt && !cur.receivedAt) await api.specimenApi.receiveSpecimen(cur.barcode)
+        else if (!cur?.collectedAt && e) {
+          const t = dateUtil.now()
+          dbm.db.specimens = dbm.db.specimens.filter((x) => x !== cur)
+          dbm.db.specimens.push({ id: `SP-T-${dbm.db.specimens.length}-${Math.random().toString(36).slice(2, 6)}`, barcode: `ST${Date.now()}${Math.floor(Math.random() * 1e6)}`, patientId: e.patientId, tube: 'red', orderIds: [], opdKeys: [k], createdAt: t, printedAt: t, printedBy: 'U601', collectedAt: t, collectedBy: 'U601', receivedAt: t, receivedBy: 'U601' })
+        }
+      }
       // 檢驗品管：今天這份檢驗裡的品管項目沒通過的，先登打一次在平均值的品管（被拒絕過的寫矯正措施）
       const procId = kind === 'O' ? dbm.db.ipdOrders.find((o) => o.id === id)?.procId : kind === 'E' ? (input.key.split(':')[2]) : undefined
       const codes = (dbm.db.procedures.find((p) => p.id === procId)?.labItems ?? []).map((x) => x.code).filter((c) => api.qcAnalyte(c))
@@ -11245,6 +11257,94 @@ try {
     ok(r.orderId === 'IO-EX-4', '完成後可以判讀發報告')
     msg = await errOf(() => imagingRaw.reportImaging({ key: `O:${ou.id}`, findings: 'x', impression: 'y' }))
     ok(msg.includes('還沒做檢查'), '排了但還沒做：不能判讀')
+  }
+
+  // 門診抽血櫃台：報到取號、印條碼（同管合併、尿液發容器）、採檢、收件後才能發報告、退件重採、權限、首頁、種子
+  console.log('\n[門診抽血櫃台]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.labDeskApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    ok(api.SELF_COLLECT_TUBES.join() === 'urine,sputum', '尿液、痰液是發容器給病人自行收集')
+
+    // 種子
+    await as('lab01')
+    let d = await D.labDesk()
+    const [p1, p2, p3] = d.checkedIn
+    ok(d.checkedIn.length === 3 && d.checkedIn.map((p) => p.checkin.no).join() === '1,2,3' && !d.notCheckedIn.length, '種子：今天三位報到（1–3 號），沒有待報到的')
+    ok(p1.toPrint.length === 1 && p1.toPrint[0].tube === 'purple' && !p1.specimens.length, '1 號：CBC 待印條碼（紫頭）')
+    ok(!p2.toPrint.length && p2.specimens.length === 1 && p2.specimens[0].tube === 'red' && p2.specimens[0].tests.length === 2 && p2.specimens[0].stage === 'collected', '2 號：飯前血糖＋肌酸酐同一支紅頭、已採檢待收件')
+    ok(p3.specimens[0].selfCollect && p3.specimens[0].stageLabel === '容器已發、待交回', '3 號：尿液容器已發、待交回')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.deskToCollect === 2 && dash.specimenToReceive >= 1, `首頁：抽血櫃台待採檢 ${dash.deskToCollect} 位（2 號已採檢不算）、檢體待收件 ${dash.specimenToReceive}`)
+    const ch = (pid) => db().charges.find((c) => !c.voided && c.paidAt.startsWith(T) && c.patientId === pid && c.lines.some((l) => l.name.includes('CBC')))
+    ok(!!ch(p1.patientId) && ch(p1.patientId).received >= ch(p1.patientId).patientTotal, '種子：加開的檢驗有算進收據')
+
+    // 權限
+    await as('nurse01')
+    let msg = await errOf(() => D.labDesk())
+    ok(msg.includes('權限'), '護理師不能用抽血櫃台')
+
+    // 沒採檢不能發報告
+    await as('lab01')
+    const k1 = (await api.labApi.listLabWork()).find((w) => w.source === 'opd' && w.patientId === p1.patientId)
+    ok(k1?.awaitingCollection, '待檢驗清單：還沒採檢的門診檢驗標「待採檢」')
+    msg = await errOf(() => labRaw.reportLab({ key: k1.key, values: {} }))
+    ok(msg.includes('抽血櫃台'), `還沒採檢不能發 → 「${msg}」`)
+
+    // 報到：沒有檢驗不能報到；重複報到回原號碼；沒報到不能印條碼
+    const noLab = db().patients.find((p) => ![p1, p2, p3].some((x) => x.patientId === p.id))
+    msg = await errOf(() => D.checkInLab(noLab.id))
+    ok(msg.includes('沒有已批價'), `沒有待採檢的檢驗不能報到 → 「${msg}」`)
+    ok((await D.checkInLab(p1.patientId)).no === 1, '同一天重複報到：回原本的號碼')
+    db().labCheckins = db().labCheckins.filter((c) => c.patientId !== p1.patientId)
+    d = await D.labDesk()
+    ok(d.notCheckedIn.some((x) => x.patientId === p1.patientId), '沒報到的列在「已批價、待報到」')
+    msg = await errOf(() => D.printDeskLabels(p1.patientId))
+    ok(msg.includes('報到'), '沒報到不能印條碼')
+    const c1 = await D.checkInLab(p1.patientId)
+    ok(c1.no === 4 && db().auditLogs[0].action === '抽血櫃台報到', '報到取號（接著今天的號碼 4 號）、寫稽核')
+
+    // 印條碼 → 採檢 → 收件 → 發報告
+    const xs = await D.printDeskLabels(p1.patientId)
+    ok(xs.length === 1 && xs[0].stage === 'printed' && xs[0].tests[0].includes('CBC'), '印條碼：一支紫頭')
+    msg = await errOf(() => D.printDeskLabels(p1.patientId))
+    ok(msg.includes('沒有要採檢'), '印過了不會重複印')
+    await as('nurse01')
+    msg = await errOf(() => api.specimenApi.collectSpecimen(xs[0].barcode))
+    ok(msg.includes('門診'), `門診檢體不能在護理站採檢 → 「${msg}」`)
+    await as('lab01')
+    ok((await D.collectDeskSpecimen(xs[0].barcode)).stage === 'collected', '櫃台採檢')
+    msg = await errOf(() => D.collectDeskSpecimen(xs[0].barcode))
+    ok(msg.includes('已採檢'), '不能重複採檢')
+    msg = await errOf(() => labRaw.reportLab({ key: k1.key, values: {} }))
+    ok(msg.includes('收件'), `採了還沒收件不能發 → 「${msg}」`)
+    await api.specimenApi.receiveSpecimen(xs[0].barcode)
+    const qc = (c) => api.qcStatusToday(db().qcRuns, c, dateUtil.now().slice(0, 10))
+    for (const c of db().procedures.find((p) => p.id === 'P003').labItems.map((x) => x.code).filter((c) => api.qcAnalyte(c) && ['missing', 'reject'].includes(qc(c)))) await api.qcApi.recordQc({ analyte: c, values: api.qcAnalyte(c).levels.map((l) => l.mean), ...(qc(c) === 'reject' ? { correction: '測試' } : {}) })
+    const vals = Object.fromEntries(db().procedures.find((p) => p.id === 'P003').labItems.map((x) => [x.code, x.options ? x.options[0] : String(x.ref?.low ?? x.low ?? 5)]))
+    msg = await errOf(() => labRaw.reportLab({ key: k1.key, values: vals }))
+    ok(!msg.includes('採檢') && !msg.includes('收件'), `收件後不再被檢體擋（${msg || '發出'}）`)
+
+    // 尿液：病人交回容器
+    const u3 = await D.collectDeskSpecimen(p3.specimens[0].barcode)
+    ok(u3.stageLabel === '已交回、待收件', '尿液容器交回 → 待收件')
+
+    // 退件：回到待印條碼、提示請病人回來
+    await api.specimenApi.rejectSpecimen(p2.specimens[0].barcode, '溶血')
+    d = await D.labDesk()
+    const r2 = d.checkedIn.find((x) => x.patientId === p2.patientId)
+    ok(r2.recollect && r2.toPrint.length === 1 && r2.toPrint[0].tests.length === 2, '退件：兩項回到待印條碼（仍合併一支）、提示重新採檢')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.deskToCollect === 1, `首頁待採檢：${dash.deskToCollect} 位（退件的 2 號）`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

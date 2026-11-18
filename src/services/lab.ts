@@ -14,6 +14,7 @@ import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { awaitingReceipt } from './specimen'
 import { qcBlockers } from './qc-rules'
+import { opdSpecimenOf } from './specimen-work'
 import { canAckLab, pendingLabWork, procItems, reportedIpd, reportedOpd, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
@@ -79,6 +80,9 @@ function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' | 'docto
       const v = find.visit(e.visitId)
       if (v?.status !== 'charged' && v?.status !== 'dispensed') fail('病人還沒批價，請先到批價櫃台', 'CONFLICT')
       if (reportedOpd(e.id, b)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
+      const sp = opdSpecimenOf(key)
+      if (!sp?.collectedAt) fail('病人還沒在抽血櫃台採檢（或還沒交回檢體），不能發報告', 'CONFLICT')
+      if (!sp!.receivedAt) fail(`檢體還沒收件（條碼 ${sp!.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')
       base = { patientId: e.patientId, procId: b, doctorId: e.doctorId, orderedAt: e.completedAt ?? e.date, encounterId: e.id }
     } else if (kind === 'O') {
       const o = must(db.ipdOrders.find((x) => x.id === a), '醫囑')
