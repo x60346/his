@@ -10312,6 +10312,78 @@ try {
     ok(!pip2.renalAlert && db().abxInterventions.at(-1).status === 'accepted' && (await api.abxMetricsApi.abxMetrics()).advice.find((x) => x.kind === 'renal').accepted === 1, '改成 Q12H：提醒消失、建議記為接受、指標「腎功能需調整」接受 1')
   }
 
+  // 手術預防性抗生素：劃刀前 60 分鐘（Vancomycin 120）、開始手術時機不符要寫原因、手術結束 24 小時要停（主治待辦、每日審視）、指標
+  console.log('\n[手術預防性抗生素]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.preIncisionWindow('M042') === 120 && api.preIncisionWindow('M036') === 60, '劃刀前給藥時限：一般 60 分鐘、Vancomycin 120 分鐘')
+    const st0 = '2026-11-10 13:00'
+    const c30 = api.preIncisionCheck(['2026-11-10 09:00', '2026-11-10 12:30', '2026-11-10 13:10'], st0, 60)
+    ok(c30.ok && c30.minutes === 30 && c30.givenAt === '2026-11-10 12:30', `取劃刀前最後一劑（劃刀後的不算）：「${c30.text}」`)
+    ok(api.preIncisionCheck(['2026-11-10 12:00'], st0, 60).ok && !api.preIncisionCheck(['2026-11-10 11:59'], st0, 60).ok && api.preIncisionCheck(['2026-11-10 11:59'], st0, 120).ok, '剛好 60 分鐘算、61 分鐘不算；Vancomycin 120 分鐘內算')
+    ok(api.preIncisionCheck(['2026-11-10 09:00'], st0, 60).text.includes('4 小時 0 分鐘') && api.preIncisionCheck([], st0, 60).text === '劃刀前沒有給藥紀錄', '不符：寫出差多久；沒給過：沒有給藥紀錄')
+    ok(api.prophylaxisOverdueHours('2026-11-10 13:45', '2026-11-11 13:44') === undefined && api.prophylaxisOverdueHours('2026-11-10 13:45', '2026-11-11 13:45') === 24, '手術結束滿 24 小時才算超過')
+    const ps = api.prophylaxisStats([{ timingOk: true, stoppedIn24: true }, { timingOk: false, stoppedIn24: false }, { timingOk: true, stoppedIn24: null }])
+    ok(ps.surgeries === 3 && ps.timingRate === 66.7 && ps.stopKnown === 2 && ps.stopRate === 50, '指標：時機符合率；24 小時內停藥率（還沒滿 24 小時的不算分母）')
+
+    // 種子三：腦梗塞清創術做完、Vancomycin 預防還在用
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const sg3 = db().surgeries.find((s) => s.id === 'SG-SEED-3')
+    const vo = db().ipdOrders.find((o) => o.id === sg3?.prep.abx.refId)
+    ok(sg3?.status === 'done' && sg3.abxTiming?.ok && sg3.abxTiming.minutes === 30 && vo?.drugId === 'M042' && vo.status === 'active' && vo.abx.reason === 'prophylaxis', '種子三：腦梗塞前天清創術，劃刀前 30 分鐘給 Vancomycin（符合），手術後還在用')
+    await as(userOf(st.doctorId))
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.prophylaxisDue === 1, '腦梗塞主治首頁：預防性抗生素超過 24 小時 1')
+    await as('dr11')
+    let it = (await api.abxStewardApi.listAbxStewardship()).items.find((x) => x.order.id === vo.id)
+    const pf = it?.findings.find((f) => f.kind === 'prophylaxis')
+    ok(pf && pf.label === '預防用藥超過 24 小時' && pf.text.includes('清創術'), `每日審視：「${pf?.text}」`)
+    let m = await api.abxMetricsApi.abxMetrics()
+    ok(m.prophylaxis.surgeries >= 1 && m.prophylaxis.timingOk >= 1 && m.prophylaxis.stopKnown >= 1 && m.prophylaxis.stoppedIn24 === 0, `指標：${m.prophylaxis.surgeries} 台、時機符合 ${m.prophylaxis.timingRate}%、24 小時內停藥 ${m.prophylaxis.stopRate}%`)
+    await as(userOf(st.doctorId))
+    await api.ipdApi.stopOrder(vo.id)
+    dash = await api.dashboardApi.getDashboard()
+    await as('dr11')
+    m = await api.abxMetricsApi.abxMetrics()
+    ok(dash.prophylaxisDue === 0 && m.prophylaxis.stoppedIn24 === 0 && m.prophylaxis.stopKnown >= 1, '主治停藥：待辦清掉；但已超過 24 小時才停，仍算「沒在 24 小時內停」')
+
+    // 種子二：闌尾炎術前一劑 Ceftriaxone（臨時醫囑），開始手術時檢查
+    const sg2 = db().surgeries.find((s) => s.id === 'SG-SEED-2')
+    const pre = db().ipdOrders.find((o) => o.id === sg2.prep.abx.refId)
+    const pm = db().mar.find((x) => x.orderId === pre.id)
+    ok(pre.id === 'IO-PREOP-1' && pre.type === 'stat' && pm.status === 'pending' && pm.scheduledAt === dateUtil.addMinutes(sg2.schedule.start, -40), '種子二：闌尾炎術前臨時醫囑 Ceftriaxone，排在劃刀前 40 分鐘')
+    await as('nurse01')
+    await S.sendToOr(sg2.id)
+    await S.recordCheck(sg2.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(sg2.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    let board = await S.orBoard(sg2.schedule.start.slice(0, 10))
+    let v = board.cases.find((c) => c.id === sg2.id)
+    ok(v.abxPre && !v.abxPre.ok && v.abxPre.text === '劃刀前沒有給藥紀錄', `送到手術室、還沒給：「${v.abxPre?.text}」`)
+    Object.assign(pm, { status: 'given', executedAt: dateUtil.addMinutes(nowStr(), -90), nurseId: 'U201' })
+    v = (await S.orBoard(sg2.schedule.start.slice(0, 10))).cases.find((c) => c.id === sg2.id)
+    ok(!v.abxPre.ok && v.abxPre.text.includes('超過 60'), `90 分鐘前給的：「${v.abxPre.text}」`)
+    let f = await fieldsOf(() => S.startSurgery(sg2.id))
+    ok(f.abxReason?.includes('超過 60'), `時機不符、沒寫原因 → 「${f.abxReason}」`)
+    v = await S.startSurgery(sg2.id, { abxReason: '手術延後，手術室已追加給藥' })
+    ok(v.status === 'in-progress' && v.abxTiming.ok === false && v.abxTiming.reason.includes('追加') && v.abxTiming.minutes >= 90 && db().auditLogs[0].detail.includes('預防性抗生素'), '寫原因就能開始：記在手術上（時機不符）、寫稽核')
+    await S.finishSurgery(sg2.id, { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 })
+    await as('dr11')
+    m = await api.abxMetricsApi.abxMetrics()
+    ok(m.prophylaxis.surgeries >= 2 && m.prophylaxis.timingOk === m.prophylaxis.surgeries - 1, '做完的闌尾炎算進指標：時機不符')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

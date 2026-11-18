@@ -101,6 +101,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '抗生素審核未通過', count: s.value.abxRejected ?? 0, hint: '我的住院病人：感染科不核准，請停藥、改藥或申覆（在住院醫囑）', route: 'ipd', icon: ShieldAlert, urgent: true },
     { roles: ['doctor'], label: '抗生素每日審視', count: s.value.abxSteward ?? 0, hint: '感染科：系統標出可降階、改口服、無效、重疊、超過 7 天的抗生素，發出建議或標不用介入', route: 'abx', query: { tab: 'steward' }, icon: ShieldAlert },
     { roles: ['doctor'], label: '抗生素建議待回覆', count: s.value.abxAdvice ?? 0, hint: '我的住院病人：感染科的抗生素建議（在住院醫囑停止或修改＝接受；不接受要寫原因）', route: 'ipd', icon: ShieldAlert },
+    { roles: ['doctor'], label: '預防性抗生素超過 24 小時', count: s.value.prophylaxisDue ?? 0, hint: '我的住院病人：手術結束滿 24 小時，術前連的抗生素還在用，請在住院醫囑停止（已有感染請寫明療程）', route: 'ipd', icon: ShieldAlert },
     { roles: ['doctor'], label: 'Vancomycin 谷濃度異常', count: s.value.tdmAlerts ?? 0, hint: '我的住院病人：谷濃度過高或過低，請在住院醫囑修改劑量或頻率', route: 'ipd', icon: ShieldAlert, urgent: true },
     { roles: ['doctor'], label: '抗生素核准天數將到', count: s.value.abxExtend ?? 0, hint: '我的住院病人：核准天數快到或已超過，要續用請在住院醫囑申請', route: 'ipd', icon: ShieldAlert },
     { roles: ['doctor'], label: '待回覆會診', count: s.value.consultIncoming ?? 0, hint: s.value.consultUrgent ? `其中急會診 ${s.value.consultUrgent} 張` : '他科請本科會診的住院病人', route: 'ipd', icon: Stethoscope, urgent: !!s.value.consultUrgent },

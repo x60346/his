@@ -7,6 +7,7 @@ import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, PREP_ITEMS, prepMissing, SI
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
+import { preIncisionOf } from './prophylaxis-work'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
 
@@ -33,6 +34,8 @@ export interface SurgeryView extends Surgery {
   checkRows: { stage: string; title: string; items: string[]; done: boolean; text?: string }[]
   countMismatch: boolean
   recordByName?: string
+  /** 預防性抗生素：送到手術室還沒開始＝以現在算的劃刀前時機（提醒）；開始後＝當時記的 */
+  abxPre?: { ok: boolean; text: string }
   cancelledByName?: string
 }
 
@@ -67,6 +70,8 @@ export function surgeryView(s: Surgery): SurgeryView {
     prepMissing: missing.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label),
     checkRows: CHECK_ORDER.map((st) => ({ stage: st, title: CHECK_ITEMS[st].title, items: CHECK_ITEMS[st].items, done: !!s.checks[st], ...(s.checks[st] ? { text: who(s.checks[st]) } : {}) })),
     countMismatch: !!s.counts?.mismatchReason,
+    ...((pre) => (pre ? { abxPre: { ok: pre.ok, text: pre.text } } : {}))(s.status === 'sent' ? preIncisionOf(s) : undefined),
+    ...(s.abxTiming ? { abxPre: { ok: s.abxTiming.ok, text: s.abxTiming.ok ? `劃刀前 ${s.abxTiming.minutes} 分鐘給藥` : `時機不符：${s.abxTiming.reason ?? ''}` } } : {}),
     ...(s.record ? { recordByName: nameOf.user(s.record.by) } : {}),
     ...(s.cancelled ? { cancelledByName: nameOf.user(s.cancelled.by) } : {}),
   }

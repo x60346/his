@@ -39,9 +39,12 @@ const caseId = ref<string>()
 const current = computed(() => board.value?.cases.find((c) => c.id === caseId.value))
 const caseOpen = computed({ get: () => !!current.value, set: (x) => !x && (caseId.value = undefined) })
 const ticked = reactive<Record<SurgeryCheckStage, string[]>>({ signIn: [], timeOut: [], signOut: [] })
+// 預防性抗生素時機不符（劃刀前超過 60 分鐘、Vancomycin 120）：開始手術要寫原因
+const abxReason = ref('')
 const counts = reactive({ spongeBefore: undefined as number | undefined, spongeAfter: undefined as number | undefined, instrumentBefore: undefined as number | undefined, instrumentAfter: undefined as number | undefined, mismatchReason: '' })
 watch(caseId, () => {
   Object.assign(ticked, { signIn: [], timeOut: [], signOut: [] })
+  abxReason.value = ''
   Object.assign(counts, { spongeBefore: undefined, spongeAfter: undefined, instrumentBefore: undefined, instrumentAfter: undefined, mismatchReason: '' })
   for (const a of [checkAct, startAct, finishAct]) a.fieldErrors.value = {}
 })
@@ -151,12 +154,14 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <UButton v-else size="sm" :loading="finishAct.pending.value" @click="finish">完成查核，手術結束</UButton>
             </div>
           </template>
-          <div v-if="c.stage === 'timeOut' && isNurse && current.status === 'sent'" class="mt-2 border-t border-slate-100 pt-2 text-right">
-            <UButton size="sm" variant="danger" :disabled="!current.checks.timeOut" :loading="startAct.pending.value" @click="startAct.run(current.id)">開始手術（劃刀）</UButton>
+          <div v-if="c.stage === 'timeOut' && isNurse && current.status === 'sent'" class="mt-2 space-y-2 border-t border-slate-100 pt-2 text-right">
+            <p v-if="current.abxPre" :class="['rounded px-2 py-1 text-left text-xs', current.abxPre.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 font-medium text-amber-900']">預防性抗生素（以現在劃刀計）：{{ current.abxPre.text }}</p>
+            <UInput v-if="current.abxPre && !current.abxPre.ok" v-model="abxReason" class="text-left" label="時機不符的原因（開始手術時必填）" placeholder="例：手術室已追加給藥" :error="startAct.fieldErrors.value.abxReason" />
+            <UButton size="sm" variant="danger" :disabled="!current.checks.timeOut" :loading="startAct.pending.value" @click="startAct.run(current.id, { abxReason })">開始手術（劃刀）</UButton>
             <p v-if="!current.checks.timeOut" class="mt-1 text-xs text-slate-500">暫停確認完成後才能開始。</p>
           </div>
         </section>
-        <p v-if="current.startAt" class="tabular text-xs text-slate-600">劃刀 {{ current.startAt.slice(11) }}{{ current.endAt ? `・結束 ${current.endAt.slice(11)}` : '' }}</p>
+        <p v-if="current.startAt" class="tabular text-xs text-slate-600">劃刀 {{ current.startAt.slice(11) }}{{ current.endAt ? `・結束 ${current.endAt.slice(11)}` : '' }}<template v-if="current.abxPre">・預防性抗生素 {{ current.abxPre.text }}</template></p>
         <p v-if="current.counts?.mismatchReason" class="rounded bg-red-50 px-2 py-1 text-xs font-semibold text-red-800">計數不符：{{ current.counts.mismatchReason }}</p>
       </div>
       <template #footer>

@@ -1129,6 +1129,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         }
       }
     }
+    // 腦梗塞薦骨壓傷：前天 13:00 清創術（手術在下面「手術」那段），12:30 先給一劑 Vancomycin 當預防（核准 1 天）；
+    // 手術結束超過 24 小時還在用 → 預防用藥待停
+    if (stroke) {
+      const s = `${addDays(T, -2)} 12:30`
+      addAbx(stroke, 'M042', s, { reason: 'prophylaxis', site: '手術部位', note: '薦骨壓傷清創術' }, { approve: true, at: `${addDays(T, -2)} 15:00`, text: '手術預防用藥，核准 1 天', days: 1 })
+      const vo = ipdOrders.at(-1)!
+      mar.push({ id: id('MAR'), orderId: vo.id, admissionId: stroke.id, scheduledAt: s, status: 'given', executedAt: s, nurseId: 'U202' })
+    }
     if (pneu) {
       const s = later(`${addDays(T, -1)} 09:00`, addMinutes(pneu.admittedAt!, 60))
       addAbx(pneu, 'M044', s, { reason: 'empiric', site: '肺部', note: '發燒未退' }, { approve: false, at: notFuture(addMinutes(s, 7 * 60), 20), text: '已使用 Ceftriaxone，痰液培養無抗藥菌：建議停用 Piperacillin/Tazobactam，續用 Ceftriaxone' })
@@ -1931,19 +1939,47 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const at = created(appx)
       const start = nowStr < `${T} 13:00` ? `${T} 15:00` : `${tomorrow} 13:00`
       const prepAt = notFuture(addMinutes(at, 120), 5)
-      const abx = ipdOrders.find((o) => o.admissionId === appx.id && o.category === 'medication' && o.status === 'active' && (codes.drugs.find((d) => d.id === o.drugId)?.indication.includes('抗生素') || codes.drugs.find((d) => d.id === o.drugId)?.restrictedAbx))
+      // 預防性抗生素：術前另開一劑 Ceftriaxone（臨時醫囑），排在劃刀前 40 分鐘給——護理師照時間給了，開始手術時就符合 60 分鐘內
+      const cro = codes.drugs.find((d) => d.id === 'M036')!
+      const abx: IpdOrder = { id: 'IO-PREOP-1', admissionId: appx.id, type: 'stat', category: 'medication', drugId: 'M036', content: cro.name, dose: 1, freq: 'STAT', route: 'IV', startAt: prepAt, status: 'active', doctorId: appx.doctorId, createdAt: prepAt, ackAt: addMinutes(prepAt, 5), ackBy: 'U201' }
+      ipdOrders.push(abx)
+      mar.push({ id: 'MAR-PREOP-1', orderId: abx.id, admissionId: appx.id, scheduledAt: addMinutes(start, -40), status: 'pending' })
       surgeries.push({
         id: 'SG-SEED-2', no: `OR${T.replace(/-/g, '')}002`, admissionId: appx.id, patientId: appx.patientId, doctorId: appx.doctorId, procId: 'P038', side: 'na', anesthesia: 'general',
         diagnosis: appx.diagnosis, requestedDate: start.slice(0, 10), estMinutes: 90, status: 'scheduled', createdAt: at,
         schedule: { room: 'OR2', start, by: 'U202', at: notFuture(addMinutes(at, 60), 20) },
         prep: {
           consent: mark('U201', prepAt), npo: mark('U201', prepAt), siteMark: mark('U201', prepAt, { notNeeded: '腹腔鏡手術，不分側' }), blood: mark('U201', prepAt, { notNeeded: '預估失血少' }),
-          abx: abx ? mark('U201', prepAt, { refId: abx.id }) : mark('U201', prepAt, { notNeeded: '手術室劃刀前給 Cefazolin（麻醉科醫囑）' }),
+          abx: mark('U201', prepAt, { refId: abx.id }),
         },
         checks: {},
       })
     }
-    counters[`surgery:${T}`] = surgeries.length
+    // 三：腦梗塞病人前天 13:00 在 OR3 做完清創術（局部麻醉）；12:30 給的 Vancomycin＝劃刀前 30 分鐘（符合），但手術結束超過 24 小時還沒停
+    const st = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const vo = st && ipdOrders.find((o) => o.admissionId === st.id && o.drugId === 'M042' && o.abx?.reason === 'prophylaxis')
+    if (st && vo) {
+      const d2 = addDays(T, -2)
+      const at = `${addDays(T, -3)} 16:00`
+      const start = `${d2} 13:00`
+      const end = `${d2} 13:45`
+      surgeries.push({
+        id: 'SG-SEED-3', no: `OR${d2.replace(/-/g, '')}001`, admissionId: st.id, patientId: st.patientId, doctorId: st.doctorId, procId: 'P040', side: 'na', anesthesia: 'local',
+        diagnosis: '薦骨壓傷（第 3 級）', requestedDate: d2, estMinutes: 45, status: 'done', createdAt: at,
+        schedule: { room: 'OR3', start, by: 'U202', at: addMinutes(at, 60) },
+        prep: {
+          consent: mark('U201', `${d2} 09:00`), npo: mark('U201', `${d2} 09:00`, { notNeeded: '局部麻醉' }), siteMark: mark('U201', `${d2} 09:00`, { notNeeded: '薦骨單一部位' }),
+          blood: mark('U201', `${d2} 09:00`, { notNeeded: '預估失血少' }), abx: mark('U201', `${d2} 09:00`, { refId: vo.id }),
+        },
+        sentAt: `${d2} 12:40`, sentBy: 'U201',
+        checks: { signIn: { by: 'U205', at: `${d2} 12:50` }, timeOut: { by: 'U205', at: `${d2} 12:58` }, signOut: { by: 'U205', at: end } },
+        startAt: start, endAt: end, abxTiming: { ok: true, givenAt: `${d2} 12:30`, minutes: 30 },
+        counts: { spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 },
+        record: { performed: '薦骨壓傷清創術', findings: '壞死組織約 4×3 cm，清除至出血面，無膿瘍', bloodLoss: 20, complications: '無', specimen: '無', by: users.find((u) => u.doctorId === st.doctorId)!.id, at: addMinutes(end, 30) },
+      })
+    }
+    // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
+    counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length
   }
 
   // ---------- 急診（示範，不抽亂數、固定 id）----------

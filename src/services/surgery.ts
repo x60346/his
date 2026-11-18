@@ -10,6 +10,7 @@ import { dietOf } from './nutrition-rules'
 import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
+import { preIncisionOf } from './prophylaxis-work'
 import { find, nameOf } from './views'
 import { requestStatus } from './blood-rules'
 
@@ -257,15 +258,23 @@ export function recordCheck(id: string, stage: Exclude<SurgeryCheckStage, 'signO
   })
 }
 
-/** 開始手術（劃刀）：劃刀前暫停確認沒做完擋 */
-export function startSurgery(id: string): Promise<SurgeryView> {
+/**
+ * 開始手術（劃刀）：劃刀前暫停確認沒做完擋。
+ * 術前準備連了抗生素醫囑：劃刀前 60 分鐘內（Vancomycin 120）要有已給的紀錄（看給藥紀錄的實際時間）；
+ * 不符不擋，但要寫原因（例：手術室已追加給藥、麻醉科另給）——記在手術上，指標算不符合
+ */
+export function startSurgery(id: string, input: { abxReason?: string } = {}): Promise<SurgeryView> {
   return mutate(() => {
     requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
     if (s.status !== 'sent') fail('這台不是「已送手術室」', 'CONFLICT')
     if (!s.checks.timeOut) fail('劃刀前暫停確認（Time Out）還沒完成，不能開始手術', 'CONFLICT', 'timeOut')
-    Object.assign(s, { status: 'in-progress', startAt: now() })
-    audit('開始手術', audText(s))
+    const t = now()
+    const pre = preIncisionOf(s, t)
+    const reason = input.abxReason?.trim()
+    if (pre && !pre.ok && !reason) failField('abxReason', `預防性抗生素：${pre.text}。請寫原因（例：手術室已追加給藥）`)
+    Object.assign(s, { status: 'in-progress', startAt: t, ...(pre ? { abxTiming: { ok: pre.ok, ...(pre.givenAt ? { givenAt: pre.givenAt, minutes: pre.minutes } : {}), ...(!pre.ok ? { reason } : {}) } } : {}) })
+    audit('開始手術', `${audText(s)}${pre ? `；預防性抗生素：${pre.text}${!pre.ok ? `（${reason}）` : ''}` : ''}`)
     return surgeryView(s)
   })
 }

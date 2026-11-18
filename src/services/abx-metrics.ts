@@ -10,6 +10,8 @@ import { query, requireUser } from './http'
 import { ABX_METRIC_DAYS, AST_STAT_DAYS, adviceStats, antibiogram, firstIsolates, usageOf, type AbxUsage, type AdviceStat, type AntibiogramRow } from './abx-metrics-rules'
 import { givenAbxDoses, patientDaysOf, realAdmissions, wardOfAdmission } from './abx-metrics-work'
 import { find } from './views'
+import { prophylaxisStats, type ProphylaxisStats } from './prophylaxis-rules'
+import { prophylaxisRows } from './prophylaxis-work'
 
 export interface AbxMetrics {
   from: string
@@ -19,6 +21,8 @@ export interface AbxMetrics {
   byDrug: (AbxUsage & { drugId: string; name: string; restricted: boolean })[]
   antibiogram: { from: string; to: string; rows: AntibiogramRow[] }
   advice: AdviceStat[]
+  /** 手術預防性抗生素：最近 30 天完成的手術 */
+  prophylaxis: ProphylaxisStats
 }
 
 export function abxMetrics(): Promise<AbxMetrics> {
@@ -46,6 +50,7 @@ export function abxMetrics(): Promise<AbxMetrics> {
     return {
       from, to, total: usageOf(doses, pd), byWard, byDrug,
       antibiogram: { from: astFrom, to, rows: antibiogram(firstIsolates(cultures)) },
+      prophylaxis: prophylaxisStats(prophylaxisRows(from, to)),
       advice: adviceStats(db.abxInterventions.filter((x) => x.at.slice(0, 10) >= from)),
     }
   })

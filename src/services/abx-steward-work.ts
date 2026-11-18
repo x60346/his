@@ -6,6 +6,7 @@ import { db } from '@/mock/db'
 import { ABX_ADVICE_LABEL, abxCourseStart, stewardFindings, type StewardFinding } from './abx-steward-rules'
 import { isAntibiotic } from './abx-work'
 import { perDayOf, renalOf } from './renal-work'
+import { prophylaxisMapOf } from './prophylaxis-work'
 import { find, nameOf } from './views'
 
 /** 建議裡寫藥名用學名（Amoxicillin/Clavulanate），商品名留在醫囑上 */
@@ -40,6 +41,7 @@ export function stewardOf(admissionId: string, t: string): { orders: IpdOrder[];
     diet: dietOf(admissionId),
     now: t,
     drugName: abxDrugName,
+    prophylaxis: prophylaxisMapOf(admissionId),
     renal: { crcl: renalOf(admissionId, t).crcl, bandsOf: (id) => find.drug(id)?.renal, perDay: perDayOf },
   })
   return { orders, findings }

@@ -1354,9 +1354,9 @@ export interface AbxRequest {
 }
 
 /**
- * 抗生素管理的建議類型（每日審視，系統依規則標出）：藥敏無效、抗菌範圍重疊、腎功能需調整、可降階、可改口服、療程超過 7 天
+ * 抗生素管理的建議類型（每日審視，系統依規則標出）：藥敏無效、抗菌範圍重疊、腎功能需調整、預防用藥超過 24 小時、可降階、可改口服、療程超過 7 天
  */
-export type AbxAdviceKind = 'ineffective' | 'overlap' | 'renal' | 'deescalate' | 'ivpo' | 'duration'
+export type AbxAdviceKind = 'ineffective' | 'overlap' | 'renal' | 'prophylaxis' | 'deescalate' | 'ivpo' | 'duration'
 /**
  * 抗生素管理介入（感染科每日審視）：對某一筆抗生素醫囑的某一類建議，發出建議或標「不用介入」。
  * 主治停止或修改這筆醫囑＝接受（系統自動記）；不接受要寫原因
@@ -1900,6 +1900,8 @@ export interface Surgery {
   checks: Partial<Record<SurgeryCheckStage, { by: string; at: string }>>
   startAt?: string
   endAt?: string
+  /** 開始手術時的預防性抗生素時機（有連抗生素醫囑才有）：劃刀前多久給；不符要寫原因 */
+  abxTiming?: { ok: boolean; givenAt?: string; minutes?: number; reason?: string }
   counts?: { spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string }
   /** 手術紀錄（主刀或本科醫師） */
   record?: { performed: string; findings: string; bloodLoss: number; complications: string; specimen: string; by: string; at: string }

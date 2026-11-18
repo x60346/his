@@ -73,6 +73,14 @@ const tone = (pct: number | null, insufficient: boolean) => (pct === null || ins
         </div>
       </UCard>
 
+      <UCard title="手術預防性抗生素（最近 30 天完成的手術）" subtitle="只算術前準備連了抗生素醫囑的手術；劃刀前 60 分鐘內給（Vancomycin 120）；24 小時內停藥看最後那筆醫囑，還沒滿 24 小時的不算分母">
+        <div class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+          <div><div class="text-xs text-slate-500">手術台數</div><div class="tabular text-xl font-bold">{{ data.prophylaxis.surgeries }}</div></div>
+          <div><div class="text-xs text-slate-500">劃刀前給藥時機符合</div><div class="tabular text-xl font-bold">{{ data.prophylaxis.timingRate === null ? '—' : `${data.prophylaxis.timingRate.toFixed(1)}%` }}</div><div class="tabular text-xs text-slate-500">{{ data.prophylaxis.timingOk }}／{{ data.prophylaxis.surgeries }} 台</div></div>
+          <div><div class="text-xs text-slate-500">24 小時內停藥</div><div class="tabular text-xl font-bold">{{ data.prophylaxis.stopRate === null ? '—' : `${data.prophylaxis.stopRate.toFixed(1)}%` }}</div><div class="tabular text-xs text-slate-500">{{ data.prophylaxis.stoppedIn24 }}／{{ data.prophylaxis.stopKnown }} 台</div></div>
+        </div>
+      </UCard>
+
       <UCard title="抗生素管理介入（最近 30 天）" subtitle="接受率＝接受 ÷（接受＋不接受）；待回覆不算分母；「不用介入」不算建議" :padded="false">
         <div class="overflow-x-auto">
           <table class="tabular w-full text-sm">
