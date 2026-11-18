@@ -30,6 +30,7 @@ import { woundStallCount } from './wound-work'
 import { icuHourly } from './icu-work'
 import { newsAlertCount, newsStateOf } from './news-work'
 import { visitDueOf } from './palliative-rules'
+import { needsMortalityReview } from './mortality-work'
 import { rassOutCount, weanDueCount } from './vent-work'
 import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
@@ -130,6 +131,8 @@ export interface DashboardStats {
   newsAlerts?: number
   /** 安寧（權限 palliative 的醫師）：照會待收案、每週訪視到期或逾時 */
   palliativeRequests?: number
+  /** 死亡病例待審查（權限 mortality.review 的醫師） */
+  mortalityToReview?: number
   palliativeVisitDue?: number
   newsRecheckOverdue?: number
   rrtPending?: number
@@ -292,6 +295,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length, newsRecheckOverdue: inpt.filter((a) => newsStateOf(a, t)?.recheck?.status === 'overdue').length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { newsAlerts: newsAlertCount(me.doctorId, t) } : {}),
+          ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('mortality.review') ? { mortalityToReview: db.admissions.filter((a) => needsMortalityReview(a) && !a.mortalityReview).length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('palliative') ? (() => {
             const live = db.palliativeCases.filter((c) => db.admissions.find((a) => a.id === c.admissionId)?.status === 'admitted')
             return { palliativeRequests: live.filter((c) => c.status === 'requested').length, palliativeVisitDue: live.filter((c) => (visitDueOf(c, t)?.status ?? 'ok') !== 'ok').length }

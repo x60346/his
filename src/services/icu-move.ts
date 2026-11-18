@@ -16,6 +16,7 @@ import { icuSince, inIcu } from './icu-work'
 import { icuWard } from '@/mock/codes'
 import { addChartNote } from './order-ops'
 import { apacheScore, bounceBacks, checkIcuRequest, checkIcuSummary, ICU_SUMMARY_FIELDS, icuCategoryLabel, sofaScore, type IcuSummaryInput } from './icu-score-rules'
+import { APACHE_CATEGORIES, apacheMortality } from './mortality-rules'
 import { afterIcuMove, apacheInputOf, icuMoveProblem, icuSummaryOf, openRequest, sofaInputOf, staysOf } from './icu-move-work'
 
 const admittedOf = (id: string) => {
@@ -159,7 +160,7 @@ export interface PatientIcu {
   summary?: { at: string; byName: string; items: { label: string; text: string }[] }
   canSummary: boolean
   sofa: SofaDay[]
-  apache?: ReturnType<typeof apacheScore> & { partial: boolean; input: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; set: boolean } }
+  apache?: ReturnType<typeof apacheScore> & { partial: boolean; input: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; set: boolean; category?: string }; /** 預估死亡率 %（類別沒選以 0 計） */ mortality: number }
   stays: { from: string; to?: string; days: number; bounce: boolean }[]
 }
 
@@ -195,7 +196,7 @@ export function patientIcu(admissionId: string): Promise<PatientIcu> {
       canSummary: doc && inIcu(a),
       sofa,
       ...(since
-        ? { apache: { ...apacheScore(apacheInputOf(a, since)), partial: addMinutes(since, 24 * 60) > t, input: { chronic: a.apache?.chronic ?? false, surgery: a.apache?.surgery ?? 'none', set: !!a.apache } } }
+        ? { apache: (() => { const sc = apacheScore(apacheInputOf(a, since)); return { ...sc, partial: addMinutes(since, 24 * 60) > t, input: { chronic: a.apache?.chronic ?? false, surgery: a.apache?.surgery ?? 'none', set: !!a.apache, ...(a.apache?.category ? { category: a.apache.category } : {}) }, mortality: apacheMortality(sc.total, a.apache?.category, a.apache?.surgery === 'emergency') } })() }
         : {}),
       stays: stays.map((s) => ({ ...s, days: Math.max(1, diffDays(s.from.slice(0, 10), (s.to ?? t).slice(0, 10)) + (s.to ? 0 : 1)), bounce: bounce.has(s.from) })),
     }
@@ -203,14 +204,15 @@ export function patientIcu(admissionId: string): Promise<PatientIcu> {
 }
 
 /** APACHE II 要手動填的：嚴重慢性病、手術 */
-export function setApacheInput(admissionId: string, input: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective' }): Promise<PatientIcu> {
+export function setApacheInput(admissionId: string, input: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; category?: string }): Promise<PatientIcu> {
   return mutate(() => {
     const u = requireUser('doctor')
     const a = admittedOf(admissionId)
     if (!canIcuAttend()) requireCare(u.doctorId, a, '填 APACHE II', { consult: false })
     if (!icuSince(a)) fail('病人不在加護病房', 'CONFLICT')
     if (!['none', 'emergency', 'elective'].includes(input.surgery)) failField('surgery', '請選手術')
-    a.apache = { chronic: !!input.chronic, surgery: input.surgery, by: u.id, at: now() }
+    if (input.category && !APACHE_CATEGORIES.some((c) => c.key === input.category)) failField('category', '請選診斷類別')
+    a.apache = { chronic: !!input.chronic, surgery: input.surgery, by: u.id, at: now(), ...(input.category ? { category: input.category } : {}) }
     audit('APACHE II', `${a.admitNo} ${nameOf.patient(a.patientId)}：慢性病 ${input.chronic ? '有' : '無'}、手術 ${input.surgery}`)
   }).then(() => patientIcu(admissionId))
 }

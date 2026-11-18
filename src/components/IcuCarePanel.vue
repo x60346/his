@@ -5,7 +5,7 @@
 //   - 住加護病房的紀錄（48 小時內再轉回標出來）
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UCheckbox, UDialog, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { APACHE_LABEL, ICU_CATEGORIES, ICU_SUMMARY_FIELDS, icuMoveApi, SOFA_LABEL, type ApacheKey, type SofaKey } from '@/services'
+import { APACHE_CATEGORIES, apacheCategoryLabel, APACHE_LABEL, ICU_CATEGORIES, ICU_SUMMARY_FIELDS, icuMoveApi, SOFA_LABEL, type ApacheKey, type SofaKey } from '@/services'
 import type { IcuCategory } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import NewsPanel from './NewsPanel.vue'
@@ -34,15 +34,15 @@ async function cancelReq() {
   if (v.value?.request && (await cancelAct.run(v.value.request.id))) reload()
 }
 // APACHE 手動欄位
-const ap = reactive({ chronic: false, surgery: 'none' as 'none' | 'emergency' | 'elective' })
+const ap = reactive({ chronic: false, surgery: 'none' as 'none' | 'emergency' | 'elective', category: '' as string })
 const apOpen = ref(false)
 function openAp() {
-  Object.assign(ap, { chronic: v.value?.apache?.input.chronic ?? false, surgery: v.value?.apache?.input.surgery ?? 'none' })
+  Object.assign(ap, { chronic: v.value?.apache?.input.chronic ?? false, surgery: v.value?.apache?.input.surgery ?? 'none', category: v.value?.apache?.input.category ?? '' })
   apOpen.value = true
 }
 const apAct = useAction(icuMoveApi.setApacheInput, { success: '已更新 APACHE II' })
 async function submitAp() {
-  if (await apAct.run(props.admissionId, { chronic: ap.chronic, surgery: ap.surgery })) {
+  if (await apAct.run(props.admissionId, { chronic: ap.chronic, surgery: ap.surgery, ...(ap.category ? { category: ap.category } : {}) })) {
     apOpen.value = false
     reload()
   }
@@ -115,7 +115,8 @@ const pts = (n: number | null) => (n === null ? '—' : n)
               <span class="font-semibold text-slate-700">APACHE II（轉入 24 小時內）</span>
               <span class="tabular text-lg font-semibold text-slate-800">{{ v.apache.total }}</span>
               <UBadge v-if="v.apache.partial" tone="gray">還不滿 24 小時（暫定）</UBadge>
-              <UButton v-if="v.canSummary" class="ml-auto" size="sm" variant="secondary" @click="openAp">慢性病／手術</UButton>
+              <UBadge tone="purple" class="tabular" :title="'診斷類別：' + (apacheCategoryLabel(v.apache.input.category) || '未選（以 0 計）')">預估死亡率 {{ v.apache.mortality }}%</UBadge>
+              <UButton v-if="v.canSummary" class="ml-auto" size="sm" variant="secondary" @click="openAp">慢性病／手術／診斷類別</UButton>
             </div>
             <div class="tabular mt-1 text-xs text-slate-600">生理 {{ v.apache.aps }}＋年齡 {{ v.apache.agePts }}＋慢性病 {{ v.apache.chronicPts }}（{{ v.apache.input.chronic ? '有嚴重慢性病' : '無嚴重慢性病' }}・{{ surgeryText[v.apache.input.surgery] }}{{ v.apache.input.set ? '' : '，醫師還沒填' }}）</div>
             <div class="tabular mt-1 flex flex-wrap gap-1 text-xs">
@@ -154,11 +155,12 @@ const pts = (n: number | null) => (n === null ? '—' : n)
         <UButton type="submit" :loading="reqAct.pending.value">送出</UButton>
       </template>
     </UDialog>
-    <UDialog v-model="apOpen" title="APACHE II：慢性病與手術" size="sm" @submit="submitAp">
+    <UDialog v-model="apOpen" title="APACHE II：慢性病、手術、診斷類別" size="sm" @submit="submitAp">
       <div class="space-y-2">
         <UCheckbox v-model="ap.chronic" label="嚴重慢性病（肝硬化、心衰竭 NYHA IV、慢性呼吸衰竭、洗腎、免疫抑制）" />
         <div><USelect v-model="ap.surgery" label="這次" :options="Object.entries(surgeryText).map(([value, label]) => ({ label, value }))" /></div>
-        <p class="text-xs text-slate-500">有嚴重慢性病：非手術或急診手術後 +5、常規手術後 +2。</p>
+        <div><USelect v-model="ap.category" label="診斷類別（預估死亡率用）" :options="[{ label: '未選（以 0 計）', value: '' }, ...APACHE_CATEGORIES.map((c) => ({ label: c.label, value: c.key }))]" :error="apAct.fieldErrors.value.category" /></div>
+        <p class="text-xs text-slate-500">有嚴重慢性病：非手術或急診手術後 +5、常規手術後 +2。預估死亡率＝APACHE II 公式（診斷類別係數、急診手術後再加），只供參考。</p>
       </div>
       <template #footer>
         <UButton variant="secondary" @click="apOpen = false">取消</UButton>

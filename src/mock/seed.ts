@@ -233,6 +233,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
       // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
       ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt'] } : {}),
+      // dr02（內科主任）：被指定「死亡病例審查」
+      ...(d.id === 'DR02' ? { grants: ['mortality.review'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
@@ -2514,6 +2516,65 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
     const sep = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('A41'))
     if (sep) palliativeCases.push({ id: 'PAL-SEED-2', admissionId: sep.id, status: 'requested', requestedBy: dr02, requestedAt: addMinutes(nowStr, -120), reason: '敗血性休克插管、升壓劑中，家屬已簽部分 DNR，詢問安寧與撤除維生醫療', visits: [], meetings: [] })
+  }
+
+  // 非預期死亡（示範，不抽亂數）：急性心肌梗塞入院 28 小時心室顫動，急救 25 分鐘無效 → 宣告死亡（急救後、入院 48 小時內、沒有 DNR）；
+  // 已送太平間、帳單待家屬結；死亡病例待 dr02 審查。急救藥有開醫囑（已執行），種子沒有扣帳異動（展示用）
+  {
+    const busy = new Set([...admissions.map((x) => x.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
+    const free = patients.filter((p) => !busy.has(p.id) && !p.deceasedAt).sort((x, y) => x.birthDate.localeCompare(y.birthDate))
+    const pt = free.find((p) => p.defaultIdentity !== '01') ?? free[0]
+    const used = new Set(admissions.flatMap((x) => (x.bedHistory ?? []).map((h) => h.bedId)))
+    const bed = beds.find((b) => b.ward === codes.wards[0] && b.status === 'empty' && !used.has(b.id)) ?? beds.find((b) => b.ward === codes.wards[1] && b.status === 'empty' && !used.has(b.id))
+    if (pt && bed) {
+      const dr03 = users.find((u) => u.doctorId === 'DR03')!.id
+      const id = 'A-DEATH-2'
+      const adAt = addMinutes(nowStr, -40 * 60)
+      const cs = addMinutes(nowStr, -(12 * 60 + 25))
+      const m = (k: number) => addMinutes(cs, k)
+      const died = m(25)
+      const order = (no: number, at: string, x: Partial<IpdOrder> & Pick<IpdOrder, 'category' | 'content'>): IpdOrder => ({ id: `IO-CB2-${no}`, admissionId: id, type: 'stat', startAt: at, stopAt: at, status: 'done', doctorId: 'DR03', createdAt: at, ackAt: at, ackBy: 'U202', codeBlueId: 'CB-SEED-2', ...x })
+      ipdOrders.push(
+        { id: 'IO-DEATH2-1', admissionId: id, type: 'long', category: 'nursing', content: '心電圖監視、Vital signs Q4H', startAt: adAt, stopAt: died, status: 'stopped', doctorId: 'DR03', createdAt: adAt, ackAt: addMinutes(adAt, 10), ackBy: 'U201', stopAckAt: addMinutes(died, 5), stopAckBy: 'U202' },
+        order(1, m(4), { category: 'medication', drugId: 'M046', content: 'Epinephrine 1mg/ml Inj 1 mg IV（急救）', dose: 1, freq: 'STAT', route: 'IV' }),
+        order(2, m(7), { category: 'medication', drugId: 'M047', content: 'Amiodarone 150mg/3ml Inj 300 mg IV（急救）', dose: 2, freq: 'STAT', route: 'IV' }),
+        order(3, m(9), { category: 'medication', drugId: 'M046', content: 'Epinephrine 1mg/ml Inj 1 mg IV（急救）', dose: 1, freq: 'STAT', route: 'IV' }),
+        order(4, m(14), { category: 'medication', drugId: 'M046', content: 'Epinephrine 1mg/ml Inj 1 mg IV（急救）', dose: 1, freq: 'STAT', route: 'IV' }),
+        order(5, died, { category: 'procedure', procId: 'P054', content: '心肺復甦術 CPR（急救）' }),
+      )
+      codeBlues.push({
+        id: 'CB-SEED-2', admissionId: id, startedAt: cs, startedBy: 'U202', leaderId: dr03, status: 'ended', endedAt: died, endedBy: dr03, outcome: 'death',
+        events: [
+          { id: 'CE2-1', at: cs, kind: 'cpr', by: 'U202' },
+          { id: 'CE2-2', at: m(1), kind: 'rhythm', rhythm: 'vf', by: 'U202' },
+          { id: 'CE2-3', at: m(2), kind: 'shock', joules: 200, by: dr03 },
+          { id: 'CE2-4', at: m(4), kind: 'epi', doseMg: 1, orderId: 'IO-CB2-1', by: 'U202' },
+          { id: 'CE2-5', at: m(5), kind: 'shock', joules: 200, by: dr03 },
+          { id: 'CE2-6', at: m(7), kind: 'amio', doseMg: 300, orderId: 'IO-CB2-2', by: 'U202' },
+          { id: 'CE2-7', at: m(8), kind: 'intubate', by: dr03 },
+          { id: 'CE2-8', at: m(9), kind: 'epi', doseMg: 1, orderId: 'IO-CB2-3', by: 'U202' },
+          { id: 'CE2-9', at: m(12), kind: 'rhythm', rhythm: 'asystole', by: 'U202' },
+          { id: 'CE2-10', at: m(14), kind: 'epi', doseMg: 1, orderId: 'IO-CB2-4', by: 'U202' },
+        ],
+      })
+      const roc = Number(T.slice(0, 4)) - 1911
+      const causes = ['心室顫動', '急性心肌梗塞']
+      const course = '急性下壁心肌梗塞入院，心導管排程中；入院 28 小時突發心室顫動，急救 25 分鐘無效。'
+      admissions.push({
+        id, admitNo: `I${adAt.slice(2, 10).replace(/-/g, '')}${String(next('admitNo')).padStart(3, '0')}`, patientId: pt.id, deptId: 'D02', doctorId: 'DR03',
+        bedId: bed.id, bedHistory: [{ bedId: bed.id, from: adAt }], preferBedClass: '健保床', reason: '胸痛、心電圖 ST 上升', diagnosis: 'I21.9 急性心肌梗塞',
+        status: 'discharged', reservedAt: addMinutes(adAt, -60), expectedDate: adAt.slice(0, 10), admittedAt: adAt, dischargedAt: addMinutes(died, 120), dischargeType: '死亡',
+        wristband: { printedAt: adAt, printedBy: 'U201', reprints: [] },
+        dischargeSummary: { diagnosis: `${causes[0]}（原始死因：${causes[1]}）`, course, condition: `${died} 宣告死亡（病死或自然死）`, followUp: '', dischargeType: '死亡', doctorId: 'DR03', writtenAt: addMinutes(died, 10), signedAt: addMinutes(died, 10) },
+        death: {
+          declaredAt: died, declaredBy: dr03, codeBlueId: 'CB-SEED-2', expected: false, causes, manner: 'natural', course,
+          care: { items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '手錶、手機，交妻子', by: 'U202', at: addMinutes(died, 60) },
+          cert: { no: `${roc} 死字第 ${String(next(`death:${roc}`)).padStart(6, '0')} 號`, copies: 3, issuedAt: addMinutes(died, 80), by: dr03, printed: [{ at: addMinutes(died, 85), by: 'U202' }] },
+          morgueAt: addMinutes(died, 120), morgueBy: 'U202',
+        },
+      })
+      pt.deceasedAt = died
+    }
   }
 
   return {

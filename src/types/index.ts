@@ -978,7 +978,9 @@ export interface Admission {
   /** 鎮靜目標（RASS 範圍，加護病房主治設定）：護理師每 4 小時評，超出範圍列主治首頁 */
   rassTarget?: { min: number; max: number; by: string; at: string }
   /** APACHE II 要手動填的（醫師）：嚴重慢性病（器官衰竭或免疫抑制）、這次是不是手術後（急診／常規手術） */
-  apache?: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; by: string; at: string }
+  apache?: { chronic: boolean; surgery: 'none' | 'emergency' | 'elective'; by: string; at: string; /** 預估死亡率用的診斷類別（mortality-rules.APACHE_CATEGORIES） */ category?: string }
+  /** 死亡病例審查（權限 mortality.review）：結論、檢討、改善事項；需提病例討論的排日期與報告人 */
+  mortalityReview?: { grade: 'unavoidable' | 'possibly' | 'avoidable' | 'discuss'; findings: string; improvement?: string; conference?: { date: string; presenter: string }; by: string; at: string }
   /**
    * 急診留觀：特別的住院（急診科、急診醫師、急診留觀區的床），沿用住院醫囑、給藥、生命徵象、護理紀錄、腕帶。
    * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院

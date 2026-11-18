@@ -67,6 +67,18 @@ try {
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
+  // 測試要幾位「空閒」的一般健保病人：種子剩下的不夠（死亡、安寧等示範也從空閒病人挑）就自己建，建完切回原本的帳號
+  let madePatients = 0
+  const topUpPatients = async (list, n, backTo) => {
+    const vv = await load('/src/utils/validators.ts')
+    while (list.length < n) {
+      madePatients++
+      await as('clerk01')
+      list.push(await api.patientApi.createPatient({ gender: madePatients % 2 ? 'M' : 'F', birthDate: '1972-03-03', phone: '', defaultIdentity: '01', allergies: [], familyHistory: [], smoking: false, betelNut: false, bloodType: '', address: '', emergencyContact: '', emergencyPhone: '', name: `測試病人${madePatients}`, idNo: vv.makeIdNo('E', madePatients % 2 ? 'M' : 'F', 7770100 + madePatients) }))
+    }
+    if (backTo) await as(backTo)
+    return list
+  }
   /** 今天前後 n 天（YYYY-MM-DD） */
   const addDaysT = (n) => dateUtil.addDays(T, n)
   /** 退回藥庫：藥庫全部同意、藥局送出（申請 → 核准 → 運送中） */
@@ -117,7 +129,7 @@ try {
   ok(sessions.length > 0, `今天有 ${sessions.length} 個診次`)
   const closed = sessions.find((s) => s.closed)
   if (closed) {
-    const someone = dbm.db.patients[30]
+    const someone = dbm.db.patients.filter((p) => !p.deceasedAt).at(-6)
     await expectError(() => api.bookingApi.register({ patientId: someone.id, sessionId: closed.id, identityCode: '01', caseType: '01' }), '掛已截止的診次')
   }
   // 依執行時間，今天可能已經沒有開放的診次（例如深夜），就改掛明天
@@ -1542,7 +1554,7 @@ try {
     if (!susp) {
       susp = (await S.listSessions({ date: addD(T, 2) }))[0]
       await as('clerk01')
-      await api.bookingApi.register({ patientId: dbm.db.patients[33].id, sessionId: susp.id, identityCode: '01', caseType: '01' })
+      await api.bookingApi.register({ patientId: dbm.db.patients.filter((p) => !p.deceasedAt).at(-3).id, sessionId: susp.id, identityCode: '01', caseType: '01' })
       await as('admin')
     }
     await expectError(() => S.suspendSession(susp.id, ''), '停診未填原因')
@@ -1552,7 +1564,7 @@ try {
     ok(notice.length > 0 && dbm.db.visits.filter((v) => activeBefore.has(v.id)).every((v) => v.status === 'cancelled' && v.cancelReason === '停診：醫師病假'), `停診：${notice.length} 筆掛號退掛，並列入通知名單（含電話 ${notice[0].phone}）`)
     await expectError(() => S.suspendSession(susp.id, '再停一次'), '重複停診')
     await as('clerk01')
-    await expectError(() => api.bookingApi.register({ patientId: dbm.db.patients[34].id, sessionId: susp.id, identityCode: '01', caseType: '01' }), '掛停診的診次')
+    await expectError(() => api.bookingApi.register({ patientId: dbm.db.patients.filter((p) => !p.deceasedAt).at(-2).id, sessionId: susp.id, identityCode: '01', caseType: '01' }), '掛停診的診次')
     ok(!(await S.listSessions({ date: susp.date })).find((s) => s.id === susp.id).bookable, '停診的診次 bookable = false（掛號頁不能選）')
     await as('admin')
     const notices = await S.listSuspendNotices()
@@ -1645,7 +1657,7 @@ try {
     const gen = (await S.listSessions({ date: day })).find((s) => s.doctorId === otherDoc.id && s.period === 'NIGHT')
     ok(!!gen && gen.roomNo === 'N01', `新增每週範本 → ${day} 自動產生夜診診次`)
     await as('clerk01')
-    await api.bookingApi.register({ patientId: dbm.db.patients[35].id, sessionId: gen.id, identityCode: '01', caseType: '01' })
+    await api.bookingApi.register({ patientId: dbm.db.patients.filter((p) => !p.deceasedAt).at(-1).id, sessionId: gen.id, identityCode: '01', caseType: '01' })
     await as('admin')
     const del = await S.deleteWeeklySlot(r1.slot.id)
     ok(del.keptSessions === 1 && dbm.db.sessions.some((s) => s.id === gen.id), '刪除範本：已有掛號的未來診次保留（不讓掛號默默消失）')
@@ -7049,15 +7061,8 @@ try {
     // 檢傷掛號
     const busy = new Set([...db().visits.filter((v) => v.date === T).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
     // 健保一般身分（榮民等免部分負擔的不收急診部分負擔，另外測）
-    const free01 = db().patients.filter((p) => !busy.has(p.id) && !p.deceasedAt && p.defaultIdentity === '01')
-    // 種子剩下的空閒病人不夠時自己建（不依賴種子剛好剩幾位：死亡、安寧的示範病人也從空閒病人裡挑）
-    for (let k = 0; free01.length < 3; k++) {
-      const v = await load('/src/utils/validators.ts')
-      await as('clerk01')
-      free01.push(await api.patientApi.createPatient({ gender: k % 2 ? 'F' : 'M', birthDate: '1975-05-05', phone: '', defaultIdentity: '01', allergies: [], familyHistory: [], smoking: false, betelNut: false, bloodType: '', address: '', emergencyContact: '', emergencyPhone: '', name: `急診測試${k + 1}`, idNo: v.makeIdNo('E', k % 2 ? 'F' : 'M', 7770001 + k) }))
-      await as('nurse01')
-    }
-    const [p1, p2, p3] = free01
+    // 種子剩下的空閒病人不夠時自己建（不依賴種子剛好剩幾位）
+    const [p1, p2, p3] = await topUpPatients(db().patients.filter((p) => !busy.has(p.id) && !p.deceasedAt && p.defaultIdentity === '01'), 3, 'nurse01')
     await as('clerk01')
     await expectError(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 2 }), '櫃台不能檢傷')
     await as('nurse01')
@@ -7190,7 +7195,7 @@ try {
 
     // 決定留觀 → 排床
     const busy = new Set([...db().visits.filter((v) => v.date === T || (v.er && v.status !== 'cancelled')).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
-    const [p1, p2] = db().patients.filter((p) => !p.deceasedAt && !busy.has(p.id) && p.defaultIdentity === '01' && !p.allergies.length)
+    const [p1, p2] = await topUpPatients(db().patients.filter((p) => !p.deceasedAt && !busy.has(p.id) && p.defaultIdentity === '01' && !p.allergies.length), 2, 'nurse01')
     const v1 = await E.triageAndRegister({ patientId: p1.id, complaint: '腹痛', vitals: N, level: 3 })
     const v2 = await E.triageAndRegister({ patientId: p2.id, complaint: '頭暈', vitals: N, level: 3 })
     await as('dr12')
@@ -7277,14 +7282,7 @@ try {
     // 直接收住院的急診也併入住院帳單
     await as('nurse01')
     const busy2 = new Set([...db().visits.filter((v) => v.date === T || v.er).map((v) => v.patientId), ...db().admissions.filter((a) => ['admitted', 'reserved'].includes(a.status)).map((a) => a.patientId)])
-    let p3 = db().patients.find((p) => !p.deceasedAt && !busy2.has(p.id) && p.defaultIdentity === '01')
-    if (!p3) {
-      // 空閒病人不夠：自己建一位（不依賴種子剛好剩幾位）
-      const vv = await load('/src/utils/validators.ts')
-      await as('clerk01')
-      p3 = await api.patientApi.createPatient({ gender: 'M', birthDate: '1968-02-02', phone: '', defaultIdentity: '01', allergies: [], familyHistory: [], smoking: false, betelNut: false, bloodType: '', address: '', emergencyContact: '', emergencyPhone: '', name: '急診測試胸痛', idNo: vv.makeIdNo('E', 'M', 7770011) })
-      await as('nurse01')
-    }
+    const [p3] = await topUpPatients(db().patients.filter((p) => !p.deceasedAt && !busy2.has(p.id) && p.defaultIdentity === '01').slice(0, 1), 1, 'nurse01')
     const v3 = await E.triageAndRegister({ patientId: p3.id, complaint: '胸痛', vitals: N, level: 2 })
     await as('dr12')
     await see(v3)
@@ -9249,7 +9247,8 @@ try {
     d = await C.endCode(d.id, { outcome: 'dnr' })
     ok(d.outcome === 'dnr' && !db().ipdOrders.some((o) => o.codeBlueId === d.id), '依 DNR 不施行急救：結束、沒有 CPR 處置費')
     const q = await C.codeQuality(30)
-    ok(q.codes === 3 && q.dnr === 1 && q.resus === 2 && q.rosc === 2 && q.roscRate === 100, `品質指標：急救 ${q.codes}（依 DNR 不施行 ${q.dnr}）、ROSC ${q.rosc}/${q.resus}（${q.roscRate}%）`)
+    // 種子兩次急救（酮酸中毒 ROSC、心肌梗塞死亡）＋這裡兩次（ROSC、依 DNR 不施行）
+    ok(q.codes === 4 && q.dnr === 1 && q.resus === 3 && q.rosc === 2 && q.roscRate === 66.7, `品質指標：急救 ${q.codes}（依 DNR 不施行 ${q.dnr}）、ROSC ${q.rosc}/${q.resus}（${q.roscRate}%）`)
   }
 
   // 升壓劑與電解質：劑量 ↔ 流速換算、開立檢查（限加護病房、要 CVC、DNR、不重複、欄位）、護理師調流速在上限內、
@@ -9600,6 +9599,97 @@ try {
     msg = await errOf(() => P.cancelPalliative(c.id))
     ok(msg.includes('已經處理過'), '收案後不能撤回')
     ok((await api.deathApi.patientDeath(cell.id)).expected, '沒有 DNR、但安寧收案：死亡算預期')
+  }
+
+  // 死亡病例審查與品質指標：觸發條件（非預期、48 小時內、術後 30 天、急救後、加護病房轉出 48 小時）、審查欄位與權限、
+  // APACHE II 預估死亡率（診斷類別、急診手術）、院內死亡率、加護病房死亡率與 SMR
+  console.log('\n[死亡病例審查]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const M = api.mortalityApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const base = { expected: true, admittedAt: '2026-11-10 10:00', declaredAt: '2026-11-15 10:00', codeBlue: false }
+    ok(!api.mortalityTriggers(base).length, '有 DNR、住 5 天、沒手術沒急救：預期死亡，不用審')
+    ok(api.mortalityTriggers({ ...base, expected: false }).join() === 'noDnr' && api.mortalityTriggers({ ...base, declaredAt: '2026-11-12 09:59' }).join() === 'early' && api.mortalityTriggers({ ...base, declaredAt: '2026-11-12 10:01' }).length === 0, '非預期；入院 48 小時內（剛好 48 小時算、多 1 分鐘不算）')
+    ok(api.mortalityTriggers({ ...base, lastSurgeryAt: '2026-10-17 10:00' }).join() === 'postop' && !api.mortalityTriggers({ ...base, lastSurgeryAt: '2026-10-15 09:00' }).length && api.mortalityTriggers({ ...base, codeBlue: true }).join() === 'afterCode' && api.mortalityTriggers({ ...base, lastIcuOutAt: '2026-11-14 12:00' }).join() === 'icuOut', '術後 30 天內、急救後、加護病房轉出 48 小時內')
+    let e = api.checkMortalityReview({}, '2026-11-18')
+    ok(e.grade && e.findings && !e.improvement, '審查：結論、檢討')
+    e = api.checkMortalityReview({ grade: 'avoidable', findings: 'x' }, '2026-11-18')
+    ok(e.improvement && !Object.keys(api.checkMortalityReview({ grade: 'unavoidable', findings: 'x' }, '2026-11-18')).length, '不是無可避免要寫改善事項；無可避免不用')
+    e = api.checkMortalityReview({ grade: 'discuss', findings: 'x', improvement: 'x', conferenceDate: '2026-11-17' }, '2026-11-18')
+    ok(e.conferenceDate?.includes('過去') && e.presenter, '需提病例討論：日期不能是過去、要報告人')
+    ok(api.apacheMortality(25, 'sepsis', false) === 56.1 && api.apacheMortality(25, undefined, false) === 53.3 && api.apacheMortality(25, 'sepsis', true) > 56.1 && api.apacheMortality(10, 'dka', false) < 3, `APACHE II 預估死亡率：25 分敗血症 ${api.apacheMortality(25, 'sepsis', false)}%、沒選類別 ${api.apacheMortality(25, undefined, false)}%、急診手術再加、酮酸中毒 10 分 ${api.apacheMortality(10, 'dka', false)}%`)
+    ok(api.ratePct(1, 3) === 33.3 && api.ratePct(1, 0) === null && api.smrOf(2, 1.6) === 1.25 && api.smrOf(1, 0) === null, '死亡率、SMR 的計算與沒有分母')
+
+    // 種子
+    const d2 = db().admissions.find((a) => a.id === 'A-DEATH-2')
+    ok(d2?.death && !d2.death.expected && d2.death.codeBlueId === 'CB-SEED-2' && !d2.mortalityReview && db().users.find((u) => u.username === 'dr02').grants?.includes('mortality.review'), '種子：急性心肌梗塞入院 28 小時急救無效（非預期、待審查）；dr02 被指定死亡病例審查')
+    await as('dr02')
+    ok((await api.dashboardApi.getDashboard()).mortalityToReview === 1, '審查者首頁：死亡病例待審查 1')
+    let w = await M.listMortality(30)
+    const c2 = w.cases.find((c) => c.admissionId === d2.id)
+    const c1 = w.cases.find((c) => c.admissionId === 'A-DEATH-1')
+    ok(w.canReview && w.toReview === 1 && w.cases[0].admissionId === d2.id && c2.triggers.map((t) => t.key).join() === 'noDnr,early,afterCode' && c2.hoursInHospital === 28 && c1 && !c1.needsReview && c1.expected, '死亡審查頁：待審查的在前（非預期、48 小時內、急救後；住院 28 小時）；肺癌 DNR 的不用審')
+    ok(w.stats.deaths === 2 && w.stats.discharges >= 2 && w.stats.mortalityRate === Math.round((2 / w.stats.discharges) * 1000) / 10 && w.stats.early === 1 && w.stats.unexpected === 1, `品質指標：院內死亡 ${w.stats.deaths} / 出院 ${w.stats.discharges}（${w.stats.mortalityRate}%）、48 小時內 1、非預期 1`)
+    // 權限
+    await as('dr03')
+    let msg = await errOf(() => M.listMortality(30))
+    ok(msg.includes('死亡病例審查'), `沒權限的醫師看死亡審查 → 「${msg}」`)
+    await as('admin')
+    w = await M.listMortality(30)
+    msg = await errOf(() => M.reviewDeath(d2.id, { grade: 'unavoidable', findings: 'x' }))
+    ok(!w.canReview && msg.includes('醫師'), `管理員只能看：審查 → 「${msg}」`)
+    // 審查
+    await as('dr02')
+    msg = await errOf(() => M.reviewDeath('A-DEATH-1', { grade: 'unavoidable', findings: 'x' }))
+    ok(msg.includes('不用審查'), `預期死亡審查 → 「${msg}」`)
+    let f = await fieldsOf(() => M.reviewDeath(d2.id, { grade: 'discuss', findings: '' }))
+    ok(f.findings && f.improvement && f.conferenceDate && f.presenter, '審查欄位一次標出')
+    const conf = dateUtil.addDays(dateUtil.today(), 7)
+    const rv = await M.reviewDeath(d2.id, { grade: 'discuss', findings: '入院後心導管排到隔天；夜班心電圖監視警報 3 分鐘才有人到', improvement: '急性心肌梗塞 90 分鐘內心導管；監視器警報分級與回應時間', conferenceDate: conf, presenter: '黃柏翰' })
+    ok(rv.review.gradeLabel === '需提病例討論' && db().auditLogs[0].action === '死亡病例審查', '審查：需提病例討論、寫稽核')
+    w = await M.listMortality(30)
+    ok(w.toReview === 0 && w.conferences.some((x) => x.date === conf && x.presenter === '黃柏翰') && (await api.dashboardApi.getDashboard()).mortalityToReview === 0, '審查後：待審查 0、列入即將召開的病例討論')
+    msg = await errOf(() => M.reviewDeath(d2.id, { grade: 'unavoidable', findings: 'x' }))
+    ok(msg.includes('已經審查'), '不能重複審查')
+
+    // APACHE II 預估死亡率：加護病房分頁選診斷類別
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    let pi = await api.icuMoveApi.patientIcu(sep.id)
+    const m0 = pi.apache.mortality
+    f = await fieldsOf(() => api.icuMoveApi.setApacheInput(sep.id, { chronic: false, surgery: 'none', category: 'xx' }))
+    ok(f.category, '診斷類別不正確擋')
+    pi = await api.icuMoveApi.setApacheInput(sep.id, { chronic: false, surgery: 'none', category: 'septicShock' })
+    ok(pi.apache.input.category === 'septicShock' && pi.apache.mortality === api.apacheMortality(pi.apache.total, 'septicShock', false) && pi.apache.mortality > m0, `敗血症 APACHE II ${pi.apache.total} 分：選「敗血性休克」預估死亡率 ${m0}% → ${pi.apache.mortality}%`)
+    // 加護病房死亡率與 SMR：敗血症宣告死亡、送太平間
+    await as(db().users.find((u) => u.doctorId === sep.doctorId).username)
+    await api.deathApi.declareDeath(sep.id, { causes: ['敗血性休克', '肺炎'], manner: 'natural', course: '敗血性休克插管、升壓劑，多重器官衰竭' })
+    await api.deathApi.issueDeathCertificate(sep.id, { copies: 1 })
+    await as('nurse01')
+    await api.deathApi.recordBodyCare(sep.id, { items: ['lines', 'clean', 'family', 'valuables', 'tag'], valuables: '無' })
+    msg = await errOf(() => api.deathApi.sendToMorgue(sep.id))
+    await as('dr02')
+    w = await M.listMortality(30)
+    const cs = w.cases.find((c) => c.admissionId === sep.id)
+    ok(cs && cs.expected && cs.icuPredicted === pi.apache.mortality && w.stats.icuStays >= 1 && w.stats.icuDeaths === 1 && w.stats.icuExpected > 0 && w.stats.smr === Math.round((1 / w.stats.icuExpected) * 100) / 100, `加護病房：死亡 ${w.stats.icuDeaths} / ${w.stats.icuStays}（${w.stats.icuMortality}%）、預估 ${w.stats.icuExpected}、SMR ${w.stats.smr}（${msg ? `送太平間：${msg}` : '已送太平間'}）`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
