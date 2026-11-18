@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2097,6 +2097,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const codeBlues: CodeBlue[] = []
   const palliativeCases: PalliativeCase[] = []
   const pressureLogs: PressureLog[] = []
+  const clusterDecisions: ClusterDecision[] = []
+  const notifiableReports: NotifiableReport[] = []
   const nurseAssignments: NurseAssignment[] = []
   const shiftRequests: ShiftRequest[] = []
   {
@@ -2617,6 +2619,21 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 群聚（示範，不抽亂數）：5A 安寧收案的大腸癌病人導尿管（已移除）三天前也發生 E. coli 泌尿道感染，dr11 已判定成立；
+  // 加上腦梗塞那例（待判定）＝ 5A 14 天內兩例同菌種 → 疑似群聚待確認
+  {
+    const ap = admissions.find((x) => x.id === 'A-PAL-1')
+    const dr11 = users.find((u) => u.doctorId === 'DR11')!.id
+    if (ap?.admittedAt) {
+      const ins = addMinutes(ap.admittedAt, 60)
+      const onset = [addDays(ap.admittedAt.slice(0, 10), 3), addDays(T, -3)].sort().pop()!
+      if (onset < T) {
+        lines.push({ id: 'LN-SEED-PALFOLEY', admissionId: ap.id, kind: 'foley', site: '尿道', size: '14Fr', insertedAt: ins, placedBy: '孫佩君', recordedBy: 'U201', recordedAt: ins, removedAt: `${onset} 10:00`, removedBy: 'U202', removeReason: '感染：移除' })
+        infectionCases.push({ id: 'INF-SEED-2', admissionId: ap.id, kind: 'cauti', lineId: 'LN-SEED-PALFOLEY', onsetAt: onset, symptoms: '發燒 38.4°C、尿液混濁、恥骨上不適', culture: 'E. coli ≥10⁵ CFU/ml（尿液）', reportedBy: 'U202', reportedAt: `${onset} 09:30`, status: 'confirmed', decision: { by: dr11, at: `${onset} 15:00`, reason: '導尿管放置第 3 天以上、尿液培養 ≥10⁵、有發燒：成立' } })
+      }
+    }
+  }
+
   // 負壓壓差紀錄（示範，不抽亂數）：過去兩天每班一筆（班開始後 30 分鐘）；705 都正常；ICU9 這一班 −1.8（負壓不足、已通知工務）
   {
     const shiftStarts = ['00:00', '08:00', '16:00']
@@ -2701,6 +2718,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     codeBlues,
     palliativeCases,
     pressureLogs,
+    clusterDecisions,
+    notifiableReports,
     dischargePlans,
     vitals,
     nursingNotes,

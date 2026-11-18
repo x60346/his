@@ -31,6 +31,7 @@ import { icuHourly } from './icu-work'
 import { newsAlertCount, newsStateOf } from './news-work'
 import { visitDueOf } from './palliative-rules'
 import { negativeRoomState } from './flag-work'
+import { currentClusters, pendingNotifiable } from './ipc-work'
 import { needsMortalityReview } from './mortality-work'
 import { rassOutCount, weanDueCount } from './vent-work'
 import { careRoleOf } from './care-team'
@@ -136,6 +137,10 @@ export interface DashboardStats {
   mortalityToReview?: number
   /** 負壓隔離室這一班沒記錄壓差、或負壓不足（護理師，全院） */
   negativeRoomTodo?: number
+  /** 感染管制：疑似群聚待判定、法定傳染病通報逾時（全院）；醫師：自己病人待通報 */
+  clustersOpen?: number
+  notifiableOverdue?: number
+  notifiablePending?: number
   palliativeVisitDue?: number
   newsRecheckOverdue?: number
   rrtPending?: number
@@ -294,7 +299,8 @@ export function getDashboard(): Promise<DashboardStats> {
           } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),
-          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length, clustersOpen: currentClusters().filter((c) => !c.decision).length, notifiableOverdue: db.admissions.flatMap(pendingNotifiable).filter((p) => p.dueAt < t).length } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { negativeRoomTodo: db.beds.filter((b) => b.negativePressure && negativeRoomState(b, t).state !== 'ok').length } : {}),
           ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length, newsRecheckOverdue: inpt.filter((a) => newsStateOf(a, t)?.recheck?.status === 'overdue').length } : {}),

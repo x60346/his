@@ -9,6 +9,7 @@ import { activeDnr, activeIsolations, placementFor } from './flag-work'
 import { find, nameOf } from './views'
 import { requireCare } from './care-team'
 import { ISO_BUNDLES, ISO_PPE, releaseCheck, type IsoBundleItem } from './iso-rules'
+import { pendingNotifiable } from './ipc-work'
 
 export interface IsolationView extends Isolation {
   startedByName: string
@@ -115,7 +116,7 @@ export interface IsolationInput {
 }
 
 /** 開隔離（醫師、護理師）：同類同原因不重複開。住院中開的、目前這床其實不該住，回傳時帶提醒（請安排轉床） */
-export function startIsolation(input: IsolationInput): Promise<{ isolation: IsolationView; placementWarning?: string }> {
+export function startIsolation(input: IsolationInput): Promise<{ isolation: IsolationView; placementWarning?: string; notifiable?: { label: string; dueAt: string } }> {
   return mutate(() => {
     const u = requireUser('doctor', 'nurse')
     const p = must(find.patient(input.patientId), '病人')
@@ -136,7 +137,8 @@ export function startIsolation(input: IsolationInput): Promise<{ isolation: Isol
     db.isolations.push(iso)
     audit('開始隔離', `${p.name}：${isoText([iso])}`)
     const warn = placementWarningOf(p.id)
-    return { isolation: isoView(iso, t), ...(warn ? { placementWarning: warn } : {}) }
+    const nf = a ? pendingNotifiable(a).find((x) => x.basis === `隔離：${org}`) : undefined
+    return { isolation: isoView(iso, t), ...(warn ? { placementWarning: warn } : {}), ...(nf ? { notifiable: { label: nf.label, dueAt: nf.dueAt } } : {}) }
   })
 }
 

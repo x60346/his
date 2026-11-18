@@ -8,7 +8,7 @@ import { ShieldPlus, FileSignature } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect } from '@/components/ui'
 import ReasonDialog from './ReasonDialog.vue'
 import {
-  DNR_DOC_LABEL, DNR_ITEMS, DNR_CPR_ITEMS, DNR_RELATIONS, flagApi, ISOLATION_KIND_LABEL, ISOLATION_PRESETS, ISOLATION_REVIEW_TEXT, masterApi,
+  DNR_DOC_LABEL, DNR_ITEMS, DNR_CPR_ITEMS, DNR_RELATIONS, flagApi, ipcApi, ISOLATION_KIND_LABEL, ISOLATION_PRESETS, ISOLATION_REVIEW_TEXT, masterApi,
   type DnrView, type IsolationView,
 } from '@/services'
 import type { DnrDoc, DnrItem, IsolationKind } from '@/types'
@@ -25,6 +25,13 @@ const canIsolate = computed(() => auth.user?.role === 'doctor' || auth.user?.rol
 const { data, loading } = useQuery(() => flagApi.getPatientFlags(props.patientId), [() => props.patientId])
 const f = computed(() => (data.value?.patientId === props.patientId ? data.value : undefined))
 const { data: doctors } = useQuery(() => masterApi.listDoctors(undefined, true))
+// 法定傳染病：隔離原因或診斷符合就列待通報（時限、逾時）；主治或感染管制按「通報」
+const { data: nfData, reload: reloadNf } = useQuery(() => ipcApi.patientNotifiable(props.patientId), [() => props.patientId])
+const nf = computed(() => (nfData.value?.patientId === props.patientId ? nfData.value : undefined))
+const reportAct = useAction(ipcApi.reportNotifiable, { success: (r) => `已通報 ${r.label}（${r.cdcNo}）` })
+async function report(disease: string) {
+  if (await reportAct.run(props.patientId, disease)) reloadNf()
+}
 
 // ---------- 開始隔離 ----------
 const KINDS: IsolationKind[] = ['contact', 'droplet', 'airborne']
@@ -41,6 +48,7 @@ async function submitIso() {
   if (!r) return
   isoOpen.value = false
   if (r.placementWarning) ui.toast.warning(`請安排轉床：${r.placementWarning}`)
+  if (r.notifiable) ui.toast.warning(`法定傳染病：${r.notifiable.label}，請在 ${r.notifiable.dueAt} 前通報（「隔離與 DNR」分頁）`)
 }
 
 // ---------- 檢討、解除 ----------
@@ -111,6 +119,12 @@ const docWho = (d: DnrView) =>
               <UBadge v-if="!f.isolations.length" tone="gray">沒有隔離</UBadge>
               <UButton v-if="canIsolate" size="sm" class="ml-auto" :icon="ShieldPlus" @click="openIso">開始隔離</UButton>
             </div>
+            <div v-for="p in nf?.pending ?? []" :key="p.disease" :class="['flex flex-wrap items-center gap-2 rounded border px-3 py-2', p.state === 'overdue' ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50']">
+              <b class="text-red-800">法定傳染病待通報：{{ p.label }}</b>
+              <span class="text-xs text-slate-600">{{ p.basis }}・時限 {{ p.dueAt.slice(5, 16).replace('-', '/') }}{{ p.state === 'overdue' ? '（已逾時）' : p.state === 'soon' ? '（快到期）' : '' }}</span>
+              <UButton v-if="nf?.canReport" class="ml-auto" size="sm" :loading="reportAct.pending.value" @click="report(p.disease)">通報</UButton>
+            </div>
+            <p v-for="r in nf?.reported ?? []" :key="r.id" class="text-xs text-slate-600">已通報 {{ r.label }}：{{ r.cdcNo }}（{{ r.reportedAt.slice(5, 16).replace('-', '/') }}）</p>
             <ul v-if="f.isolations.length" class="space-y-2">
               <li v-for="i in f.isolations" :key="i.id" class="rounded border border-amber-200 bg-amber-50/50 px-3 py-2">
                 <div class="flex flex-wrap items-center gap-2">

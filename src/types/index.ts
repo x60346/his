@@ -962,6 +962,30 @@ export interface Bed {
   negativePressure?: boolean
 }
 
+/** 群聚判定（感染管制）：key＝病房｜菌種或部位｜最早一例；確認要寫處置、排除要寫原因 */
+export interface ClusterDecision {
+  key: string
+  status: 'confirmed' | 'excluded'
+  note: string
+  by: string
+  at: string
+}
+/** 法定傳染病通報（模擬：單號系統產生，不連線疾管署） */
+export interface NotifiableReport {
+  id: string
+  patientId: string
+  admissionId?: string
+  disease: string
+  label: string
+  /** 從什麼時候起算（開隔離或住院診斷） */
+  triggeredAt: string
+  dueAt: string
+  reportedAt: string
+  reportedBy: string
+  cdcNo: string
+  note?: string
+}
+
 /** 負壓隔離室壓差紀錄（每班至少一次；Pa，負值；高於 −2.5 是負壓不足，要寫處理） */
 export interface PressureLog {
   id: string

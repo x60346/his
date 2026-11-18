@@ -1,20 +1,31 @@
 <script setup lang="ts">
 // 感染管制（權限「感染管制」，示範 dr11）：全院待判定的院內感染個案（舊的在前）、最近 30 天判定過的；點一筆在右邊判定（和病人分頁同一個元件）
 import { computed, ref } from 'vue'
-import { UBadge, UCard, UPageHeader, UQueryState } from '@/components/ui'
+import { UBadge, UCard, UPageHeader, UQueryState, UTabs } from '@/components/ui'
+import IpcPanels from './components/IpcPanels.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
 import { infectionApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 
 const { data, loading, reload } = useQuery(() => infectionApi.listInfectionWork())
 const picked = ref<string>()
+// 分頁：個案判定、指標、群聚、法定傳染病
+const tab = ref<'cases' | 'stats' | 'clusters' | 'notify'>('cases')
+const tabs = computed(() => [
+  { key: 'cases', label: '個案判定', count: data.value?.pending.length || undefined },
+  { key: 'stats', label: '指標' },
+  { key: 'clusters', label: '群聚' },
+  { key: 'notify', label: '法定傳染病' },
+])
 const sel = computed(() => [...(data.value?.pending ?? []), ...(data.value?.decided ?? [])].find((c) => c.admissionId === picked.value))
 </script>
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="感染管制" description="院內感染個案判定；成立的進病房品質指標（每千管路日感染率）" />
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-[24rem_1fr]">
+    <UPageHeader title="感染管制" description="院內感染個案判定、全院指標、群聚偵測、法定傳染病通報" />
+    <UTabs v-model="tab" :tabs="tabs" />
+    <IpcPanels v-if="tab !== 'cases'" :mode="tab" @changed="reload" />
+    <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-[24rem_1fr]">
       <UCard :padded="false" class="self-start">
         <UQueryState :loading="loading && !data" :ready="!!data">
           <div v-if="data" class="text-sm">

@@ -9841,6 +9841,91 @@ try {
     ok(v.ended && !v.ended.exception, '醫師確認症狀緩解 24 小時：可以解除（不是例外）')
   }
 
+  // 感染管制統計、群聚、法定傳染病：菌種辨識、群聚規則（同病房 14 天、同菌種優先）、通報比對與時限；
+  // 指標、群聚確認與排除、待通報與通報（權限、單號）、開隔離提醒、逾時
+  console.log('\n[感染管制統計、群聚與法定傳染病]')
+  {
+    dbm.resetDatabase('small')
+    dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
+    const db = () => dbm.db
+    const I = api.ipcApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.organismOf('E. coli ≥10⁵ CFU/ml') === '大腸桿菌' && api.organismOf('MRSA（傷口）') === 'MRSA' && !api.organismOf('待報告'), '菌種辨識（英文學名對應、認不得的不算）')
+    const c = (id, ward, kind, culture, onsetAt) => ({ id, ward, kind, culture, onsetAt })
+    let cl = api.findClusters([c('a', '5A', 'cauti', 'E. coli', '2026-11-01'), c('b', '5A', 'cauti', '大腸桿菌', '2026-11-14')])
+    ok(cl.length === 1 && cl[0].by === 'organism' && cl[0].label === '大腸桿菌' && cl[0].caseIds.join() === 'a,b', '同病房 14 天內兩例同菌種：一群（同一批不再依部位重複列）')
+    ok(!api.findClusters([c('a', '5A', 'cauti', 'E. coli', '2026-11-01'), c('b', '5A', 'other', 'E. coli', '2026-11-16')]).length && !api.findClusters([c('a', '5A', 'cauti', 'E. coli', '2026-11-01'), c('b', '6B', 'cauti', 'E. coli', '2026-11-02')]).length, '相差超過 14 天、不同病房：不算')
+    cl = api.findClusters([c('a', '5A', 'ssi', '待報告', '2026-11-01'), c('b', '5A', 'ssi', '綠膿桿菌', '2026-11-05')])
+    ok(cl.length === 1 && cl[0].by === 'site' && cl[0].label === '手術部位感染', '菌種不同（或還沒報告）但同感染部位：依部位成群')
+    ok(api.notifiableOf('疑似肺結核（待痰液抗酸菌報告）', false)?.key === 'tb' && api.notifiableOf('開放性肺結核', false)?.key === 'tb-open' && !api.notifiableOf('流感', false) && api.notifiableOf('流感', true)?.key === 'flu-severe', '法定傳染病比對：結核病、開放性肺結核（24 小時）、流感要在加護病房才算重症')
+    ok(api.notifyState('2026-11-20 10:00', '2026-11-18 10:00') === 'ok' && api.notifyState('2026-11-20 10:00', '2026-11-19 11:00') === 'soon' && api.notifyState('2026-11-20 10:00', '2026-11-20 10:01') === 'overdue' && api.checkClusterDecision({ confirm: true }).note, '通報時限：時限內、前 24 小時快到期、逾時；群聚判定要寫')
+
+    // 種子與指標
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    const hasSecond = db().infectionCases.some((x) => x.id === 'INF-SEED-2')
+    ok(hasSecond, '種子：5A 第二例 E. coli 泌尿道感染（安寧病人的導尿管，已判定成立）')
+    await as('dr11')
+    const st = await I.infectionStats(30)
+    const w5 = st.rows.find((r) => r.ward === '5A 內科病房')
+    ok(st.rows.length === 4 && st.total.patientDays > 0 && (!hasSecond || (st.total.hai >= 1 && w5.devices.find((d) => d.kind === 'cauti').cases >= 1 && w5.devices.find((d) => d.kind === 'cauti').lineDays > 0)), `指標：4 個病房＋全院（全院住院人日 ${st.total.patientDays}、院內感染 ${st.total.hai}、密度 ${st.total.density}）`)
+    let lc = await I.listClusters()
+    const cl5 = lc.clusters.find((x) => x.ward === '5A 內科病房')
+    ok(!hasSecond || (cl5 && !cl5.decision && cl5.label === '大腸桿菌' && cl5.caseIds.includes('INF-SEED-1') && cl5.caseIds.includes('INF-SEED-2') && lc.canDecide), '種子：5A 兩例 E. coli 泌尿道感染＝疑似群聚待判定')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(!hasSecond || dash.clustersOpen === 1, `感染管制首頁：疑似群聚待判定 ${dash.clustersOpen}`)
+    if (cl5) {
+      const f = await fieldsOf(() => I.decideCluster(cl5.key, { confirm: true, note: '' }))
+      ok(f.note, '確認群聚要寫處置')
+      await I.decideCluster(cl5.key, { confirm: true, note: '5A 導尿管照護查核、加強手部衛生稽核' })
+      lc = await I.listClusters()
+      const msg = await errOf(() => I.decideCluster(cl5.key, { confirm: false, note: 'x' }))
+      ok(lc.clusters.find((x) => x.key === cl5.key)?.decision?.status === 'confirmed' && msg.includes('已經判定') && db().auditLogs[0].action === '確認群聚' && (await api.dashboardApi.getDashboard()).clustersOpen === 0, '確認群聚（稽核）；不能重複判定；首頁待判定歸零')
+    }
+    await as('admin')
+    const msgA = await errOf(() => I.decideCluster('x', { confirm: true, note: 'x' }))
+    ok(msgA.includes('感染管制醫師或護理師'), '管理員不能判定群聚')
+    // 法定傳染病
+    await as('dr11')
+    let nfl = await I.listNotifiable()
+    const tb = nfl.pending.find((p) => p.patientId === pn.patientId)
+    ok(tb?.disease === 'tb' && tb.basis.includes('肺結核') && tb.state !== 'overdue', `待通報：肺炎病人疑似肺結核（${tb?.label}，時限 ${tb?.dueAt}）`)
+    await as('dr02')
+    ok((await api.dashboardApi.getDashboard()).notifiablePending >= 1 && (await I.patientNotifiable(pn.patientId)).canReport, '主治首頁：法定傳染病待通報；隔離分頁可以通報')
+    await as('dr07')
+    let msg = await errOf(() => I.reportNotifiable(pn.patientId, 'tb'))
+    ok(msg.includes('主治') || msg.includes('感染管制'), `別科醫師通報 → 「${msg}」`)
+    await as('dr02')
+    const rep = await I.reportNotifiable(pn.patientId, 'tb', { note: '胸部 X 光右上肺葉空洞' })
+    ok(/^CDC\d{12}$/.test(rep.cdcNo) && !(await I.patientNotifiable(pn.patientId)).pending.length && db().auditLogs[0].action === '法定傳染病通報', `通報：單號 ${rep.cdcNo}、待通報消失、稽核`)
+    msg = await errOf(() => I.reportNotifiable(pn.patientId, 'tb'))
+    ok(msg.includes('沒有待通報'), '不能重複通報')
+    // 開隔離時提醒；逾時
+    const sep = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41'))
+    await as('nurse01')
+    const sr = await api.flagApi.startIsolation({ patientId: sep.patientId, kind: 'droplet', organism: '流感' })
+    ok(sr.notifiable?.label === '流感併發重症', '加護病房的病人開流感隔離：提醒法定傳染病（流感併發重症）')
+    db().isolations.find((x) => x.id === sr.isolation.id).startedAt = dateUtil.addMinutes(dateUtil.now(), -8 * 24 * 60)
+    await as('dr11')
+    nfl = await I.listNotifiable()
+    ok(nfl.pending[0]?.patientId === sep.patientId && nfl.pending[0].state === 'overdue' && (await api.dashboardApi.getDashboard()).notifiableOverdue >= 1 && nfl.reported.some((r) => r.id === rep.id && !r.late), '超過 7 天沒通報：逾時排最前、首頁通報逾時；剛才那筆列在已通報（準時）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
