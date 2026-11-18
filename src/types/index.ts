@@ -1025,6 +1025,34 @@ export interface PressureLog {
 
 export type AdmissionStatus = 'reserved' | 'admitted' | 'discharged' | 'cancelled'
 
+/** 入院用藥整合 */
+export interface MedRec {
+  items: HomeMed[]
+  builtBy: string
+  builtAt: string
+  /** 每一項都決定了（沒有居家用藥的，建立時就完成） */
+  completedAt?: string
+  completedBy?: string
+}
+/** 居家用藥一項：院內門診處方帶入的（有 drugId），或院外的藥（手打名稱，可能沒有對應主檔） */
+export interface HomeMed {
+  id: string
+  drugId?: string
+  name: string
+  dose?: number
+  freq?: string
+  route?: string
+  source: 'opd' | 'outside'
+  /** 院內門診：最近一次開的日期 */
+  lastDate?: string
+  decision?: 'continue' | 'hold' | 'change'
+  reason?: string
+  /** 續用：連到的住院醫囑（同一個藥、執行中） */
+  orderId?: string
+  decidedBy?: string
+  decidedAt?: string
+}
+
 export interface Admission {
   id: string
   /** 住院號 */
@@ -1065,6 +1093,8 @@ export interface Admission {
    * 出院前醫師可取消（signedAt 清掉，內容留著當草稿）。
    */
   dischargeSummary?: DischargeSummary
+  /** 入院用藥整合：護理師或藥師建居家用藥清單，醫師逐項決定續用、暫停或改藥 */
+  medRec?: MedRec
   /** 出院轉歸：辦理出院時從醫師簽署的病摘帶入 */
   dischargeType?: string
   /**

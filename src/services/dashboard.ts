@@ -17,6 +17,7 @@ import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { openAdvice, stewardTodoCount } from './abx-steward-work'
 import { tdmAlerts } from './renal-work'
 import { pharmPending, pharmQueried } from './pharm-work'
+import { medRecState } from './medrec-rules'
 import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
@@ -169,6 +170,11 @@ export interface DashboardStats {
   /** 藥師：藥物不良反應待評估（其中嚴重型 24 小時內） */
   adrPending?: number
   adrUrgent?: number
+  /** 護理師、藥師：住院中還沒建居家用藥清單的病人（其中超過入院 24 小時）；醫師：我的病人用藥整合待決定（其中逾時） */
+  medRecToBuild?: number
+  medRecToBuildLate?: number
+  medRecToDecide?: number
+  medRecLate?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -243,6 +249,7 @@ export function getDashboard(): Promise<DashboardStats> {
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
+      ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
@@ -284,6 +291,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           abxAdvice: openAdvice(me.doctorId).length,
           tdmAlerts: tdmAlerts(me.doctorId).length,
+          ...(() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId && a.medRec && !a.medRec.completedAt); return { medRecToDecide: xs.length, medRecLate: xs.filter((a) => medRecState(a.medRec, a.admittedAt ?? now(), now()).overdue).length } })(),
           pharmQueries: pharmQueried(me.doctorId).length,
           prophylaxisDue: prophylaxisOverdue(now(), me.doctorId).length,
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,

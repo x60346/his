@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -63,6 +63,7 @@ import { buildLabValues } from '@/services/lab-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
+import { homeMedsFromOpd } from '@/services/medrec-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -2828,6 +2829,38 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         assessment: { by: 'U301', at: addMinutes(on, 5 * 60), answers: ['unknown', 'yes', 'yes', 'unknown', 'no', 'unknown', 'unknown', 'unknown', 'unknown', 'yes'], score: 6, causality: 'probable', note: '給藥後 20 小時出現、停藥後改善，無其他可解釋原因', allergyAdded: 'Penicillin' },
       })
       if (!pt.allergies.includes('Penicillin')) pt.allergies.push('Penicillin')
+    }
+  }
+
+  // 入院用藥整合（示範，不抽亂數）：
+  //   - 糖尿病病人：護理師入院 1 小時建了清單（門診 Metformin、Glimepiride，院外銀杏），主治還沒決定 → 用藥整合待決定
+  //   - 腦梗塞病人：已完成，其中門診的 Losartan 暫停（急性中風容許較高血壓；住院續用的是 Amlodipine）
+  //   - 其他住院中的病人：入院時已依門診處方整合完成（同一個藥有住院醫囑＝續用，沒有＝暫停）；首頁不會整排逾時
+  {
+    const docUser = (doctorId: string) => users.find((u) => u.doctorId === doctorId)!.id
+    let k = 0
+    const hm = (x: Omit<HomeMed, 'id'>): HomeMed => ({ id: `HM-SEED-${++k}`, ...x })
+    for (const a of admissions.filter((x) => x.status === 'admitted' && x.admittedAt && !x.obs)) {
+      const builtAt = notFuture(addMinutes(a.admittedAt!, 60), 30)
+      const decidedAt = notFuture(addMinutes(a.admittedAt!, 5 * 60), 20)
+      if (a.diagnosis.startsWith('E11')) {
+        a.medRec = { builtBy: 'U201', builtAt, items: [
+          hm({ drugId: 'M015', name: drugMap.get('M015')!.name, dose: 1, freq: 'BID', route: 'PO', source: 'opd', lastDate: addDays(T, -30) }),
+          hm({ drugId: 'M016', name: drugMap.get('M016')!.name, dose: 1, freq: 'QD', route: 'PO', source: 'opd', lastDate: addDays(T, -30) }),
+          hm({ name: '銀杏萃取物 40mg（院外，保健食品）', dose: 1, freq: 'BID', source: 'outside' }),
+        ] }
+        continue
+      }
+      const opd = homeMedsFromOpd(encounters.filter((e) => e.patientId === a.patientId), a.admittedAt!)
+      const active = (drugId: string) => ipdOrders.find((o) => o.admissionId === a.id && o.drugId === drugId && o.status === 'active' && o.category === 'medication')
+      const items = opd.map((m) => {
+        const o = active(m.drugId)
+        return hm({ drugId: m.drugId, name: drugMap.get(m.drugId)!.name, dose: m.dose, freq: m.freq, route: m.route, source: 'opd', lastDate: m.lastDate, decidedBy: docUser(a.doctorId), decidedAt, ...(o ? { decision: 'continue', orderId: o.id } : { decision: 'hold', reason: '住院期間暫停，出院時再評估' }) })
+      })
+      if (a.diagnosis.startsWith('I63') && !items.some((x) => x.drugId === 'M013')) {
+        items.push(hm({ drugId: 'M013', name: drugMap.get('M013')!.name, dose: 1, freq: 'QD', route: 'PO', source: 'opd', lastDate: addDays(a.admittedAt!.slice(0, 10), -14), decidedBy: docUser(a.doctorId), decidedAt, decision: 'hold', reason: '急性腦梗塞，容許較高血壓，降壓藥暫停' }))
+      }
+      a.medRec = { builtBy: 'U201', builtAt, items, completedAt: items.length ? decidedAt : builtAt, completedBy: items.length ? docUser(a.doctorId) : 'U201' }
     }
   }
 

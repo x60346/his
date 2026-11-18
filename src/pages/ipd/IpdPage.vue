@@ -27,6 +27,7 @@ import NutritionPanel from '@/components/NutritionPanel.vue'
 import BloodPanel from '@/components/blood/BloodPanel.vue'
 import AbxTimeline from '@/components/AbxTimeline.vue'
 import AdrPanel from '@/components/AdrPanel.vue'
+import MedRecPanel from '@/components/MedRecPanel.vue'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
@@ -45,7 +46,7 @@ import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
 import { bloodApi, consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
-import { abxApi, abxStewardApi, pharmApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
+import { abxApi, abxStewardApi, pharmApi, medrecApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -145,6 +146,9 @@ const keepAct = useAction(pharmApi.replyPharmQuery, { success: '已回覆藥師�
 async function confirmKeep(reply: string) {
   if (keeping.value && (await keepAct.run(keeping.value.id, reply))) keeping.value = undefined
 }
+// 出院病摘：入院時暫停的居家藥（提醒要不要恢復，不擋）
+const { data: medRec } = useQuery(async () => (admissionId.value && !isAdmin ? medrecApi.getMedRec(admissionId.value) : undefined), [admissionId])
+const heldMeds = computed(() => (medRec.value?.admissionId === admissionId.value ? medRec.value?.items.filter((x) => x.decision === 'hold') : undefined) ?? [])
 const lastReject = (o: OrderView) => o.abxInfo?.steps.filter((s) => s.action === 'reject').at(-1)
 const ackConsult = useAction(ipdApi.ackConsultOrders, { success: (r) => `已閱 ${r.count} 筆會診醫囑` })
 const longOrders = computed(() => (orders.value ?? []).filter((o) => o.type === 'long'))
@@ -159,6 +163,9 @@ const categoryLabel: Record<IpdOrderCategory, { label: string; tone: 'blue' | 'c
 const statusLabel = { active: '執行中', stopped: '已停止', done: '已完成' } as const
 
 const orderOpen = ref(false)
+// 用藥整合「續用」：帶入開醫囑對話框（關掉就清掉，避免下次一般的新增醫囑也被帶入）
+const orderPreset = ref<{ drugId: string; dose?: number; freq?: string; route?: string }>()
+watch(orderOpen, (x) => !x && (orderPreset.value = undefined))
 const stop = useAction(ipdApi.stopOrder, { success: (o) => `已停止：${o.content}` })
 async function onStop(o: OrderView) {
   const extra = o.category === 'medication' && o.type === 'long' ? '\n尚未執行的給藥排程會一併刪除。' : ''
@@ -206,6 +213,7 @@ const tabs = computed(() => [
   { key: 'labs', label: '檢驗', count: labs.value?.reports.length },
   { key: 'abx', label: '抗生素' },
   { key: 'adr', label: '不良反應' },
+  { key: 'medrec', label: '用藥整合' },
   { key: 'imaging', label: '影像', count: imgs.value ? imgs.value.reports.length + imgs.value.pending.length : undefined },
   { key: 'blood', label: '輸血', count: blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.filter((r) => !['done', 'cancelled'].includes(r.status)).length || undefined : undefined },
   { key: 'surgery', label: '手術' },
@@ -505,6 +513,7 @@ async function submitNote() {
         <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
         <div v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
         <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
+        <div v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" @order="(p) => { orderPreset = p; orderOpen = true }" /></div>
         <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
         <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
@@ -558,6 +567,10 @@ async function submitNote() {
               </div>
               <MedicationEditor v-model="dsMeds" :drugs="drugMap" :freqs="freqs" :warnings="medWarnings ?? []" :default-days="DISCHARGE_RX_DAYS" no-self-pay />
               <p v-if="saveDs.fieldErrors.value.meds" class="text-xs text-red-600">{{ saveDs.fieldErrors.value.meds }}</p>
+              <div v-if="heldMeds.length" class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="status">
+                <b>入院時暫停的居家藥</b>（出院要不要恢復？要的話加進出院帶藥）：
+                <span v-for="(x, i) in heldMeds" :key="x.id">{{ i ? '；' : '' }}{{ x.drugName }} {{ x.doseText }}（{{ x.reason }}）</span>
+              </div>
             </section>
             <PhraseHint :phrase="phrase" />
             <div class="flex justify-end gap-2">
@@ -609,7 +622,7 @@ async function submitNote() {
       :error="reply.fieldErrors.value.reply"
       @confirm="confirmReply"
     />
-    <OrderDialog v-model="orderOpen" :admission="adm" />
+    <OrderDialog v-model="orderOpen" :admission="adm" :preset="orderPreset" />
     <ReviseOrderDialog :order="revising" @close="revising = null" />
     <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />
     <RequestConsultDialog v-model="consultOpen" :admission="adm" />

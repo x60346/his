@@ -16,7 +16,8 @@ import { useUi } from '@/stores/ui'
 import type { AbxReason, Drug, DrugTiming, IpdOrderCategory, Procedure, DietKind } from '@/types'
 
 const open = defineModel<boolean>({ default: false })
-const props = defineProps<{ admission?: AdmissionView }>()
+// preset：從別處帶入的給藥（例：用藥整合「續用」帶入居家用藥的藥、劑量、頻率），打開時填好，醫師確認後開立
+const props = defineProps<{ admission?: AdmissionView; preset?: { drugId: string; dose?: number; freq?: string; route?: string } }>()
 const ui = useUi()
 
 const categories: { key: IpdOrderCategory; label: string }[] = [
@@ -59,8 +60,17 @@ watch(open, (v) => {
     Object.assign(iv, { on: false, volumeMl: 500, rateMlH: 80, add: null, addDose: 1 })
     Object.assign(tube, { formulaId: '', totalMl: 1500, mode: 'bolus', feeds: 6, rateMlH: 60 })
     save.fieldErrors.value = {}
+    if (props.preset) applyPreset(props.preset)
   }
 })
+async function applyPreset(p: NonNullable<typeof props.preset>) {
+  const d = (await masterApi.listDrugs({})).find((x) => x.id === p.drugId)
+  if (!d || !open.value) return
+  pickDrug(d)
+  if (p.dose) form.dose = p.dose
+  if (p.freq) form.freq = p.freq
+  if (p.route) form.route = p.route
+}
 // 檢驗、處置通常是臨時醫囑；飲食、護理通常是長期醫囑
 watch(() => form.category, (c) => {
   if (c === 'procedure') form.type = 'stat'

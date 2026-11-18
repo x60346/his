@@ -10630,6 +10630,107 @@ try {
     ok(v.reports.length >= 2 && v.reports[0].causalityLabel === '很可能' && v.drugs.some((d) => d.drugId === 'M036'), '病人分頁：通報與評估結果、可選的藥')
   }
 
+  // 入院用藥整合：門診處方帶出居家用藥（90 天、同藥取最新）、24 小時期限、建清單（護理師、藥師）、醫師逐項決定
+  // （續用要先有住院醫囑、暫停改藥要原因、院外的藥）、完成、首頁待辦、出院提醒暫停的藥
+  console.log('\n[入院用藥整合]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const M = api.medrecApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const med = (drugId, dose = 1) => ({ drugId, dose, freq: 'BID', route: 'PO', days: 28, qty: 56, selfPay: false })
+    const hs = api.homeMedsFromOpd([
+      { date: '2026-11-01', status: 'completed', medications: [med('M015', 2), med('M012')] },
+      { date: '2026-10-01', status: 'completed', medications: [med('M015', 1), med('M016')] },
+      { date: '2026-07-01', status: 'completed', medications: [med('M013')] },
+      { date: '2026-11-05', status: 'consulting', medications: [med('M020')] },
+    ], '2026-11-10 14:00')
+    ok(hs.length === 3 && hs.find((x) => x.drugId === 'M015').dose === 2 && hs.find((x) => x.drugId === 'M015').lastDate === '2026-11-01' && !hs.some((x) => x.drugId === 'M013' || x.drugId === 'M020'), '門診處方帶出：90 天內、看完的門診、同一個藥取最近一次')
+    const st0 = api.medRecState(undefined, '2026-11-10 14:00', '2026-11-11 13:59')
+    ok(st0.state === 'unbuilt' && !st0.overdue && api.medRecState(undefined, '2026-11-10 14:00', '2026-11-11 14:01').overdue && !api.medRecState({ items: [], completedAt: 'x' }, '2026-11-10 14:00', '2026-11-12 00:00').overdue && api.medRecState({ items: [{ id: 'a' }, { id: 'b', decision: 'hold' }] }, '2026-11-10 14:00', '2026-11-10 15:00').left === 1, '狀態：沒建／待決定（剩幾項）／完成；入院 24 小時後沒完成＝逾時')
+    ok(api.checkHomeMedDecision({ drugId: 'M015' }, { decision: 'hold' }).reason && api.checkHomeMedDecision({ drugId: 'M015' }, { decision: 'change' }).reason && !Object.keys(api.checkHomeMedDecision({ drugId: 'M015' }, { decision: 'continue' })).length && api.checkHomeMedDecision({}, { decision: 'continue' }).reason && api.checkHomeMedDecision({}, {}).decision, '決定：暫停、改藥要原因；院外的藥續用也要寫怎麼續')
+
+    // 種子
+    const dm = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    ok(db().admissions.filter((a) => a.status === 'admitted' && !a.obs).every((a) => a.medRec), '種子：住院中的病人都有居家用藥清單')
+    await as(userOf(dm.doctorId))
+    let v = await M.getMedRec(dm.id)
+    ok(v.state === 'pending' && v.items.length === 3 && v.items.some((x) => x.source === 'outside') && v.canDecide && v.items.find((x) => x.drugId === 'M015').activeOrderId, '種子：糖尿病病人清單 3 項（含院外銀杏）待主治決定；Metformin 已有住院醫囑')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.medRecToDecide >= 1, `主治首頁「用藥整合待決定」${dash.medRecToDecide}`)
+    await as(userOf(st.doctorId))
+    v = await M.getMedRec(st.id)
+    ok(v.state === 'done' && v.items.find((x) => x.drugId === 'M013')?.decision === 'hold', '種子：腦梗塞已整合完成，Losartan 暫停（有原因）')
+    await as('nurse01')
+    ok((await api.dashboardApi.getDashboard()).medRecToBuild === 0, '護理師首頁：沒有待建清單')
+
+    // 主治決定
+    await as(userOf(dm.doctorId))
+    const met = v && (await M.getMedRec(dm.id)).items
+    const iMet = met.find((x) => x.drugId === 'M015')
+    const iGli = met.find((x) => x.drugId === 'M016')
+    const iOut = met.find((x) => x.source === 'outside')
+    let f = await fieldsOf(() => M.decideHomeMed(dm.id, iGli.id, { decision: 'continue' }))
+    ok(f.decision?.includes('先開立'), `續用但沒有住院醫囑 → 「${f.decision}」`)
+    f = await fieldsOf(() => M.decideHomeMed(dm.id, iOut.id, { decision: 'continue' }))
+    ok(f.reason, '院外的藥續用要寫怎麼續')
+    v = await M.decideHomeMed(dm.id, iMet.id, { decision: 'continue' })
+    ok(v.items.find((x) => x.id === iMet.id).orderId && v.state === 'pending', '續用 Metformin：連到住院醫囑、還沒完成')
+    const other = db().doctors.find((d) => d.deptId !== dm.deptId && db().users.some((u) => u.doctorId === d.id))
+    await as(userOf(other.id))
+    let msg = await errOf(() => M.decideHomeMed(dm.id, iGli.id, { decision: 'hold', reason: 'x' }))
+    ok(msg.includes('醫師'), `別科醫師不能整合 → 「${msg}」`)
+    await as(userOf(dm.doctorId))
+    await api.ipdApi.addOrder(await withRxOk({ admissionId: dm.id, type: 'long', category: 'medication', drugId: 'M016', content: '', dose: 1, freq: 'QD', route: 'PO' }))
+    await M.decideHomeMed(dm.id, iGli.id, { decision: 'continue' })
+    v = await M.decideHomeMed(dm.id, iOut.id, { decision: 'hold', reason: '住院期間暫停，出院時再評估' })
+    ok(v.state === 'done' && db().admissions.find((a) => a.id === dm.id).medRec.completedAt && db().auditLogs[0].detail.includes('整合完成') && api.heldHomeMeds(db().admissions.find((a) => a.id === dm.id).medRec).length === 1, '開了 Glimepiride 醫囑後續用；銀杏暫停 → 整合完成、寫稽核；出院提醒 1 項暫停的')
+    msg = await errOf(() => M.decideHomeMed(dm.id, iOut.id, { decision: 'continue', reason: 'x' }))
+    ok(msg.includes('已經完成'), '完成後不能再改')
+
+    // 建清單（拿掉一位的清單重建）
+    const fr = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    delete db().admissions.find((a) => a.id === fr.id).medRec
+    await as('nurse01')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.medRecToBuild === 1, '護理師首頁「居家用藥待建清單」1')
+    v = await M.getMedRec(fr.id)
+    ok(v.state === 'unbuilt' && v.canBuild && !v.canDecide, `還沒建：護理師可以建（建議 ${v.draft.length} 項）`)
+    f = await fieldsOf(() => M.buildMedRec(fr.id, [{ source: 'outside', name: ' ' }]))
+    ok(f.item0, '院外的藥要寫名稱')
+    v = await M.buildMedRec(fr.id, [...v.draft.map((x) => ({ drugId: x.drugId, dose: x.dose, freq: x.freq, route: x.route, source: 'opd', lastDate: x.lastDate })), { source: 'outside', name: '葡萄糖胺（院外）', dose: 1, freq: 'QD' }])
+    ok(v.state === 'pending' && v.items.at(-1).source === 'outside' && db().auditLogs[0].action === '居家用藥清單', '建立清單：門診建議＋院外的藥、寫稽核')
+    msg = await errOf(() => M.buildMedRec(fr.id, []))
+    ok(msg.includes('已經建立'), '只能建一次')
+    await as(userOf(fr.doctorId))
+    msg = await errOf(() => M.buildMedRec(fr.id, []))
+    ok(msg.includes('權限'), '醫師不建清單（護理師、藥師建）')
+    // 沒有居家用藥：建空清單＝直接完成
+    const ap = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('K35'))
+    delete db().admissions.find((a) => a.id === ap.id).medRec
+    await as('ph01')
+    v = await M.buildMedRec(ap.id, [])
+    ok(v.state === 'done' && !v.items.length, '藥師記錄「無居家用藥」：直接完成')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
