@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -64,6 +64,7 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
+import { QC_ANALYTES } from '@/services/qc-rules'
 import * as codes from './codes'
 import type { Database } from './db'
 
@@ -2952,6 +2953,26 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 檢驗品管（示範，不抽亂數）：五個品管項目近 20 天每天 07:30 一次（z 值照固定的小波動），都通過；
+  // 今天鉀兩個濃度都偏高超過 2SD（2-2s）→ 拒絕，鉀（電解質）報告擋住、待矯正重做
+  const qcRuns: QcRun[] = []
+  {
+    const wave = [0.3, -0.6, 1.1, -0.2, 0.8, -1.3, 0.4, 0.1, -0.9, 1.4, -0.4, 0.6, -1.0, 0.2, 1.2, -0.7, 0.5, -0.1, 0.9, -0.5]
+    let k = 0
+    for (const a of QC_ANALYTES) {
+      for (let i = 19; i >= 0; i--) {
+        const date = addDays(T, -i)
+        // 今天還不到 07:30 就記在 00:00（今天一定有一次：品管通過才能發報告、鉀的示範也在）
+        const at = i === 0 && nowStr < `${T} 07:30` ? `${T} 00:00` : `${date} 07:30`
+        const bad = a.code === 'K' && i === 0
+        const z: [number, number] = bad ? [2.4, 2.25] : [wave[(i + k) % 20], wave[(i + k + 7) % 20] * 0.8]
+        const values: [number, number] = [0, 1].map((l) => Math.round((a.levels[l].mean + z[l] * a.levels[l].sd) * 100) / 100) as [number, number]
+        qcRuns.push({ id: `QC-SEED-${a.code}-${i}`, analyte: a.code, date, at, by: 'U601', values, z, result: bad ? 'reject' : Math.abs(z[0]) > 2 || Math.abs(z[1]) > 2 ? 'warn' : 'accept', rules: bad ? ['2-2s'] : [] })
+      }
+      k += 3
+    }
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -3043,6 +3064,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     adrReports,
     pharmCareNotes,
     specimens,
+    qcRuns,
     dischargePlans,
     vitals,
     nursingNotes,

@@ -14,8 +14,16 @@ import { genderLabel } from '@/utils/labels'
 import CultureForm from './components/CultureForm.vue'
 import CultureView from '@/components/CultureView.vue'
 import SpecimenReceiveCard from './components/SpecimenReceiveCard.vue'
+import QcPanel from './components/QcPanel.vue'
+import { useRoute, useRouter } from 'vue-router'
 
 const tab = ref<'work' | 'done'>('work')
+// 上方切換「檢驗」與「品管」（首頁帶 ?tab=qc）
+const route = useRoute()
+const router = useRouter()
+const mode = ref<'lab' | 'qc'>(route.query.tab === 'qc' ? 'qc' : 'lab')
+watch(mode, (m) => router.replace({ query: m === 'qc' ? { tab: 'qc' } : {} }))
+const modes = [{ key: 'lab', label: '檢驗' }, { key: 'qc', label: '品管' }]
 // 住院檢驗：還沒採檢、或已採檢但檢驗科還沒收件（條碼）的，列在清單上但不能登打
 const blocked = (w: { awaitingCollection?: boolean; awaitingReceipt?: string }) => !!w.awaitingCollection || w.awaitingReceipt !== undefined
 const date = ref(today())
@@ -98,6 +106,9 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
 
 <template>
   <div class="space-y-4">
+  <UTabs v-model="mode" :tabs="modes" />
+  <QcPanel v-if="mode === 'qc'" />
+  <template v-else>
   <SpecimenReceiveCard />
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_1fr]">
     <UCard :padded="false" class="self-start">
@@ -216,5 +227,6 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
       </div>
     </UCard>
   </div>
+  </template>
   </div>
 </template>

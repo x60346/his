@@ -48,7 +48,8 @@ try {
   const http = await load('/src/services/http.ts')
   const dbm = await load('/src/mock/db.ts')
   const api = await load('/src/services/index.ts')
-  // 住院檢體條碼：已採檢的檢體要檢驗科收件後才能發報告。其他段落測的是報告本身，發住院報告前自動收件（走正式的 receiveSpecimen）；
+  // 住院檢體條碼：已採檢的檢體要檢驗科收件後才能發報告；檢驗品管：今天品管沒通過的項目不能發報告。
+  // 其他段落測的是報告本身，發報告前自動收件、自動補做品管（都走正式的 API）；
   // 要測「沒收件不能發」的段落用 labRaw（沒包裝的原函式）
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
@@ -56,6 +57,13 @@ try {
       const [kind, id] = (input?.key ?? '').split(':')
       const sp = kind === 'O' && dbm.db.specimens.find((x) => x.orderIds.includes(id) && !x.rejected && x.collectedAt && !x.receivedAt)
       if (sp) await api.specimenApi.receiveSpecimen(sp.barcode)
+      // 檢驗品管：今天這份檢驗裡的品管項目沒通過的，先登打一次在平均值的品管（被拒絕過的寫矯正措施）
+      const procId = kind === 'O' ? dbm.db.ipdOrders.find((o) => o.id === id)?.procId : kind === 'E' ? (input.key.split(':')[2]) : undefined
+      const codes = (dbm.db.procedures.find((p) => p.id === procId)?.labItems ?? []).map((x) => x.code).filter((c) => api.qcAnalyte(c))
+      for (const c of codes) {
+        const st = api.qcStatusToday(dbm.db.qcRuns, c, dateUtil.now().slice(0, 10))
+        if (st === 'missing' || st === 'reject') await api.qcApi.recordQc({ analyte: c, values: api.qcAnalyte(c).levels.map((l) => l.mean), ...(st === 'reject' ? { correction: '測試：重新校正' } : {}) })
+      }
       return labRaw[k](input)
     }
   }
@@ -11044,6 +11052,90 @@ try {
     await as('nurse01')
     w = await api.specimenApi.wardSpecimens(dm.id)
     ok(!w.toPrint.some((g) => g.orders.some((o) => o.id === kid[0].id)) && db().ipdOrders.filter((o) => o.parentOrderId === lo.id).length === 1, '取消的不在待採檢、也不會再產生')
+  }
+
+  // 檢驗品管：Westgard（1-3s、2-2s 同次與連續、1-2s 警告）、今天狀態、品管沒過不能發報告、拒絕後重做要矯正措施、種子、首頁
+  console.log('\n[檢驗品管]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const Q = api.qcApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const W = api.westgard
+    ok(W([0.5, -1.2]).result === 'accept' && W([2.1, 0.3]).result === 'warn' && W([2.1, 0.3]).rules[0] === '1-2s', '±2SD 內通過；任一超過 2SD 警告（1-2s）')
+    ok(W([3.2, 0]).rules.includes('1-3s') && W([-3.1, 0]).result === 'reject', '任一超過 3SD 拒絕（1-3s）')
+    ok(W([2.2, 2.4]).rules.includes('2-2s') && W([-2.2, -2.1]).result === 'reject' && W([2.2, -2.3]).result === 'warn', '兩個濃度同一邊都超過 2SD 拒絕（2-2s）；不同邊只是警告')
+    ok(W([2.3, 0.1], [2.1, 0.4]).rules.includes('2-2s') && W([2.3, 0.1], [-2.1, 0.4]).result === 'warn', '同一濃度連續兩次同一邊超過 2SD 拒絕（2-2s）')
+    ok(api.qcZ('K', 0, 3.16) === 2 && api.qcZ('GLU-AC', 1, 264) === -2, `z 值：鉀濃度 1 3.16＝+2SD、血糖濃度 2 264＝−2SD`)
+    const runs = [{ analyte: 'K', date: 'd', at: 'd 07:00', result: 'reject' }, { analyte: 'K', date: 'd', at: 'd 09:00', result: 'warn' }, { analyte: 'NA', date: 'd', at: 'd 07:00', result: 'reject' }]
+    ok(api.qcStatusToday(runs, 'K', 'd') === 'warn' && api.qcStatusToday(runs, 'NA', 'd') === 'reject' && api.qcStatusToday(runs, 'CRE', 'd') === 'missing', '今天狀態看最後一次；沒做＝未做')
+    ok(api.qcBlockers(['NA', 'K', 'X'], runs, 'd').length === 1 && api.qcBlockers(['CRE'], runs, 'd')[0].includes('還沒做'), '發報告前：只看有品管的項目，拒絕、未做的擋')
+    const ce = api.checkQcInput({ analyte: 'K', values: ['', 0] }, 'reject')
+    ok(ce.level1 && ce.level2 && ce.correction, '登打：兩個濃度都要填；上次被拒絕要寫矯正措施')
+
+    // 種子：鉀今天 2-2s 拒絕
+    await as('lab01')
+    let ov = await Q.qcOverview()
+    const st = Object.fromEntries(ov.analytes.map((x) => [x.code, x.status]))
+    ok(st.K === 'reject' && ['WBC', 'GLU-AC', 'CRE', 'NA'].every((c) => st[c] === 'ok' || st[c] === 'warn') && ov.analytes.find((x) => x.code === 'K').runs.length >= 2 && ov.analytes.find((x) => x.code === 'K').runs.at(-1).rules.includes('2-2s'), '種子：鉀今天 2-2s 被拒絕，其他今天通過；有近期紀錄可畫圖')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.qcPending === 1 && dash.qcRejected === 1, '檢驗科首頁：今日品管未通過 1（拒絕 1）')
+
+    // 發報告的把關：電解質（含鉀）
+    const adm = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(adm.doctorId))
+    const eo = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P055', content: '' })
+    const co = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P008', content: '' })
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(eo.id)
+    await api.nursingApi.completeStatOrder(co.id)
+    await as('lab01')
+    for (const id of [eo.id, co.id]) await api.specimenApi.receiveSpecimen(db().specimens.find((x) => x.orderIds.includes(id)).barcode)
+    let msg = await errOf(() => labRaw.reportLab({ key: `O:${eo.id}`, values: { NA: '138', K: '4.1' } }))
+    ok(msg.includes('鉀') && msg.includes('被拒絕'), `鉀品管被拒絕：電解質報告擋住 → 「${msg}」`)
+    await labRaw.reportLab({ key: `O:${co.id}`, values: { CRE: '1.0' } })
+    ok(db().labReports.some((r) => r.orderId === co.id), '肌酸酐品管通過：照常發報告')
+    let f = await fieldsOf(() => Q.recordQc({ analyte: 'K', values: [3.0, 6.0] }))
+    ok(f.correction, '鉀重做：沒寫矯正措施擋')
+    let r = await Q.recordQc({ analyte: 'K', values: [3.02, 5.98], correction: '電極清潔、重新校正' })
+    ok(r.result === 'accept' && r.correction && db().auditLogs[0].action === '檢驗品管', '寫矯正措施重做：通過、寫稽核')
+    await labRaw.reportLab({ key: `O:${eo.id}`, values: { NA: '138', K: '4.1' } })
+    ok(db().labReports.some((x) => x.orderId === eo.id), '鉀品管通過後：電解質報告可以發')
+    // 連續兩次同一邊超過 2SD
+    r = await Q.recordQc({ analyte: 'NA', values: [128.3, 155] })
+    ok(r.result === 'warn', `鈉濃度 1 +2.2SD：警告（${r.rules.join('')}）`)
+    r = await Q.recordQc({ analyte: 'NA', values: [128.5, 155] })
+    ok(r.result === 'reject' && r.rules.includes('2-2s'), '再一次同一邊 +2.3SD：2-2s 拒絕（看上一次）')
+    ok((await api.dashboardApi.getDashboard()).qcRejected === 1, '首頁：鈉被拒絕')
+    // 沒做：刪掉今天的血糖品管
+    db().qcRuns = db().qcRuns.filter((x) => !(x.analyte === 'GLU-AC' && x.date === T))
+    await as(userOf(adm.doctorId))
+    const go = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P004', content: '' })
+    await as('nurse01')
+    await api.nursingApi.completeStatOrder(go.id)
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(db().specimens.find((x) => x.orderIds.includes(go.id)).barcode)
+    msg = await errOf(() => labRaw.reportLab({ key: `O:${go.id}`, values: { 'GLU-AC': '120' } }))
+    ok(msg.includes('還沒做品管'), `今天還沒做血糖品管 → 「${msg}」`)
+    await as('nurse01')
+    msg = await errOf(() => Q.recordQc({ analyte: 'K', values: [3, 6] }))
+    ok(msg.includes('權限'), '護理師不能登打品管')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

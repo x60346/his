@@ -1392,6 +1392,20 @@ export interface IpdOrder {
   parentOrderId?: string
 }
 
+/** 檢驗品管一次（一個項目、兩個濃度）：Westgard 判定；拒絕後重做要寫矯正措施 */
+export interface QcRun {
+  id: string
+  analyte: string
+  date: string
+  at: string
+  by: string
+  values: [number, number]
+  z: [number, number]
+  result: 'accept' | 'warn' | 'reject'
+  rules: string[]
+  correction?: string
+}
+
 export type PharmCareKind = 'dose' | 'monitor' | 'interaction' | 'deprescribe' | 'other'
 /** 藥事照護紀錄（臨床藥師查房）：對病人（不綁某一筆醫囑）的建議，主治接受或不接受（寫原因） */
 export interface PharmCareNote {

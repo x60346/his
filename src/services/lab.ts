@@ -13,6 +13,7 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser, s
 import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { awaitingReceipt } from './specimen'
+import { qcBlockers } from './qc-rules'
 import { canAckLab, pendingLabWork, procItems, reportedIpd, reportedOpd, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
@@ -102,6 +103,9 @@ export function reportLab(input: { key: string; values: Record<string, string> }
     if (base.procId === 'P059') fail('細菌培養請用培養報告登打（檢體、菌種、藥敏）', 'CONFLICT')
     const defs = procItems(base!.procId)
     if (!defs.length) fail('這個醫令沒有設定檢驗項目')
+    // 品管：這份檢驗裡的品管項目今天都要通過（沒做、被拒絕都不能發）
+    const qc = qcBlockers(defs.map((d) => d.code), db.qcRuns, now().slice(0, 10))
+    if (qc.length) fail(`${qc.join('；')}，不能發報告（到「品管」登打）`, 'CONFLICT', 'qc')
     const p = must(find.patient(base!.patientId), '病患')
     const { values, errors } = buildLabValues(defs, input.values ?? {}, p.gender)
     failFields(errors)

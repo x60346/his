@@ -25,6 +25,7 @@ import * as adr from './adr'
 import * as medrec from './medrec'
 import * as pharmcare from './pharmcare'
 import * as specimen from './specimen'
+import * as qc from './qc'
 import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
@@ -98,6 +99,7 @@ export const adrApi = overNetwork(adr)
 export const medrecApi = overNetwork(medrec)
 export const pharmCareApi = overNetwork(pharmcare)
 export const specimenApi = overNetwork(specimen)
+export const qcApi = overNetwork(qc)
 export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
@@ -199,6 +201,7 @@ export * from './medrec-rules'
 export * from './pharmcare-rules'
 export * from './specimen-rules'
 export * from './lab-schedule-rules'
+export * from './qc-rules'
 export * from './blood-rules'
 export * from './copy-rules'
 export * from './management-rules'
@@ -267,6 +270,7 @@ export type { AdrView, AdrStats, AdrInput } from './adr'
 export type { MedRecView, HomeMedView, HomeMedInput, DischargeRecon, DischargeMedList } from './medrec'
 export type { PharmCareView, PharmCarePatient } from './pharmcare'
 export type { SpecimenView, WardSpecimens } from './specimen'
+export type { QcOverview, QcRunView } from './qc'
 export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, BloodScanDemo, BloodScanInput, StartTransfusionInput, TransfusionVitalsInput } from './blood'
 export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { ManagementReport, MonthMetrics } from './management'
