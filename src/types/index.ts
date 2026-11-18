@@ -1327,6 +1327,31 @@ export interface IpdOrder {
    * 沒有這個欄位＝功能上線前開的醫囑（視同已審）
    */
   pharm?: PharmReview
+  /** 病人有過敏紀錄、醫師確認仍要開的過敏原（藥師審核看得到） */
+  allergyOverride?: string[]
+}
+
+export type AdrSeverity = 'mild' | 'moderate' | 'severe'
+/**
+ * 藥物不良反應通報（住院）：醫師、護理師通報懷疑的藥（這次住院給過的）；藥師用 Naranjo 量表評估因果，
+ * 很可能以上可勾選加入病人的過敏紀錄
+ */
+export interface AdrReport {
+  id: string
+  admissionId: string
+  patientId: string
+  drugId: string
+  onsetAt: string
+  symptoms: string
+  severity: AdrSeverity
+  /** 嚴重型：過敏性休克、SJS／TEN（24 小時內要評估） */
+  serious?: 'anaphylaxis' | 'sjs'
+  /** 處置（停藥、給藥…） */
+  action: string
+  reportedBy: string
+  reportedAt: string
+  /** 藥師評估：Naranjo 10 題、分數、判定、說明；加入過敏的話記下過敏原 */
+  assessment?: { by: string; at: string; answers: ('yes' | 'no' | 'unknown')[]; score: number; causality: 'definite' | 'probable' | 'possible' | 'doubtful'; note: string; allergyAdded?: string }
 }
 
 /** 藥師審核：pending 待審、approved 通過、query 疑義待醫師回覆（回覆「維持原醫囑」後回到待審） */

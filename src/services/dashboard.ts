@@ -166,6 +166,9 @@ export interface DashboardStats {
   pharmReviewStat?: number
   /** 醫師：我的病人的藥師疑義待回覆 */
   pharmQueries?: number
+  /** 藥師：藥物不良反應待評估（其中嚴重型 24 小時內） */
+  adrPending?: number
+  adrUrgent?: number
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -241,7 +244,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
-      ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length } })() : {}),
+      ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,

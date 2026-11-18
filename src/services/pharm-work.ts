@@ -26,7 +26,7 @@ export function pharmIssuesOf(o: IpdOrder): PharmIssue[] {
   if (!d || !a) return []
   const out: PharmIssue[] = []
   const p = find.patient(a.patientId)
-  for (const w of checkAllergies(p?.allergies ?? [], [d])) out.push({ level: 'severe', kind: '過敏', text: `病人對「${w.allergen}」過敏，${d.name} 可能有交叉過敏` })
+  for (const w of checkAllergies(p?.allergies ?? [], [d])) out.push({ level: 'severe', kind: '過敏', text: `病人對「${w.allergen}」過敏，${d.name} 可能有交叉過敏${o.allergyOverride?.includes(w.allergen) ? '（醫師開立時已確認評估過）' : ''}` })
   const confirmed = new Map((o.rxAlerts ?? []).map((r) => [r.key, r]))
   for (const r of checkRxAlerts(drugRefs([d.id]), ipdInUse(a.id, d.id, o.id))) {
     const c = confirmed.get(r.key)

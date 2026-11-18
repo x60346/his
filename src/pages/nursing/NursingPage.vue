@@ -28,6 +28,7 @@ import SafetyPanel from '@/components/SafetyPanel.vue'
 import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import PcaPanel from '@/components/PcaPanel.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
+import AdrPanel from '@/components/AdrPanel.vue'
 import InfusionPanel from '@/components/InfusionPanel.vue'
 import WoundPanel from '@/components/WoundPanel.vue'
 import FlowsheetPanel from '@/components/FlowsheetPanel.vue'
@@ -143,6 +144,7 @@ const tabs = computed(() =>
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
         { key: 'wounds', label: '傷口', count: adm.value.woundTodo || undefined },
         { key: 'infection', label: '感染通報' },
+        { key: 'adr', label: '不良反應' },
         { key: 'safety', label: '譫妄與約束', count: (adm.value.deliriumDue ? 1 : 0) + (adm.value.restraint && adm.value.restraint.check !== 'ok' ? 1 : 0) || undefined },
         ...(adm.value.infusion ? [{ key: 'infusion', label: '點滴', count: adm.value.infusion.todo || undefined }] : []),
         ...(adm.value.pca ? [{ key: 'pca', label: 'PCA', count: (adm.value.pca.status === 'ordered' || adm.value.pca.record !== 'ok' || adm.value.pca.alert ? 1 : 0) || undefined }] : []),
@@ -318,6 +320,7 @@ const wardTotals = computed(() => ({
           <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
           <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
           <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
+          <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
           <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
           <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" @open-risk="tab = 'risk'" />
           <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />

@@ -6,7 +6,7 @@
 //   - 待退藥：病房送回來的（暫停、拒絕、醫囑停止、出院）由藥師點收入庫；還沒送回的另外列出供參考
 //   - 病房回報：藥車點收時發現不符（短少、破損、不是這位病人的），藥師處理後寫說明（補發走上面的調劑流程）
 // 每劑幾個、哪些要退都由服務層算（ud-rules、ud-work）；頁面送出的是畫面上看得到的那幾劑。
-// 上方切換「調劑」與「醫囑審核」（藥師審核住院給藥醫囑，PharmReviewPanel；首頁帶 ?tab=review）：長期醫囑審核通過才會出現在調劑清單
+// 上方切換「調劑」、「醫囑審核」與「不良反應」（藥師評估，AdrReviewPanel；?tab=adr）、（藥師審核住院給藥醫囑，PharmReviewPanel；首頁帶 ?tab=review）：長期醫囑審核通過才會出現在調劑清單
 import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, ClipboardCheck, PackageCheck, PillBottle, Printer, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UInput, UQueryState, UTabs } from '@/components/ui'
@@ -16,6 +16,7 @@ import WardRefillCard from './components/WardRefillCard.vue'
 import DischargeRxCard from './components/DischargeRxCard.vue'
 import UdCartSheetDialog from './components/UdCartSheetDialog.vue'
 import PharmReviewPanel from './components/PharmReviewPanel.vue'
+import AdrReviewPanel from './components/AdrReviewPanel.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
@@ -23,9 +24,10 @@ import { useUi } from '@/stores/ui'
 const ui = useUi()
 const route = useRoute()
 const router = useRouter()
-const mode = ref<'ud' | 'review'>(route.query.tab === 'review' ? 'review' : 'ud')
-watch(mode, (m) => router.replace({ query: m === 'review' ? { tab: 'review' } : {} }))
-const modes = computed(() => [{ key: 'ud', label: '調劑' }, { key: 'review', label: '醫囑審核', count: w.value?.awaitingReview || undefined }])
+type Mode = 'ud' | 'review' | 'adr'
+const mode = ref<Mode>(route.query.tab === 'review' || route.query.tab === 'adr' ? route.query.tab : 'ud')
+watch(mode, (m) => router.replace({ query: m === 'ud' ? {} : { tab: m } }))
+const modes = computed(() => [{ key: 'ud', label: '調劑' }, { key: 'review', label: '醫囑審核', count: w.value?.awaitingReview || undefined }, { key: 'adr', label: '不良反應' }])
 const { data: w, loading } = useQuery(() => udApi.getUdWork(), [])
 const md = (s: string) => s.slice(5, 10).replace('-', '/')
 
@@ -107,6 +109,7 @@ function openSheet(id: string) {
   <div class="space-y-4">
     <UTabs v-model="mode" :tabs="modes" />
     <PharmReviewPanel v-if="mode === 'review'" />
+    <AdrReviewPanel v-else-if="mode === 'adr'" />
     <UQueryState v-else :loading="loading && !w" :ready="!!w">
       <template v-if="w">
         <p class="text-sm text-slate-600">

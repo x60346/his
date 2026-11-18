@@ -10,6 +10,7 @@ import { CONTROLLED_LEVEL_LABEL, licenseProblem, needsSpecialRx } from './contro
 import { doseUnitOf } from './billing'
 import { effectiveTiming, marTimes, normalizeRxTiming, timingApplies, timingText, residualOf, doseStrengthText } from './drug-rules'
 import { find, nameOf, openDeptTransfer, usable } from './views'
+import { checkAllergies } from './allergy'
 import { CONSULT_ORDER_HOURS, requireCare } from './care-team'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
@@ -133,6 +134,8 @@ export type OrderInput = Pick<IpdOrder, 'admissionId' | 'type' | 'category' | 'd
   allowDuplicate?: boolean
   /** 劑量偏高時，醫師確認無誤 */
   confirmHighDose?: boolean
+  /** 病人對這個藥（或同類）有過敏紀錄時，醫師確認已評估仍要開（記在醫囑 allergyOverride，藥師審核看得到） */
+  allergyConfirmed?: boolean
   /** 交互作用、重複用藥提醒的確認（key → 原因；嚴重的原因必填）——這次送出的確認，原因存在醫囑的 rxAlerts */
   rxAlertReasons?: Record<string, string>
   /** 管制性抗生素的使用申請（理由、感染部位、菌種、說明）；修改醫囑不用填（沿用） */
@@ -165,6 +168,7 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     let abx: IpdOrder['abx']
     let dietValue: IpdOrder['diet']
     let infusionValue: IpdOrder['infusion']
+    let allergyOverride: string[] | undefined
 
     if (input.category === 'medication') {
       const drug = usable.drug(input.drugId ?? '')
@@ -218,6 +222,10 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
         content = `${drug.name} ${infusionValue.volumeMl} ml @ ${infusionValue.rateMlH} ml/h${adds.map((x) => ` ＋ ${x.drug.name} ${x.dose} ${doseUnitOf(x.drug)}`).join('')}`
       }
       // 服用時機：開立時決定、存在醫囑上（排程依它排）。只有長期、適用的（口服、非睡前／需要時）才有
+      // 過敏：病人的過敏紀錄（含藥物不良反應評估後加入的）擋同類的藥，醫師確認才能開；修改醫囑沿用原本的確認
+      const allergyHits = checkAllergies(find.patient(a.patientId)?.allergies ?? [], [drug]).map((w) => w.allergen)
+      if (allergyHits.length && !old && !input.allergyConfirmed) fail(`病人對 ${allergyHits.join('、')} 過敏，${drug.name} 可能引起過敏反應；確認已評估風險才能開立`, 'CONFLICT', 'allergy')
+      if (allergyHits.length) allergyOverride = old?.allergyOverride ?? allergyHits
       const rx = normalizeRxTiming(drug.timing, { timing: input.timing, freq: input.freq, route: input.route ?? '' })
       if (rx === 'invalid') failField('timing', '服用時機不正確')
       timing = input.type === 'long' && timingApplies(input.freq, input.route) ? { timing: effectiveTiming(drug.timing, rx), ...(rx ? { timingSet: true } : {}) } : {}
@@ -255,6 +263,7 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       ...timing,
       ...(rxAlerts?.length ? { rxAlerts } : {}),
       ...(abx ? { abx } : {}),
+      ...(allergyOverride ? { allergyOverride } : {}),
       // 給藥醫囑都要藥師審核（修改＝新醫囑，重新送審）
       ...(input.category === 'medication' ? { pharm: newPharm(t) } : {}),
       ...(dietValue ? { diet: dietValue } : {}),

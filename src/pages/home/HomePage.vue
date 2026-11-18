@@ -121,6 +121,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
     { roles: ['pharmacist'], label: '出院帶藥待調劑', count: s.value.dischargeRxToDispense, hint: '醫師已簽准出院：調好後櫃台才能結帳', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院醫囑待審核', count: s.value.pharmReview ?? 0, hint: s.value.pharmReviewStat ? `其中 ${s.value.pharmReviewStat} 筆臨時醫囑（先給後審）` : '長期醫囑審核通過才能每日調劑；系統已列出過敏、交互作用、劑量、腎功能等問題', route: 'ud', query: { tab: 'review' }, icon: Pill, urgent: !!s.value.pharmReviewStat },
+    { roles: ['pharmacist'], label: '藥物不良反應待評估', count: s.value.adrPending ?? 0, hint: s.value.adrUrgent ? `其中 ${s.value.adrUrgent} 筆嚴重型（過敏性休克、SJS），24 小時內要評估` : '醫師、護理師通報的不良反應：用 Naranjo 量表評估因果，很可能以上可加入過敏', route: 'ud', query: { tab: 'adr' }, icon: Pill, urgent: !!s.value.adrUrgent },
     { roles: ['pharmacist'], label: '住院補調劑', count: s.value.udExtra, hint: '今天的劑量還沒調劑（新開的醫囑），護理師在等', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院待核對', count: s.value.udVerify, hint: '已調劑的藥盒，核對通過才送病房', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院待退藥', count: s.value.udReturns, hint: '病房已送回，待點收入庫', route: 'ud', icon: Pill },

@@ -180,6 +180,7 @@ ${doseNote(drug, input.dose ?? 0)}。
     }
     const warns = await opdApi.allergyWarnings(props.admission.patientId, [drug.id])
     if (warns.length && !(await ui.confirm({ title: '過敏警示', message: `病人對 ${warns.map((w) => w.allergen).join('、')} 過敏，${drug.name} 可能引起過敏反應。\n確認已評估風險，仍要開立？`, okText: '確認開立', danger: true }))) return
+    if (warns.length) input.allergyConfirmed = true
     const alerts = await ipdApi.orderRxAlerts(props.admission.id, drug.id)
     if (alerts.length) {
       const r = await rxConfirm.value!.ask(alerts)

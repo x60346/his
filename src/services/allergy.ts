@@ -27,3 +27,14 @@ export function checkAllergies(allergies: string[], drugs: Drug[]): AllergyWarni
   }
   return warnings
 }
+
+/**
+ * 藥物不良反應判定要加入過敏時，記成哪一個過敏原：屬於某一類（例：Ceftriaxone → Cephalosporin）就記那一類，
+ * 之後同類的藥都會被過敏檢查擋到；不屬於任何一類就記學名（只擋這一種成分）
+ */
+export function allergenOfDrug(d: Pick<Drug, 'generic' | 'name'>): string {
+  const text = `${d.generic} ${d.name}`.toLowerCase()
+  // Aspirin 在 NSAIDs 裡也有，先比對範圍窄的那一類
+  const order = ['Penicillin', 'Cephalosporin', 'Aspirin', 'Sulfa', 'NSAIDs']
+  return order.find((k) => allergyClasses[k].some((w) => text.includes(w))) ?? d.generic
+}

@@ -10542,6 +10542,94 @@ try {
     ok(db().ipdOrders.find((o) => o.id === rv.id).pharm.queries[0].resolution === 'stopped', '停止：疑義記「已停止」')
   }
 
+  // 藥物不良反應通報：Naranjo 量表與判定、過敏原對應、通報欄位（只能選這次給過的藥）、嚴重型 24 小時、藥師評估與加入過敏、
+  // 加入後住院開藥被擋（要確認）、種子
+  console.log('\n[藥物不良反應通報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.adrApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const all = (x) => Array(10).fill(x)
+    ok(api.naranjoScore(all('yes')) === 8 && api.naranjoScore(all('no')) === 1 && api.naranjoScore(all('unknown')) === 0, 'Naranjo：全是 8 分、全否 1 分、全不知道 0 分')
+    ok(api.causalityOf(9) === 'definite' && api.causalityOf(8) === 'probable' && api.causalityOf(5) === 'probable' && api.causalityOf(4) === 'possible' && api.causalityOf(1) === 'possible' && api.causalityOf(0) === 'doubtful', '判定：≥9 確定、5–8 很可能、1–4 可能、≤0 存疑')
+    ok(api.canAddAllergy('probable') && !api.canAddAllergy('possible'), '很可能以上才能加入過敏')
+    const D = (id) => db().drugs.find((d) => d.id === id)
+    ok(api.allergenOfDrug(D('M036')) === 'Cephalosporin' && api.allergenOfDrug(D('M004')) === 'Penicillin' && api.allergenOfDrug(D('M019')) === 'Aspirin' && api.allergenOfDrug(D('M002')) === 'NSAIDs' && api.allergenOfDrug(D('M042')) === 'Vancomycin', '過敏原：依類別（Ceftriaxone→Cephalosporin、Augmentin→Penicillin、Aspirin、Ibuprofen→NSAIDs），沒有類別記學名')
+    const ce = api.checkAdrInput({ onsetAt: '2099-01-01 00:00' }, '2026-11-18 10:00')
+    ok(ce.drugId && ce.onsetAt?.includes('未來') && ce.symptoms && ce.severity && ce.action, '通報欄位一次標出、發生時間不能在未來')
+    ok(api.adrDueAt({ serious: 'sjs', reportedAt: '2026-11-18 10:00' }) === '2026-11-19 10:00' && !api.adrDueAt({ reportedAt: '2026-11-18 10:00' }), '嚴重型 24 小時內評估')
+
+    // 種子
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    await as('ph01')
+    let list = await A.listAdrReview()
+    const s1 = list.pending.find((x) => x.id === 'ADR-SEED-1')
+    const s2 = db().adrReports.find((x) => x.id === 'ADR-SEED-2')
+    ok(s1?.drugName.startsWith('Ceftriaxone') && s1.allergen === 'Cephalosporin' && !s1.assessment, '種子：肺炎 Ceftriaxone 紅疹待評估（建議過敏原 Cephalosporin）')
+    ok(s2?.assessment.causality === 'probable' && s2.assessment.score === 6 && db().patients.find((p) => p.id === s2.patientId).allergies.includes('Penicillin'), '種子：已出院病人 Augmentin 蕁麻疹，Naranjo 6 分很可能、已加入 Penicillin 過敏')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.adrPending === list.pending.length && dash.adrPending >= 1 && list.stats.total >= 1, `藥師首頁「藥物不良反應待評估」${dash.adrPending}；30 天統計 ${list.stats.total} 筆`)
+
+    // 通報
+    await as('nurse01')
+    let f = await fieldsOf(() => A.reportAdr({ admissionId: pn.id, drugId: 'M043', onsetAt: dateUtil.addMinutes(nowStr(), -30), symptoms: '喘', severity: 'severe', action: '給氧' }))
+    ok(f.drugId?.includes('沒有給過'), '只能選這次住院給過的藥')
+    const r = await A.reportAdr({ admissionId: pn.id, drugId: 'M036', onsetAt: dateUtil.addMinutes(nowStr(), -20), symptoms: '血壓 78/40、喘、全身紅疹', severity: 'severe', serious: 'anaphylaxis', action: '停藥、肌注 Epinephrine、通知醫師' })
+    ok(r.seriousLabel === '過敏性休克' && r.dueAt && !r.overdue && db().auditLogs[0].action === '藥物不良反應通報', '通報嚴重型：24 小時期限、寫稽核')
+    await as('ph01')
+    list = await A.listAdrReview()
+    dash = await api.dashboardApi.getDashboard()
+    ok(list.pending[0].id === r.id && dash.adrUrgent >= 1, '藥師待評估：嚴重型排前面、首頁標嚴重型')
+
+    // 評估
+    await as(userOf(pn.doctorId))
+    let msg = await errOf(() => A.assessAdr(r.id, { answers: all('unknown') }))
+    ok(msg.includes('藥師'), '醫師不能評估')
+    await as('ph01')
+    f = await fieldsOf(() => A.assessAdr(r.id, { answers: ['yes', 'yes'] }))
+    ok(f.answers, '10 題都要回答')
+    const possible = ['unknown', 'yes', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown'] // 2 分
+    f = await fieldsOf(() => A.assessAdr(r.id, { answers: possible, addAllergy: true }))
+    ok(f.addAllergy?.includes('可能'), `可能（2 分）不能加入過敏 → 「${f.addAllergy}」`)
+    const probable = ['yes', 'yes', 'yes', 'unknown', 'no', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown'] // 1+2+1+2 = 6
+    const done = await A.assessAdr(r.id, { answers: probable, note: '給藥 10 分鐘內發生、停藥後改善', addAllergy: true })
+    const pt = db().patients.find((p) => p.id === pn.patientId)
+    ok(done.assessment.score === 6 && done.causalityLabel === '很可能' && done.assessment.allergyAdded === 'Cephalosporin' && pt.allergies.includes('Cephalosporin') && db().auditLogs[0].detail.includes('加入過敏'), '很可能＋勾選：加入 Cephalosporin 過敏、寫稽核')
+    msg = await errOf(() => A.assessAdr(r.id, { answers: probable }))
+    ok(msg.includes('已經評估'), '不能重複評估')
+    // 加入後：住院開同類的藥要確認
+    await as(userOf(pn.doctorId))
+    const base = { admissionId: pn.id, type: 'long', category: 'medication', drugId: 'M005', content: '', dose: 1, freq: 'QID', route: 'PO' }
+    msg = await errOf(async () => api.ipdApi.addOrder(await withRxOk(base)))
+    ok(msg.includes('Cephalosporin') && msg.includes('過敏'), `加入過敏後開 Cephalexin（同類）→ 「${msg}」`)
+    const ok2 = await api.ipdApi.addOrder(await withRxOk({ ...base, allergyConfirmed: true }))
+    ok(ok2.allergyOverride?.includes('Cephalosporin'), '醫師確認後可開，醫囑記下確認的過敏原')
+    await as('ph01')
+    const it = (await api.pharmApi.listPharmReview()).pending.find((x) => x.order.id === ok2.id)
+    ok(it?.issues.some((i) => i.kind === '過敏' && i.text.includes('已確認')), '藥師審核看到過敏與「醫師開立時已確認」')
+    await as('nurse01')
+    const v = await A.patientAdrs(pn.id)
+    ok(v.reports.length >= 2 && v.reports[0].causalityLabel === '很可能' && v.drugs.some((d) => d.drugId === 'M036'), '病人分頁：通報與評估結果、可選的藥')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

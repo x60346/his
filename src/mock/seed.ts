@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2809,6 +2809,28 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     mk(3, st, 'M021', 'QD', 300, { pharm: { status: 'query', at: addMinutes(nowStr, -300), queries: [{ by: ph, at: qAt, text: '病人已在使用 Aspirin，併用 Warfarin 出血風險大增；且無 INR 紀錄，請確認適應症與是否需併用' }] } })
   }
 
+  // 藥物不良反應（示範，不抽亂數）：
+  //   - 肺炎病人打 Ceftriaxone 後全身紅疹（中度），護理師 2 小時前通報、等藥師評估
+  //   - 已出院的肺炎病人（11 月初那位）出院前一天吃 Augmentin 後起紅疹，藥師評估 Naranjo 6 分（很可能），加入 Penicillin 過敏
+  const adrReports: AdrReport[] = []
+  {
+    const pn = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    if (pn && ipdOrders.some((o) => o.admissionId === pn.id && o.drugId === 'M036')) {
+      adrReports.push({ id: 'ADR-SEED-1', admissionId: pn.id, patientId: pn.patientId, drugId: 'M036', onsetAt: addMinutes(nowStr, -180), symptoms: '前胸、背部紅疹伴搔癢，無呼吸困難、血壓穩定', severity: 'moderate', action: '暫停下一劑 Ceftriaxone、給抗組織胺，已通知主治', reportedBy: 'U201', reportedAt: addMinutes(nowStr, -120) })
+    }
+    const hx = ipdOrders.find((o) => o.id === 'IO-HX-ABX-2')
+    const hxa = hx && admissions.find((a) => a.id === hx.admissionId)
+    if (hx && hxa) {
+      const on = addMinutes(hx.startAt, 20 * 60)
+      const pt = patients.find((p) => p.id === hxa.patientId)!
+      adrReports.push({
+        id: 'ADR-SEED-2', admissionId: hxa.id, patientId: hxa.patientId, drugId: 'M004', onsetAt: on, symptoms: '四肢蕁麻疹、搔癢', severity: 'mild', action: '停用 Augmentin、給抗組織胺', reportedBy: 'U201', reportedAt: addMinutes(on, 30),
+        assessment: { by: 'U301', at: addMinutes(on, 5 * 60), answers: ['unknown', 'yes', 'yes', 'unknown', 'no', 'unknown', 'unknown', 'unknown', 'unknown', 'yes'], score: 6, causality: 'probable', note: '給藥後 20 小時出現、停藥後改善，無其他可解釋原因', allergyAdded: 'Penicillin' },
+      })
+      if (!pt.allergies.includes('Penicillin')) pt.allergies.push('Penicillin')
+    }
+  }
+
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
   // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
   {
@@ -2897,6 +2919,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     clusterDecisions,
     notifiableReports,
     abxInterventions,
+    adrReports,
     dischargePlans,
     vitals,
     nursingNotes,
