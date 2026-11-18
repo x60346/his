@@ -43,7 +43,7 @@ import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
 import { bloodApi, consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
-import { abxApi, admissionApi, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
+import { abxApi, abxStewardApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -120,6 +120,14 @@ const extendAbx = useAction(abxApi.requestAbxExtension, { success: (o) => `已�
 async function confirmAbx(note: string) {
   const x = abxResubmit.value
   if (x && (await (x.kind === 'appeal' ? appeal : extendAbx).run(x.order.id, note))) abxResubmit.value = undefined
+}
+// 感染科每日審視的建議：停止或修改這筆＝接受（服務層自動記），不接受要寫原因——上方藍條
+const abxAdvice = computed(() => (orders.value ?? []).flatMap((o) => (o.abxAdvice ?? []).map((v) => ({ order: o, advice: v }))))
+const declining = ref<{ order: OrderView; advice: AbxAdviceView }>()
+const decliningOpen = computed({ get: () => !!declining.value, set: (v) => !v && (declining.value = undefined) })
+const declineAdvice = useAction(abxStewardApi.declineAbxAdvice, { success: '已回覆不接受，感染科會看到原因' })
+async function confirmDecline(note: string) {
+  if (declining.value && (await declineAdvice.run(declining.value.advice.id, note))) declining.value = undefined
 }
 const lastReject = (o: OrderView) => o.abxInfo?.steps.filter((s) => s.action === 'reject').at(-1)
 const ackConsult = useAction(ipdApi.ackConsultOrders, { success: (r) => `已閱 ${r.count} 筆會診醫囑` })
@@ -402,6 +410,14 @@ async function submitNote() {
           <span class="min-w-0 flex-1"><b>抗生素核准天數{{ o.abxInfo!.extend === 'over' ? '已超過' : '快到了' }}：</b>{{ o.content }}，{{ o.abxInfo!.text }}。要續用請申請；不用了請停止。</span>
           <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'extend' }">申請續用</UButton>
         </div>
+        <div v-for="x in abxAdvice" :key="`abxa-${x.advice.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900" role="status">
+          <span class="min-w-0 flex-1"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5) }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
+          <template v-if="!isAdmin">
+            <UButton size="sm" variant="danger" @click="onStop(x.order)">停止</UButton>
+            <UButton v-if="canRevise(x.order)" size="sm" variant="secondary" @click="revising = x.order">修改</UButton>
+            <UButton size="sm" variant="ghost" @click="declining = x">不接受</UButton>
+          </template>
+        </div>
         <div v-if="consultUnseen.length" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-sm text-purple-900">
           <span class="min-w-0 flex-1">會診醫師新開了 <b>{{ consultUnseen.length }}</b> 筆醫囑：{{ consultUnseen.map((o) => `${o.content}（${o.consultLabel?.replace('會診：', '')}）`).join('、') }}</span>
           <UButton size="sm" variant="secondary" :loading="ackConsult.pending.value" @click="adm && ackConsult.run(adm.id)">已閱</UButton>
@@ -567,6 +583,17 @@ async function submitNote() {
       :pending="appeal.pending.value || extendAbx.pending.value"
       :error="(abxResubmit?.kind === 'appeal' ? appeal : extendAbx).fieldErrors.value.note"
       @confirm="confirmAbx"
+    />
+    <ReasonDialog
+      v-model="decliningOpen"
+      title="不接受感染科的抗生素建議"
+      :subject="declining ? `${declining.order.content}：${declining.advice.note}` : ''"
+      label="不接受的原因（感染科會看到）"
+      :presets="['臨床改善中，維持原用藥', '已會診討論，維持原用藥', '病人對建議的藥過敏']"
+      ok-text="送出"
+      :pending="declineAdvice.pending.value"
+      :error="declineAdvice.fieldErrors.value.note"
+      @confirm="confirmDecline"
     />
     <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回" :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />

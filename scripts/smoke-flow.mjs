@@ -9993,6 +9993,167 @@ try {
     ok(labs.reports.some((r) => r.culture?.isolates[0]?.organism === 'ECO'), '病歷的檢驗報告帶結構化培養結果')
   }
 
+  // 抗生素管理介入（每日審視）：藥敏判讀（MRSA 對 β-lactam 天生抗藥）、療程接續（48 小時內再開、修改醫囑）、換同類提示、
+  // 五條規則（無效、重疊、降階、改口服、超過 7 天）、種子示範、感染科發出建議／不用介入、主治停止或修改＝接受、不接受、首頁待辦
+  console.log('\n[抗生素管理介入]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.abxStewardApi
+    const I = api.ipdApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    // 純函式：藥敏
+    const ECO = { organism: 'ECO', ast: { AMP: 'R', AMC: 'R', CEX: 'S', CRO: 'S', TZP: 'S', MEM: 'S' } }
+    const MRSA = { organism: 'MRSA', ast: { OXA: 'R', CEX: 'R', AMC: 'R', VAN: 'S' } }
+    ok(api.sirOf(MRSA, 'M036') === 'R' && api.sirOf(MRSA, 'M042') === 'S' && api.sirOf(ECO, 'M004') === 'R' && api.sirOf(ECO, 'M006') === undefined, '藥敏：MRSA 對 Ceftriaxone 天生抗藥（沒測也算 R）、Azithromycin 沒測')
+    ok(api.susceptibleDrugs([ECO]).join() === 'M005,M036,M044,M043' && api.susceptibleDrugs([ECO], (id) => api.ABX_PROFILE[id]?.oral).join() === 'M005' && api.susceptibleDrugs([MRSA]).join() === 'M042', '敏感的藥依窄效到廣效排；只看口服；MRSA 只剩 Vancomycin')
+    // 純函式：療程從哪天算
+    const h1 = [
+      { id: 'a', drugId: 'M004', startAt: '2026-11-01 09:00', stopAt: '2026-11-05 08:00', status: 'stopped' },
+      { id: 'b', drugId: 'M004', startAt: '2026-11-06 20:00', stopAt: '2026-11-07 09:00', status: 'stopped' },
+      { id: 'c', drugId: 'M004', startAt: '2026-11-07 09:00', status: 'active', replaces: 'b' },
+      { id: 'd', drugId: 'M004', startAt: '2026-11-09 10:00', status: 'active' },
+    ]
+    ok(api.abxCourseStart(h1[2], h1) === '2026-11-01 09:00', '療程接續：修改醫囑的前身、停藥 36 小時又開，一路接到最早那筆')
+    ok(api.abxCourseStart({ id: 'x', drugId: 'M004', startAt: '2026-11-07 08:00', status: 'active' }, [h1[0]]) === '2026-11-01 09:00', '停藥剛好 48 小時再開：接續')
+    ok(api.abxCourseStart({ id: 'x', drugId: 'M004', startAt: '2026-11-07 08:01', status: 'active' }, [h1[0]]) === '2026-11-07 08:01', '超過 48 小時：重新算第 1 天')
+    ok(api.abxCourseStart({ id: 'x', drugId: 'M005', startAt: '2026-11-05 09:00', status: 'active' }, [h1[0]]) === '2026-11-05 09:00', '不同的藥不接續')
+    const nm = (id) => db().drugs.find((d) => d.id === id)?.generic ?? id
+    const hs = api.abxCourseHint('M004', [{ id: 'a', drugId: 'M004', startAt: '2026-11-01 09:00', stopAt: '2026-11-05 08:00', status: 'stopped' }], '2026-11-06 10:00', nm)
+    ok(hs?.day === 6 && hs.text.includes('接續原療程'), `同一支 48 小時內停過：「${hs?.text}」`)
+    const hc = api.abxCourseHint('M005', [{ id: 'a', drugId: 'M036', startAt: '2026-11-01 09:00', status: 'active' }], '2026-11-04 10:00', nm)
+    ok(hc?.day === 4 && hc.text.includes('β-lactam') && hc.text.includes('Ceftriaxone'), `換同類：「${hc?.text}」`)
+    ok(!api.abxCourseHint('M042', [{ id: 'a', drugId: 'M036', startAt: '2026-11-01 09:00', status: 'active' }], '2026-11-04 10:00', nm) && !api.abxCourseHint('M001', [], '2026-11-04 10:00', nm), '不同類、不是抗生素：沒有提示')
+    // 純函式：五條規則
+    const F = (orders, isolates = [], diet = 'regular', t = '2026-11-10 10:00') => api.stewardFindings({ orders, isolates, diet, now: t, drugName: nm })
+    const o = (id, drugId, courseStart, route = 'IV', extra = {}) => ({ id, drugId, route, startAt: courseStart, courseStart, ...extra })
+    let fs = F([o('1', 'M004', '2026-11-01 09:00', 'PO')], [ECO])
+    ok(fs.length === 1 && fs[0].kind === 'ineffective' && fs[0].drugIds[0] === 'M005' && fs[0].text.includes('Cephalexin、Ceftriaxone 等'), `藥敏無效（第 10 天也不另提天數）：「${fs[0]?.text}」`)
+    fs = F([o('1', 'M043', '2026-11-09 09:00')], [ECO])
+    ok(fs.length === 1 && fs[0].kind === 'deescalate' && fs[0].drugIds.join() === 'M005,M036,M044', `可降階：「${fs[0]?.text}」`)
+    ok(!F([o('1', 'M042', '2026-11-09 09:00')], [MRSA]).length, 'MRSA 用 Vancomycin：沒有建議')
+    fs = F([o('1', 'M036', '2026-11-07 09:00')], [], 'soft')
+    ok(fs.length === 1 && fs[0].kind === 'ivpo' && fs[0].drugIds.join() === 'M004,M005', `靜脈注射滿 72 小時、能進食（沒有培養用經驗對照）：「${fs[0]?.text}」`)
+    ok(!F([o('1', 'M036', '2026-11-07 09:00')], [], 'npo').length && !F([o('1', 'M036', '2026-11-07 11:00')], [], 'soft').length && !F([o('1', 'M036', '2026-11-07 09:00')], [], null).length && !F([o('1', 'M042', '2026-11-07 09:00')], [], 'soft').length, '禁食、未滿 72 小時、不知道飲食、沒有口服可換：不建議改口服')
+    ok(F([o('1', 'M036', '2026-11-07 09:00')], [ECO], 'soft').find((f) => f.kind === 'ivpo')?.drugIds.join() === 'M005', '有培養：只建議藥敏敏感的口服藥')
+    fs = F([o('1', 'M006', '2026-11-03 09:00', 'PO')])
+    ok(fs.length === 1 && fs[0].kind === 'duration' && fs[0].text.includes('第 8 天'), `超過 7 天：「${fs[0]?.text}」`)
+    ok(!F([o('1', 'M006', '2026-11-04 09:00', 'PO')]).length && !F([o('1', 'M042', '2026-11-03 09:00', 'IV', { approvedDays: 14 })]).length && F([o('1', 'M042', '2026-11-03 09:00', 'IV', { approvedDays: 7 })]).some((f) => f.kind === 'duration'), '第 7 天不提；感染科核准到第 14 天不提、只核准 7 天要提')
+    fs = F([o('1', 'M036', '2026-11-09 09:00'), o('2', 'M043', '2026-11-09 20:00'), o('3', 'M042', '2026-11-09 20:00')])
+    ok(fs.filter((f) => f.kind === 'overlap').map((f) => f.orderId).join() === '1,2' && fs.find((f) => f.orderId === '1').withOrderIds.join() === '2', '兩支 β-lactam 重疊：兩筆都標（Vancomycin 不同類）')
+
+    // 種子
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const cell = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03'))
+    const aug = db().ipdOrders.find((x) => x.id === 'IO-ABX-ST')
+    const vanco = db().ipdOrders.find((x) => x.admissionId === cell.id && x.drugId === 'M042' && x.status === 'active')
+    const cro = db().ipdOrders.find((x) => x.admissionId === cell.id && x.drugId === 'M036' && x.status === 'active')
+    ok(aug?.admissionId === st.id && aug.status === 'active' && db().mar.some((m) => m.orderId === aug.id && m.status === 'given'), '種子：腦梗塞昨天送尿液培養後經驗性用 Augmentin 口服（已給過）')
+    await as('dr11')
+    let list = await S.listAbxStewardship()
+    const itemOf = (id) => list.items.find((x) => x.order.id === id)
+    let it = itemOf(aug.id)
+    ok(list.canReview && it?.findings.length === 1 && it.findings[0].kind === 'ineffective' && !it.findings[0].handled && it.findings[0].text.includes('Amoxicillin/Clavulanate') && it.culture?.culture.isolates[0].organism === 'ECO', `種子：腦梗塞 Augmentin「藥敏無效」待介入：「${it?.findings[0]?.text}」`)
+    it = itemOf(vanco.id)
+    ok(it?.courseDay === 8 && it.findings.some((f) => f.kind === 'duration' && !f.handled) && it.order.abxInfo?.extend === 'over', '種子：蜂窩性組織炎 Vancomycin 第 8 天「超過 7 天」（核准 7 天也已超過）')
+    it = itemOf(cro.id)
+    ok(it?.findings.length === 1 && it.findings[0].kind === 'ineffective' && it.findings[0].handled?.status === 'sent' && it.findings[0].handled.id === 'ABXI-SEED-1', '種子：蜂窩性組織炎 Ceftriaxone（MRSA 天生抗藥）已發出建議、等主治回覆（無效的藥不另提天數）')
+    ok(list.interventions.some((x) => x.id === 'ABXI-SEED-1' && x.statusLabel === '待主治回覆' && x.patientName), '介入紀錄：待主治回覆列得到')
+    ok(list.items.every((x) => x.findings.every((f) => f.text)) && list.items[0].open > 0, '有還沒處理的建議排前面')
+    let dash = await api.dashboardApi.getDashboard()
+    const todo0 = list.items.filter((x) => x.open > 0).length
+    ok(dash.abxSteward === todo0 && todo0 >= 2, `感染科首頁「抗生素每日審視」${dash.abxSteward}，和審視頁待審視一樣`)
+    await as(userOf(cell.doctorId))
+    dash = await api.dashboardApi.getDashboard()
+    let ords = await I.listOrders(cell.id)
+    ok(dash.abxAdvice >= 1 && ords.find((x) => x.id === cro.id)?.abxAdvice?.[0].note.includes('建議停用 Ceftriaxone') && !ords.find((x) => x.id === vanco.id).abxAdvice, '主治首頁「抗生素建議待回覆」、住院醫囑那一筆列出建議')
+
+    // 發出建議、不用介入
+    await as(userOf(st.doctorId))
+    let msg = await errOf(() => S.sendAbxAdvice(aug.id, 'ineffective', '建議改藥'))
+    ok(msg.includes('感染科'), `不是感染科不能發建議 → 「${msg}」`)
+    await as('dr11')
+    let f = await fieldsOf(() => S.sendAbxAdvice(aug.id, 'ineffective', ' '))
+    ok(f.note, '發出建議要寫說明')
+    msg = await errOf(() => S.sendAbxAdvice(aug.id, 'duration', '療程已足'))
+    ok(msg.includes('沒有「療程超過 7 天」'), `規則沒標的不能發 → 「${msg}」`)
+    const adv = await S.sendAbxAdvice(aug.id, 'ineffective', 'E. coli 對 Augmentin 抗藥，建議改 Cephalexin 500mg QID')
+    ok(adv.status === 'sent' && adv.finding.includes('Amoxicillin/Clavulanate') && db().auditLogs[0].action === '抗生素管理：發出建議', '發出建議：存當時的系統建議、寫稽核')
+    msg = await errOf(() => S.sendAbxAdvice(aug.id, 'ineffective', '再一次'))
+    ok(msg.includes('已經處理過'), '同一條不能重複發')
+    f = await fieldsOf(() => S.dismissAbxFinding(vanco.id, 'duration', ''))
+    ok(f.note, '不用介入要寫理由')
+    const dis = await S.dismissAbxFinding(vanco.id, 'duration', '已和主治討論：MRSA 蜂窩性組織炎合併膿瘍，預計 14 天')
+    ok(dis.status === 'dismissed' && db().auditLogs[0].action === '抗生素管理：不用介入', '不用介入：寫稽核')
+    list = await S.listAbxStewardship()
+    ok(!itemOf(aug.id).open && !itemOf(vanco.id).open && (await api.dashboardApi.getDashboard()).abxSteward === todo0 - 2, '處理過的不再算待審視（首頁跟著少）')
+
+    // 主治：不接受、停止＝接受
+    await as(userOf(st.doctorId))
+    ok((await api.dashboardApi.getDashboard()).abxAdvice === 1, '腦梗塞主治首頁：抗生素建議待回覆 1')
+    const other = db().doctors.find((d) => d.deptId !== st.deptId && d.id !== 'DR11' && db().users.some((u) => u.doctorId === d.id))
+    await as(userOf(other.id))
+    msg = await errOf(() => S.declineAbxAdvice(adv.id, '維持原用藥'))
+    ok(msg.includes('醫師'), `不是這位病人的醫師不能回覆 → 「${msg}」`)
+    await as(userOf(st.doctorId))
+    f = await fieldsOf(() => S.declineAbxAdvice(adv.id, ''))
+    ok(f.note, '不接受要寫原因')
+    const dec = await S.declineAbxAdvice(adv.id, '病人臨床改善中，維持原用藥')
+    ok(dec.status === 'declined' && dec.reply.text.includes('臨床改善') && (await api.dashboardApi.getDashboard()).abxAdvice === 0 && db().auditLogs[0].action === '抗生素管理：不接受建議', '不接受：記原因，主治待辦清掉')
+    msg = await errOf(() => S.declineAbxAdvice(adv.id, '再一次'))
+    ok(msg.includes('回覆過'), '回覆過的不能再回')
+    await as(userOf(cell.doctorId))
+    await I.stopOrder(cro.id)
+    let iv = db().abxInterventions.find((x) => x.id === 'ABXI-SEED-1')
+    ok(iv.status === 'accepted' && iv.reply.text === '停止醫囑' && !(await api.dashboardApi.getDashboard()).abxAdvice, '主治停止 Ceftriaxone＝接受（自動記），待辦清掉')
+
+    // 修改＝接受；療程接續與換同類提示
+    await as(userOf(st.doctorId))
+    const cr2 = await I.addOrder(await withRxOk({ admissionId: st.id, type: 'long', category: 'medication', drugId: 'M036', content: '', dose: 1, freq: 'Q12H', route: 'IV' }))
+    await as('dr11')
+    list = await S.listAbxStewardship()
+    ok(itemOf(cr2.id)?.findings.some((x) => x.kind === 'overlap' && !x.handled) && itemOf(aug.id).findings.some((x) => x.kind === 'overlap'), '腦梗塞加開 Ceftriaxone：和 Augmentin 重疊（兩筆都標）')
+    const ov = await S.sendAbxAdvice(cr2.id, 'overlap', '尿液 E. coli 對 Ceftriaxone 敏感：請停 Augmentin，或改單用 Cephalexin')
+    list = await S.listAbxStewardship()
+    ok(itemOf(aug.id).findings.find((x) => x.kind === 'overlap')?.handled?.id === ov.id, '重疊對其中一筆發過建議：另一筆的重疊也算處理過')
+    await as(userOf(st.doctorId))
+    await I.reviseOrder(cr2.id, { dose: 1, freq: 'QD', route: 'IV', reason: '依感染科建議調整' })
+    iv = db().abxInterventions.find((x) => x.id === ov.id)
+    ok(iv.status === 'accepted' && iv.reply.text.startsWith('修改醫囑'), `主治修改醫囑＝接受：「${iv.reply.text}」`)
+    await I.stopOrder(aug.id)
+    let hint = await S.abxCourseHintOf(st.id, 'M004')
+    ok(hint?.text.includes('接續原療程') && hint.day === 2, `剛停的 Augmentin 再開：提示「${hint?.text}」`)
+    const aug2 = await I.addOrder(await withRxOk({ admissionId: st.id, type: 'long', category: 'medication', drugId: 'M004', content: '', dose: 1, freq: 'BID', route: 'PO' }))
+    await as('dr11')
+    list = await S.listAbxStewardship()
+    ok(itemOf(aug2.id)?.courseStart === aug.startAt && itemOf(aug2.id).courseDay === 2, '48 小時內再開：療程接續（審視頁第 2 天，不是第 1 天）')
+    await as(userOf(st.doctorId))
+    hint = await S.abxCourseHintOf(st.id, 'M005')
+    ok(hint?.text.includes('β-lactam') && hint.day >= 1, `換同類 Cephalexin：提示「${hint?.text}」`)
+    ok(!(await S.abxCourseHintOf(st.id, 'M001')), '不是抗生素：沒有提示')
+    // 管制性抗生素：停了 48 小時內再開，療程接續（還是要重新送審）
+    await as(userOf(cell.doctorId))
+    await I.stopOrder(vanco.id)
+    const v2 = await I.addOrder(await withRxOk({ admissionId: cell.id, type: 'long', category: 'medication', drugId: 'M042', content: '', dose: 1, freq: 'Q12H', route: 'IV', abx: { reason: 'culture', site: '皮膚軟組織', organism: 'MRSA' } }))
+    ok(v2.abx.courseStart === vanco.abx.courseStart && v2.abx.status === 'pending' && v2.abxInfo.day === 8, `管制性抗生素 48 小時內再開：療程接續（${v2.abxInfo.text}）、重新送審`)
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

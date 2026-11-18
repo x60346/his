@@ -21,6 +21,8 @@ import { checkTubePlan, DIET_KINDS, dietKindOfText, dietText } from './nutrition
 import { checkInfusionInput } from './infusion-rules'
 import { activeLines } from './line-work'
 import { abxInfoOf, isInfectious, type AbxInfo } from './abx-work'
+import { acceptAdviceOn, adviceOfOrder, medHistory, type AbxAdviceView } from './abx-steward-work'
+import { abxCourseStart } from './abx-steward-rules'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -69,6 +71,8 @@ export interface OrderView extends IpdOrder {
   doseStrength?: string
   /** 管制性抗生素：第幾天、審核狀態（醫囑列、審核頁顯示） */
   abxInfo?: AbxInfo
+  /** 感染科每日審視發出、待主治回覆的建議（停止或修改這筆＝接受；不接受要寫原因） */
+  abxAdvice?: AbxAdviceView[]
 }
 
 export const orderView = (o: IpdOrder): OrderView => {
@@ -87,6 +91,7 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(drug && residualOf(drug, o.dose) ? { residualQty: residualOf(drug, o.dose)!.residual } : {}),
     ...(drug && o.dose && !Number.isInteger(o.dose) && doseStrengthText(drug, o.dose) ? { doseStrength: doseStrengthText(drug, o.dose) } : {}),
     ...(o.abx && o.status === 'active' ? { abxInfo: abxInfoOf(o.abx) } : {}),
+    ...(o.status === 'active' && o.category === 'medication' && adviceOfOrder(o.id).length ? { abxAdvice: adviceOfOrder(o.id) } : {}),
     ...(o.consultId ? { consultLabel: `會診：${nameOf.dept(find.doctor(o.doctorId)?.deptId)} ${nameOf.doctor(o.doctorId)}`, ...(o.consultSeenAt ? {} : { consultUnseen: true }) } : {}),
   }
 }
@@ -160,7 +165,8 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
           const why = `${ABX_REASON_LABEL[x.reason]}${x.organism?.trim() ? `（${x.organism.trim()}）` : ''}・${x.site.trim()}${x.note?.trim() ? `：${x.note.trim()}` : ''}`
           abx = {
             reason: x.reason, site: x.site.trim(), ...(x.reason === 'culture' ? { organism: x.organism!.trim() } : {}), ...(x.note?.trim() ? { note: x.note.trim() } : {}),
-            courseStart: extra.startAt ?? t, status: self ? 'approved' : 'pending', requestedAt: t, ...(self ? { approvedDays: ABX_DEFAULT_DAYS } : {}),
+            // 同一支停藥 48 小時內又開：接續原療程（不從第 1 天重算）
+            courseStart: abxCourseStart({ id: '', drugId: drug.id, startAt: extra.startAt ?? t, status: 'active' }, medHistory(a.id)), status: self ? 'approved' : 'pending', requestedAt: t, ...(self ? { approvedDays: ABX_DEFAULT_DAYS } : {}),
             steps: [{ action: 'request', at: t, by: user.id, text: why }, ...(self ? [{ action: 'approve' as const, at: t, by: user.id, text: '感染科醫師開立，免審', days: ABX_DEFAULT_DAYS }] : [])],
           }
         }
@@ -344,6 +350,8 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
       allowDuplicate: true, ...(input.confirmHighDose ? { confirmHighDose: true } : {}),
     }, t, { startAt, replaces: old.id, reviseReason: reason, ...(role.kind === 'consult' ? { consultId: role.consult.id } : {}) })
     old.replacedBy = o.id
+    // 感染科的建議待回覆：修改＝接受
+    acceptAdviceOn(old, user.id, t, `修改醫囑：${orderSummary(o, unit)}（${reason}）`)
     const change = `${orderSummary(old, unit)} → ${orderSummary(o, unit)}`
     if (q) Object.assign(q, { reply: `已修改：${change}（${reason}）`, resolution: 'modified' })
     audit('修改住院醫囑', `${a.admitNo} ${old.content}：${change}（${reason}）${q ? `；回覆護理師疑問：${q.reason}` : ''}`)
@@ -362,7 +370,10 @@ export function stopOrder(orderId: string): Promise<OrderView> {
     const role = requireCare(user.doctorId, must(find.admission(o.admissionId), '住院紀錄'), '停止這位病人的醫囑', { consult: true })
     if (role.kind === 'consult' && o.doctorId !== user.doctorId) fail('會診醫師只能停止自己開的醫囑', 'FORBIDDEN')
     // 有疑問的醫囑被停止：疑問就此解決（醫師通常會另開正確的一筆）
-    const q = stopOrderRecord(o, user.id, now())
+    const t = now()
+    const q = stopOrderRecord(o, user.id, t)
+    // 感染科的建議待回覆：停止＝接受
+    acceptAdviceOn(o, user.id, t, '停止醫囑')
     audit('停止住院醫囑', `${o.content}${q ? `（回覆護理師疑問：${q.reason}）` : ''}`)
     return orderView(o)
   })

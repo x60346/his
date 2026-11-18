@@ -1338,6 +1338,32 @@ export interface AbxRequest {
   steps: AbxStep[]
 }
 
+/**
+ * 抗生素管理的建議類型（每日審視，系統依規則標出）：藥敏無效、抗菌範圍重疊、可降階、可改口服、療程超過 7 天
+ */
+export type AbxAdviceKind = 'ineffective' | 'overlap' | 'deescalate' | 'ivpo' | 'duration'
+/**
+ * 抗生素管理介入（感染科每日審視）：對某一筆抗生素醫囑的某一類建議，發出建議或標「不用介入」。
+ * 主治停止或修改這筆醫囑＝接受（系統自動記）；不接受要寫原因
+ */
+export interface AbxIntervention {
+  id: string
+  admissionId: string
+  orderId: string
+  drugId: string
+  kind: AbxAdviceKind
+  /** 發出當時系統標的那一句（之後規則結果變了，這裡留當時的） */
+  finding: string
+  /** sent 待主治回覆、accepted 已接受（主治停止或修改了醫囑）、declined 主治不接受、dismissed 審視者標「不用介入」 */
+  status: 'sent' | 'accepted' | 'declined' | 'dismissed'
+  by: string
+  at: string
+  /** 審視者的說明（發出建議：給主治的建議；不用介入：理由） */
+  note: string
+  /** 主治的回覆：接受（停止／修改醫囑，自動寫）或不接受（原因） */
+  reply?: { by: string; at: string; text: string }
+}
+
 export interface OrderQuery {
   by: string
   at: string

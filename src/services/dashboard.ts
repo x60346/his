@@ -14,6 +14,7 @@ import { pendingReturn, udCandidate } from './ud-work'
 import { labAckCount, labWorkCount } from './lab-work'
 import { imagingAckCount, imagingWorkCount } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
+import { openAdvice, stewardTodoCount } from './abx-steward-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
@@ -78,6 +79,9 @@ export interface DashboardStats {
   abxOverdue?: number
   abxRejected?: number
   abxExtend?: number
+  /** 感染科：抗生素每日審視有建議還沒處理的醫囑；主治：感染科建議待我回覆 */
+  abxSteward?: number
+  abxAdvice?: number
   consultUrgent?: number
   /** 血庫：待驗血型或交叉試驗沒配滿的備血單（其中急件）；護理站：已發血待輸、輸血中該量 15 分鐘生命徵象的（全院）；醫師：我的病人輸血反應待確認 */
   bloodWork?: number
@@ -260,8 +264,9 @@ export function getDashboard(): Promise<DashboardStats> {
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
-          ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue }))(abxPendingCounts(now())) : {}),
+          ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue, abxSteward: stewardTodoCount(now()) }))(abxPendingCounts(now())) : {}),
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
+          abxAdvice: openAdvice(me.doctorId).length,
           consultOrdersUnseen: new Set(db.ipdOrders.filter((o) => mine.has(o.admissionId) && o.consultId && !o.consultSeenAt).map((o) => o.admissionId)).size,
           transferIncoming: db.admissions.filter((a) => {
             const x = a.status === 'admitted' ? openDeptTransfer(a) : undefined

@@ -4,16 +4,16 @@ import type { AbxStep, IpdOrder, VitalRecord } from '@/types'
 import { db } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
-import { ABX_DEFAULT_DAYS, ABX_MAX_DAYS, abxState, abxText } from './abx-rules'
+import { ABX_DEFAULT_DAYS, ABX_MAX_DAYS, abxDay, abxState, abxText } from './abx-rules'
+import { courseStartOf } from './abx-steward-work'
 import { abxInfoOf, activeAbxOrders, isAntibiotic, isInfectious, type AbxInfo } from './abx-work'
 import { orderView, type OrderView } from './ipd'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { requireCare } from './care-team'
 import { find, nameOf } from './views'
 
-export interface AbxReviewItem {
-  order: OrderView
-  abx: AbxInfo
+/** 審核、每日審視共用的病人資料：床號、診斷、過敏、隔離、生命徵象、最近檢驗、目前所有的抗生素 */
+export interface AbxPatientPart {
   admissionId: string
   admitNo: string
   bedNo: string
@@ -31,9 +31,17 @@ export interface AbxReviewItem {
   /** 這位病人目前所有的抗生素（含這一筆）：「Ceftriaxone 1g Inj・使用第 5 天」 */
   antibiotics: string[]
 }
+export interface AbxReviewItem extends AbxPatientPart {
+  order: OrderView
+  abx: AbxInfo
+}
 
 function itemOf(o: IpdOrder, t: string): AbxReviewItem {
-  const a = must(find.admission(o.admissionId), '住院紀錄')
+  return { order: orderView(o), abx: abxInfoOf(o.abx!, t), ...abxPatientPart(o.admissionId, t) }
+}
+
+export function abxPatientPart(admissionId: string, t: string): AbxPatientPart {
+  const a = must(find.admission(admissionId), '住院紀錄')
   const p = find.patient(a.patientId)
   const latest = db.vitals.filter((v) => v.admissionId === a.id).reduce<VitalRecord | undefined>((b, v) => (!b || v.at >= b.at ? v : b), undefined)
   const seen = new Set<string>()
@@ -45,9 +53,10 @@ function itemOf(o: IpdOrder, t: string): AbxReviewItem {
     .map((r) => ({ procName: find.procedure(r.procId)?.name ?? r.procId, at: r.reportedAt, abnormal: r.values.filter((v) => v.flag).map((v) => `${v.name} ${v.value}${v.flag === 'H' ? '↑' : v.flag === 'L' ? '↓' : ''}`) }))
   const antibiotics = db.ipdOrders
     .filter((x) => x.admissionId === a.id && x.status === 'active' && x.category === 'medication' && isAntibiotic(find.drug(x.drugId ?? '')))
-    .map((x) => `${x.content}・${x.abx ? abxText(x.abx, t) : `使用第 ${Math.max(1, Math.round((Date.parse(t.slice(0, 10)) - Date.parse(x.startAt.slice(0, 10))) / 86400000) + 1)} 天`}`)
+    // 一般抗生素也接續療程（修改醫囑、48 小時內停過又開）
+    .map((x) => `${x.content}・${x.abx ? abxText(x.abx, t) : `使用第 ${abxDay(courseStartOf(x), t)} 天`}`)
   return {
-    order: orderView(o), abx: abxInfoOf(o.abx!, t), admissionId: a.id, admitNo: a.admitNo, bedNo: find.bed(a.bedId ?? '')?.bedNo ?? '',
+    admissionId: a.id, admitNo: a.admitNo, bedNo: find.bed(a.bedId ?? '')?.bedNo ?? '',
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', age: p ? `${new Date(t).getFullYear() - Number(p.birthDate.slice(0, 4))} 歲` : '',
     diagnosis: a.diagnosis, attendingName: nameOf.doctor(a.doctorId), deptName: nameOf.dept(a.deptId), allergies: p?.allergies ?? [], flags: flagsOf(a.patientId),
     ...(latest ? { latestVitals: latest } : {}), labs, antibiotics,

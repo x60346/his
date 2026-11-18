@@ -1,6 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
+  AbxIntervention,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -749,7 +750,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const pt = ipdPatients[i]
     // 腦梗塞（雙人房）住比較久：示範住院中費用查詢、期中繳款提醒（滿 30 天、部分負擔進第二段）。亂數照樣抽，其他人的資料不變
     const rolled = int(1, 6)
-    const daysIn = i === 4 ? 32 : rolled
+    // 蜂窩性組織炎住 9 天：示範抗生素每日審視「Vancomycin 超過 7 天」
+    const daysIn = i === 4 ? 32 : i === 5 ? 9 : rolled
     const admitDate = addDays(T, -daysIn)
     // 隔離示範（不抽亂數）：肺炎（疑似肺結核、空氣隔離）住綜合病房的單人房；蜂窩性組織炎（MRSA、接觸隔離）住綜合病房健保床，同房另一床空著
     const cls: Bed['bedClass'] = i === 0 || i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'
@@ -1070,7 +1072,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // ---------- 管制性抗生素（示範，不抽亂數）：先用後審，感染科 DR11 審核 ----------
   //   - 敗血症：Meropenem 50 小時前開立（經驗性、血流），還沒審 → 逾時
-  //   - 蜂窩性組織炎（MRSA）：Vancomycin 依培養結果開立，隔天核准 7 天（今天約第 3 天）
+  //   - 蜂窩性組織炎（MRSA）：Vancomycin 依培養結果 7 天前開立，隔天核准 7 天（今天第 8 天：核准天數已超過、每日審視「超過 7 天」）
+  //   - 腦梗塞（導尿管 E. coli 泌尿道感染）：昨天送尿液培養後經驗性用 Augmentin 口服——藥敏 Amoxicillin/Clavulanate 抗藥，每日審視「藥敏無效」
   //   - 肺炎：Piperacillin/Tazobactam 昨天開立，不核准（已有 Ceftriaxone、培養無抗藥菌），等主治處理
   {
     const inpt = admissions.filter((a) => a.status === 'admitted')
@@ -1107,8 +1110,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const pneu = inpt.find((a) => a.diagnosis.startsWith('J18'))
     if (sepsis) addAbx(sepsis, 'M043', later(addMinutes(nowStr, -50 * 60), addMinutes(sepsis.admittedAt!, 60)), { reason: 'empiric', site: '血流', note: '血壓偏低、乳酸上升，先擴大涵蓋' })
     if (cell) {
-      const s = later(`${addDays(T, -2)} 10:00`, addMinutes(cell.admittedAt!, 240))
+      const s = later(`${addDays(T, -7)} 10:00`, addMinutes(cell.admittedAt!, 240))
       addAbx(cell, 'M042', s, { reason: 'culture', site: '皮膚軟組織', organism: 'MRSA', note: '傷口培養 MRSA' }, { approve: true, at: notFuture(addMinutes(s, 20 * 60), 30), text: '同意使用，請監測 Vancomycin 谷濃度與腎功能', days: 7 })
+    }
+    const stroke = inpt.find((a) => a.diagnosis.startsWith('I63'))
+    if (stroke) {
+      const d = drugMap.get('M004')!
+      const startAt = `${addDays(T, -1)} 10:30`
+      const o: IpdOrder = { id: 'IO-ABX-ST', admissionId: stroke.id, type: 'long', category: 'medication', drugId: d.id, content: d.name, dose: 1, freq: 'BID', route: 'PO', ...(timingApplies('BID', 'PO') ? { timing: effectiveTiming(d.timing, undefined) } : {}), startAt, status: 'active', doctorId: stroke.doctorId, createdAt: startAt, ackAt: addMinutes(startAt, 15), ackBy: 'U202' }
+      ipdOrders.push(o)
+      const f = codes.frequencies.find((x) => x.code === 'BID')!
+      for (let day = startAt.slice(0, 10); day <= T; day = addDays(day, 1)) {
+        for (const tm of marTimes(f.code, f.times, o.timing, 'PO')) {
+          const at = `${day} ${tm}`
+          if (at < startAt) continue
+          const past = at < recentCut
+          mar.push({ id: id('MAR'), orderId: o.id, admissionId: stroke.id, scheduledAt: at, status: past ? 'given' : 'pending', ...(past ? { executedAt: at, nurseId: 'U202' } : {}) })
+        }
+      }
     }
     if (pneu) {
       const s = later(`${addDays(T, -1)} 09:00`, addMinutes(pneu.admittedAt!, 60))
@@ -2474,7 +2493,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   //   - 敗血症（加護病房、部分 DNR）：主治 2 小時前提出安寧照會，待收案
   {
     const busy = new Set([...admissions.map((x) => x.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
-    const pt = (() => { const free = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate)); return free.find((p) => p.defaultIdentity !== '01') ?? free[0] })() // 健保一般身分的留給其他示範與測試（急診檢傷要三位）
+    const pt = (() => { const free = patients.filter((p) => !busy.has(p.id)).sort((x, y) => x.birthDate.localeCompare(y.birthDate)); const adult = free.filter((p) => ageOf(p.birthDate, T) >= 18); return adult.find((p) => p.defaultIdentity !== '01') ?? adult[0] })() // 健保一般身分的留給其他示範與測試（急診檢傷要三位）；要成人（當天的掛號不同，空閒的非一般身分可能只剩幼兒）
     const used = new Set(admissions.flatMap((x) => (x.bedHistory ?? []).map((h) => h.bedId)))
     const bed = beds.find((b) => b.ward === codes.wards[0] && b.status === 'empty' && !used.has(b.id))
     const dr01 = users.find((u) => u.doctorId === 'DR01')!.id
@@ -2528,7 +2547,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 已送太平間、帳單待家屬結；死亡病例待 dr02 審查。急救藥有開醫囑（已執行），種子沒有扣帳異動（展示用）
   {
     const busy = new Set([...admissions.map((x) => x.patientId), ...visits.filter((v) => v.date >= T).map((v) => v.patientId)])
-    const free = patients.filter((p) => !busy.has(p.id) && !p.deceasedAt).sort((x, y) => x.birthDate.localeCompare(y.birthDate))
+    // 要成人（當天的掛號不同，空閒的非一般身分可能只剩幼兒）
+    const free = patients.filter((p) => !busy.has(p.id) && !p.deceasedAt && ageOf(p.birthDate, T) >= 18).sort((x, y) => x.birthDate.localeCompare(y.birthDate))
     const pt = free.find((p) => p.defaultIdentity !== '01') ?? free[0]
     const used = new Set(admissions.flatMap((x) => (x.bedHistory ?? []).map((h) => h.bedId)))
     const bed = beds.find((b) => b.ward === codes.wards[0] && b.status === 'empty' && !used.has(b.id)) ?? beds.find((b) => b.ward === codes.wards[1] && b.status === 'empty' && !used.has(b.id))
@@ -2668,6 +2688,19 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 抗生素管理介入（示範，不抽亂數）：蜂窩性組織炎的 MRSA 對 Ceftriaxone 天生抗藥，感染科兩小時前發出建議「停用、單用 Vancomycin」，等主治回覆
+  const abxInterventions: AbxIntervention[] = []
+  {
+    const cell = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('L03'))
+    const cro = cell && ipdOrders.find((o) => o.admissionId === cell.id && o.drugId === 'M036' && o.status === 'active')
+    if (cell && cro) {
+      abxInterventions.push({
+        id: 'ABXI-SEED-1', admissionId: cell.id, orderId: cro.id, drugId: 'M036', kind: 'ineffective', finding: '抗藥性金黃色葡萄球菌 MRSA 對 Ceftriaxone 抗藥；藥敏敏感：Vancomycin',
+        status: 'sent', by: users.find((u) => u.doctorId === 'DR11')!.id, at: addMinutes(nowStr, -120), note: 'MRSA 對 Ceftriaxone 無效，已有 Vancomycin：建議停用 Ceftriaxone',
+      })
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -2736,6 +2769,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     pressureLogs,
     clusterDecisions,
     notifiableReports,
+    abxInterventions,
     dischargePlans,
     vitals,
     nursingNotes,
