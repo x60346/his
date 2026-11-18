@@ -7,6 +7,8 @@
 import type { ImagingReport } from '@/types'
 import { db } from '@/mock/db'
 import { find, nameOf } from './views'
+import { now } from '@/utils/date'
+import { examNoShow } from './exam-rules'
 
 export interface ImagingWorkItem {
   /** E:看診id:醫令id（門診）或 O:醫囑id（住院） */
@@ -29,16 +31,16 @@ export interface ImagingWorkItem {
   /** 還沒做檢查（檢查室還沒完成） */
   awaitingExam?: boolean
   /** 檢查排程：檢查室、時間、走到哪 */
-  exam?: { room: string; start: string; stage: 'scheduled' | 'arrived' | 'done' }
+  exam?: { room: string; start: string; stage: 'scheduled' | 'arrived' | 'done'; noShow?: boolean }
   normal: { findings: string; impression: string }
 }
 
 export const imagingOf = (procId: string) => find.procedure(procId)?.imaging
 /** 這筆影像的檢查排程（一筆影像一個） */
-export const examOfKey = (key: string) => db.imagingExams.find((e) => e.key === key)
+export const examOfKey = (key: string) => db.imagingExams.find((e) => e.key === key && !e.cancelled)
 const examInfo = (key: string) => {
   const e = examOfKey(key)
-  return e ? { exam: { room: e.room, start: e.start, stage: e.doneAt ? ('done' as const) : e.arrivedAt ? ('arrived' as const) : ('scheduled' as const) } } : {}
+  return e ? { exam: { room: e.room, start: e.start, stage: e.doneAt ? ('done' as const) : e.arrivedAt ? ('arrived' as const) : ('scheduled' as const), ...(examNoShow(e, now()) ? { noShow: true } : {}) } } : {}
 }
 export const reportedImagingOpd = (encounterId: string, procId: string) => db.imagingReports.some((r) => r.encounterId === encounterId && r.procId === procId)
 export const reportedImagingIpd = (orderId: string) => db.imagingReports.some((r) => r.orderId === orderId)
@@ -99,6 +101,10 @@ export function canAckImaging(r: ImagingReport, doctorId?: string): boolean {
   if (r.doctorId === doctorId) return true
   return !!r.admissionId && find.admission(r.admissionId)?.doctorId === doctorId
 }
+
+/** 門診開立醫師的影像未到（過了排程 30 分鐘沒報到、沒取消）：首頁提醒 */
+export const noShowOf = (doctorId?: string) =>
+  db.imagingExams.filter((e) => e.key.startsWith('E:') && examNoShow(e, now()) && db.encounters.find((x) => x.id === e.key.split(':')[1])?.doctorId === doctorId).sort((a, b) => a.start.localeCompare(b.start))
 
 /** 首頁：這位醫師可以判讀的（不含還沒做的）；待確認的份數 */
 export const imagingWorkCount = (doctorId: string) => pendingImagingWork().filter((w) => !w.awaitingExam && canReadImaging(w, doctorId)).length

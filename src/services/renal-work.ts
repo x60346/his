@@ -84,3 +84,19 @@ export function tdmAlerts(doctorId: string): IpdOrder[] {
     return s === 'high' || s === 'low'
   })
 }
+
+/** 病人（住院或門診）的 CrCl：住院用這次住院的體重；門診用 30 天內門診量的體重（影像顯影劑把關用） */
+export function renalOfPatient(patientId: string, admissionId?: string, t: string = now()): RenalInfo {
+  if (admissionId) return renalOf(admissionId, t)
+  const p = find.patient(patientId)
+  if (!p) return { crcl: null, text: '' }
+  const scr = latestScr(p.id, t)
+  const since = addDays(t.slice(0, 10), -WEIGHT_VALID_DAYS)
+  const w = db.encounters.filter((e) => e.patientId === patientId && e.vitals?.weight && e.date >= since && e.date <= t).sort((x, y) => y.date.localeCompare(x.date))[0]?.vitals.weight
+  const age = ageOf(p.birthDate, t.slice(0, 10))
+  const female = p.gender === 'F'
+  if (!scr) return { crcl: null, text: `CrCl 算不出：沒有 ${CRE_VALID_DAYS} 天內的肌酸酐` }
+  if (!w) return { crcl: null, text: `CrCl 算不出：沒有 ${WEIGHT_VALID_DAYS} 天內的體重` }
+  const crcl = crclOf({ age, female, weightKg: w, scr: scr.value })
+  return { crcl, text: `CrCl ${crcl} ml/min（肌酸酐 ${scr.value}、${w} kg、${age} 歲${female ? '女性' : '男性'}）` }
+}

@@ -864,9 +864,12 @@ export interface ImagingExam {
   arrivedBy?: string
   doneAt?: string
   doneBy?: string
+  /** 檢查前準備的確認（報到時逐項）：ok＝完成；沒完成的寫原因（例：早上吃過早餐） */
+  prep?: Record<string, { ok: boolean; at: string; by: string; note?: string }>
+  /** 取消（寫原因）：影像回到待排程 */
+  cancelled?: { at: string; by: string; reason: string }
 }
 
-/** 門診抽血櫃台報到（一天一位病人一號） */
 /** 自動審核沒通過的規則：品管沒過、危急值、和上次差太多（delta check）、超出儀器可測範圍 */
 export interface AutoVerifyHold {
   rule: 'qc' | 'critical' | 'delta' | 'amr'
@@ -894,6 +897,7 @@ export interface AnalyzerResult {
   releasedBy?: string
 }
 
+/** 門診抽血櫃台報到（一天一位病人一號） */
 export interface LabCheckin {
   id: string
   no: number
@@ -940,7 +944,16 @@ export interface Procedure {
   /** 麻醉費：哪一種麻醉（手術做完依麻醉方式帶入；局部麻醉不另收） */
   anesthesiaFee?: AnesthesiaType
   /** 影像檢查：誰判讀（radiology＝放射科醫師；orderer＝開立醫師自己，例：心電圖）與正常報告範本 */
-  imaging?: { reader: 'radiology' | 'orderer'; normal: { findings: string; impression: string }; room?: ExamRoom; minutes?: number }
+  imaging?: {
+    reader: 'radiology' | 'orderer'
+    normal: { findings: string; impression: string }
+    room?: ExamRoom
+    minutes?: number
+    /** 檢查前準備（報到時逐項確認，沒完成不能做）：例 禁食 6 小時、顯影劑同意書、腎功能 */
+    prep?: { id: string; label: string }[]
+    /** 打顯影劑：腎功能（CrCl）把關 */
+    contrast?: boolean
+  }
   active: boolean
 }
 

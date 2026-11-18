@@ -3022,6 +3022,35 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
     const ap = by('K35')
     if (ap) order('IO-EX-4', ap, 'P016', addMinutes(nowStr, -45))
+    // 檢查前準備與未到：泌尿道感染腹部超音波已報到、但早上吃過早餐（未禁食，不能做）；敗血症含顯影劑腹部 CT 今天稍晚（CrCl 偏低要水化）；
+    // 門診一位今天的腰椎 X 光排在 1 小時前、人沒來（未到，開立醫師首頁看得到）
+    const uti = by('N39')
+    if (uti) {
+      const s3 = later(addMinutes(nowStr, -20), day0)
+      const o = order('IO-EX-5', uti, 'P016', later(addMinutes(s3, -120), day0))
+      const arr = later(addMinutes(nowStr, -10), s3)
+      ex(o, s3, { arrivedAt: arr, arrivedBy: 'U101', prep: { npo6: { ok: false, at: arr, by: 'U101', note: '早上 8 點吃過早餐' } } })
+    }
+    const sep = by('A41')
+    if (sep) {
+      const s4 = [addMinutes(nowStr, 90), `${T} 16:30`].sort()[0]
+      ex(order('IO-EX-6', sep, 'P061', addMinutes(nowStr, -90)), s4)
+    }
+    const busy = new Set(admissions.filter((x) => x.status === 'admitted').map((x) => x.patientId))
+    const opd = visits
+      .filter((v) => v.date === T && (v.status === 'charged' || v.status === 'dispensed') && !busy.has(v.patientId))
+      .map((v) => ({ v, e: encounters.find((x) => x.visitId === v.id && x.status === 'completed'), c: charges.find((x) => x.visitId === v.id && !x.voided) }))
+      .filter((x): x is { v: Visit; e: Encounter; c: Charge } => !!x.e && !!x.c && !x.e.procedures.some((p) => procMap.get(p.procId)?.imaging || procMap.get(p.procId)?.labItems))
+      .at(-1)
+    if (opd) {
+      opd.e.procedures.push({ procId: 'P015', qty: 1, selfPay: false })
+      const lines = calcChargeLines(opd.v, opd.e, { identity: codes.identities.find((d) => d.code === opd.v.identityCode)!, settings: codes.billingSettings, drug: (id) => drugMap.get(id), procedure: (id) => procMap.get(id) })
+      const sum = summarize(lines)
+      const received = Math.ceil(sum.patientTotal / 100) * 100
+      Object.assign(opd.c, { lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal, received, change: received - sum.patientTotal })
+      const s5 = addMinutes(nowStr, -60)
+      imagingExams.push({ id: 'EX-SEED-NS', key: `E:${opd.e.id}:P015`, patientId: opd.e.patientId, procId: 'P015', room: 'XR', start: s5, minutes: 10, scheduledBy: 'U101', scheduledAt: later(opd.c.paidAt, addMinutes(s5, -40)) })
+    }
   }
 
   // 門診抽血櫃台（示範，不抽亂數）：今天三位已批價的門診病人加開檢驗（重算收據，日結照樣對得起來）——

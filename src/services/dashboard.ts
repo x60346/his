@@ -12,7 +12,7 @@ import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
 import { analyzerHeldCount, deskToCollectCount, labAckCount, labWorkCount } from './lab-work'
-import { imagingAckCount, imagingWorkCount } from './imaging-work'
+import { imagingAckCount, imagingWorkCount, noShowOf } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { openAdvice, stewardTodoCount } from './abx-steward-work'
 import { tdmAlerts } from './renal-work'
@@ -199,6 +199,9 @@ export interface DashboardStats {
   /** 櫃台、放射科醫師：影像待排程；今天已排還沒完成的 */
   examToSchedule?: number
   examToday?: number
+  /** 門診開立醫師：病人沒來做影像（過了排程 30 分鐘沒報到） */
+  examNoShow?: number
+  examNoShowText?: string
   udReturns: number
   udVerify: number
   udSendBack: number
@@ -284,7 +287,7 @@ export function getDashboard(): Promise<DashboardStats> {
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
       ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); return { deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
-      ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt).length } : {}))(sessionRole()),
+      ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length } : {}))(sessionRole()),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
@@ -322,6 +325,7 @@ export function getDashboard(): Promise<DashboardStats> {
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
+          ...((xs) => ({ examNoShow: xs.length, examNoShowText: xs.map((e) => `${db.patients.find((p) => p.id === e.patientId)?.name} ${db.procedures.find((p) => p.id === e.procId)?.name}（${e.start.slice(5)}）`).join('、') }))(noShowOf(me.doctorId)),
           ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue, abxSteward: stewardTodoCount(now()) }))(abxPendingCounts(now())) : {}),
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           abxAdvice: openAdvice(me.doctorId).length,

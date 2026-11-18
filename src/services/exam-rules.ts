@@ -36,3 +36,21 @@ export const examClash = <T extends Pick<ImagingExam, 'id' | 'room' | 'start' | 
 /** 檢查前後 30 分鐘內的給藥時間（還沒給的）：護理站提醒調整 */
 export const marConflicts = (e: Pick<ImagingExam, 'start' | 'minutes'>, marTimes: string[]) =>
   marTimes.filter((t) => t >= addMinutes(e.start, -EXAM_MAR_MARGIN) && t <= addMinutes(e.start, e.minutes + EXAM_MAR_MARGIN)).sort()
+
+/** 過了排程時間多少分鐘還沒報到算「未到」 */
+export const EXAM_NOSHOW_MIN = 30
+/** 未到：沒取消、沒報到、已經過了排程時間 30 分鐘 */
+export const examNoShow = (e: Pick<ImagingExam, 'start' | 'arrivedAt' | 'cancelled'>, now: string) => !e.cancelled && !e.arrivedAt && now > addMinutes(e.start, EXAM_NOSHOW_MIN)
+
+/** 檢查前準備還沒完成的項目（沒確認、或確認「沒完成」的） */
+export const examPrepMissing = (defs: { id: string; label: string }[] | undefined, prep: ImagingExam['prep']) => (defs ?? []).filter((d) => !prep?.[d.id]?.ok)
+
+/**
+ * 顯影劑與腎功能（CrCl，Cockcroft-Gault）：< 30 不能打（請開立醫師改無顯影檢查或取消）；30–45 可以打但要提醒水化；算不出要提醒先確認腎功能
+ */
+export function contrastCheck(crcl: number | null): { level: 'ok' | 'hydrate' | 'unknown' | 'block'; text: string } {
+  if (crcl === null) return { level: 'unknown', text: 'CrCl 算不出（沒有 7 天內的肌酸酐或 30 天內的體重）：請先確認腎功能再打顯影劑' }
+  if (crcl < 30) return { level: 'block', text: `CrCl ${crcl} ml/min（< 30）：不能打顯影劑，請開立醫師改無顯影的檢查或取消` }
+  if (crcl < 45) return { level: 'hydrate', text: `CrCl ${crcl} ml/min（30–45）：可以打，檢查前後請水化（補充水分）` }
+  return { level: 'ok', text: `CrCl ${crcl} ml/min：腎功能可以打顯影劑` }
+}

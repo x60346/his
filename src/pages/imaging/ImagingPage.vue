@@ -81,7 +81,8 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
                 <span class="block text-sm text-slate-700">{{ w.procName }}</span>
                 <span class="block text-xs text-slate-500">{{ w.where }}・{{ w.doctorName }}・{{ when(w.orderedAt) }} 開立</span>
               </span>
-              <UBadge v-if="w.awaitingExam" tone="gray">待檢查</UBadge>
+              <UBadge v-if="w.exam?.noShow" tone="red">病人未到</UBadge>
+              <UBadge v-else-if="w.awaitingExam" tone="gray">待檢查</UBadge>
               <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
           </li>

@@ -5465,6 +5465,7 @@ try {
     await as('clerk01')
     const ex = await api.examApi.scheduleExam(`O:${io.id}`, `${addDaysT(1)} 09:00`)
     await api.examApi.arriveExam(ex.id)
+    await api.examApi.confirmExamPrep(ex.id, 'npo6', true)
     await api.examApi.completeExam(ex.id)
     ok(db().ipdOrders.find((o) => o.id === io.id).status === 'done', '檢查室完成：住院醫囑一起完成')
     await as('dr10')
@@ -11250,6 +11251,9 @@ try {
     await E.arriveExam(e4.id)
     msg = await errOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 10:00`))
     ok(msg.includes('報到'), '報到後不能改時間')
+    msg = await errOf(() => E.completeExam(e4.id))
+    ok(msg.includes('禁食'), '腹部超音波：禁食還沒確認不能完成')
+    await E.confirmExamPrep(e4.id, 'npo6', true)
     await E.completeExam(e4.id)
     ok(db().ipdOrders.find((o) => o.id === 'IO-EX-4').status === 'done', '完成：住院醫囑一起完成')
     await as('dr10')
@@ -11454,6 +11458,142 @@ try {
     ok(b.today.total === 7 && b.today.auto === 4, `今天比例：${b.today.auto}/${b.today.total}（${b.today.pct}%）`)
     const rc = await A.releaseAnalyzer(ld2.results[0].id)
     ok(db().labReports.find((r) => r.id === rc.reportId).values[0].critical, '審核發出：危急值照樣標，醫師要確認')
+  }
+
+  // 影像取消、未到與檢查前準備：未到判定、準備項目、顯影劑腎功能分級、種子、取消回待排程、未到改期與醫師首頁、逐項確認、顯影劑擋與提醒、權限
+  console.log('\n[影像取消未到與檢查前準備]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const n0 = '2026-11-18 10:00'
+    ok(!api.examNoShow({ start: '2026-11-18 09:30' }, n0) && api.examNoShow({ start: '2026-11-18 09:29' }, n0) && !api.examNoShow({ start: '2026-11-18 09:00', arrivedAt: 'x' }, n0) && !api.examNoShow({ start: '2026-11-18 09:00', cancelled: {} }, n0), '未到：過了排程 30 分鐘還沒報到（剛好 30 分不算；報到、取消的不算）')
+    const defs = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }]
+    ok(api.examPrepMissing(defs, { a: { ok: true }, b: { ok: false } }).map((d) => d.id).join() === 'b' && api.examPrepMissing(undefined, undefined).length === 0, '準備項目：確認沒完成的、沒確認的都算還沒完成')
+    ok(api.contrastCheck(null).level === 'unknown' && api.contrastCheck(29).level === 'block' && api.contrastCheck(30).level === 'hydrate' && api.contrastCheck(44).level === 'hydrate' && api.contrastCheck(45).level === 'ok', '顯影劑：CrCl < 30 擋、30–44 水化、算不出提醒')
+    const im = (id) => db().procedures.find((p) => p.id === id).imaging
+    ok(im('P016').prep.map((p) => p.id).join() === 'npo6' && im('P061').contrast && im('P061').prep.length === 3 && im('P061').room === 'CT' && !im('P013').prep, '主檔：腹部超音波禁食 6 小時；含顯影劑腹部 CT 要禁食、同意書、腎功能；胸部 X 光不用準備')
+
+    // 種子
+    await as('clerk01')
+    let b = await E.examBoard(T)
+    const us = b.rooms.find((r) => r.room === 'US').exams.find((e) => e.orderId === 'IO-EX-5')
+    const ct = b.rooms.find((r) => r.room === 'CT').exams.find((e) => e.orderId === 'IO-EX-6')
+    ok(us?.stage === 'arrived' && us.prepItems[0].ok === false && us.prepItems[0].note.includes('早餐'), '種子：泌尿道感染腹部超音波已報到、未禁食（早上吃過早餐）')
+    ok(ct?.contrast?.level === 'hydrate' && ct.contrast.text.includes('31') && ct.prepItems.length === 3, `種子：敗血症含顯影劑腹部 CT——${ct?.contrast?.text}`)
+    const ns = db().imagingExams.find((e) => e.id === 'EX-SEED-NS')
+    const nsView = (await E.examBoard(ns.start.slice(0, 10))).rooms.find((r) => r.room === 'XR').exams.find((e) => e.id === ns.id)
+    ok(nsView?.noShow && nsView.stageLabel === '未到', '種子：門診腰椎 X 光排在 1 小時前、人沒來 → 未到')
+    const nsEnc = db().encounters.find((e) => e.id === ns.key.split(':')[1])
+    const nsName = db().patients.find((p) => p.id === ns.patientId).name
+    ok(db().charges.some((c) => c.visitId === nsEnc.visitId && !c.voided && c.lines.some((l) => l.name.includes('腰椎'))), '種子：加開的 X 光有算進收據')
+    await as(userOf(nsEnc.doctorId))
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.examNoShow >= 1 && dash.examNoShowText.includes(nsName), `開立醫師首頁：影像檢查病人未到（${dash.examNoShowText}）`)
+    const myNs = await E.myNoShowExams()
+    ok(myNs.some((e) => e.id === ns.id), '開立醫師查得到自己的未到清單')
+    await as('dr10')
+    const iw = (await api.imagingApi.listImagingWork()).find((w) => w.key === ns.key)
+    ok(iw?.exam?.noShow, '判讀清單：標「病人未到」')
+
+    // 準備沒完成不能做；取消回待排程
+    await as('clerk01')
+    let msg = await errOf(() => E.completeExam(us.id))
+    ok(msg.includes('禁食'), `未禁食不能完成 → 「${msg}」`)
+    let f = await fieldsOf(() => E.confirmExamPrep(us.id, 'npo6', false, ' '))
+    ok(f.note, '準備沒完成要寫原因')
+    msg = await errOf(() => E.confirmExamPrep(us.id, 'consent', true))
+    ok(msg.includes('沒有這個準備項目'), '不是這項檢查的準備項目擋')
+    f = await fieldsOf(() => E.cancelExam(us.id, ''))
+    ok(f.reason, '取消要寫原因')
+    await as('nurse01')
+    msg = await errOf(() => E.cancelExam(us.id, '改期'))
+    ok(msg.includes('權限'), '護理師不能取消')
+    const ae = await E.admissionExams(us.admissionId)
+    ok(ae.exams.some((e) => e.id === us.id && e.prepItems[0].ok === false), '護理站看得到檢查前準備沒完成')
+    await as('clerk01')
+    const cx = await E.cancelExam(us.id, '病人未禁食，改期')
+    b = await E.examBoard(T)
+    const back = b.toSchedule.find((w) => w.key === 'O:IO-EX-5')
+    ok(cx.cancelled && back?.cancelledReason === '病人未禁食，改期' && back.prep[0].includes('禁食') && !b.rooms.find((r) => r.room === 'US').exams.some((e) => e.id === us.id) && db().auditLogs[0].action === '影像檢查取消', '取消：回到待排程（附上次取消原因、要禁食的提醒）、檢查室清單不再列、寫稽核')
+    msg = await errOf(() => E.arriveExam(us.id))
+    ok(msg.includes('取消'), '取消的不能報到')
+    msg = await errOf(() => E.cancelExam(us.id, 'x'))
+    ok(msg.includes('已經取消'), '不能重複取消')
+    const tmr = addDaysT(1)
+    const re = await E.scheduleExam('O:IO-EX-5', `${tmr} 08:00`)
+    ok(re.id !== us.id && !re.prep && re.stage === 'scheduled', '重新排程是新的一筆（準備要重新確認）')
+    const done1 = db().imagingExams.find((e) => e.id === 'EX-SEED-1')
+    msg = await errOf(() => E.cancelExam(done1.id, 'x'))
+    ok(msg.includes('做完'), '做完的不能取消')
+
+    // 未到改期
+    const nsTmr = await E.scheduleExam(ns.key, `${tmr} 10:00`)
+    ok(!nsTmr.noShow && db().auditLogs[0].detail.includes('未到改期'), '未到改時間：不再是未到、稽核標未到改期')
+    await as(userOf(nsEnc.doctorId))
+    dash = await api.dashboardApi.getDashboard()
+    ok(!(dash.examNoShowText ?? '').includes(nsName), '改期後開立醫師首頁不再列')
+
+    // 顯影劑：水化提醒 → 逐項確認 → 完成
+    await as('clerk01')
+    msg = await errOf(() => E.confirmExamPrep(ct.id, 'renal', true))
+    ok(msg.includes('報到後'), '報到後才確認準備')
+    await E.arriveExam(ct.id)
+    const r1 = await E.confirmExamPrep(ct.id, 'renal', true)
+    ok(r1.prepItems.find((p) => p.id === 'renal').note.includes('CrCl 31') && r1.prepItems.find((p) => p.id === 'renal').note.includes('水化'), '腎功能確認：記下 CrCl 與「已提醒水化」')
+    msg = await errOf(() => E.completeExam(ct.id))
+    ok(msg.includes('同意書') && msg.includes('禁食'), `同意書、禁食還沒確認不能完成 → 「${msg}」`)
+    await E.confirmExamPrep(ct.id, 'consent', true)
+    await E.confirmExamPrep(ct.id, 'npo6', true)
+    ok((await E.completeExam(ct.id)).stage === 'done' && db().ipdOrders.find((o) => o.id === 'IO-EX-6').status === 'done', '準備都完成 → 可以做（醫囑一起完成）')
+
+    // 顯影劑：CrCl < 30 擋
+    const sep = db().admissions.find((a) => a.id === ct.admissionId)
+    await as(userOf(sep.doctorId))
+    const o2 = await api.ipdApi.addOrder({ admissionId: sep.id, type: 'stat', category: 'procedure', procId: 'P061', content: '' })
+    await as('clerk01')
+    const e2 = await E.scheduleExam(`O:${o2.id}`, `${tmr} 09:00`)
+    await E.arriveExam(e2.id)
+    for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(e2.id, k, true)
+    const pt = db().patients.find((p) => p.id === sep.patientId)
+    db().labReports.push({ id: 'LR-T-CRE', no: 'LT', patientId: pt.id, procId: 'P008', admissionId: sep.id, doctorId: sep.doctorId, orderedAt: nowStr(), values: [{ code: 'CRE', name: '肌酸酐', unit: 'mg/dL', value: '3.0', flag: 'H', ref: '' }], reportedBy: 'U601', reportedAt: nowStr() })
+    msg = await errOf(() => E.completeExam(e2.id))
+    ok(msg.includes('不能打顯影劑'), `確認後肌酸酐升高（CrCl < 30）：完成時再擋 → 「${msg}」`)
+    await E.cancelExam(e2.id, '醫師改檢查')
+    const o3w = (await E.examBoard(T)).toSchedule.find((w) => w.key === `O:${o2.id}`)
+    ok(o3w?.contrast?.level === 'block', '待排程就看得到不能打顯影劑')
+    const e3 = await E.scheduleExam(`O:${o2.id}`, `${tmr} 09:30`)
+    await E.arriveExam(e3.id)
+    msg = await errOf(() => E.confirmExamPrep(e3.id, 'renal', true))
+    ok(msg.includes('不能打顯影劑'), 'CrCl < 30：腎功能那一項不能確認')
+    // 算不出（腦梗塞：沒有體重）→ 提醒另行確認
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(st.doctorId))
+    const o4 = await api.ipdApi.addOrder({ admissionId: st.id, type: 'stat', category: 'procedure', procId: 'P061', content: '' })
+    await as('clerk01')
+    const e4 = await E.scheduleExam(`O:${o4.id}`, `${tmr} 10:30`)
+    ok(e4.contrast?.level === 'unknown', '算不出 CrCl → 提醒先確認腎功能')
+    await E.arriveExam(e4.id)
+    const r4 = await E.confirmExamPrep(e4.id, 'renal', true)
+    ok(r4.prepItems.find((p) => p.id === 'renal').note.includes('另行確認'), '算不出時確認：記「腎功能已另行確認」')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

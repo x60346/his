@@ -514,6 +514,8 @@ const procedureBase: Procedure[] = [
   { id: 'P059', code: '13007C', name: '細菌培養（傷口、尿液）', category: '檢驗', points: 200, selfPrice: 350, active: true },
   // 治療藥物監測：Vancomycin 谷濃度（點數為展示用近似值）
   { id: 'P060', code: '12083C', name: 'Vancomycin 谷濃度', category: '檢驗', points: 400, selfPrice: 600, active: true },
+  // 含顯影劑的電腦斷層：檢查前要簽同意書、確認腎功能（點數為展示用近似值）
+  { id: 'P061', code: '33072B', name: '電腦斷層（腹部，含顯影劑）', category: '影像', points: 5200, selfPrice: 8500, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]
@@ -525,13 +527,18 @@ const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
   P015: { reader: 'radiology', normal: { findings: '腰椎排列正常，椎體高度維持，椎間盤間隙無明顯狹窄。', impression: '腰椎 X 光無明顯異常。' } },
   P016: { reader: 'radiology', normal: { findings: '肝臟大小正常、實質回音均勻，無局部病灶。膽囊無結石，膽管無擴張。胰臟、脾臟、兩側腎臟無明顯異常。', impression: '腹部超音波無明顯異常。' } },
   P017: { reader: 'orderer', normal: { findings: '竇性心律，心跳 72 次／分；PR、QRS、QT 間期正常，無 ST-T 變化。', impression: '正常心電圖。' } },
+  P061: { reader: 'radiology', normal: { findings: '肝、膽、胰、脾、兩側腎臟顯影正常，無局部病灶；腸道無擴張，腹腔無積液或游離氣體，無腫大淋巴結。', impression: '腹部電腦斷層（含顯影劑）無明顯異常。' } },
   P018: { reader: 'radiology', normal: { findings: '腦實質無出血、梗塞或腫塊，腦室大小正常，中線無偏移。', impression: '頭部電腦斷層無明顯異常。' } },
 }
 
 /** 檢驗的檢體容器（沒列的檢驗用紅頭生化管） */
 const tubeOf: Record<string, TubeKind> = { P003: 'purple', P005: 'purple', P010: 'urine', P012: 'swab', P052: 'gas', P057: 'sputum', P058: 'swab', P059: 'culture' }
-/** 影像在哪個檢查室做、大約幾分鐘（排程用） */
-const examOf: Record<string, { room: ExamRoom; minutes: number }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20 }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 } }
+/** 檢查前準備（報到時逐項確認） */
+const NPO6 = { id: 'npo6', label: '禁食 6 小時（最後進食時間已確認）' }
+const CONSENT = { id: 'consent', label: '顯影劑同意書已簽' }
+const RENAL = { id: 'renal', label: '腎功能（CrCl）已確認' }
+/** 影像在哪個檢查室做、大約幾分鐘（排程用）、檢查前準備、是否打顯影劑 */
+const examOf: Record<string, { room: ExamRoom; minutes: number; prep?: { id: string; label: string }[]; contrast?: boolean }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20, prep: [NPO6] }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 }, P061: { room: 'CT', minutes: 20, prep: [NPO6, CONSENT, RENAL], contrast: true } }
 export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red' } : {}), ...(imagingOf[p.id] ? { imaging: { ...imagingOf[p.id], ...examOf[p.id] } } : {}) }))
 
 export const preventItems: PreventItem[] = [
