@@ -6596,7 +6596,10 @@ try {
     ok(src.sources.some((s) => s.kind === 'opd') && src.sources.some((s) => s.kind === 'lab') && src.fee.base === 100 && src.fee.perPage === 10, `可申請 ${src.sources.length} 項（門診、檢驗…），基本費 100、每頁 10`)
     ok(src.sources.every((s, i, a) => i === 0 || a[i - 1].date >= s.date), '新的在前')
     ok(!src.sources.some((s) => s.kind === 'opd' && db().encounters.find((x) => x.id === s.refId).status !== 'completed'), '沒完成的門診不能申請')
-    const pick = src.sources.slice(0, 3).map((s) => ({ kind: s.kind, refId: s.refId }))
+    // 一定挑到一份門診、一份檢驗（列印頁兩種版面都要測到），再補一項
+    const o1 = src.sources.find((s) => s.kind === 'opd')
+    const l1 = src.sources.find((s) => s.kind === 'lab')
+    const pick = [o1, l1, src.sources.find((s) => s !== o1 && s !== l1)].map((s) => ({ kind: s.kind, refId: s.refId }))
     const self = { kind: 'self', name: pt.name, idNo: pt.idNo }
 
     let f = await fieldsOf(() => C.createRecordCopy({ patientId: pt.id, applicant: { kind: 'self', name: '別人', idNo: 'Z199999999' }, purpose: '', items: [], payMethod: 'cash', received: 1000 }))
@@ -6630,9 +6633,9 @@ try {
     const pr = await C.printRecordCopy(r1.id)
     ok(pr.pages.length === 3 && pr.times === 1 && pr.pages.every((p) => p.title && p.meta) && pr.applicantText.startsWith('本人'), `列印 ${pr.pages.length} 頁：${pr.pages.map((p) => p.title).join('、')}`)
     const opdPage = pr.pages.find((p) => p.kind === 'opd')
-    if (opdPage) ok(opdPage.sections.some((s) => s.heading === '診斷') && !/\b(sbp|dbp|temp)\b/.test(JSON.stringify(opdPage)), '門診病歷頁：診斷、SOAP，生命徵象用中文')
+    ok(opdPage && opdPage.sections.some((s) => s.heading === '診斷') && !/\b(sbp|dbp|temp)\b/.test(JSON.stringify(opdPage)), '門診病歷頁：診斷、SOAP，生命徵象用中文')
     const labPage = pr.pages.find((p) => p.kind === 'lab')
-    if (labPage) ok(labPage.table.rows.length > 0, '檢驗報告頁：結果表')
+    ok(labPage && labPage.table.rows.length > 0, '檢驗報告頁：結果表')
     const pr2 = await C.printRecordCopy(r1.id)
     ok(pr2.times === 2 && db().auditLogs.some((l) => l.action === '列印病歷影本' && l.detail.includes('補印')), '補印記第 2 次、寫稽核')
 
@@ -10152,6 +10155,93 @@ try {
     await I.stopOrder(vanco.id)
     const v2 = await I.addOrder(await withRxOk({ admissionId: cell.id, type: 'long', category: 'medication', drugId: 'M042', content: '', dose: 1, freq: 'Q12H', route: 'IV', abx: { reason: 'culture', site: '皮膚軟組織', organism: 'MRSA' } }))
     ok(v2.abx.courseStart === vanco.abx.courseStart && v2.abx.status === 'pending' && v2.abxInfo.day === 8, `管制性抗生素 48 小時內再開：療程接續（${v2.abxInfo.text}）、重新送審`)
+  }
+
+  // 抗生素用量與抗藥性指標：一劑幾個 DDD、DDD／DOT 每千住院人日（依給藥紀錄）、第一株規則與藥敏統計（株數不足）、
+  // 建議接受率、種子、經營月報的抗生素 DDD、主檔 DDD 欄位
+  console.log('\n[抗生素用量與抗藥性指標]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const drug = (id) => db().drugs.find((d) => d.id === id)
+    // 純函式
+    ok(api.dddOfDose(drug('M036'), 1) === 0.5 && Math.abs(api.dddOfDose(drug('M004'), 1) - 1 / 3) < 1e-9 && Math.abs(api.dddOfDose(drug('M044'), 1) - 4 / 14) < 1e-9 && api.dddOfDose(drug('M001'), 1) === 0, '一劑幾個 DDD：Ceftriaxone 1g＝0.5、Augmentin 一顆（Amoxicillin 0.5 g）＝1/3、Pip/Tazo 一支（4 g）＝4/14；沒設 DDD 的 0')
+    ok(api.perThousand(5, 200) === 25 && api.perThousand(1, 3) === 333.3 && api.perThousand(3, 0) === null, '每千住院人日：一位小數、分母 0 回 null')
+    const u = api.usageOf([
+      { admissionId: 'A', drugId: 'M036', at: '2026-11-01 09:00', ddd: 0.5 },
+      { admissionId: 'A', drugId: 'M036', at: '2026-11-01 21:00', ddd: 0.5 },
+      { admissionId: 'A', drugId: 'M042', at: '2026-11-01 21:00', ddd: 0.5 },
+      { admissionId: 'B', drugId: 'M036', at: '2026-11-01 09:00', ddd: 0.5 },
+      { admissionId: 'A', drugId: 'M036', at: '2026-11-02 09:00', ddd: 0.5 },
+    ], 10)
+    ok(u.ddd === 2.5 && u.dot === 4 && u.dddRate === 250 && u.dotRate === 400, `DDD 加總、DOT 同一天同一支算 1 天（不同病人、不同藥、不同天分開）：DDD ${u.ddd}、DOT ${u.dot}`)
+    const fi = api.firstIsolates([
+      { patientId: 'P1', reportedAt: '2026-05-01 10:00', isolates: [{ organism: 'ECO', ast: { AMP: 'R' } }] },
+      { patientId: 'P1', reportedAt: '2026-03-01 10:00', isolates: [{ organism: 'ECO', ast: { AMP: 'S' } }, { organism: 'KPN', ast: {} }] },
+      { patientId: 'P2', reportedAt: '2026-04-01 10:00', isolates: [{ organism: 'ECO', ast: { AMP: 'R' } }] },
+    ])
+    ok(fi.length === 3 && fi.find((x) => x.patientId === 'P1' && x.organism === 'ECO').ast.AMP === 'S', '每位病人每種菌只算第一株（最早那份；同病人不同菌各算）')
+    const ag = api.antibiogram([{ organism: 'ECO', ast: { AMP: 'S', MEM: 'S' } }, { organism: 'ECO', ast: { AMP: 'I', MEM: 'S' } }, { organism: 'ECO', ast: { AMP: 'R' } }, { organism: 'CAN', ast: {} }])
+    const ec = ag.find((r) => r.organism === 'ECO')
+    ok(ag.length === 1 && ec.isolates === 3 && ec.insufficient && ec.drugs.find((d) => d.key === 'AMP').pct === 33.3 && ec.drugs.find((d) => d.key === 'MEM').tested === 2 && ec.drugs.find((d) => d.key === 'MEM').pct === 100 && ec.drugs.find((d) => d.key === 'CRO').pct === null, '藥敏統計：中等不算敏感、沒測的不算分母、少於 30 株標株數不足、念珠菌不列')
+    const st = api.adviceStats([{ kind: 'ivpo', status: 'accepted' }, { kind: 'ivpo', status: 'declined' }, { kind: 'ivpo', status: 'sent' }, { kind: 'ivpo', status: 'dismissed' }, { kind: 'duration', status: 'accepted' }])
+    const iv = st.find((x) => x.kind === 'ivpo')
+    const tot = st.at(-1)
+    ok(iv.sent === 3 && iv.rate === 50 && iv.pending === 1 && iv.dismissed === 1 && tot.kind === 'total' && tot.sent === 4 && tot.rate === 66.7 && st.find((x) => x.kind === 'overlap').rate === null, '接受率＝接受÷（接受＋不接受）：待回覆不算分母、不用介入不算建議、沒有回覆的「—」')
+
+    // 種子與服務
+    await as('dr11')
+    let m = await api.abxMetricsApi.abxMetrics()
+    const inRange = (at) => at && at.slice(0, 10) >= m.from && at.slice(0, 10) <= m.to
+    const abxIds = new Set(db().ipdOrders.filter((o) => ['M003', 'M004', 'M005', 'M006', 'M036', 'M042', 'M043', 'M044'].includes(o.drugId)).map((o) => o.id))
+    const given = db().mar.filter((x) => abxIds.has(x.orderId) && x.status === 'given' && inRange(x.executedAt))
+    const ddd = given.reduce((n, x) => { const o = db().ipdOrders.find((y) => y.id === x.orderId); return n + (o.dose * drug(o.drugId).dddUnitG) / drug(o.drugId).ddd }, 0)
+    ok(Math.abs(m.total.ddd - ddd) < 0.01 && m.total.ddd > 0 && m.total.dddRate === api.perThousand(m.total.ddd, m.total.patientDays), `全院 DDD ${m.total.ddd}（${m.total.dddRate}／千住院人日）：和逐筆給藥紀錄重算一樣`)
+    ok(Math.abs(m.byDrug.reduce((n, d) => n + d.ddd, 0) - m.total.ddd) < 0.01 && m.byWard.reduce((n, w) => n + w.ddd, 0) <= m.total.ddd + 0.01 && m.byWard.reduce((n, w) => n + w.patientDays, 0) <= m.total.patientDays, '依藥品加總＝全院；依病房不超過全院（出院時沒有床的算在全院）')
+    ok(m.byDrug.find((d) => d.drugId === 'M042')?.restricted && !m.byDrug.find((d) => d.drugId === 'M036').restricted && m.byDrug[0].ddd >= m.byDrug.at(-1).ddd, '依藥品：管制性抗生素標出、DDD 多的在前')
+    const pending = db().mar.find((x) => abxIds.has(x.orderId) && x.status === 'pending' && db().ipdOrders.find((o) => o.id === x.orderId).drugId === 'M036')
+    Object.assign(pending, { status: 'held', executedAt: nowStr() })
+    ok((await api.abxMetricsApi.abxMetrics()).total.ddd === m.total.ddd, '暫停（沒給）的不算')
+    Object.assign(pending, { status: 'given' })
+    const m2 = await api.abxMetricsApi.abxMetrics()
+    ok(Math.abs(m2.total.ddd - m.total.ddd - 0.5) < 0.001, '多給一劑 Ceftriaxone 1g：DDD 多 0.5')
+    const ecoli = m.antibiogram.rows.find((r) => r.organism === 'ECO')
+    ok(ecoli?.isolates >= 30 && !ecoli.insufficient && ecoli.drugs.find((d) => d.key === 'MEM').pct === 100 && ecoli.drugs.find((d) => d.key === 'AMP').pct < 50 && m.antibiogram.rows[0].organism === 'ECO', `種子：過去一年大腸桿菌 ${ecoli?.isolates} 株（腦梗塞那株同一位病人只算第一株）、Ampicillin 敏感率 ${ecoli?.drugs.find((d) => d.key === 'AMP').pct}%`)
+    ok(m.antibiogram.rows.filter((r) => r.organism !== 'ECO').every((r) => r.insufficient) && m.antibiogram.rows.some((r) => r.organism === 'MRSA'), '其他菌（含住院中的 MRSA）少於 30 株：株數不足')
+    const adv = m.advice
+    ok(adv.find((x) => x.kind === 'ivpo').accepted === 1 && adv.find((x) => x.kind === 'ineffective').pending === 1 && adv.at(-1).rate === 100, '種子：已出院肺炎「改口服」已接受、蜂窩性組織炎「無效」待回覆，接受率 100%')
+    await as(db().users.find((u) => u.doctorId === db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('L03')).doctorId).username)
+    await api.abxStewardApi.declineAbxAdvice('ABXI-SEED-1', '已會診討論，維持原用藥')
+    await as('dr11')
+    ok((await api.abxMetricsApi.abxMetrics()).advice.at(-1).rate === 50, '主治不接受一筆：接受率 50%')
+    await as('nurse01')
+    let msg = ''
+    try { await api.abxMetricsApi.abxMetrics() } catch (e) { msg = e.message }
+    ok(msg !== '', `護理師不能看抗生素指標 → 「${msg}」`)
+
+    // 經營月報：全院抗生素 DDD
+    await as('admin')
+    const rep = await api.managementApi.managementReport(T.slice(0, 7))
+    const mFrom = `${T.slice(0, 7)}-01`
+    const mDdd = db().mar.filter((x) => abxIds.has(x.orderId) && x.status === 'given' && x.executedAt && x.executedAt.slice(0, 10) >= mFrom && x.executedAt.slice(0, 10) <= T).reduce((n, x) => { const o = db().ipdOrders.find((y) => y.id === x.orderId); return n + (o.dose * drug(o.drugId).dddUnitG) / drug(o.drugId).ddd }, 0)
+    ok(api.MGMT_KPIS.some((k) => k.key === 'abxDdd' && k.group === '住院') && rep.current.abxDdd === api.perThousand(mDdd, rep.current.patientDays) && rep.current.abxDdd > 0 && api.mgmtValueText(12.34, 'DDD/千人日') === '12.3', `經營月報「抗生素用量」（DDD／千住院人日）本月 ${rep.current.abxDdd}（分母用月報的住院人日）`)
+    // 主檔
+    const base = { ...drug('M036') }
+    let f = await fieldsOf(() => api.masterApi.saveDrug({ ...base, dddUnitG: undefined }))
+    ok(f.dddUnitG, 'DDD 和每單位克數要一起填')
+    f = await fieldsOf(() => api.masterApi.saveDrug({ ...base, ddd: -1 }))
+    ok(f.ddd, 'DDD 要大於 0')
+    const saved = await api.masterApi.saveDrug({ ...base, ddd: 2, dddUnitG: 1 })
+    const cleared = await api.masterApi.saveDrug({ ...saved, ddd: undefined, dddUnitG: undefined })
+    ok(saved.ddd === 2 && saved.dddUnitG === 1 && cleared.ddd === undefined, '主檔存 DDD；兩個都清空＝不列入用量統計')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

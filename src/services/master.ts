@@ -174,6 +174,12 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
     // 管制藥品級別：空白＝非管制藥；只有第一～四級
     const controlled = Number(input.controlled ?? 0) || undefined
     if (controlled !== undefined && ![1, 2, 3, 4].includes(controlled)) v.add('controlled', '管制藥品級別只有第一～四級')
+    // 抗生素 DDD：兩個一起填（空白＝不列入用量統計），都要大於 0
+    const ddd = Number(input.ddd) || undefined
+    const dddUnitG = Number(input.dddUnitG) || undefined
+    if (input.ddd !== undefined && input.ddd !== null && String(input.ddd) !== '' && !(Number(input.ddd) > 0)) v.add('ddd', 'WHO DDD 要大於 0（克）')
+    if (input.dddUnitG !== undefined && input.dddUnitG !== null && String(input.dddUnitG) !== '' && !(Number(input.dddUnitG) > 0)) v.add('dddUnitG', '每單位克數要大於 0')
+    if (!!ddd !== !!dddUnitG) v.add(ddd ? 'dddUnitG' : 'ddd', 'WHO DDD 與每單位相當幾克要一起填（才算得出 DDD）')
     v.done()
     // 規則：欄位都正確後才檢查
     if (nhiCode && db.drugs.some((d) => d.nhiCode === nhiCode && d.id !== input.id)) failField('nhiCode', '健保代碼重複', 'CONFLICT')
@@ -202,7 +208,7 @@ export function saveDrug(input: DrugInput): Promise<Drug> {
       })(),
       safetyStock: input.safetyStock,
       defaultDose: input.defaultDose, defaultFreq: input.defaultFreq, defaultRoute: input.defaultRoute,
-      highAlert: !!input.highAlert, ...(controlled ? { controlled: controlled as Drug['controlled'] } : {}), ...(input.restrictedAbx ? { restrictedAbx: true } : {}), doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
+      highAlert: !!input.highAlert, ...(controlled ? { controlled: controlled as Drug['controlled'] } : {}), ...(input.restrictedAbx ? { restrictedAbx: true } : {}), ...(ddd && dddUnitG ? { ddd, dddUnitG } : {}), doseUnit: input.doseUnit?.trim() || undefined, active: input.active,
       indication: input.indication.trim(), warning: input.warning.trim(),
       timing: input.category === '口服' ? input.timing : 'ANY',
       // 庫存不是主檔欄位，只能透過進貨、發藥、盤點的異動改變。

@@ -773,6 +773,12 @@ export interface Drug {
   controlled?: 1 | 2 | 3 | 4
   /** 管制性抗生素：住院開立要填使用理由，感染科 48 小時內審核（先用後審） */
   restrictedAbx?: boolean
+  /**
+   * 抗生素用量統計（WHO DDD）：ddd＝WHO 每日定義劑量（克）；dddUnitG＝每一個給藥單位相當幾克（以 DDD 計算的成分，
+   * 例：Augmentin 625mg 以 Amoxicillin 500 mg 計＝0.5）。兩個都有才算 DDD
+   */
+  ddd?: number
+  dddUnitG?: number
   /** 病人自控止痛（PCA）用的藥袋：一袋多少 mg、多少 ml（只能在住院醫囑「PCA」開，不能當一般醫囑或處方） */
   pca?: { totalMg: number; volumeMl: number }
   /** 急救車用藥（腎上腺素、Amiodarone）：只能在急救紀錄給（自動開臨時醫囑、扣病房常備或住院藥局） */

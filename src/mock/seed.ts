@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention,
+  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2699,6 +2699,58 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         status: 'sent', by: users.find((u) => u.doctorId === 'DR11')!.id, at: addMinutes(nowStr, -120), note: 'MRSA 對 Ceftriaxone 無效，已有 Vancomycin：建議停用 Ceftriaxone',
       })
     }
+  }
+
+  // 已出院的肺炎（最近 30 天內出院、住 4 天以上的那一位）：Ceftriaxone 靜脈注射滿 72 小時，感染科建議改口服，
+  // 主治隔天早上停 Ceftriaxone、改 Augmentin 口服＝接受（抗生素指標的接受率、用量有歷史資料）
+  {
+    const dr11 = users.find((u) => u.doctorId === 'DR11')!.id
+    const pn = admissions.find((a) => a.status === 'discharged' && a.diagnosis.startsWith('J18') && a.dischargedAt! >= `${addDays(T, -28)} 00:00` && a.dischargedAt! > addMinutes(a.admittedAt!, 4 * 24 * 60))
+    if (pn) {
+      const start = addMinutes(pn.admittedAt!, 60)
+      const sentAt = addMinutes(start, 73 * 60)
+      const stopAt = addMinutes(sentAt, 17 * 60) < addMinutes(pn.dischargedAt!, -120) ? addMinutes(sentAt, 17 * 60) : addMinutes(pn.dischargedAt!, -120)
+      const doc = doctorUser(pn.doctorId)
+      const give = (o: IpdOrder, from: string, to: string) => {
+        const fq = codes.frequencies.find((x) => x.code === o.freq)!
+        for (let day = from.slice(0, 10); day <= to.slice(0, 10); day = addDays(day, 1)) {
+          for (const tm of marTimes(fq.code, fq.times, o.timing, o.route)) {
+            const at = `${day} ${tm}`
+            if (at >= from && at < to) mar.push({ id: id('MAR'), orderId: o.id, admissionId: pn.id, scheduledAt: at, status: 'given', executedAt: at, nurseId: 'U201', scan: { mode: 'scanned' } })
+          }
+        }
+      }
+      const cro: IpdOrder = { id: 'IO-HX-ABX-1', admissionId: pn.id, type: 'long', category: 'medication', drugId: 'M036', content: drugMap.get('M036')!.name, dose: 1, freq: 'Q12H', route: 'IV', startAt: start, stopAt, status: 'stopped', doctorId: pn.doctorId, createdAt: start, ackAt: addMinutes(start, 10), ackBy: 'U201', stopAckAt: addMinutes(stopAt, 10), stopAckBy: 'U201' }
+      const augD = drugMap.get('M004')!
+      const augAt = addMinutes(stopAt, 30)
+      const aug: IpdOrder = { id: 'IO-HX-ABX-2', admissionId: pn.id, type: 'long', category: 'medication', drugId: 'M004', content: augD.name, dose: 1, freq: 'BID', route: 'PO', timing: effectiveTiming(augD.timing, undefined), startAt: augAt, stopAt: pn.dischargedAt, status: 'stopped', doctorId: pn.doctorId, createdAt: augAt, ackAt: addMinutes(augAt, 10), ackBy: 'U201', stopAckAt: pn.dischargedAt, stopAckBy: 'U201' }
+      ipdOrders.push(cro, aug)
+      give(cro, start, stopAt)
+      give(aug, augAt, pn.dischargedAt!)
+      abxInterventions.push({
+        id: 'ABXI-SEED-HX1', admissionId: pn.id, orderId: cro.id, drugId: 'M036', kind: 'ivpo', finding: '靜脈注射已 3 天、可以進食：評估改口服 Amoxicillin/Clavulanate、Cephalexin',
+        status: 'accepted', by: dr11, at: sentAt, note: '退燒 48 小時、可進食：建議改 Augmentin 625mg BID 口服', reply: { by: doc, at: stopAt, text: '停止醫囑' },
+      })
+    }
+  }
+
+  // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
+  // 克雷伯氏菌 8 株、金黃色葡萄球菌（MSSA）6 株、綠膿桿菌 3 株（株數不足）。都在 40 天以前，不影響住院中病人的培養；沒有多重抗藥菌
+  {
+    const p059 = procMap.get('P059')!
+    let k = 0
+    const add = (pt: Patient, at: string, specimen: CultureSpecimen, iso: CultureIsolate) => {
+      k++
+      labReports.push({ id: `LR-HX-CULT-${k}`, no: `L${at.slice(0, 10).replace(/-/g, '')}${9800 + k}`, patientId: pt.id, procId: 'P059', doctorId: 'DR01', orderedAt: addMinutes(at, -26 * 60), values: buildLabValues(p059.labItems!, { CULT: '其他細菌' }, pt.gender).values, culture: { specimen, isolates: [iso] }, reportedBy: 'U601', reportedAt: at })
+    }
+    const R = (b: boolean): SirResult => (b ? 'R' : 'S')
+    patients.slice(0, 32).forEach((pt, i) => {
+      // 約：Ampicillin 抗藥 60%、Augmentin 30%、Cephalexin 40%、Ceftriaxone 20%（ESBL）、Pip/Tazo 6%、Meropenem 都敏感
+      add(pt, `${addDays(T, -(40 + i * 10))} 10:30`, 'urine', { organism: 'ECO', ast: { AMP: R(i % 5 < 3), AMC: R(i % 10 === 0 || i % 10 === 3 || i % 10 === 6), CEX: R(i % 4 === 0 || i % 5 === 0), CRO: R(i % 5 === 0), TZP: R(i % 16 === 7), MEM: 'S' } })
+    })
+    patients.slice(0, 8).forEach((pt, i) => add(pt, `${addDays(T, -(45 + i * 37))} 11:00`, i % 2 ? 'sputum' : 'urine', { organism: 'KPN', ast: { AMC: R(i % 4 === 1), CEX: R(i % 3 === 0), CRO: R(i === 3), TZP: 'S', MEM: 'S' } }))
+    patients.slice(10, 16).forEach((pt, i) => add(pt, `${addDays(T, -(50 + i * 50))} 09:40`, 'wound', { organism: 'SAU', ast: { OXA: 'S', CEX: 'S', AMC: 'S', VAN: 'S' } }))
+    patients.slice(20, 23).forEach((pt, i) => add(pt, `${addDays(T, -(60 + i * 90))} 14:20`, 'sputum', { organism: 'PAE', ast: { TZP: R(i === 1), MEM: 'S' } }))
   }
 
   return {

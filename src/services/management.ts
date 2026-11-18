@@ -8,6 +8,8 @@ import { buildDailyReport, type DailyReport } from './daily-report'
 import { monthRange, shiftMonth } from './management-rules'
 import { nameOf } from './views'
 import { isObsBed } from './bed-work'
+import { givenAbxDoses } from './abx-metrics-work'
+import { perThousand } from './abx-metrics-rules'
 
 const SEEN = new Set(['consulted', 'charged', 'dispensed'])
 
@@ -28,6 +30,8 @@ export interface MonthMetrics {
   occupancy: number | null
   /** 平均住院天數（這個月出院的人） */
   alos: number | null
+  /** 抗生素用量：這個月已給的抗生素 DDD ÷ 住院人日 × 1000（依給藥紀錄；和抗生素審核頁「指標」同一套算法，分母用本報表的住院人日） */
+  abxDdd: number | null
   /** 實收（和日結同一個數） */
   collected: number | null
   /** 應收（收據金額）依來源 */
@@ -60,7 +64,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
   for (let d = from; d <= to; d = addDays(d, 1)) patientDays += stayed(d)
   const hasData = visits.length > 0 || charges.length > 0 || patientDays > 0
   const empty: MonthMetrics = {
-    month, from, to, hasData, opdVisits: null, opdFirst: null, opdRevisit: null, admissions: null, discharges: null, patientDays: null, occupancy: null, alos: null,
+    month, from, to, hasData, opdVisits: null, opdFirst: null, opdRevisit: null, admissions: null, discharges: null, patientDays: null, occupancy: null, alos: null, abxDdd: null,
     collected: null, revenueOpd: null, revenueIpd: null, revenueOther: null, nhiPoints: null, drugShare: null, labReports: null, imagingReports: null, prescriptions: null, byFeeType: null,
   }
   if (!hasData) return empty
@@ -77,6 +81,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
     admissions: wardAdmissions().filter((a) => inR(a.admittedAt, from, to)).length, discharges: disc.length, patientDays,
     occupancy: beds ? round1((patientDays / (beds * days)) * 100) : null,
     alos: disc.length ? round1(disc.reduce((n, a) => n + Math.max(1, diffDays(a.admittedAt!.slice(0, 10), a.dischargedAt!.slice(0, 10))), 0) / disc.length) : null,
+    abxDdd: perThousand(givenAbxDoses(from, to).reduce((n, d) => n + d.ddd, 0), patientDays),
     collected: rep.collected,
     revenueIpd: sumDept((n) => n.endsWith('（住院）')),
     revenueOther: sumDept((n) => n === '病歷影本'),

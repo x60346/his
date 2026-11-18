@@ -3,7 +3,8 @@
 // 左邊「待審核」（逾時的在前）與「最近審核」（7 天內）；右邊看病人（診斷、過敏、隔離、生命徵象、檢驗、
 // 目前所有的抗生素與天數）和這次的理由、送審紀錄，核准（到療程第幾天）或不核准（要寫建議）。
 // 不是感染科的醫師也能看（知道在等誰審），但不能審。規則都在服務層 abx.ts。
-// 上方切換「管制性抗生素審核」與「每日審視」（全院在用的抗生素、系統標的建議，元件 AbxStewardPanel；首頁帶 ?tab=steward）
+// 上方切換「管制性抗生素審核」、「每日審視」（全院在用的抗生素、系統標的建議，AbxStewardPanel；首頁帶 ?tab=steward）
+// 與「指標」（用量 DDD／DOT、院內藥敏統計、建議接受率，AbxMetricsPanel；?tab=metrics）
 import { computed, reactive, ref, watch } from 'vue'
 import { Check, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UInput, UQueryState, UTabs, UTextarea } from '@/components/ui'
@@ -13,12 +14,14 @@ import { useAction, useQuery } from '@/composables/useService'
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { useRoute, useRouter } from 'vue-router'
 import AbxStewardPanel from './components/AbxStewardPanel.vue'
+import AbxMetricsPanel from './components/AbxMetricsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
-const mode = ref<'review' | 'steward'>(route.query.tab === 'steward' ? 'steward' : 'review')
-watch(mode, (m) => router.replace({ query: m === 'steward' ? { tab: 'steward' } : {} }))
-const modes = [{ key: 'review', label: '管制性抗生素審核' }, { key: 'steward', label: '每日審視' }]
+type Mode = 'review' | 'steward' | 'metrics'
+const mode = ref<Mode>(route.query.tab === 'steward' || route.query.tab === 'metrics' ? route.query.tab : 'review')
+watch(mode, (m) => router.replace({ query: m === 'review' ? {} : { tab: m } }))
+const modes = [{ key: 'review', label: '管制性抗生素審核' }, { key: 'steward', label: '每日審視' }, { key: 'metrics', label: '指標' }]
 
 const { data, loading } = useQuery(() => abxApi.listAbxReviews())
 const tab = ref<'pending' | 'decided'>('pending')
@@ -47,6 +50,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
   <div class="space-y-3">
     <UTabs v-model="mode" :tabs="modes" />
     <AbxStewardPanel v-if="mode === 'steward'" />
+    <AbxMetricsPanel v-else-if="mode === 'metrics'" />
     <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_1fr]">
       <UCard :padded="false" class="self-start">
         <div class="px-4 pt-1"><UTabs v-model="tab" :tabs="tabs" /></div>

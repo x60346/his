@@ -16,7 +16,7 @@ export function shiftMonth(month: string, n: number): string {
 }
 
 export type MgmtKey =
-  | 'opdVisits' | 'opdFirst' | 'opdRevisit' | 'admissions' | 'discharges' | 'patientDays' | 'occupancy' | 'alos'
+  | 'opdVisits' | 'opdFirst' | 'opdRevisit' | 'admissions' | 'discharges' | 'patientDays' | 'occupancy' | 'alos' | 'abxDdd'
   | 'collected' | 'revenueOpd' | 'revenueIpd' | 'revenueOther' | 'nhiPoints' | 'drugShare' | 'labReports' | 'imagingReports' | 'prescriptions'
 
 /** 指標：名稱、單位、分組（畫面與 Excel 摘要依這個順序） */
@@ -29,6 +29,7 @@ export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門
   { key: 'patientDays', label: '住院人日', unit: '人日', group: '住院' },
   { key: 'occupancy', label: '佔床率', unit: '%', group: '住院' },
   { key: 'alos', label: '平均住院天數', unit: '天', group: '住院' },
+  { key: 'abxDdd', label: '抗生素用量', unit: 'DDD/千人日', group: '住院' },
   { key: 'collected', label: '實收（日結）', unit: '元', group: '收入' },
   { key: 'revenueOpd', label: '門診收入（應收）', unit: '元', group: '收入' },
   { key: 'revenueIpd', label: '住院收入（應收）', unit: '元', group: '收入' },
@@ -44,7 +45,7 @@ export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門
 export function mgmtValueText(v: number | null | undefined, unit: string): string {
   if (v === null || v === undefined) return '—'
   if (unit === '%') return `${v.toFixed(1)}%`
-  if (unit === '天') return v.toFixed(1)
+  if (unit === '天' || unit === 'DDD/千人日') return v.toFixed(1)
   return v.toLocaleString()
 }
 

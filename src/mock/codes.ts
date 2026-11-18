@@ -197,10 +197,11 @@ const drug = (
 const drugBase = [
   drug('M001', 'AC00001100', 'Acetaminophen 500mg', 'Acetaminophen', '500 mg/tab', 'TAB', '口服', 2, 5, 3200, 1, 'TID', 'PO'),
   drug('M002', 'AC00002100', 'Ibuprofen 400mg', 'Ibuprofen', '400 mg/tab', 'TAB', '口服', 2.5, 6, 1800, 1, 'TID', 'PO'),
-  drug('M003', 'AC00003100', 'Amoxicillin 500mg', 'Amoxicillin', '500 mg/cap', 'CAP', '口服', 3.2, 8, 1500, 1, 'TID', 'PO'),
-  drug('M004', 'AC00004100', 'Augmentin 625mg', 'Amoxicillin/Clavulanate', '625 mg/tab', 'TAB', '口服', 9.8, 22, 900, 1, 'BID', 'PO'),
-  drug('M005', 'AC00005100', 'Cephalexin 500mg', 'Cephalexin', '500 mg/cap', 'CAP', '口服', 4.1, 10, 1100, 1, 'QID', 'PO'),
-  drug('M006', 'AC00006100', 'Azithromycin 250mg', 'Azithromycin', '250 mg/tab', 'TAB', '口服', 21, 45, 400, 1, 'QD', 'PO'),
+  // 抗生素的 WHO DDD（克）與每顆／每支相當幾克：用量統計（每千住院人日 DDD）用
+  { ...drug('M003', 'AC00003100', 'Amoxicillin 500mg', 'Amoxicillin', '500 mg/cap', 'CAP', '口服', 3.2, 8, 1500, 1, 'TID', 'PO'), ddd: 1.5, dddUnitG: 0.5 },
+  { ...drug('M004', 'AC00004100', 'Augmentin 625mg', 'Amoxicillin/Clavulanate', '625 mg/tab', 'TAB', '口服', 9.8, 22, 900, 1, 'BID', 'PO'), ddd: 1.5, dddUnitG: 0.5 },
+  { ...drug('M005', 'AC00005100', 'Cephalexin 500mg', 'Cephalexin', '500 mg/cap', 'CAP', '口服', 4.1, 10, 1100, 1, 'QID', 'PO'), ddd: 2, dddUnitG: 0.5 },
+  { ...drug('M006', 'AC00006100', 'Azithromycin 250mg', 'Azithromycin', '250 mg/tab', 'TAB', '口服', 21, 45, 400, 1, 'QD', 'PO'), ddd: 0.3, dddUnitG: 0.25 },
   drug('M007', 'AC00007100', 'Cetirizine 10mg', 'Cetirizine', '10 mg/tab', 'TAB', '口服', 1.6, 4, 2600, 1, 'HS', 'PO'),
   drug('M008', 'AC00008100', 'Loratadine 10mg', 'Loratadine', '10 mg/tab', 'TAB', '口服', 1.8, 4, 1900, 1, 'QD', 'PO'),
   drug('M009', 'AC00009100', 'Dextromethorphan 20mg', 'Dextromethorphan', '20 mg/tab', 'TAB', '口服', 1.5, 3, 2400, 1, 'TID', 'PO'),
@@ -230,7 +231,7 @@ const drugBase = [
   drug('M033', 'AC00033100', 'Betamethasone Cream', 'Betamethasone', '0.05% 5 g/tube', 'TUBE', '外用', 18, 40, 400, 1, 'BID', 'EXT', false, '次'),
   drug('M034', 'AC00034100', 'Gentamicin Eye Drop', 'Gentamicin', '0.3% 5 ml/btl', 'BTL', '眼用', 22, 50, 260, 1, 'QID', 'OU', false, '滴'),
   drug('M035', 'AC00035100', 'Salbutamol Inhaler', 'Salbutamol', '100 mcg/puff 200 puffs', 'BTL', '吸入', 150, 280, 120, 2, 'PRN', 'INHL', false, '噴'),
-  drug('M036', 'AC00036100', 'Ceftriaxone 1g Inj', 'Ceftriaxone', '1 g/vial', 'VIAL', '注射', 65, 140, 500, 1, 'Q12H', 'IV'),
+  { ...drug('M036', 'AC00036100', 'Ceftriaxone 1g Inj', 'Ceftriaxone', '1 g/vial', 'VIAL', '注射', 65, 140, 500, 1, 'Q12H', 'IV'), ddd: 2, dddUnitG: 1 },
   drug('M037', 'AC00037100', 'Normal Saline 500ml', 'Sodium chloride 0.9%', '500 ml/bag', 'BAG', '注射', 25, 50, 900, 1, 'QD', 'IV'),
   drug('M038', 'AC00038100', 'Insulin Glargine 100U/ml', 'Insulin glargine', '300 U/pen', 'PEN', '注射', 480, 900, 90, 10, 'HS', 'SC', true, 'U'),
   drug('M039', 'AC00039100', 'Morphine 10mg Inj', 'Morphine', '10 mg/amp', 'AMP', '注射', 18, 40, 120, 1, 'PRN', 'IM', true),
@@ -238,9 +239,9 @@ const drugBase = [
   // 門診示範用的第二級管制藥（要專用處方箋）：只放門診藥局、不進一般種子（seed 另外開帳，不抽亂數）
   { ...drug('M041', 'AC00041100', 'Morphine 15mg Tab', 'Morphine sulfate', '15 mg/tab', 'TAB', '口服', 9, 20, 60, 1, 'Q12H', 'PO', true), safetyStock: 20 },
   // 管制性抗生素（住院開立要感染科審核）：只放住院藥局，不進一般種子（seed 另外開帳，不抽亂數）
-  { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true },
-  { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
-  { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true },
+  { ...drug('M042', 'AC00042100', 'Vancomycin 1g Inj', 'Vancomycin', '1 g/vial', 'VIAL', '注射', 230, 480, 120, 1, 'Q12H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 2, dddUnitG: 1 },
+  { ...drug('M043', 'AC00043100', 'Meropenem 1g Inj', 'Meropenem', '1 g/vial', 'VIAL', '注射', 560, 1100, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 3, dddUnitG: 1 },
+  { ...drug('M044', 'AC00044100', 'Piperacillin/Tazobactam 4.5g Inj', 'Piperacillin/Tazobactam', '4.5 g/vial', 'VIAL', '注射', 320, 680, 120, 1, 'Q8H', 'IV'), safetyStock: 20, restrictedAbx: true, ddd: 14, dddUnitG: 4 },
   // 病人自控止痛（PCA）藥袋：只放住院藥局、只能在 PCA 開（seed 另外開帳）
   { ...drug('M045', 'AC00045100', 'Morphine PCA 100mg/100ml', 'Morphine', '1 mg/ml，100 ml/袋', 'BAG', '注射', 260, 520, 30, 1, 'PRN', 'IV', true), safetyStock: 5, pca: { totalMg: 100, volumeMl: 100 } },
   // 急救車用藥：只能在急救紀錄給（自動開臨時醫囑扣帳），放住院藥局（seed 另外開帳）

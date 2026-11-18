@@ -74,6 +74,8 @@ const drugFields = computed<FieldDef[]>(() => [
   { key: 'controlled', label: '管制藥品級別', type: 'select', options: [{ label: '非管制藥', value: '' }, ...[1, 2, 3, 4].map((n) => ({ label: `第${'一二三四'[n - 1]}級管制藥品`, value: n }))], hint: '病房點班含管制藥要另一位護理師見證' },
   { key: 'highAlert', label: '高警訊藥品', type: 'checkbox', hint: '開立與給藥時需再次確認' },
   { key: 'restrictedAbx', label: '管制性抗生素', type: 'checkbox', hint: '住院開立要填使用理由，感染科 48 小時內審核' },
+  { key: 'ddd', label: '抗生素 WHO DDD（克，選填）', type: 'number', hint: '每日定義劑量，例：Ceftriaxone 2；抗生素用量統計用' },
+  { key: 'dddUnitG', label: '每單位相當幾克（選填）', type: 'number', hint: '例：Augmentin 625mg 以 Amoxicillin 計 0.5；和 DDD 一起填' },
   { key: 'active', label: '使用中', type: 'checkbox', wide: true },
 ])
 // 價格不預填 0：需要使用者決定的數字不替他先填（0 元的藥會讓批價少收錢）
