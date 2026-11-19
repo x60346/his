@@ -241,6 +241,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt', 'anesthesia'] } : {}),
       // dr02（內科主任）：被指定「死亡病例審查」
       ...(d.id === 'DR02' ? { grants: ['mortality.review'] } : {}),
+      // dr10（放射科）：沒有病理科，被指定「病理」代表病理醫師發報告
+      ...(d.id === 'DR10' ? { grants: ['pathology'] } : {}),
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
@@ -260,7 +262,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 長期沒登入的櫃台（示範「密碼過期太久鎖帳號」：130 天前設定的密碼，90 天到期、過期 40 天 > 寬限 30 天）
     { id: 'U403', username: 'clerk03', password: '1234', name: '呂佳蓉', roles: ['clerk'], active: true },
     // 醫檢師：登打檢驗結果、發報告
-    { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true, grants: ['lab.limits'] },
+    { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true, grants: ['lab.limits', 'pathology'] },
     { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
     { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true },
   ]
@@ -2138,6 +2140,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         ],
         createdAt: at, updatedAt: at,
       })
+    }
+    // 病理檢體：前天清創的壞死組織——病理報告鱗狀細胞癌（慢性傷口惡性變化，和術前診斷不符），主刀還沒確認；
+    // 今天恢復室那台疝囊 40 分鐘前送出、病理還沒收件；昨晚急刀本台無檢體。lab01 收件、dr10 代表病理醫師
+    {
+      const s3 = surgeries.find((x) => x.id === 'SG-SEED-3')
+      if (s3?.startAt && s3.endAt) {
+        s3.specimens = [{ id: 'SP-SEED-3A', label: 'A', site: '薦骨壞死組織', container: 'jar', fixative: 'formalin', by: 'U205', at: addMinutes(s3.startAt, 30) }]
+        s3.path = {
+          sentAt: s3.endAt, sentBy: 'U205', received: { at: addMinutes(s3.endAt, 50), by: 'U601' },
+          report: { diagnosis: '鱗狀細胞癌，高分化（慢性壓傷潰瘍惡性變化）；切緣可見腫瘤', malignant: true, consistent: false, note: '建議擴大切除、轉腫瘤科評估', by: 'U110', at: `${addDays(T, -1)} 15:20` },
+        }
+        if (s3.record) s3.record.specimen = 'A 薦骨壞死組織（檢體罐・福馬林）'
+      }
+      const s4 = surgeries.find((x) => x.id === 'SG-SEED-4')
+      if (s4) s4.noSpecimen = true
+      const s5 = surgeries.find((x) => x.id === 'SG-SEED-5')
+      if (s5?.startAt && s5.endAt) {
+        s5.specimens = [{ id: 'SP-SEED-5A', label: 'A', site: '疝囊', container: 'jar', fixative: 'formalin', by: 'U205', at: addMinutes(s5.startAt, 40) }]
+        s5.path = { sentAt: s5.endAt, sentBy: 'U205' }
+        if (s5.record) s5.record.specimen = 'A 疝囊（檢體罐・福馬林）'
+      }
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length

@@ -2314,6 +2314,28 @@ export type AnesthesiaType = 'general' | 'spinal' | 'regional' | 'local'
 export type SurgeryPrepKey = 'consent' | 'npo' | 'siteMark' | 'blood' | 'abx'
 /** 手術安全查核三階段：麻醉前（sign in）、劃刀前暫停確認（time out）、離開手術室前（sign out） */
 export type SurgeryCheckStage = 'signIn' | 'timeOut' | 'signOut'
+/** 手術病理檢體 */
+export type PathContainer = 'jar' | 'bag' | 'cassette' | 'tube'
+export type PathFixative = 'formalin' | 'saline' | 'none'
+/** 一件檢體（手術中流動護理師登記）：標籤 A、B、C… */
+export interface SurgicalSpecimen {
+  id: string
+  label: string
+  site: string
+  container: PathContainer
+  fixative: PathFixative
+  note?: string
+  by: string
+  at: string
+}
+/** 病理：送出（手術完成時）→ 收件（少了的要原因）→ 報告 → 主刀確認（惡性、不符必須） */
+export interface PathologyRecord {
+  sentAt: string
+  sentBy: string
+  received?: { at: string; by: string; missing?: string[]; note?: string }
+  report?: { diagnosis: string; malignant: boolean; consistent: boolean; note?: string; by: string; at: string }
+  ack?: { by: string; at: string; note?: string }
+}
 /** 手術團隊的角色（主刀＝Surgery.doctorId，不在這裡） */
 export type TeamRole = 'assistant' | 'anesthetist' | 'scrub' | 'circulating'
 /** 團隊的一段班：from 沒有＝從頭；交班時前一段記 to、新的一段記 from */
@@ -2442,6 +2464,12 @@ export interface Surgery {
   pacu?: PacuRecord
   /** 手術團隊（主刀以外）：每個角色依時間排的班，最後一段沒有 to 的是現在的人 */
   team?: Partial<Record<TeamRole, TeamShift[]>>
+  /** 檢體（逐件登記；這個功能之前完成的手術沒有，手術紀錄的檢體是文字） */
+  specimens?: SurgicalSpecimen[]
+  /** 離開手術室前確認本台沒有檢體 */
+  noSpecimen?: boolean
+  /** 病理（有檢體才有：手術完成時送出） */
+  path?: PathologyRecord
   /** 術後醫囑：主刀（或本科醫師）手術完成後開了（套組套，或沿用術前醫囑）；術前的禁食醫囑停或保留 */
   postop?: { by: string; at: string; setId?: string; setName?: string; orderIds: string[]; npoStopped: string[]; npoKept: string[]; note?: string }
   note?: string

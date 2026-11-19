@@ -10,6 +10,7 @@ import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-
 import { preIncisionOf } from './prophylaxis-work'
 import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
+import { pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
 
@@ -60,6 +61,14 @@ export interface SurgeryView extends Surgery {
   postopDue: boolean
   postopLate: boolean
   postopText?: string
+  /** 檢體：逐件登記（新手術）；病理階段、要主刀確認（惡性或不符、還沒確認） */
+  specimenRows: { id: string; text: string }[]
+  /** 新手術（逐件登記）：手術紀錄的檢體不用另打 */
+  specimenStructured: boolean
+  pathStageLabel?: string
+  pathAckDue: boolean
+  /** 收件時少了的 */
+  pathMissing?: string
 }
 /** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
 export function bumpedByEmergency(s: Surgery): Surgery | undefined {
@@ -90,6 +99,11 @@ export function surgeryView(s: Surgery): SurgeryView {
     teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
     ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted'),
     ...(s.postop ? { postopText: `${s.postop.at.slice(5)} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
+    specimenRows: (s.specimens ?? []).map((x) => ({ id: x.id, text: specimenText(x) })),
+    specimenStructured: !!(s.specimens || s.noSpecimen || s.status === 'in-progress'),
+    ...((st) => (st ? { pathStageLabel: PATH_STAGE_LABEL[st] } : {}))(pathStage(s.path)),
+    pathAckDue: pathCritical(s.path?.report) && !s.path?.ack,
+    ...(s.path?.received?.missing?.length ? { pathMissing: `病理收件少了 ${s.path.received.missing.join('、')}：${s.path.received.note ?? ''}` } : {}),
     preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),
     renalText: renalOfPatient(s.patientId, a?.status === 'admitted' ? a.id : undefined).text || '沒有近期肌酸酐',
     prepRows: PREP_ITEMS.map((x) => {
@@ -163,4 +177,16 @@ export function surgeryCounts(t: string, doctorId?: string): { toSchedule: numbe
 export function postopCounts(t: string, doctorId: string): { due: number; late: number } {
   const xs = live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId)
   return { due: xs.length, late: xs.filter((s) => s.endAt && (parseDate(t).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS).length }
+}
+
+/** 病理：主刀待確認（惡性或不符）；病理端待收件、逾時、待發報告 */
+export function pathCounts(t: string, doctorId?: string): { ackDue: number; toReceive: number; overdue: number; toReport: number } {
+  const xs = db.surgeries.filter((s) => s.path)
+  const mins = (a: string) => (parseDate(t).getTime() - parseDate(a).getTime()) / 60000
+  return {
+    ackDue: doctorId ? xs.filter((s) => s.doctorId === doctorId && pathCritical(s.path!.report) && !s.path!.ack).length : 0,
+    toReceive: xs.filter((s) => !s.path!.received).length,
+    overdue: xs.filter((s) => !s.path!.received && mins(s.path!.sentAt) > PATH_RECEIVE_HOURS * 60).length,
+    toReport: xs.filter((s) => s.path!.received && !s.path!.report).length,
+  }
 }

@@ -13,6 +13,7 @@ import { isAntibiotic } from './abx-work'
 import { preIncisionOf } from './prophylaxis-work'
 import { find, nameOf } from './views'
 import { requestStatus } from './blood-rules'
+import { specimenText } from './pathology-rules'
 
 const audText = (s: Surgery) => `${s.no} ${nameOf.patient(s.patientId)} ${find.procedure(s.procId)?.name ?? ''}（${SIDE_LABEL[s.side]}）`
 
@@ -131,7 +132,9 @@ export function writeOpRecord(id: string, input: OpRecordInput): Promise<Surgery
     const bl = Number(input.bloodLoss)
     if (!Number.isInteger(bl) || bl < 0 || bl > 20000) f.add('bloodLoss', '失血量是 0–20000 ml 的整數')
     f.done()
-    s.record = { performed: input.performed.trim(), findings: input.findings.trim(), bloodLoss: bl, complications: input.complications?.trim() || '無', specimen: input.specimen?.trim() || '無', by: u.id, at: now() }
+    // 逐件登記的手術：檢體照登記的寫（不用另打）；以前的手術才用文字
+    const specimen = s.specimens || s.noSpecimen ? (s.specimens?.length ? s.specimens.map(specimenText).join('；') : '無') : input.specimen?.trim() || '無'
+    s.record = { performed: input.performed.trim(), findings: input.findings.trim(), bloodLoss: bl, complications: input.complications?.trim() || '無', specimen, by: u.id, at: now() }
     audit('手術紀錄', `${audText(s)}：失血 ${bl} ml、併發症 ${s.record.complications}`)
     return surgeryView(s)
   })
@@ -297,7 +300,7 @@ export function startSurgery(id: string, input: { abxReason?: string } = {}): Pr
 }
 
 /** 完成：離開前查核（項目全勾）＋紗布器械計數；不符要寫原因（主刀的待辦會看到） */
-export function finishSurgery(id: string, input: { items: string[]; spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string }): Promise<SurgeryView> {
+export function finishSurgery(id: string, input: { items: string[]; spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string; noSpecimen?: boolean }): Promise<SurgeryView> {
   return mutate(() => {
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
@@ -309,15 +312,21 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     const { fields, mismatch } = countsProblem(c)
     if (miss.length) fields.items = `還有 ${miss.length} 項沒確認：${miss.join('、')}`
     const reason = input.mismatchReason?.trim()
+    // 檢體：有登記的手術完成時一起送病理；沒有要確認「本台無檢體」
+    const specs = s.specimens ?? []
+    if (!specs.length && !input.noSpecimen) fields.noSpecimen = '沒有登記檢體：請確認「本台無檢體」，有檢體請先逐件登記'
+    if (specs.length && input.noSpecimen) fields.noSpecimen = `已登記 ${specs.length} 件檢體，不能勾「本台無檢體」`
     if (mismatch.length && !reason) fields.mismatchReason = `計數不符（${mismatch.join('；')}）：請寫原因與處理（例：已照 X 光確認無遺留），並告知主刀`
     failFields(fields)
     const t = now()
     s.checks.signOut = { by: u.id, at: t }
     s.counts = { ...c, ...(mismatch.length ? { mismatchReason: `${mismatch.join('；')}：${reason}` } : {}) }
     Object.assign(s, { status: 'done', endAt: t })
+    if (specs.length) s.path = { sentAt: t.slice(0, 16), sentBy: u.id }
+    else s.noSpecimen = true
     // 局部麻醉以外：離開手術室就進恢復室（轉出、病房接回在 anesthesia.ts）
     if (s.anesthesia !== 'local') s.pacu = { inAt: t.slice(0, 16), scores: [] }
-    audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}${s.pacu ? '，進恢復室' : ''}`)
+    audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}${s.pacu ? '，進恢復室' : ''}${specs.length ? `，送病理 ${specs.length} 件` : '，本台無檢體'}`)
     return surgeryView(s)
   })
 }

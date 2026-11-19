@@ -9,6 +9,8 @@ import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
 import AnesRecordPanel from '@/components/surgery/AnesRecordPanel.vue'
 import PacuPanel from '@/components/surgery/PacuPanel.vue'
 import TeamPanel from '@/components/surgery/TeamPanel.vue'
+import SpecimenPanel from '@/components/surgery/SpecimenPanel.vue'
+import PathPanel from '@/components/surgery/PathPanel.vue'
 
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
@@ -52,11 +54,11 @@ const caseOpen = computed({ get: () => !!current.value, set: (x) => !x && (caseI
 const ticked = reactive<Record<SurgeryCheckStage, string[]>>({ signIn: [], timeOut: [], signOut: [] })
 // 預防性抗生素時機不符（劃刀前超過 60 分鐘、Vancomycin 120）：開始手術要寫原因
 const abxReason = ref('')
-const counts = reactive({ spongeBefore: undefined as number | undefined, spongeAfter: undefined as number | undefined, instrumentBefore: undefined as number | undefined, instrumentAfter: undefined as number | undefined, mismatchReason: '' })
+const counts = reactive({ spongeBefore: undefined as number | undefined, spongeAfter: undefined as number | undefined, instrumentBefore: undefined as number | undefined, instrumentAfter: undefined as number | undefined, mismatchReason: '', noSpecimen: false })
 watch(caseId, () => {
   Object.assign(ticked, { signIn: [], timeOut: [], signOut: [] })
   abxReason.value = ''
-  Object.assign(counts, { spongeBefore: undefined, spongeAfter: undefined, instrumentBefore: undefined, instrumentAfter: undefined, mismatchReason: '' })
+  Object.assign(counts, { spongeBefore: undefined, spongeAfter: undefined, instrumentBefore: undefined, instrumentAfter: undefined, mismatchReason: '', noSpecimen: false })
   for (const a of [checkAct, startAct, finishAct]) a.fieldErrors.value = {}
 })
 const tick = (st: SurgeryCheckStage, item: string, on: boolean) => (ticked[st] = on ? [...new Set([...ticked[st], item])] : ticked[st].filter((x) => x !== item))
@@ -68,7 +70,7 @@ const stageOpen = (s: SurgeryView, st: SurgeryCheckStage) =>
   isNurse.value && !s.checks[st] && (st === 'signIn' ? s.status === 'sent' : st === 'timeOut' ? s.status === 'sent' && !!s.checks.signIn : s.status === 'in-progress')
 async function finish() {
   if (!current.value) return
-  await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason })
+  await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason, noSpecimen: counts.noSpecimen })
 }
 // ---------- 恢復室 ----------
 const { data: pacu, reload: reloadPacu } = useQuery(() => anesthesiaApi.pacuBoard(), [])
@@ -201,6 +203,8 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
         <TeamPanel v-if="current.status !== 'cancelled'" :surgery="current" :can-schedule="!!board?.canSchedule" :is-nurse="isNurse" />
         <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
         <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
+        <SpecimenPanel v-if="['in-progress', 'done'].includes(current.status)" :surgery="current" :is-nurse="isNurse" />
+        <PathPanel v-if="current.path" :surgery-id="current.id" />
         <PacuPanel v-if="current.pacu" :surgery-id="current.id" @changed="reloadPacu" />
         <div v-if="current.status === 'scheduled'" class="flex flex-wrap items-center gap-2">
           <p class="text-amber-800">病房還沒送來（術前準備完成後由護理站「送手術室」）。</p>
@@ -222,6 +226,8 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <UInput v-model="counts.spongeAfter" type="number" label="紗布（術後）" :error="finishAct.fieldErrors.value.spongeAfter" />
               <UInput v-model="counts.instrumentBefore" type="number" label="器械（術前）" :error="finishAct.fieldErrors.value.instrumentBefore" />
               <UInput v-model="counts.instrumentAfter" type="number" label="器械（術後）" :error="finishAct.fieldErrors.value.instrumentAfter" />
+              <div v-if="!current.specimenRows.length" class="col-span-2 sm:col-span-4"><UCheckbox v-model="counts.noSpecimen" label="本台無檢體（有檢體請先在上面「檢體」逐件登記）" /><p v-if="finishAct.fieldErrors.value.noSpecimen" class="text-xs text-red-600">{{ finishAct.fieldErrors.value.noSpecimen }}</p></div>
+              <p v-else class="col-span-2 text-xs text-slate-600 sm:col-span-4">檢體 {{ current.specimenRows.length }} 件，手術完成時一起送病理。</p>
               <div class="col-span-2 sm:col-span-4"><UInput v-model="counts.mismatchReason" label="計數不符時：原因與處理（例：已照 X 光確認無遺留，已告知主刀）" :error="finishAct.fieldErrors.value.mismatchReason" /></div>
             </div>
             <p v-if="(c.stage === 'signOut' ? finishAct : checkAct).fieldErrors.value.items" class="mt-1 text-xs text-red-600">{{ (c.stage === 'signOut' ? finishAct : checkAct).fieldErrors.value.items }}</p>

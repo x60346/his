@@ -149,7 +149,12 @@ try {
     return surgeryRaw.recordCheck(id, stage, items)
   }
   // 完成手術要有麻醉開始與結束（局部麻醉不用）：其他段落測的是完成本身，沒記的直接補（測試輔助）；要測擋的用 surgeryRaw.finishSurgery
-  surgeryRaw.finishSurgery = api.surgeryApi.finishSurgery
+  // 完成手術要有檢體或確認「本台無檢體」：其他段落沒登記檢體的自動勾無檢體；要測擋的用 specRaw
+  const specRaw = { finishSurgery: api.surgeryApi.finishSurgery }
+  surgeryRaw.finishSurgery = (id, input) => {
+    const s = dbm.db.surgeries.find((x) => x.id === id)
+    return specRaw.finishSurgery(id, { ...(s && !s.specimens?.length && input?.noSpecimen === undefined ? { noSpecimen: true } : {}), ...input })
+  }
   api.surgeryApi.finishSurgery = async (id, input) => {
     const s = dbm.db.surgeries.find((x) => x.id === id)
     if (s && s.status === 'in-progress' && s.anesthesia !== 'local' && !s.anes?.endAt) {
@@ -15801,6 +15806,156 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/components/surgery/PostopDialog.vue', 'utf8')
     ok(!/db\.|createOrder|checkAllergies|doseLevel/.test(page), '檢查在服務層，頁面只收選擇')
+  }
+  // 病理檢體：規則（標籤不補號、欄位、要確認的條件、階段）；種子（清創報告惡性不符待確認、疝囊待收件、急刀無檢體）與首頁；
+  // 手術中逐件登記與刪除、完成手術要有檢體或確認無檢體、完成時送出、手術紀錄照登記寫；收件（逐件、少了要原因、主刀看得到）；
+  // 發報告（醫師、欄位）；主刀確認（別科不行、重複）；送出超過 4 小時逾時
+  console.log('\n[病理檢體]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const PA = api.pathologyApi
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId)
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.nextSpecimenLabel([]) === 'A' && api.nextSpecimenLabel([{ label: 'B' }]) === 'C', '標籤：A 起，刪掉的不補號（接最後一個）')
+    const ce = api.checkSpecimen({ site: ' ', container: 'x' })
+    ok(ce.site && ce.container && ce.fixative, '檢體欄位：部位、容器、固定液')
+    ok(api.pathCritical({ malignant: true, consistent: true }) && api.pathCritical({ malignant: false, consistent: false }) && !api.pathCritical({ malignant: false, consistent: true }), '惡性或不符要主刀確認')
+    ok(api.pathStage({ sentAt: 'x', sentBy: 'x' }) === 'sent' && api.pathStage({ sentAt: 'x', sentBy: 'x', received: {}, report: {} }) === 'reported', '階段')
+    // 種子
+    const s3 = db().surgeries.find((s) => s.id === 'SG-SEED-3')
+    const s5 = db().surgeries.find((s) => s.id === 'SG-SEED-5')
+    ok(s3.path.report.malignant && !s3.path.report.consistent && !s3.path.ack && s5.path && !s5.path.received && db().surgeries.find((s) => s.id === 'SG-SEED-4').noSpecimen, '種子：清創報告惡性且不符待確認、疝囊待收件、急刀無檢體')
+    const surgeon3 = userOf(s3.doctorId)
+    await as(surgeon3.username)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.pathAckDue === 1 && dash.pathToReport === undefined, '主刀首頁：病理報告待確認 1（沒有病理權限看不到待發報告）')
+    await as('lab01')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.pathToReceive === 1 && dash.pathOverdue === 0, '病理（lab01）首頁：待收件 1')
+    await as('dr10')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.pathToReport === 0, 'dr10 首頁：病理待發報告 0')
+    await as('nurse01')
+    await expectError(() => PA.pathBoard(), '沒有病理權限看不到病理頁')
+    await as('lab01')
+    let board = await PA.pathBoard()
+    ok(board.toReceive.length === 1 && board.toReceive[0].canReceive && board.reported[0].surgeryId === s3.id && board.reported[0].critical, '病理頁：待收件（醫檢師可收）、近期報告（待確認的在前）')
+
+    // 新的一台：手術中登記檢體
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && a.doctorId !== 'DR10' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const surgeon = userOf(adm.doctorId)
+    const flow = async (admissionId, anesthesia) => {
+      await as(surgeon.username)
+      const sg = await S.requestSurgery({ admissionId, procId: 'P039', side: 'left', anesthesia, requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+      await as('nurse01')
+      await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} ${anesthesia === 'local' ? '13' : '09'}:00` })
+      for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(sg.id, k)
+      await S.markPrep(sg.id, 'blood', { notNeeded: '出血少' })
+      await S.markPrep(sg.id, 'abx', { notNeeded: '乾淨手術' })
+      await S.sendToOr(sg.id)
+      await S.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+      await S.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+      return sg
+    }
+    const sg = await flow(adm.id, 'general')
+    let msg = await errOf(() => PA.addSpecimen(sg.id, { site: '疝囊', container: 'jar', fixative: 'formalin' }))
+    ok(msg.includes('手術中'), '開始手術前不能登記檢體')
+    await S.startSurgery(sg.id)
+    let f = await fieldsOf(() => PA.addSpecimen(sg.id, { site: '', container: 'jar' }))
+    ok(f.site && f.fixative, '部位、固定液要填')
+    let xs = await PA.addSpecimen(sg.id, { site: '疝囊', container: 'jar', fixative: 'formalin' })
+    xs = await PA.addSpecimen(sg.id, { site: '脂肪瘤', container: 'jar', fixative: 'formalin' })
+    ok(xs.map((x) => x.label).join() === 'A,B' && db().auditLogs[0].action === '登記檢體', '逐件登記 A、B（稽核）')
+    xs = await PA.removeSpecimen(sg.id, xs[0].id)
+    xs = await PA.addSpecimen(sg.id, { site: '疝囊', container: 'jar', fixative: 'formalin', note: '重新標示' })
+    ok(xs.map((x) => x.label).join() === 'B,C' && db().auditLogs[1].action === '刪除檢體', '刪掉的不補號：B、C')
+    await as(surgeon.username)
+    await expectError(() => PA.addSpecimen(sg.id, { site: 'x', container: 'jar', fixative: 'none' }), '醫師不能登記（流動護理師登記）')
+    await as('nurse01')
+    const fin = { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 }
+    f = await fieldsOf(() => S.finishSurgery(sg.id, { ...fin, noSpecimen: true }))
+    ok(f.noSpecimen?.includes('2 件'), '有登記檢體不能勾無檢體')
+    let v = await S.finishSurgery(sg.id, fin)
+    ok(v.path && v.path.sentBy === db().users.find((u) => u.username === 'nurse01').id && v.pathStageLabel === '待病理收件' && db().auditLogs[0].detail.includes('送病理 2 件'), '完成手術時一起送病理（稽核）')
+    msg = await errOf(() => PA.removeSpecimen(sg.id, xs[0].id))
+    ok(msg.includes('完成'), '完成後檢體不能改')
+    await as(surgeon.username)
+    v = await S.writeOpRecord(sg.id, { performed: '左側腹股溝疝氣修補術', findings: '間接型疝氣', bloodLoss: 10, complications: '', specimen: '亂打的' })
+    ok(v.record.specimen === 'B 脂肪瘤（檢體罐・福馬林）；C 疝囊（檢體罐・福馬林）' && v.specimenStructured, `手術紀錄的檢體照登記寫：${v.record.specimen}`)
+    // 沒有檢體：要確認
+    const adm2 = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId === adm.doctorId && a.id !== adm.id && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+      ?? db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && a.id !== adm.id && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    if (adm2) {
+      const sg2 = await flow(adm2.id, 'local')
+      await S.startSurgery(sg2.id)
+      f = await fieldsOf(() => specRaw.finishSurgery(sg2.id, fin))
+      ok(f.noSpecimen?.includes('本台無檢體'), '沒登記檢體要確認「本台無檢體」')
+      v = await specRaw.finishSurgery(sg2.id, { ...fin, noSpecimen: true })
+      ok(v.noSpecimen && !v.path && db().auditLogs[0].detail.includes('本台無檢體'), '確認無檢體：不送病理')
+    }
+    // 收件
+    await as('dr10')
+    await expectError(() => PA.receivePath(sg.id, { received: xs.map((x) => x.id) }), '醫師不能收件（醫檢師收）')
+    await as('lab01')
+    f = await fieldsOf(() => PA.receivePath(sg.id, { received: [] }))
+    ok(f.received, '要勾收到的')
+    f = await fieldsOf(() => PA.receivePath(sg.id, { received: [xs[0].id] }))
+    ok(f.note?.includes('C'), '少了一件要寫原因')
+    let it = await PA.receivePath(sg.id, { received: [xs[0].id], note: '已通知手術室尋找' })
+    ok(it.stage === 'received' && it.missing.join() === 'C' && db().auditLogs[0].detail.includes('少了 C'), '少了的記下來（稽核）')
+    await expectError(() => PA.receivePath(sg.id, { received: [xs[0].id] }), '不能重複收件')
+    await as(surgeon.username)
+    v = (await S.patientSurgeries(adm.id)).list.find((x) => x.id === sg.id)
+    ok(v.pathMissing?.includes('少了 C'), '主刀看得到收件少了')
+    // 發報告
+    await as('lab01')
+    await expectError(() => PA.reportPath(sg.id, { diagnosis: 'x', malignant: false, consistent: true }), '醫檢師不能發報告')
+    await as('dr10')
+    f = await fieldsOf(() => PA.reportPath(sg.id, { diagnosis: '' }))
+    ok(f.diagnosis && f.malignant && f.consistent, '報告欄位：診斷、良惡性、是否相符')
+    it = await PA.reportPath(sg.id, { diagnosis: '疝囊組織，無特殊；脂肪瘤', malignant: false, consistent: true })
+    ok(it.stage === 'reported' && !it.critical && db().auditLogs[0].action === '病理報告', '良性、相符：不用主刀確認')
+    await as(surgeon.username)
+    ok((await api.dashboardApi.getDashboard()).pathAckDue === (s3.doctorId === adm.doctorId ? 1 : 0), '良性相符不列入待確認')
+    it = await PA.ackPath(sg.id)
+    ok(it.stage === 'acked', '良性的也可以按已讀')
+    // 主刀確認惡性不符（種子清創）
+    const otherDept = db().users.find((u) => u.doctorId && db().doctors.find((d) => d.id === u.doctorId).deptId !== db().doctors.find((d) => d.id === s3.doctorId).deptId)
+    await as(otherDept.username)
+    msg = await errOf(() => PA.ackPath(s3.id))
+    ok(msg.includes('主刀或同科'), '別科醫師不能確認')
+    await as(surgeon3.username)
+    it = await PA.ackPath(s3.id, { note: '已向家屬說明，轉腫瘤科' })
+    ok(it.stage === 'acked' && it.ackText.includes('轉腫瘤科') && (await api.dashboardApi.getDashboard()).pathAckDue === 0 && db().auditLogs[0].action === '確認病理報告', '主刀確認（稽核），首頁待確認歸零')
+    await expectError(() => PA.ackPath(s3.id), '不能重複確認')
+    // 逾時（測試輔助：把送出時間往前推）
+    db().surgeries.find((s) => s.id === s5.id).path.sentAt = dateUtil.addMinutes(nowStr(), -5 * 60).slice(0, 16)
+    await as('lab01')
+    dash = await api.dashboardApi.getDashboard()
+    board = await PA.pathBoard()
+    ok(dash.pathOverdue === 1 && board.toReceive.find((x) => x.surgeryId === s5.id).overdue, '送出超過 4 小時還沒收件：首頁與病理頁標紅')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/pathology/PathologyPage.vue', 'utf8') + readFileSync('src/components/surgery/PathPanel.vue', 'utf8')
+    ok(!/db\.|pathCritical|PATH_RECEIVE_HOURS \*|malignant \|\|/.test(page), '要不要確認、逾時由服務層判斷')
   }
 } catch (e) {
   failed++

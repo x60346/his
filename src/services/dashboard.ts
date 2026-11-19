@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { pacuCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -173,6 +173,12 @@ export interface DashboardStats {
   /** 主刀：術後醫囑待開、完成超過 4 小時還沒開 */
   postopDue?: number
   postopLate?: number
+  /** 主刀：病理報告待確認（惡性或和術前診斷不符） */
+  pathAckDue?: number
+  /** 權限「病理」：待收件（其中逾時）、待發報告 */
+  pathToReceive?: number
+  pathOverdue?: number
+  pathToReport?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   /** 藥師：住院醫囑待審核（其中臨時醫囑） */
@@ -364,6 +370,8 @@ export function getDashboard(): Promise<DashboardStats> {
           bloodReactions: reactionsToAck(me.doctorId).length,
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
+          pathAckDue: pathCounts(now(), me.doctorId).ackDue,
+          ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport } : {}),
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('anesthesia') ? ((c) => ({ preAnesDue: c.due, preAnesBrief: c.brief }))(preAnesCounts(now())) : {}),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
@@ -415,6 +423,7 @@ export function getDashboard(): Promise<DashboardStats> {
             myRequestResults: db.shiftRequests.filter((r) => r.requesterId === me.id && ['approved', 'rejected', 'declined'].includes(r.status) && (r.decidedAt ?? r.peer?.at ?? '') >= addMinutes(t, -24 * 60)).length,
           } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('surgery.schedule') ? ((xs) => ({ emergencyWaiting: xs.length, emergencyOverdue: xs.filter((s) => emergencyState(s, t)?.state === 'overdue').length }))(db.surgeries.filter((s) => s.urgency && !s.sentAt && (s.status === 'requested' || s.status === 'scheduled') && db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')) : {}),
+          ...(me && sessionRole() === 'lab' && permissionsOf({ ...me, role: 'lab' }).includes('pathology') ? ((c) => ({ pathToReceive: c.toReceive, pathOverdue: c.overdue }))(pathCounts(t)) : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length, rcaOverdue: db.incidents.flatMap((x) => x.rca?.plans ?? []).filter((p) => planOverdue(p, today())).length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),

@@ -9,6 +9,7 @@ import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } fro
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import PacuPanel from './PacuPanel.vue'
 import PostopDialog from './PostopDialog.vue'
+import PathPanel from './PathPanel.vue'
 import { ANESTHESIA_LABEL, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
@@ -148,6 +149,9 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
             <div>術式：{{ s.record.performed }}・失血 {{ s.record.bloodLoss }} ml・併發症 {{ s.record.complications }}・檢體 {{ s.record.specimen }}</div>
             <div class="whitespace-pre-line">術中發現：{{ s.record.findings }}</div>
           </div>
+          <p v-if="s.specimenRows.length && !s.path" class="text-xs text-slate-600">檢體：{{ s.specimenRows.map((x) => x.text).join('；') }}</p>
+          <p v-if="s.pathMissing" class="text-xs font-semibold text-red-700">{{ s.pathMissing }}</p>
+          <PathPanel v-if="s.path" :surgery-id="s.id" />
           <p v-if="s.postopText" class="text-xs text-slate-600">術後醫囑：{{ s.postopText }}</p>
           <p v-else-if="s.postopDue" class="text-xs" :class="s.postopLate ? 'font-semibold text-red-700' : 'text-amber-800'">術後醫囑還沒開{{ s.postopLate ? '（手術完成超過 4 小時）' : '' }}</p>
           <div v-if="isDoctor" class="flex gap-2">
@@ -208,7 +212,8 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <UInput v-model="rec.bloodLoss" type="number" label="失血量 ml" required :error="recAct.fieldErrors.value.bloodLoss" />
           <UInput v-model="rec.complications" label="併發症" />
-          <UInput v-model="rec.specimen" label="檢體" />
+          <UInput v-if="!recording?.specimenStructured" v-model="rec.specimen" label="檢體" />
+          <p v-else class="self-end pb-2 text-xs text-slate-600">檢體：{{ recording?.specimenRows.length ? recording.specimenRows.map((x) => x.text).join('；') : '無' }}（照手術室登記）</p>
         </div>
         <p v-if="recording?.countMismatch" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">手術室紀錄紗布器械計數不符：{{ recording.counts?.mismatchReason }}</p>
       </div>
