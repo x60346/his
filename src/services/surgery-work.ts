@@ -2,8 +2,8 @@
 // 規則在 surgery-rules（純函式）；API 在 surgery.ts
 import type { Admission, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
-import { addMinutes, ageOf } from '@/utils/date'
-import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL } from './surgery-rules'
+import { addMinutes, ageOf, now } from '@/utils/date'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, URGENCY_LABEL } from './surgery-rules'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
@@ -37,6 +37,16 @@ export interface SurgeryView extends Surgery {
   /** 預防性抗生素：送到手術室還沒開始＝以現在算的劃刀前時機（提醒）；開始後＝當時記的 */
   abxPre?: { ok: boolean; text: string }
   cancelledByName?: string
+  /** 急刀：等級、時效（期限、等了幾分鐘、狀態） */
+  urgencyLabel?: string
+  emergency?: ReturnType<typeof emergencyState>
+  /** 擇期手術被急刀佔了同一間房的時段：要改期（說明） */
+  bumpedBy?: string
+}
+/** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
+export function bumpedByEmergency(s: Surgery): Surgery | undefined {
+  if (s.urgency || s.status !== 'scheduled' || !s.schedule) return undefined
+  return db.surgeries.find((x) => x.id !== s.id && x.urgency && x.schedule?.room === s.schedule!.room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, s.schedule!.start, s.estMinutes))
 }
 
 export function surgeryView(s: Surgery): SurgeryView {
@@ -54,6 +64,8 @@ export function surgeryView(s: Surgery): SurgeryView {
     doctorName: nameOf.doctor(s.doctorId), procName: find.procedure(s.procId)?.name ?? s.procId,
     sideText: SIDE_LABEL[s.side], anesthesiaText: ANESTHESIA_LABEL[s.anesthesia], statusLabel: SURGERY_STATUS_LABEL[s.status],
     ...(s.schedule ? { scheduleText: `${s.schedule.room} ${s.schedule.start.slice(5)}–${end!.slice(11)}`, scheduleEnd: end } : {}),
+    ...(s.urgency ? { urgencyLabel: URGENCY_LABEL[s.urgency], emergency: emergencyState(s, now()) } : {}),
+    ...((b) => (b ? { bumpedBy: `${b.schedule!.room} 被急刀（${URGENCY_LABEL[b.urgency!]}）${b.no} 佔用（${b.schedule!.start.slice(11)} 起），請改期` } : {}))(bumpedByEmergency(s)),
     prepRows: PREP_ITEMS.map((x) => {
       const m = s.prep[x.key]
       let text = m ? `${m.notNeeded ? `不需要：${m.notNeeded}` : '已完成'}・${who(m)}` : undefined

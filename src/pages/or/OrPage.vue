@@ -11,7 +11,7 @@ import { CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
 import type { SurgeryCheckStage } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
-import { today } from '@/utils/date'
+import { addMinutes, now, today } from '@/utils/date'
 
 const auth = useAuth()
 const isNurse = computed(() => auth.user?.role === 'nurse')
@@ -25,9 +25,15 @@ const scheduling = ref<SurgeryView>()
 const schedOpen = computed({ get: () => !!scheduling.value, set: (x) => !x && (scheduling.value = undefined) })
 const sch = reactive({ room: OR_ROOMS[0] as string | number | undefined, date: today(), time: '09:00' })
 function openSched(s: SurgeryView) {
-  Object.assign(sch, { room: s.schedule?.room ?? OR_ROOMS[0], date: s.schedule?.start.slice(0, 10) ?? (s.requestedDate < today() ? today() : s.requestedDate), time: s.schedule?.start.slice(11) ?? '09:00' })
+  // 急刀預設現在（下一個 5 分鐘）；擇期預設預計日期 09:00
+  const soon = ((t) => addMinutes(t, (5 - (Number(t.slice(15)) % 5)) % 5 || 5))(now())
+  Object.assign(sch, { room: s.schedule?.room ?? OR_ROOMS[0], date: s.schedule?.start.slice(0, 10) ?? (s.urgency ? soon.slice(0, 10) : s.requestedDate < today() ? today() : s.requestedDate), time: s.schedule?.start.slice(11) ?? (s.urgency ? soon.slice(11) : '09:00') })
   schedAct.fieldErrors.value = {}
   scheduling.value = s
+}
+function reschedule(s: SurgeryView) {
+  caseId.value = undefined
+  openSched(s)
 }
 const schedAct = useAction(surgeryApi.scheduleSurgery, { success: (s) => `已排程：${s.scheduleText}` })
 async function submitSched() {
@@ -59,6 +65,7 @@ async function finish() {
   if (!current.value) return
   await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason })
 }
+const waitText = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} 小時${m % 60 ? ` ${m % 60} 分` : ''}` : `${m} 分`)
 const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.schedule?.room === room)
 </script>
 
@@ -70,18 +77,24 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
     <UQueryState :loading="loading && !board" :ready="!!board">
       <template v-if="board">
         <section v-if="board.requested.length" class="rounded-md border border-amber-300 bg-amber-50/50 p-3 text-sm">
-          <h3 class="mb-2 font-semibold text-amber-900">待排程 {{ board.requested.length }} 台</h3>
+          <h3 class="mb-2 font-semibold text-amber-900">待排程 {{ board.requested.length }} 台<span class="ml-2 text-xs font-normal text-slate-500">急刀排最前面（依等級、申請時間）</span></h3>
           <ul class="divide-y divide-amber-100">
             <li v-for="s in board.requested" :key="s.id" class="flex flex-wrap items-center gap-2 py-1.5">
+              <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
               <b>{{ s.bedNo }} {{ s.patientName }}</b>
               <span>{{ s.procName }}（{{ s.sideText }}）・{{ s.anesthesiaText }}・{{ s.estMinutes }} 分</span>
-              <span class="text-xs text-slate-500">預計 {{ s.requestedDate }}・主刀 {{ s.doctorName }}</span>
+              <span v-if="s.emergency" class="tabular text-xs" :class="s.emergency.state === 'overdue' ? 'font-semibold text-red-700' : 'text-red-600'">已等 {{ waitText(s.emergency.minutes) }}・{{ s.emergency.state === 'overdue' ? `超過時限（${s.emergency.due.slice(11)} 前要入刀房）` : `${s.emergency.due.slice(11)} 前入刀房` }}・主刀 {{ s.doctorName }}</span>
+              <span v-else class="text-xs text-slate-500">預計 {{ s.requestedDate }}・主刀 {{ s.doctorName }}</span>
               <UButton v-if="board.canSchedule" size="sm" class="ml-auto" :icon="CalendarClock" @click="openSched(s)">排程</UButton>
             </li>
           </ul>
           <p v-if="!board.canSchedule" class="mt-1 text-xs text-slate-500">排程由有「手術排程」權限的人處理。</p>
         </section>
 
+        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+          <span>急刀時效達成（30 天、已入刀房）：<b class="tabular" :class="board.emergencyStats.pct < 90 ? 'text-red-700' : 'text-emerald-700'">{{ board.emergencyStats.total ? `${board.emergencyStats.ontime}/${board.emergencyStats.total}（${board.emergencyStats.pct}%）` : '—' }}</b></span>
+          <span v-if="board.needsReschedule" class="font-semibold text-red-700">{{ board.needsReschedule }} 台擇期手術被急刀佔用，需改期（不會自動移）</span>
+        </div>
         <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))]">
           <section v-for="room in board.rooms" :key="room" class="rounded-md border border-slate-200 bg-white p-3 text-sm">
             <h3 class="mb-2 font-semibold text-slate-700">{{ room }}</h3>
@@ -90,11 +103,15 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <div class="flex items-center gap-1.5">
                 <span class="tabular text-xs font-semibold text-slate-700">{{ s.schedule!.start.slice(11) }}–{{ s.scheduleEnd!.slice(11) }}</span>
                 <UBadge :tone="tone(s)">{{ s.statusLabel }}</UBadge>
+                <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
+                <UBadge v-if="s.bumpedBy" tone="red">需改期</UBadge>
                 <AlertTriangle v-if="s.countMismatch" class="h-3.5 w-3.5 text-red-600" />
               </div>
               <div class="font-medium text-slate-800">{{ s.patientName }}<span class="ml-1 text-xs font-normal text-slate-500">{{ s.bedNo }}</span></div>
               <div class="text-xs text-slate-600">{{ s.procName }}（{{ s.sideText }}）</div>
               <div v-if="s.prepMissing.length && s.status === 'scheduled'" class="text-xs text-amber-800">術前準備還差：{{ s.prepMissing.join('、') }}</div>
+              <div v-if="s.emergency" class="tabular text-xs" :class="s.emergency.state === 'overdue' || s.emergency.state === 'late' ? 'font-semibold text-red-700' : 'text-slate-600'">{{ s.emergency.state === 'ontime' || s.emergency.state === 'late' ? `申請到入刀房 ${waitText(s.emergency.minutes)}${s.emergency.state === 'late' ? '（超過時限）' : '（時限內）'}` : `已等 ${waitText(s.emergency.minutes)}・${s.emergency.due.slice(11)} 前要入刀房${s.emergency.state === 'overdue' ? '（已超過）' : ''}` }}</div>
+              <div v-if="s.bumpedBy" class="text-xs font-medium text-red-700">{{ s.bumpedBy }}</div>
             </button>
           </section>
         </div>
@@ -103,7 +120,8 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
 
     <UDialog v-model="schedOpen" :title="`排程：${scheduling?.patientName ?? ''}`" size="sm" @submit="submitSched">
       <div v-if="scheduling" class="space-y-3 text-sm">
-        <p class="text-slate-600">{{ scheduling.procName }}（{{ scheduling.sideText }}）・預估 {{ scheduling.estMinutes }} 分・預計 {{ scheduling.requestedDate }}</p>
+        <p class="text-slate-600">{{ scheduling.procName }}（{{ scheduling.sideText }}）・預估 {{ scheduling.estMinutes }} 分・<template v-if="scheduling.emergency">{{ scheduling.emergency.due.slice(11) }} 前要入刀房</template><template v-else>預計 {{ scheduling.requestedDate }}</template></p>
+        <p v-if="scheduling.urgency" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">急刀（{{ scheduling.urgencyLabel }}）：可排在開放時段外；同房的擇期手術不擋，排下去後那台會列「需改期」，由你另外改。</p>
         <USelect v-model="sch.room" label="手術房" :options="OR_ROOMS" :error="schedAct.fieldErrors.value.room" />
         <div class="grid grid-cols-2 gap-3">
           <UInput v-model="sch.date" type="date" label="日期" />
@@ -129,7 +147,11 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <div :class="current.allergies.length ? 'font-semibold text-red-700' : 'text-slate-500'">過敏：{{ current.allergies.length ? current.allergies.join('、') : '無已知過敏' }}</div>
           <div class="text-xs text-slate-600">術前準備：{{ current.prepRows.map((r) => `${r.label}${r.done ? '✓' : '✗'}`).join('　') }}</div>
         </div>
-        <p v-if="current.status === 'scheduled'" class="text-amber-800">病房還沒送來（術前準備完成後由護理站「送手術室」）。</p>
+        <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
+        <div v-if="current.status === 'scheduled'" class="flex flex-wrap items-center gap-2">
+          <p class="text-amber-800">病房還沒送來（術前準備完成後由護理站「送手術室」）。</p>
+          <UButton v-if="board?.canSchedule" size="sm" variant="secondary" class="ml-auto" :icon="CalendarClock" @click="reschedule(current)">改期</UButton>
+        </div>
 
         <section v-for="c in current.checkRows" :key="c.stage" :class="['rounded-md border p-3', c.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200']">
           <div class="flex items-center gap-2">

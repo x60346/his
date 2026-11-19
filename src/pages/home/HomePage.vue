@@ -132,6 +132,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['clerk'], label: '住院待結帳', count: s.value.ipdToBill, hint: '醫師已簽准出院：結清住院費用後才能辦出院', route: 'charge', query: { tab: 'ipd' }, icon: Receipt, urgent: true },
+    { roles: ['admin', 'nurse'], label: '急刀待入刀房', count: s.value.emergencyWaiting ?? 0, hint: s.value.emergencyOverdue ? `其中 ${s.value.emergencyOverdue} 台已超過時限（立即 1 小時、緊急 6 小時、次緊急 24 小時）` : '緊急手術：排房（可排在開放時段外、撞到的擇期改期）、送手術室', route: 'or', icon: ShieldAlert, urgent: !!s.value.emergencyOverdue },
     { roles: ['admin', 'nurse', 'doctor'], label: 'RCA 行動計畫過期', count: s.value.rcaOverdue ?? 0, hint: '根本原因分析的改善行動過了期限還沒完成：追蹤負責人、完成後在病安通報勾完成', route: 'incidents', icon: ShieldAlert, urgent: true },
     { roles: ['admin', 'nurse', 'doctor'], label: '病安事件待審查', count: s.value.incidentPending ?? 0, hint: '病安通報還沒結案的：評定嚴重度、寫原因分析與改善措施', route: 'incidents', icon: ShieldAlert },
     { roles: ['clerk'], label: '醫師建議回診待預約', count: s.value.adviceToBook ?? 0, hint: s.value.adviceOverdue ? `其中 ${s.value.adviceOverdue} 位過了建議日一週還沒掛` : '醫師寫了「幾週後回診」交給櫃台：電話聯絡病人掛號，或標病人自己掛、不回診', route: 'booking', query: { tab: 'advice' }, icon: PhoneCall, urgent: !!s.value.adviceOverdue },

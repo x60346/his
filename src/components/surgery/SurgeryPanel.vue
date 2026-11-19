@@ -7,8 +7,8 @@ import { computed, reactive, ref } from 'vue'
 import { Plus, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
-import { ANESTHESIA_LABEL, SIDE_LABEL, surgeryApi, type SurgeryView } from '@/services'
-import type { AnesthesiaType, SurgeryPrepKey, SurgerySide } from '@/types'
+import { ANESTHESIA_LABEL, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
+import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { addDays, today } from '@/utils/date'
@@ -24,9 +24,9 @@ const tone = (s: SurgeryView) => (s.status === 'cancelled' ? 'gray' : s.status =
 
 // ---------- 申請 ----------
 const reqOpen = ref(false)
-const form = reactive({ procId: '' as string | number | undefined, side: '' as SurgerySide | '', anesthesia: 'general' as AnesthesiaType, requestedDate: addDays(today(), 1), estMinutes: 60 as number | undefined, diagnosis: '', note: '' })
+const form = reactive({ urgency: '' as SurgeryUrgency | '', procId: '' as string | number | undefined, side: '' as SurgerySide | '', anesthesia: 'general' as AnesthesiaType, requestedDate: addDays(today(), 1), estMinutes: 60 as number | undefined, diagnosis: '', note: '' })
 function openReq() {
-  Object.assign(form, { procId: '', side: '', anesthesia: 'general', requestedDate: addDays(today(), 1), estMinutes: 60, diagnosis: '', note: '' })
+  Object.assign(form, { urgency: '', procId: '', side: '', anesthesia: 'general', requestedDate: addDays(today(), 1), estMinutes: 60, diagnosis: '', note: '' })
   req.fieldErrors.value = {}
   reqOpen.value = true
 }
@@ -35,9 +35,9 @@ function pickProc(id: string | number | undefined) {
   const p = opts.value?.procs.find((x) => x.id === id)
   if (p) form.estMinutes = p.minutes
 }
-const req = useAction(surgeryApi.requestSurgery, { success: (s) => `已申請手術 ${s.no}：等手術室排程` })
+const req = useAction(surgeryApi.requestSurgery, { success: (s) => (s.urgency ? `已申請${s.urgencyLabel}急刀 ${s.no}：${s.emergency!.due.slice(11)} 前要入刀房，手術室已收到` : `已申請手術 ${s.no}：等手術室排程`) })
 async function submitReq() {
-  const ok = await req.run({ admissionId: props.admissionId, procId: String(form.procId ?? ''), side: form.side as SurgerySide, anesthesia: form.anesthesia, requestedDate: form.requestedDate, estMinutes: Number(form.estMinutes), diagnosis: form.diagnosis, note: form.note })
+  const ok = await req.run({ admissionId: props.admissionId, procId: String(form.procId ?? ''), side: form.side as SurgerySide, anesthesia: form.anesthesia, requestedDate: form.requestedDate, ...(form.urgency ? { urgency: form.urgency } : {}), estMinutes: Number(form.estMinutes), diagnosis: form.diagnosis, note: form.note })
   if (ok) reqOpen.value = false
 }
 
@@ -99,11 +99,13 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <div class="flex flex-wrap items-center gap-2">
             <b class="text-slate-800">{{ s.procName }}</b>
             <span class="text-slate-600">{{ s.sideText }}・{{ s.anesthesiaText }}・預估 {{ s.estMinutes }} 分</span>
+            <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
             <UBadge :tone="tone(s)">{{ s.statusLabel }}</UBadge>
             <span v-if="s.scheduleText" class="tabular rounded bg-blue-50 px-1.5 text-xs font-medium text-blue-800">{{ s.scheduleText }}</span>
             <span class="tabular ml-auto text-xs text-slate-500">{{ s.no }}・主刀 {{ s.doctorName }}</span>
           </div>
-          <div class="text-xs text-slate-600">術前診斷：{{ s.diagnosis }}・預計 {{ s.requestedDate }}<span v-if="s.note">・{{ s.note }}</span></div>
+          <div class="text-xs text-slate-600">術前診斷：{{ s.diagnosis }}・<template v-if="s.emergency">{{ s.emergency.due.slice(11) }} 前入刀房</template><template v-else>預計 {{ s.requestedDate }}</template><span v-if="s.note">・{{ s.note }}</span></div>
+          <p v-if="s.bumpedBy" class="text-xs font-medium text-red-700">{{ s.bumpedBy }}</p>
           <p v-if="s.cancelled" class="text-xs text-slate-500">已取消：{{ s.cancelled.reason }}・{{ s.cancelledByName }}</p>
 
           <!-- 術前準備 -->
@@ -147,10 +149,12 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
 
     <UDialog v-model="reqOpen" :title="`申請手術：${v?.patientName ?? ''}`" @submit="submitReq">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="sm:col-span-2"><USelect v-model="form.urgency" label="時效" :options="[{ label: '擇期（手術室排日期）', value: '' }, ...(Object.keys(URGENCY_LABEL) as SurgeryUrgency[]).map((k) => ({ label: `急刀・${URGENCY_LABEL[k]}（${URGENCY_MINUTES[k] / 60} 小時內入刀房）`, value: k }))]" :error="req.fieldErrors.value.urgency" />
+          <p v-if="form.urgency" class="mt-1 text-xs text-red-700">急刀從現在起算，手術室可排在開放時段外；撞到的擇期手術由手術室改期。</p></div>
         <div class="sm:col-span-2"><USelect :model-value="form.procId" label="術式" required :options="(opts?.procs ?? []).map((p) => ({ label: p.name, value: p.id }))" placeholder="選擇術式" :error="req.fieldErrors.value.procId" @update:model-value="pickProc" /></div>
         <USelect v-model="form.side" label="左右側" required :options="(Object.keys(SIDE_LABEL) as SurgerySide[]).map((k) => ({ label: SIDE_LABEL[k], value: k }))" placeholder="選擇" :error="req.fieldErrors.value.side" />
         <USelect v-model="form.anesthesia" label="麻醉方式" required :options="(Object.keys(ANESTHESIA_LABEL) as AnesthesiaType[]).map((k) => ({ label: ANESTHESIA_LABEL[k], value: k }))" :error="req.fieldErrors.value.anesthesia" />
-        <UInput v-model="form.requestedDate" type="date" label="預計日期" required :error="req.fieldErrors.value.requestedDate" />
+        <UInput v-if="!form.urgency" v-model="form.requestedDate" type="date" label="預計日期" required :error="req.fieldErrors.value.requestedDate" />
         <UInput v-model="form.estMinutes" type="number" label="預估時間（分鐘）" required :error="req.fieldErrors.value.estMinutes" />
         <div class="sm:col-span-2"><UInput v-model="form.diagnosis" label="術前診斷" required :error="req.fieldErrors.value.diagnosis" /></div>
         <div class="sm:col-span-2"><UInput v-model="form.note" label="備註（選填，例：病人有抗凝血藥、術前停藥）" /></div>

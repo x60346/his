@@ -15112,6 +15112,100 @@ try {
     }
     await as('clerk01')
   }
+  // 緊急手術（急刀）：三級時限（立即 1h、緊急 6h、次緊急 24h）；申請到入刀房計時；可排在開放時段外；
+  // 急刀只和急刀撞期，撞到的擇期列「需改期」（不自動移）；首頁待入刀房與超時；30 天時效達成率；種子
+  console.log('\n[緊急手術（急刀）]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const T = dateUtil.today()
+    const t0 = dateUtil.now()
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    ok(api.URGENCY_MINUTES.immediate === 60 && api.URGENCY_MINUTES.urgent === 360 && api.URGENCY_MINUTES.semi === 1440, '時限：立即 1 小時、緊急 6 小時、次緊急 24 小時')
+    const base = { urgency: 'urgent', createdAt: '2026-11-18 10:00', status: 'requested' }
+    ok(api.emergencyState(base, '2026-11-18 15:59').state === 'waiting' && api.emergencyState(base, '2026-11-18 16:01').state === 'overdue', '還沒入刀房：時限內等待、超過')
+    ok(api.emergencyState({ ...base, sentAt: '2026-11-18 16:00' }, '2026-11-19 09:00').state === 'ontime' && api.emergencyState({ ...base, sentAt: '2026-11-18 16:05' }, '2026-11-19 09:00').state === 'late', '入刀房：剛好到時限算達成、超過算未達成（以送手術室時間計）')
+    ok(api.emergencyState({ createdAt: base.createdAt, status: 'requested' }, t0) === undefined && api.emergencyState({ ...base, status: 'cancelled' }, t0) === undefined, '擇期、取消的沒有時效')
+    const r = api.emergencyRate([{ ...base, sentAt: '2026-11-18 11:00' }, { ...base, sentAt: '2026-11-18 17:00' }, base], '2026-11-18 12:00')
+    ok(r.total === 2 && r.ontime === 1 && r.pct === 50, '達成率只算已入刀房的')
+
+    // 種子：急診留觀闌尾炎緊急申請、等 4 小時沒排；昨天立即疝氣嵌頓 45 分入刀房
+    const er = db().surgeries.find((s) => s.id === 'SG-SEED-ER')
+    ok(er.urgency === 'urgent' && er.status === 'requested' && er.admissionId === 'A-ER-OBS' && Math.abs(api.emergencyState(er, t0).minutes - 240) <= 2, '種子：急診留觀病人申請緊急闌尾切除、還沒排')
+    const sy = db().surgeries.find((s) => s.id === 'SG-SEED-4')
+    ok(sy.urgency === 'immediate' && sy.status === 'done' && api.emergencyState(sy, t0).state === 'ontime' && api.emergencyState(sy, t0).minutes === 45 && sy.schedule.start.slice(11) > api.OR_DAY.end, '種子：昨天立即急刀 45 分鐘入刀房（開放時段外）')
+    await as('nurse01')
+    let b = await S.orBoard(T)
+    ok(b.requested[0].id === er.id && b.requested[0].urgencyLabel === '緊急' && b.requested[0].emergency.state === 'waiting', '待排程：急刀排最前面、標等級與時效')
+    ok(b.emergencyStats.total === 1 && b.emergencyStats.pct === 100, '時效達成率（30 天）：1/1')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.emergencyWaiting === 1 && dash.emergencyOverdue === 0, '首頁：急刀待入刀房 1（還沒超時）')
+
+    // 申請
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const adm2 = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.id !== adm.id && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const input = { admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: addDaysT(3), estMinutes: 60, diagnosis: '左側腹股溝疝氣嵌頓' }
+    await as(userOf(adm.doctorId))
+    let f = await errOf(() => S.requestSurgery({ ...input, urgency: 'asap' }))
+    ok(f.includes('急刀等級'), '等級不對擋下')
+    const e1 = await S.requestSurgery({ ...input, urgency: 'immediate' })
+    ok(e1.urgency === 'immediate' && e1.requestedDate === T && e1.emergency.due === dateUtil.addMinutes(db().surgeries.find((s) => s.id === e1.id).createdAt, 60) && db().auditLogs[0].action === '申請急刀', '立即：預計日期一律今天、1 小時內要入刀房、稽核「申請急刀」')
+    // 擇期一台：明天 09:00 OR3
+    await as(userOf(adm2.doctorId))
+    const el = await S.requestSurgery({ ...input, admissionId: adm2.id, side: 'right', requestedDate: tomorrow, diagnosis: '右側腹股溝疝氣' })
+    await as('nurse01')
+    await S.scheduleSurgery(el.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+
+    // 排程：開放時段外可以、只和急刀撞期
+    f = await errOf(() => S.scheduleSurgery(el.id, { room: 'OR3', start: `${tomorrow} 21:00` }))
+    ok(f.includes('開放'), '擇期不能排在開放時段外')
+    let v = await S.scheduleSurgery(e1.id, { room: 'OR1', start: `${T} 22:00` })
+    ok(v.status === 'scheduled' && v.schedule.start === `${T} 22:00`, '急刀可以排在開放時段外（夜間）')
+    v = await S.scheduleSurgery(e1.id, { room: 'OR3', start: `${tomorrow} 09:30` })
+    ok(v.status === 'scheduled' && !v.bumpedBy, '急刀可以排在擇期手術的時段（擇期不擋）')
+    b = await S.orBoard(tomorrow)
+    const bumped = b.cases.find((c) => c.id === el.id)
+    ok(bumped.bumpedBy?.includes(e1.no) && bumped.bumpedBy.includes('改期') && b.needsReschedule === 1, `撞到的擇期列需改期：「${bumped.bumpedBy}」`)
+    ok(db().surgeries.find((s) => s.id === el.id).schedule.start === `${tomorrow} 09:00`, '擇期不會自動移')
+    f = await errOf(() => S.scheduleSurgery(er.id, { room: 'OR3', start: `${tomorrow} 10:00` }))
+    ok(f.includes(e1.no), `急刀和急刀撞期擋下：「${f}」`)
+    f = await errOf(() => S.scheduleSurgery(el.id, { room: 'OR3', start: `${tomorrow} 09:45` }))
+    ok(f.includes(e1.no), '擇期改期也不能撞急刀')
+    await S.scheduleSurgery(el.id, { room: 'OR2', start: `${tomorrow} 09:00` })
+    ok(!(await S.orBoard(tomorrow)).cases.find((c) => c.id === el.id).bumpedBy && (await S.orBoard(tomorrow)).needsReschedule === 0, '改期後不再列需改期')
+
+    // 入刀房計時：送手術室（術前準備完成）→ 時效達成
+    v = await S.scheduleSurgery(e1.id, { room: 'OR1', start: dateUtil.addMinutes(dateUtil.now(), 10) })
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(e1.id, k)
+    await S.markPrep(e1.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(e1.id, 'abx', { notNeeded: '麻醉誘導時給' })
+    v = await S.sendToOr(e1.id)
+    ok(v.emergency.state === 'ontime' && v.emergency.minutes <= 60, `送手術室：申請到入刀房 ${v.emergency.minutes} 分（時限內）`)
+    b = await S.orBoard(T)
+    ok(b.emergencyStats.total === 2 && b.emergencyStats.ontime === 2, '達成率加進這一台：2/2')
+
+    // 超時：種子那台改成 7 小時前申請（測試輔助）→ 首頁標紅
+    db().surgeries.find((s) => s.id === er.id).createdAt = dateUtil.addMinutes(dateUtil.now(), -7 * 60)
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.emergencyWaiting === 1 && dash.emergencyOverdue === 1, '首頁：急刀超過時限 1（送了的那台不算待入刀房）')
+    ok((await S.orBoard(T)).requested.find((x) => x.id === er.id).emergency.state === 'overdue', '手術室待排程標超時')
+    await as('clerk01')
+    ok((await api.dashboardApi.getDashboard()).emergencyWaiting === undefined, '沒有手術排程權限的看不到這個待辦')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/or/OrPage.vue', 'utf8')
+    ok(!/db\.|URGENCY_MINUTES|createdAt/.test(page) && page.includes('s.emergency.state'), '時效由服務層算（emergencyState），頁面只顯示')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

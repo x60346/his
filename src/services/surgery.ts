@@ -1,13 +1,13 @@
 // 手術排程與術前核對：主治申請 → 手術室排程（權限「手術排程」，同房不能撞）→ 病房術前準備（同意書、禁食、部位標記、備血、預防性抗生素）
 // → 送手術室（準備沒完成擋）→ 麻醉前查核 → 劃刀前暫停確認 → 開始（沒暫停確認擋）→ 離開前查核＋紗布器械計數 → 完成（不符要原因、主刀看得到）
 // → 主刀寫手術紀錄。做完的手術與麻醉費列入住院帳單（surgery-work.surgeryFeeItems）。規則在 surgery-rules
-import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide } from '@/types'
+import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
-import { addMinutes, now, today } from '@/utils/date'
+import { addDays, addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
-import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL } from './surgery-rules'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
-import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
+import { bumpedByEmergency, surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
 import { preIncisionOf } from './prophylaxis-work'
@@ -63,6 +63,8 @@ export interface SurgeryInput {
   estMinutes: number
   diagnosis: string
   note?: string
+  /** 急刀等級（沒有＝擇期）；急刀的預計日期一律是今天 */
+  urgency?: SurgeryUrgency
 }
 
 export function requestSurgery(input: SurgeryInput): Promise<SurgeryView> {
@@ -73,6 +75,8 @@ export function requestSurgery(input: SurgeryInput): Promise<SurgeryView> {
     requireCare(u.doctorId, a, '申請手術', { consult: false })
     const t = now()
     const est = Number(input.estMinutes)
+    if (input.urgency && !(input.urgency in URGENCY_LABEL)) failField('urgency', '急刀等級不對')
+    if (input.urgency) input = { ...input, requestedDate: t.slice(0, 10) }
     const e = checkSurgeryInput({ ...input, estMinutes: est }, t.slice(0, 10))
     const proc = input.procId ? find.procedure(input.procId) : undefined
     if (input.procId && (!proc?.surgery || !proc.active)) e.procId = '這不是可以申請的術式'
@@ -81,11 +85,11 @@ export function requestSurgery(input: SurgeryInput): Promise<SurgeryView> {
     const s: Surgery = {
       id: newId('SG'), no: `OR${d.replace(/-/g, '')}${String(nextCounter(`surgery:${d}`)).padStart(3, '0')}`,
       admissionId: a.id, patientId: a.patientId, doctorId: u.doctorId!, procId: proc!.id, side: input.side, anesthesia: input.anesthesia,
-      diagnosis: input.diagnosis.trim(), requestedDate: input.requestedDate, estMinutes: est, ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      diagnosis: input.diagnosis.trim(), requestedDate: input.requestedDate, estMinutes: est, ...(input.note?.trim() ? { note: input.note.trim() } : {}), ...(input.urgency ? { urgency: input.urgency } : {}),
       status: 'requested', createdAt: t, prep: {}, checks: {},
     }
     db.surgeries.push(s)
-    audit('申請手術', `${audText(s)}，${ANESTHESIA_LABEL[s.anesthesia]}，預計 ${s.requestedDate}`)
+    audit(s.urgency ? '申請急刀' : '申請手術', `${audText(s)}，${ANESTHESIA_LABEL[s.anesthesia]}，${s.urgency ? `${URGENCY_LABEL[s.urgency]}（${URGENCY_MINUTES[s.urgency] / 60} 小時內入刀房）` : `預計 ${s.requestedDate}`}`)
     return surgeryView(s)
   })
 }
@@ -142,8 +146,11 @@ export interface OrBoard {
   canSchedule: boolean
   /** 這天排在各房的（取消的不列） */
   cases: SurgeryView[]
-  /** 待排程（不分日期） */
+  /** 待排程（不分日期；急刀在前，依等級、申請時間） */
   requested: SurgeryView[]
+  /** 近 30 天急刀時效達成率；擇期被急刀佔用要改期的筆數 */
+  emergencyStats: { total: number; ontime: number; pct: number }
+  needsReschedule: number
 }
 
 export function orBoard(date: string): Promise<OrBoard> {
@@ -154,7 +161,10 @@ export function orBoard(date: string): Promise<OrBoard> {
     return {
       date: d, rooms: OR_ROOMS, canSchedule: permissionsOf(u).includes('surgery.schedule'),
       cases: db.surgeries.filter((s) => s.schedule?.start.startsWith(d) && s.status !== 'cancelled' && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
-      requested: db.surgeries.filter((s) => s.status === 'requested' && find.admission(s.admissionId)?.status === 'admitted').sort((x, y) => x.requestedDate.localeCompare(y.requestedDate)).map(surgeryView),
+      requested: db.surgeries.filter((s) => s.status === 'requested' && find.admission(s.admissionId)?.status === 'admitted')
+        .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
+      emergencyStats: emergencyRate(db.surgeries.filter((s) => s.createdAt >= `${addDays(today(), -30)} 00:00`), now()),
+      needsReschedule: db.surgeries.filter((s) => bumpedByEmergency(s)).length,
     }
   })
 }
@@ -173,8 +183,10 @@ export function scheduleSurgery(id: string, input: { room: string; start: string
     if (input.start < t) failField('start', '不能排在過去的時間')
     const hm = input.start.slice(11)
     const end = addMinutes(input.start, s.estMinutes)
-    if (hm < OR_DAY.start || end.slice(11) > OR_DAY.end || end.slice(0, 10) !== input.start.slice(0, 10)) failField('start', `手術房開放 ${OR_DAY.start}–${OR_DAY.end}（預估 ${s.estMinutes} 分鐘，會超過）`)
-    const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === input.room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, input.start, s.estMinutes))
+    // 急刀可以排在開放時段外（夜間、假日）
+    if (!s.urgency && (hm < OR_DAY.start || end.slice(11) > OR_DAY.end || end.slice(0, 10) !== input.start.slice(0, 10))) failField('start', `手術房開放 ${OR_DAY.start}–${OR_DAY.end}（預估 ${s.estMinutes} 分鐘，會超過）`)
+    // 急刀只和急刀比（撞到的擇期列「需改期」，不自動移）；擇期和所有的比
+    const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === input.room && x.status !== 'cancelled' && x.status !== 'done' && (!s.urgency || x.urgency) && overlaps(x.schedule.start, x.estMinutes, input.start, s.estMinutes))
     if (clash) failField('start', `${input.room} 這段時間已排 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起 ${clash.estMinutes} 分鐘）`, 'CONFLICT')
     const old = s.schedule
     s.schedule = { room: input.room, start: input.start, by: u.id, at: t }

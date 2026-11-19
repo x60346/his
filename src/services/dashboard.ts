@@ -50,6 +50,7 @@ import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
 import { tatOpen } from './tat-work'
 import { downtimeClash, downtimeEnd, examDayOf, outOfHours } from './exam-rules'
 import { planOverdue } from './incident-rules'
+import { emergencyState } from './surgery-rules'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -236,6 +237,9 @@ export interface DashboardStats {
   /** 病安事件審查：還沒結案的；RCA 行動計畫過期的 */
   incidentPending?: number
   rcaOverdue?: number
+  /** 手術排程：急刀還沒入刀房的、已超過時限的 */
+  emergencyWaiting?: number
+  emergencyOverdue?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -398,6 +402,7 @@ export function getDashboard(): Promise<DashboardStats> {
             swapToRespond: db.shiftRequests.filter((r) => r.targetId === me.id && r.status === 'pending-peer').length,
             myRequestResults: db.shiftRequests.filter((r) => r.requesterId === me.id && ['approved', 'rejected', 'declined'].includes(r.status) && (r.decidedAt ?? r.peer?.at ?? '') >= addMinutes(t, -24 * 60)).length,
           } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('surgery.schedule') ? ((xs) => ({ emergencyWaiting: xs.length, emergencyOverdue: xs.filter((s) => emergencyState(s, t)?.state === 'overdue').length }))(db.surgeries.filter((s) => s.urgency && !s.sentAt && (s.status === 'requested' || s.status === 'scheduled') && db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')) : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length, rcaOverdue: db.incidents.flatMap((x) => x.rca?.plans ?? []).filter((p) => planOverdue(p, today())).length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),

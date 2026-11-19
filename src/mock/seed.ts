@@ -1984,6 +1984,30 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         record: { performed: '薦骨壓傷清創術', findings: '壞死組織約 4×3 cm，清除至出血面，無膿瘍', bloodLoss: 20, complications: '無', specimen: '無', by: users.find((u) => u.doctorId === st.doctorId)!.id, at: addMinutes(end, 30) },
       })
     }
+    // 四：昨天 21:10 急刀（立即，1 小時內）：疝氣嵌頓，開放時段外排 OR1，45 分鐘入刀房（時效達成）
+    const y = addDays(T, -1)
+    const used = new Set([frac?.id, appx?.id, st?.id])
+    const hx = admissions.find((a) => a.status === 'admitted' && a.admittedAt && a.admittedAt < `${y} 18:00` && !a.obs && !used.has(a.id))
+    if (hx) {
+      const at = `${y} 21:10`
+      const sent = addMinutes(at, 45)
+      const start = addMinutes(sent, 20)
+      const end = addMinutes(start, 60)
+      surgeries.push({
+        id: 'SG-SEED-4', no: `OR${y.replace(/-/g, '')}001`, admissionId: hx.id, patientId: hx.patientId, doctorId: hx.doctorId, procId: 'P039', side: 'right', anesthesia: 'general', urgency: 'immediate',
+        diagnosis: 'K40.30 右側腹股溝疝氣嵌頓', requestedDate: y, estMinutes: 60, status: 'done', createdAt: at,
+        schedule: { room: 'OR1', start, by: 'U202', at: addMinutes(at, 10) },
+        prep: {
+          consent: mark('U201', addMinutes(at, 20)), npo: mark('U201', addMinutes(at, 20), { notNeeded: '急刀，禁食不足由麻醉評估' }), siteMark: mark('U201', addMinutes(at, 25)),
+          blood: mark('U201', addMinutes(at, 25), { notNeeded: '預估失血少' }), abx: mark('U201', addMinutes(at, 30), { notNeeded: '急刀，麻醉誘導時給' }),
+        },
+        sentAt: sent, sentBy: 'U201',
+        checks: { signIn: { by: 'U205', at: addMinutes(sent, 5) }, timeOut: { by: 'U205', at: addMinutes(start, -2) }, signOut: { by: 'U205', at: end } },
+        startAt: start, endAt: end,
+        counts: { spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 },
+        record: { performed: '右側腹股溝疝氣修補術', findings: '小腸嵌頓約 10 cm，復位後顏色恢復，未切除腸段', bloodLoss: 30, complications: '無', specimen: '無', by: users.find((u) => u.doctorId === hx.doctorId)!.id, at: addMinutes(end, 20) },
+      })
+    }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length
   }
@@ -2060,6 +2084,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         for (let h = 0; addMinutes(placed, h * 240) <= nowStr; h++) {
           const vt = addMinutes(placed, h * 240)
           vitals.push({ id: `VS-ER-OBS-${h}`, admissionId: 'A-ER-OBS', at: vt, temp: h < 3 ? 37.8 : 37.3, pulse: h < 3 ? 100 : 88, resp: 18, sbp: 124, dbp: 76, spo2: 97, pain: h < 3 ? 5 : 3, ...(h < 3 ? { painAction: '協助舒適臥位，禁食中不給口服止痛，通知醫師' } : {}), nurseId: h % 2 ? 'U202' : 'U201' })
+        }
+        // 急刀示範：留觀中右下腹痛加劇、白血球升高，4 小時前申請腹腔鏡闌尾切除術（緊急，6 小時內入刀房）——手術室還沒排（首頁、手術室標示等待時間）
+        {
+          const at = addMinutes(nowStr, -240)
+          const d = at.slice(0, 10)
+          const no = `OR${d.replace(/-/g, '')}${String(surgeries.filter((x) => x.no.startsWith(`OR${d.replace(/-/g, '')}`)).length + 1).padStart(3, '0')}`
+          surgeries.push({
+            id: 'SG-SEED-ER', no, admissionId: 'A-ER-OBS', patientId: op.id, doctorId: erDoc.id, procId: 'P038', side: 'na', anesthesia: 'general', urgency: 'urgent',
+            diagnosis: 'K35.80 急性闌尾炎', requestedDate: d, estMinutes: 90, status: 'requested', createdAt: at,
+            note: '留觀中右下腹痛加劇、反彈痛，白血球 15,800', prep: { npo: { by: 'U201', at: addMinutes(at, 10) } }, checks: {},
+          })
+          counters[`surgery:${d}`] = Math.max(counters[`surgery:${d}`] ?? 0, Number(no.slice(-3)))
         }
         nursingNotes.push({ id: 'NN-ER-OBS', admissionId: 'A-ER-OBS', at: addMinutes(placed, 30), focus: '急性疼痛', data: '病人右下腹痛，疼痛 5 分，噁心。', action: '協助舒適臥位，依醫囑禁食、觀察腹部變化。', response: '病人表示疼痛可忍受。', nurseId: 'U201' })
         // 留觀也做跌倒、壓傷入院評估（打點滴：跌倒中度）

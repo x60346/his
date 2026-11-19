@@ -2304,6 +2304,7 @@ export interface SurgeryPrepMark {
  * → 三段安全查核（麻醉前、劃刀前暫停確認、離開前含紗布器械計數）→ 手術紀錄。
  * 做完自動把術式與麻醉費列入住院帳單
  */
+export type SurgeryUrgency = 'immediate' | 'urgent' | 'semi'
 export interface Surgery {
   id: string
   /** 手術單號 */
@@ -2320,6 +2321,8 @@ export interface Surgery {
   /** 希望的日期 */
   requestedDate: string
   estMinutes: number
+  /** 緊急手術（急刀）：立即（1 小時內入刀房）、緊急（6 小時）、次緊急（24 小時）；沒有＝擇期。從申請起算到送手術室 */
+  urgency?: SurgeryUrgency
   note?: string
   status: SurgeryStatus
   createdAt: string

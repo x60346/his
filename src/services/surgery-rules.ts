@@ -1,7 +1,7 @@
 // 手術排程與術前核對（純函式）：左右側、麻醉方式、手術房、術前準備清單、三段安全查核的項目、狀態、排程撞期、紗布器械計數。
 // 服務層把關、病房與手術室畫面、首頁待辦都用這一份
-import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryStatus } from '@/types'
-import { addMinutes } from '@/utils/date'
+import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryStatus, SurgeryUrgency } from '@/types'
+import { addMinutes, parseDate } from '@/utils/date'
 
 export const SIDE_LABEL: Record<SurgerySide, string> = { left: '左側', right: '右側', bilateral: '兩側', na: '不分側' }
 export const ANESTHESIA_LABEL: Record<AnesthesiaType, string> = { general: '全身麻醉', spinal: '脊髓麻醉', regional: '神經阻斷麻醉', local: '局部麻醉' }
@@ -63,4 +63,30 @@ export function countsProblem(c: { spongeBefore?: number; spongeAfter?: number; 
     if (c.instrumentBefore !== c.instrumentAfter) mismatch.push(`器械 術前 ${c.instrumentBefore}、術後 ${c.instrumentAfter}`)
   }
   return { fields, mismatch }
+}
+
+// ---------- 緊急手術（急刀） ----------
+
+export const URGENCY_LABEL: Record<SurgeryUrgency, string> = { immediate: '立即', urgent: '緊急', semi: '次緊急' }
+/** 從申請到入刀房（送手術室）的時限（分鐘） */
+export const URGENCY_MINUTES: Record<SurgeryUrgency, number> = { immediate: 60, urgent: 360, semi: 1440 }
+export const URGENCY_ORDER: Record<SurgeryUrgency, number> = { immediate: 0, urgent: 1, semi: 2 }
+/** 急刀的期限 */
+export const emergencyDue = (s: Pick<Surgery, 'urgency' | 'createdAt'>) => (s.urgency ? addMinutes(s.createdAt, URGENCY_MINUTES[s.urgency]) : undefined)
+/**
+ * 急刀時效：入刀房了（送手術室）→ ontime／late；還沒→ waiting（時限內）／overdue（超過）。取消的、擇期的沒有
+ */
+export function emergencyState(s: Pick<Surgery, 'urgency' | 'createdAt' | 'sentAt' | 'status'>, now: string): { state: 'ontime' | 'late' | 'waiting' | 'overdue'; due: string; minutes: number } | undefined {
+  if (!s.urgency || s.status === 'cancelled') return undefined
+  const due = emergencyDue(s)!
+  const end = s.sentAt ?? now
+  const minutes = Math.round((parseDate(end).getTime() - parseDate(s.createdAt).getTime()) / 60000)
+  if (s.sentAt) return { state: s.sentAt <= due ? 'ontime' : 'late', due, minutes }
+  return { state: now > due ? 'overdue' : 'waiting', due, minutes }
+}
+/** 急刀時效達成率（已入刀房的；依等級） */
+export function emergencyRate(xs: Pick<Surgery, 'urgency' | 'createdAt' | 'sentAt' | 'status'>[], now: string) {
+  const done = xs.map((s) => emergencyState(s, now)).filter((x): x is NonNullable<typeof x> => !!x && (x.state === 'ontime' || x.state === 'late'))
+  const ontime = done.filter((x) => x.state === 'ontime').length
+  return { total: done.length, ontime, pct: done.length ? Math.round((ontime / done.length) * 100) : 100 }
 }
