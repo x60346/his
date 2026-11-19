@@ -11321,7 +11321,10 @@ try {
     const c1 = await D.checkInLab(p1.patientId)
     ok(c1.no === n0 + 1 && db().auditLogs[0].action === '抽血櫃台報到', `報到取號（接著今天的號碼 ${n0 + 1} 號）、寫稽核`)
 
-    // 印條碼 → 採檢 → 收件 → 發報告
+    // 叫號 → 印條碼 → 採檢 → 收件 → 發報告
+    msg = await errOf(() => D.printDeskLabels(p1.patientId))
+    ok(msg.includes('叫到'), `重新報到還沒叫到號不能印條碼 → 「${msg}」`)
+    ok((await D.callNextLab()).patientId === p1.patientId, '叫下一位：叫到他')
     const xs = await D.printDeskLabels(p1.patientId)
     ok(xs.length === 1 && xs[0].stage === 'printed' && xs[0].tests[0].includes('CBC'), '印條碼：一支紫頭')
     msg = await errOf(() => D.printDeskLabels(p1.patientId))
@@ -12078,6 +12081,84 @@ try {
     ok(f.to?.includes('同科其他醫師'), '升級後不能再通報開立醫師')
     ov = await L.calloutLab(opd.id, { to: ov.calloutSuggest[0], toRole: 'doctor', readBack: true })
     ok(ov.callout.escalated && ov.callout.to !== docName, '通報同科醫師：記升級通報')
+  }
+
+  // 門診抽血叫號：階段判定、過號回來的位置、等候分鐘；種子（CBC 那位叫號中）；叫下一位、重叫上限、過號、回來插隊、叫到才能採檢、權限
+  console.log('\n[門診抽血叫號]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.labDeskApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    // 純函式
+    const c0 = { no: 1, at: '2026-11-19 09:00' }
+    ok(api.queueStage(c0) === 'waiting' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05'] }) === 'called' && api.queueStage({ ...c0, calls: ['x'], servedAt: 'y' }) === 'served' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05'], skippedAt: '2026-11-19 09:08' }) === 'skipped', '階段：等候、叫號中、已採檢、過號')
+    ok(api.queueStage({ ...c0, calls: ['2026-11-19 09:05'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20' }) === 'waiting' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:30'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20' }) === 'called', '過號回來：重新等候；回來後再叫到＝叫號中')
+    const w = (o) => ({ no: o, at: 'x' })
+    ok(api.returnOrder([w(3), w(4), w(5)], [w(1), w(3), w(4), w(5)]) === 4.5 && api.returnOrder([w(3), w(4)], [w(1), w(3), w(4), w(7)]) === 8 && api.returnOrder([], [w(2)]) === 3, '過號回來：插在下兩位之後（第 2、3 位中間）；等候不到兩位排最後')
+    ok(api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:12'] }) === 12 && api.waitedMinutes(c0) === undefined && api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:40'], returnedAt: '2026-11-19 09:30' }) === 10, '等候分鐘：報到到第一次叫號；過號回來的從回來起算')
+    ok(api.avgWait([{ ...c0, calls: ['2026-11-19 09:10'] }, { ...c0, calls: ['2026-11-19 09:21'] }, c0]) === 16 && api.avgWait([c0]) === undefined, '平均等候：有叫到的才算')
+
+    // 種子
+    await as('lab01')
+    let d = await D.labDesk()
+    const p1 = d.checkedIn.find((p) => p.checkin.id === 'LC-SEED-1')
+    ok(d.queue.current?.patientId === p1.patientId && d.queue.current.calls === 1 && p1.queue === 'called' && p1.checkin.no === d.checkedIn.length, `種子：CBC 那位最後報到（${p1.checkin.no} 號）、現在叫號中`)
+    ok(d.checkedIn.filter((p) => p.patientId !== p1.patientId).every((p) => p.queue === 'served') && !d.queue.waiting.length && !d.queue.skipped.length && d.queue.avgWait !== undefined, `種子：其他人都叫到、開始採檢了；今天平均等候 ${d.queue.avgWait} 分鐘`)
+    await as('nurse01')
+    let msg = await errOf(() => D.callNextLab())
+    ok(msg.includes('權限'), '護理師不能叫號')
+
+    // 叫號中的還沒處理不能叫下一位；重叫最多 3 次；過號
+    await as('lab01')
+    msg = await errOf(() => D.callNextLab())
+    ok(msg.includes(`${p1.checkin.no} 號`) && msg.includes('還沒處理'), `目前叫到的還沒處理不能叫下一位 → 「${msg}」`)
+    await D.recallLab(p1.patientId)
+    const r3 = await D.recallLab(p1.patientId)
+    ok(r3.calls.length === 3 && db().auditLogs[0].detail.includes('第 3 次'), '重叫：第 2、3 次（稽核寫第幾次）')
+    msg = await errOf(() => D.recallLab(p1.patientId))
+    ok(msg.includes('請過號'), `叫了 3 次不能再叫 → 「${msg}」`)
+    const sk = await D.skipLab(p1.patientId)
+    ok(api.queueStage(sk) === 'skipped' && db().auditLogs[0].action === '抽血過號', '過號（稽核）')
+    msg = await errOf(() => D.printDeskLabels(p1.patientId))
+    ok(msg.includes('過號'), `過號的不能採檢 → 「${msg}」`)
+    msg = await errOf(() => D.callNextLab())
+    ok(msg.includes('沒有等候'), '沒有等候中的病人')
+    msg = await errOf(() => D.skipLab(p1.patientId))
+    ok(msg.includes('叫號中'), '已過號不能再過號')
+
+    // 再來四位等候（測試：直接報到，沒有檢驗）→ 叫第一位；過號的回來插在下兩位之後
+    const others = db().patients.filter((p) => !db().labCheckins.some((c) => c.patientId === p.id)).slice(0, 4)
+    const base = d.checkedIn.length
+    others.forEach((p, i) => db().labCheckins.push({ id: `LC-T${i}`, no: base + 1 + i, patientId: p.id, date: T, at: dateUtil.now(), by: 'U601' }))
+    db().counters[`labdesk:${T}`] = base + 4
+    let c = await D.callNextLab()
+    ok(c.patientId === others[0].id, '叫下一位：依號碼叫第一位等候的')
+    msg = await errOf(() => D.returnLab(others[1].id))
+    ok(msg.includes('沒有過號'), '沒過號的不能按回來了')
+    const rt = await D.returnLab(p1.patientId)
+    d = await D.labDesk()
+    ok(d.queue.waiting.map((x) => x.patientId).join() === [others[1].id, others[2].id, p1.patientId, others[3].id].join() && d.queue.waiting[2].returned && !d.queue.skipped.length && db().auditLogs[0].detail.includes('前面還有 2 位'), `過號回來：插在目前叫號（${c.no} 號）的下兩位之後`)
+    ok(rt.no === p1.checkin.no, '回來還是原本的號碼')
+    // 依序叫到他才能採檢
+    for (const p of [others[0], others[1], others[2]]) {
+      await D.skipLab(p.id)
+      c = await D.callNextLab()
+    }
+    ok(c.patientId === p1.patientId, '依序叫到過號回來的那位')
+    const xs = await D.printDeskLabels(p1.patientId)
+    d = await D.labDesk()
+    ok(xs.length === 1 && d.checkedIn.find((p) => p.patientId === p1.patientId).queue === 'served' && !d.queue.current, '叫到號才能印條碼採檢；開始採檢後叫號結束')
+    c = await D.callNextLab()
+    ok(c.patientId === others[3].id && d.queue.skipped.length === 3, '接著叫下一位；過號的三位列在過號')
+    ok(typeof d.queue.avgWait === 'number', `平均等候 ${d.queue.avgWait} 分鐘`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

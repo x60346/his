@@ -3060,7 +3060,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
 
   // 門診抽血櫃台（示範，不抽亂數）：今天三位已批價的門診病人加開檢驗（重算收據，日結照樣對得起來）——
-  //   第 1 位 CBC：剛報到、還沒印條碼；第 2 位飯前血糖＋肌酸酐（同是紅頭一支）：已採檢、待檢驗科收件；
+  //   第 1 位 CBC：最後報到、現在叫號中（叫了一次）、還沒印條碼；第 2 位飯前血糖＋肌酸酐（同是紅頭一支）：已採檢、待檢驗科收件；
   //   第 3 位尿液常規：容器已發，等病人交回
   const labCheckins: LabCheckin[] = []
   {
@@ -3080,8 +3080,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const sum = summarize(lines)
       const received = Math.ceil(sum.patientTotal / 100) * 100
       Object.assign(x.c, { lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal, received, change: received - sum.patientTotal })
-      const t0 = addMinutes(nowStr, -60 + i * 10), at = x.c.paidAt > t0 ? x.c.paidAt : t0
-      labCheckins.push({ id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601' })
+      // 叫號：CBC 那位最後報到、現在叫號中（叫了一次）；另外兩位叫到後已開始採檢
+      const t0 = addMinutes(nowStr, -60 + [4, 0, 1][i] * 10), at = x.c.paidAt > t0 ? x.c.paidAt : t0
+      const clamp = (t: string) => (t > nowStr ? nowStr : t)
+      labCheckins.push({ id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601', calls: [clamp(addMinutes(at, i ? 1 : 2))], ...(i ? { servedAt: clamp(addMinutes(at, i === 1 ? 3 : 2)) } : {}) })
       const keys = plan[i].map((p) => `E:${x.e.id}:${p}`)
       if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601' })
       if (i === 2) specimens.push({ id: 'SP-OPD-3', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'urine', orderIds: [], opdKeys: keys, selfCollect: true, createdAt: addMinutes(at, 2), printedAt: addMinutes(at, 2), printedBy: 'U601' })
@@ -3097,7 +3099,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         const labs = (e?.procedures ?? []).filter((p) => procMap.get(p.procId)?.labItems && !p.notDone)
         if (!e || !c || !labs.length || labCheckins.some((x) => x.patientId === v.patientId)) return
         const at = upTo(addMinutes(c.paidAt, 5))
-        labCheckins.push({ id: `LC-SEED-N${labCheckins.length + 1}`, no: 0, patientId: v.patientId, date: T, at, by: 'U601' })
+        labCheckins.push({ id: `LC-SEED-N${labCheckins.length + 1}`, no: 0, patientId: v.patientId, date: T, at, by: 'U601', calls: [upTo(addMinutes(at, 1))], servedAt: upTo(addMinutes(at, 2)) })
         for (const tube of [...new Set(labs.map((p) => procMap.get(p.procId)!.tube ?? 'red'))]) {
           const self = SELF_COLLECT_TUBES.includes(tube)
           const rcv = upTo(addMinutes(at, 20))

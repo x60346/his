@@ -926,7 +926,7 @@ export interface AnalyzerResult {
   releasedBy?: string
 }
 
-/** 門診抽血櫃台報到（一天一位病人一號） */
+/** 門診抽血櫃台報到（一天一位病人一號）＋叫號：叫到號才能採檢；叫了沒來過號，回來插在目前叫號的下兩位之後 */
 export interface LabCheckin {
   id: string
   no: number
@@ -934,6 +934,16 @@ export interface LabCheckin {
   date: string
   at: string
   by: string
+  /** 叫號的時間（重叫會多一筆） */
+  calls?: string[]
+  /** 叫了沒來：過號 */
+  skippedAt?: string
+  /** 過號後回來：重新排隊 */
+  returnedAt?: string
+  /** 開始採檢（印條碼）：叫號結束 */
+  servedAt?: string
+  /** 排隊順序（沒有＝號碼）；過號回來的插在目前叫號的下兩位之後 */
+  order?: number
 }
 
 export interface Procedure {

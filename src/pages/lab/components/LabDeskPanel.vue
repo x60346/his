@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // 門診抽血櫃台（醫檢師）：左邊「已批價、還沒報到」的病人 → 報到取號；右邊今天報到的（依號碼）：
 // 還沒印條碼的檢驗依容器合併 → 印條碼（尿液、痰液是發容器給病人）→ 採檢（容器是病人交回）→ 送檢驗科收件。
-// 被退件的回到「待印條碼」，紅字請病人回來重新採檢。規則在服務層 lab-desk.ts
+// 被退件的回到「待印條碼」，紅字請病人回來重新採檢。上方叫號看板：叫下一位、重叫（最多 3 次）、過號、過號的回來重新排隊；
+// 叫到號才能印條碼採檢。規則在服務層 lab-desk.ts、lab-queue-rules
 import { computed, ref } from 'vue'
-import { Printer, ScanLine, Ticket } from 'lucide-vue-next'
+import { BellRing, Printer, ScanLine, SkipForward, Ticket, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
 import { labDeskApi, TUBE_COLOR, type DeskPatient, type DeskSpecimen } from '@/services'
@@ -23,6 +24,12 @@ async function onScan() {
   if (code.value.trim() && (await collect.run(code.value.trim()))) code.value = ''
 }
 const doPrint = () => window.print()
+// 叫號
+const callNext = useAction(labDeskApi.callNextLab, { success: (c) => `叫號：${c.no} 號` })
+const recall = useAction(labDeskApi.recallLab, { success: (c) => `重叫 ${c.no} 號` })
+const skip = useAction(labDeskApi.skipLab, { success: (c) => `${c.no} 號過號` })
+const back = useAction(labDeskApi.returnLab, { success: (c) => `${c.no} 號回來了，重新排隊` })
+const QTONE = { waiting: 'gray', called: 'blue', served: 'green', skipped: 'red' } as const
 const TONE: Record<string, 'blue' | 'yellow' | 'green' | 'red' | 'gray'> = { printed: 'blue', collected: 'yellow', received: 'green', rejected: 'red' }
 const open = computed(() => data.value?.checkedIn.filter((p) => p.toPrint.length || p.specimens.some((s) => s.stage === 'printed')) ?? [])
 const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.includes(p)) ?? [])
@@ -30,7 +37,35 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
 
 <template>
   <UQueryState :loading="loading && !data" :ready="!!data">
-    <div v-if="data" class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr]">
+    <div v-if="data" class="space-y-4">
+    <!-- 叫號看板 -->
+    <div class="flex flex-wrap items-stretch gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+      <div class="flex min-w-[9rem] flex-col items-center justify-center rounded bg-slate-800 px-4 py-2 text-white">
+        <span class="text-xs text-slate-300">目前叫號</span>
+        <span class="tabular text-3xl font-bold">{{ data.queue.current ? data.queue.current.no : '—' }}</span>
+        <span v-if="data.queue.current" class="text-xs">{{ data.queue.current.patientName }}・第 {{ data.queue.current.calls }} 次</span>
+      </div>
+      <div class="flex min-w-[14rem] flex-1 flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+          <span>等候 <b class="tabular text-base text-slate-900">{{ data.queue.waiting.length }}</b> 位</span>
+          <span>今天平均等候 <b class="tabular text-base text-slate-900">{{ data.queue.avgWait ?? '—' }}</b> 分鐘</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <UButton :icon="BellRing" :loading="callNext.pending.value" :disabled="!!data.queue.current || !data.queue.waiting.length" @click="callNext.run()">叫下一位</UButton>
+          <template v-if="data.queue.current">
+            <UButton variant="secondary" :icon="BellRing" :loading="recall.pending.value" :disabled="data.queue.current.calls >= data.queue.maxCalls" @click="recall.run(data.queue.current.patientId)">重叫</UButton>
+            <UButton variant="ghost" :icon="SkipForward" :loading="skip.pending.value" @click="skip.run(data.queue.current.patientId)">過號</UButton>
+          </template>
+        </div>
+        <p v-if="data.queue.current" class="text-xs text-slate-500">病人來了就在下方按「印條碼」開始採檢；叫了 {{ data.queue.maxCalls }} 次沒來請過號</p>
+        <p v-if="data.queue.waiting.length" class="text-xs text-slate-600">等候：{{ data.queue.waiting.map((w) => `${w.no} 號${w.returned ? '（過號回來）' : ''}`).join('、') }}</p>
+        <p v-if="data.queue.skipped.length" class="flex flex-wrap items-center gap-2 text-xs text-red-700">過號：
+          <span v-for="s in data.queue.skipped" :key="s.no" class="inline-flex items-center gap-1">{{ s.no }} 號 {{ s.patientName }}
+            <UButton size="sm" variant="secondary" :icon="Undo2" :loading="back.pending.value" @click="back.run(s.patientId)">回來了</UButton></span>
+        </p>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr]">
       <UCard :padded="false">
         <template #title><span class="flex items-center gap-2 text-sm font-semibold"><Ticket class="h-4 w-4" />已批價、待報到 <UBadge v-if="data.notCheckedIn.length" tone="yellow">{{ data.notCheckedIn.length }}</UBadge></span></template>
         <p v-if="!data.notCheckedIn.length" class="px-4 py-3 text-sm text-slate-400">沒有待報到的病人</p>
@@ -56,7 +91,8 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
               <div class="flex flex-wrap items-center gap-2">
                 <span class="tabular rounded bg-slate-800 px-1.5 text-xs font-bold text-white">{{ p.checkin?.no }} 號</span>
                 <b>{{ p.patientName }}</b><span class="text-xs text-slate-500">{{ p.chartNo }}・報到 {{ p.checkin?.at.slice(11) }}</span>
-                <UButton v-if="p.toPrint.length" size="sm" class="ml-auto" :icon="Printer" :loading="print.pending.value" @click="onPrint(p)">印條碼</UButton>
+                <UBadge v-if="p.queue" :tone="QTONE[p.queue]">{{ p.queueLabel }}</UBadge>
+                <UButton v-if="p.toPrint.length" size="sm" class="ml-auto" :icon="Printer" :loading="print.pending.value" :disabled="p.queue === 'waiting' || p.queue === 'skipped'" :title="p.queue === 'waiting' ? '還沒叫到號' : p.queue === 'skipped' ? '已過號' : ''" @click="onPrint(p)">印條碼</UButton>
               </div>
               <p v-if="p.recollect" class="text-xs font-semibold text-red-700" role="alert">檢體被退件（{{ p.specimens.filter((s) => s.rejectedReason).map((s) => s.rejectedReason).join('、') }}），請病人回來重新採檢</p>
               <ul v-if="p.toPrint.length" class="space-y-0.5 text-xs text-slate-700">
@@ -74,6 +110,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
           <p v-if="finished.length" class="text-xs text-slate-500">櫃台已處理完（檢體送檢驗科）：{{ finished.map((p) => `${p.checkin?.no} 號 ${p.patientName}`).join('、') }}</p>
         </div>
       </UCard>
+    </div>
     </div>
   </UQueryState>
 
