@@ -12123,14 +12123,16 @@ try {
     await as('lab01')
     let d = await D.labDesk()
     const p1 = d.checkedIn.find((p) => p.checkin.id === 'LC-SEED-1')
-    ok(d.queue.current?.patientId === p1.patientId && d.queue.current.calls === 1 && p1.queue === 'called' && p1.checkin.no === d.checkedIn.length, `種子：CBC 那位最後報到（${p1.checkin.no} 號）、現在叫號中`)
-    ok(d.checkedIn.filter((p) => p.patientId !== p1.patientId).every((p) => p.queue === 'served') && !d.queue.waiting.length && !d.queue.skipped.length && d.queue.avgWait !== undefined, `種子：其他人都叫到、開始採檢了；今天平均等候 ${d.queue.avgWait} 分鐘`)
+    ok(!d.queue.current && p1.queue === 'waiting' && p1.priorityLabel && d.queue.waiting.map((w) => w.patientId).join() === p1.patientId && d.queue.waiting[0].priorityLabel && p1.checkin.no === d.checkedIn.length, `種子：CBC 那位最後報到（${p1.checkin.no} 號）、優先等候中（${p1.priorityLabel}）`)
+    ok(d.checkedIn.filter((p) => p.patientId !== p1.patientId).every((p) => p.queue === 'served') && !d.queue.skipped.length && d.queue.avgWait !== undefined, `種子：其他人都叫到、開始採檢了；今天平均等候 ${d.queue.avgWait} 分鐘`)
     await as('nurse01')
     let msg = await errOf(() => D.callNextLab())
     ok(msg.includes('權限'), '護理師不能叫號')
 
-    // 叫號中的還沒處理不能叫下一位；重叫最多 3 次；過號
+    // 叫號中的還沒處理不能叫下一位；重叫最多 3 次；過號（這段測排隊位置，先拿掉優先）
     await as('lab01')
+    delete db().labCheckins.find((c) => c.id === 'LC-SEED-1').priority
+    ok((await D.callNextLab()).patientId === p1.patientId, '叫下一位：叫到他')
     msg = await errOf(() => D.callNextLab())
     ok(msg.includes(`${p1.checkin.no} 號`) && msg.includes('還沒處理'), `目前叫到的還沒處理不能叫下一位 → 「${msg}」`)
     await D.recallLab(p1.patientId)
@@ -12344,6 +12346,90 @@ try {
     let msg = ''
     try { await api.tatApi.tatBoard() } catch (e) { msg = e.message }
     ok(msg.includes('權限'), '護理師不能看檢驗時效')
+  }
+
+  // 叫號優先與候診螢幕：優先判定、下一位與叫號順序（連續兩位優先後輪一般）、姓名遮罩；種子（優先等候）、候診螢幕不用登入只給遮過的名字、
+  // 依序叫號與看板順序一致、報到時選優先、報到後改優先、權限
+  console.log('\n[叫號優先與候診螢幕]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.labDeskApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    // 純函式
+    ok(api.priorityOf(75) === 'elderly' && api.priorityOf(80, 'disabled') === 'elderly' && api.priorityOf(74, 'mobility') === 'mobility' && api.priorityOf(74, 'disabled') === 'disabled' && api.priorityOf(74, 'x') === undefined && api.priorityOf(74) === undefined, '優先：75 歲以上自動；其他是身心障礙、行動不便')
+    const q = (no, priority) => ({ no, at: 'x', ...(priority ? { priority } : {}) })
+    const ws = [q(1), q(2, 'mobility'), q(3), q(4, 'elderly'), q(5, 'disabled')]
+    ok(api.pickNext(ws, 0).no === 2 && api.pickNext(ws, 1).no === 2 && api.pickNext(ws, 2).no === 1 && api.pickNext([q(4, 'elderly')], 2).no === 4 && api.pickNext([], 0) === undefined, '下一位：優先在前；連續叫兩位優先後輪一般（沒有一般就照叫優先）')
+    ok(api.callOrder(ws, 0).map((x) => x.no).join() === '2,4,1,5,3' && api.callOrder(ws, 2).map((x) => x.no).join() === '1,2,4,3,5', `叫號順序：${api.callOrder(ws, 0).map((x) => x.no).join('、')}（優先、優先、一般、優先、一般）`)
+    ok(api.maskName('王小明') === '王○明' && api.maskName('陳一') === '陳○' && api.maskName('歐陽小明') === '歐○○明' && api.maskName('林') === '林', '姓名遮罩：王○明')
+
+    // 種子：優先等候；候診螢幕不用登入
+    await as('lab01')
+    let d = await D.labDesk()
+    const p1 = d.checkedIn.find((p) => p.checkin.id === 'LC-SEED-1')
+    const pt1 = db().patients.find((p) => p.id === p1.patientId)
+    ok(p1.priorityLabel && p1.checkin.priority === api.priorityOf(dateUtil.ageOf(pt1.birthDate, T), 'mobility'), `種子：CBC 那位優先等候（${p1.priorityLabel}）`)
+    await api.authApi.logout()
+    let scr = await D.labQueueDisplay()
+    ok(!scr.current && scr.next.length === 1 && scr.next[0].no === p1.checkin.no && scr.next[0].priority && scr.next[0].name === api.maskName(pt1.name) && scr.next[0].name !== pt1.name && scr.waitingCount === 1, `候診螢幕（沒登入）：接下來 ${scr.next[0].no} 號 ${scr.next[0].name}（優先）`)
+    ok(JSON.stringify(scr).indexOf(pt1.name) < 0 && JSON.stringify(scr).indexOf(pt1.chartNo) < 0, '候診螢幕沒有全名、病歷號')
+    let msg = await errOf(() => D.labDesk())
+    ok(msg.includes('登入'), '沒登入不能看櫃台畫面')
+
+    // 再來五位（測試：直接報到）：一般 A、B，優先 C、D、E → 叫號順序 p1、C、A、D、E、B
+    await as('lab01')
+    const free = db().patients.filter((p) => !db().labCheckins.some((c) => c.patientId === p.id)).slice(0, 5)
+    const base = d.checkedIn.length
+    const pr = [undefined, undefined, 'mobility', 'disabled', 'mobility']
+    free.forEach((p, i) => db().labCheckins.push({ id: `LC-P${i}`, no: base + 1 + i, patientId: p.id, date: T, at: dateUtil.now(), by: 'U601', ...(pr[i] ? { priority: pr[i] } : {}) }))
+    db().counters[`labdesk:${T}`] = base + 5
+    const expect = [p1.patientId, free[2].id, free[0].id, free[3].id, free[4].id, free[1].id]
+    d = await D.labDesk()
+    ok(d.queue.waiting.map((w) => w.patientId).join() === expect.join() && d.queue.waiting[0].priorityLabel && !d.queue.waiting[2].priorityLabel, '看板：接下來的順序（優先、優先、一般、優先、優先、一般）')
+    scr = await D.labQueueDisplay()
+    ok(scr.next.length === 5 && scr.waitingCount === 6 && scr.next.map((n) => n.no).join() === d.queue.waiting.slice(0, 5).map((w) => w.no).join(), '候診螢幕：接下來五位、順序和櫃台一樣')
+    const called = []
+    for (let i = 0; i < 6; i++) {
+      const c = await D.callNextLab()
+      called.push(c.patientId)
+      if (i === 0) {
+        scr = await D.labQueueDisplay()
+        ok(scr.current?.no === c.no && scr.next[0].no !== c.no, `候診螢幕：目前叫號 ${scr.current?.no}`)
+      }
+      await D.skipLab(c.patientId)
+    }
+    ok(called.join() === expect.join(), '實際叫號順序和看板預告的一樣（連續兩位優先後輪一位一般）')
+    ok(db().auditLogs.some((x) => x.action === '抽血叫號' && x.detail.includes('優先')), '稽核：叫到優先的標「優先」')
+
+    // 報到後改優先；75 歲以上不能取消；開始採檢後不能改
+    const b = free[1].id
+    await D.returnLab(b)
+    let c = await D.setLabPriority(b, 'mobility')
+    ok(c.priority === 'mobility' && db().auditLogs[0].action === '抽血櫃台優先', '報到後改為優先（行動不便）')
+    c = await D.setLabPriority(b, null)
+    ok(!c.priority, '取消優先')
+    msg = await errOf(() => D.setLabPriority(b, 'vip'))
+    ok(msg.includes('身心障礙'), '只有身心障礙、行動不便')
+    const old = db().patients.find((p) => dateUtil.ageOf(p.birthDate, T) >= 75 && !db().labCheckins.some((x) => x.patientId === p.id))
+    db().labCheckins.push({ id: 'LC-OLD', no: base + 6, patientId: old.id, date: T, at: dateUtil.now(), by: 'U601', priority: 'elderly' })
+    msg = await errOf(() => D.setLabPriority(old.id, null))
+    ok(msg.includes('75 歲以上'), '75 歲以上自動優先，不能取消')
+    const served = d.checkedIn.find((p) => p.queue === 'served')
+    msg = await errOf(() => D.setLabPriority(served.patientId, 'mobility'))
+    ok(msg.includes('開始採檢'), '開始採檢後不能改')
+
+    // 報到時選優先（重新報到 CBC 那位）
+    db().labCheckins = db().labCheckins.filter((x) => x.patientId !== p1.patientId)
+    c = await D.checkInLab(p1.patientId, { priority: 'disabled' })
+    ok(c.priority === api.priorityOf(dateUtil.ageOf(pt1.birthDate, T), 'disabled') && db().auditLogs[0].detail.includes('優先'), `報到時選優先：${c.priority}（75 歲以上不管選什麼都是 elderly）`)
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

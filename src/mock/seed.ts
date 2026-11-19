@@ -61,6 +61,7 @@ import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
+import { priorityOf } from '@/services/lab-queue-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
@@ -3072,7 +3073,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
 
   // 門診抽血櫃台（示範，不抽亂數）：今天三位已批價的門診病人加開檢驗（重算收據，日結照樣對得起來）——
-  //   第 1 位 CBC：最後報到、現在叫號中（叫了一次）、還沒印條碼；第 2 位飯前血糖＋肌酸酐（同是紅頭一支）：已採檢、待檢驗科收件；
+  //   第 1 位 CBC：最後報到、優先等候中、還沒印條碼；第 2 位飯前血糖＋肌酸酐（同是紅頭一支）：已採檢、待檢驗科收件；
   //   第 3 位尿液常規：容器已發，等病人交回
   const labCheckins: LabCheckin[] = []
   {
@@ -3092,10 +3093,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const sum = summarize(lines)
       const received = Math.ceil(sum.patientTotal / 100) * 100
       Object.assign(x.c, { lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal, received, change: received - sum.patientTotal })
-      // 叫號：CBC 那位最後報到、現在叫號中（叫了一次）；另外兩位叫到後已開始採檢
+      // 叫號：CBC 那位最後報到、優先等候中（75 歲以上自動；不到的當作行動不便、坐輪椅）；另外兩位叫到後已開始採檢
       const t0 = addMinutes(nowStr, -60 + [4, 0, 1][i] * 10), at = x.c.paidAt > t0 ? x.c.paidAt : t0
       const clamp = (t: string) => (t > nowStr ? nowStr : t)
-      labCheckins.push({ id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601', calls: [clamp(addMinutes(at, i ? 1 : 2))], ...(i ? { servedAt: clamp(addMinutes(at, i === 1 ? 3 : 2)) } : {}) })
+      const pt = patients.find((p) => p.id === x.v.patientId)!
+      labCheckins.push({
+        id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601',
+        ...(i ? { calls: [clamp(addMinutes(at, 1))], servedAt: clamp(addMinutes(at, i === 1 ? 3 : 2)) } : { priority: priorityOf(ageOf(pt.birthDate, T), 'mobility') }),
+      })
       const keys = plan[i].map((p) => `E:${x.e.id}:${p}`)
       if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601' })
       if (i === 2) specimens.push({ id: 'SP-OPD-3', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'urine', orderIds: [], opdKeys: keys, selfCollect: true, createdAt: addMinutes(at, 2), printedAt: addMinutes(at, 2), printedBy: 'U601' })

@@ -72,6 +72,7 @@ export const appRoutes: RouteRecordRaw[] = [
 ]
 
 export const routes: RouteRecordRaw[] = [
+  { path: '/queue', name: 'queue', component: () => import('@/pages/queue/QueueDisplayPage.vue'), meta: { public: true, title: '抽血候診' } },
   { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue'), meta: { public: true, title: '登入' } },
   // 延遲載入：MainLayout 會讀取本檔的 appRoutes 產生選單，靜態 import 會形成循環依賴
   { path: '/', component: () => import('@/layouts/MainLayout.vue'), children: appRoutes },

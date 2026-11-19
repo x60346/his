@@ -950,6 +950,8 @@ export interface LabCheckin {
   servedAt?: string
   /** 排隊順序（沒有＝號碼）；過號回來的插在目前叫號的下兩位之後 */
   order?: number
+  /** 優先（75 歲以上自動、身心障礙、行動不便）：排在一般前面，但連續叫兩位優先後要叫一位一般 */
+  priority?: 'elderly' | 'disabled' | 'mobility'
 }
 
 export interface Procedure {

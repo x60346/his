@@ -12,7 +12,7 @@ export const QUEUE_RETURN_AFTER = 2
 export type QueueStage = 'waiting' | 'called' | 'served' | 'skipped'
 export const QUEUE_STAGE_LABEL: Record<QueueStage, string> = { waiting: '等候中', called: '叫號中', served: '已採檢', skipped: '過號' }
 
-type C = Pick<LabCheckin, 'no' | 'at' | 'calls' | 'skippedAt' | 'returnedAt' | 'servedAt' | 'order' | 'callsAtReturn'>
+type C = Pick<LabCheckin, 'no' | 'at' | 'calls' | 'skippedAt' | 'returnedAt' | 'servedAt' | 'order' | 'callsAtReturn' | 'priority'>
 /** 這一輪（過號回來後）叫了幾次：時間只到分鐘，回來和再叫可能同一分鐘，所以用回來時的叫號次數切 */
 export const callsSinceReturn = (c: Pick<C, 'calls' | 'returnedAt' | 'callsAtReturn'>) => (c.calls?.length ?? 0) - (c.returnedAt ? c.callsAtReturn ?? 0 : 0)
 /** 目前在哪一步：開始採檢了＝served；過號還沒回來＝skipped；回來後（或從沒過號）有叫過＝called；其他＝waiting */
@@ -41,3 +41,37 @@ export function avgWait(cs: C[]): number | undefined {
   const xs = cs.map(waitedMinutes).filter((x): x is number => x !== undefined)
   return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : undefined
 }
+
+// ── 優先叫號：75 歲以上（自動）、身心障礙、行動不便。優先排在一般前面，但連續叫兩位優先後要叫一位一般（一般的不會一直等） ──
+
+export type QueuePriority = NonNullable<LabCheckin['priority']>
+export const QUEUE_PRIORITY_LABEL: Record<QueuePriority, string> = { elderly: '75 歲以上', disabled: '身心障礙', mobility: '行動不便' }
+export const QUEUE_PRIORITY_AGE = 75
+/** 連續叫幾位優先後，要叫一位一般 */
+export const QUEUE_PRIORITY_STREAK = 2
+/** 報到時的優先：75 歲以上自動；其他看櫃台勾的（身心障礙、行動不便） */
+export const priorityOf = (age: number, chosen?: string): QueuePriority | undefined =>
+  age >= QUEUE_PRIORITY_AGE ? 'elderly' : chosen === 'disabled' || chosen === 'mobility' ? chosen : undefined
+
+/** 下一位要叫誰：有優先、而且連續叫優先還不到兩位（或沒有一般在等）→ 優先的第一位；否則一般的第一位。streak＝目前連續叫了幾位優先 */
+export function pickNext<T extends C>(waiting: T[], streak: number): T | undefined {
+  const w = [...waiting].sort((a, b) => queueOrder(a) - queueOrder(b))
+  const pri = w.filter((c) => c.priority)
+  const norm = w.filter((c) => !c.priority)
+  return pri.length && (streak < QUEUE_PRIORITY_STREAK || !norm.length) ? pri[0] : norm[0]
+}
+/** 接下來的叫號順序（看板、候診螢幕）：照 pickNext 一位一位排 */
+export function callOrder<T extends C>(waiting: T[], streak: number): T[] {
+  const left = [...waiting]
+  const out: T[] = []
+  let s = streak
+  while (left.length) {
+    const n = pickNext(left, s)!
+    out.push(n)
+    left.splice(left.indexOf(n), 1)
+    s = n.priority ? s + 1 : 0
+  }
+  return out
+}
+/** 候診螢幕的姓名遮罩：王小明 → 王○明、陳一 → 陳○、歐陽小明 → 歐○○明 */
+export const maskName = (name: string) => (name.length <= 1 ? name : name.length === 2 ? `${name[0]}○` : `${name[0]}${'○'.repeat(name.length - 2)}${name.at(-1)}`)

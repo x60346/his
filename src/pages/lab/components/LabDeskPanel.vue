@@ -3,8 +3,8 @@
 // 還沒印條碼的檢驗依容器合併 → 印條碼（尿液、痰液是發容器給病人）→ 採檢（容器是病人交回）→ 送檢驗科收件。
 // 被退件的回到「待印條碼」，紅字請病人回來重新採檢。上方叫號看板：叫下一位、重叫（最多 3 次）、過號、過號的回來重新排隊；
 // 叫到號才能印條碼採檢。規則在服務層 lab-desk.ts、lab-queue-rules
-import { computed, ref } from 'vue'
-import { BellRing, Printer, ScanLine, SkipForward, Ticket, Undo2 } from 'lucide-vue-next'
+import { computed, reactive, ref } from 'vue'
+import { BellRing, ExternalLink, Printer, ScanLine, SkipForward, Ticket, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
 import { labDeskApi, TUBE_COLOR, type DeskPatient, type DeskSpecimen } from '@/services'
@@ -30,6 +30,14 @@ const recall = useAction(labDeskApi.recallLab, { success: (c) => `重叫 ${c.no}
 const skip = useAction(labDeskApi.skipLab, { success: (c) => `${c.no} 號過號` })
 const back = useAction(labDeskApi.returnLab, { success: (c) => `${c.no} 號回來了，重新排隊` })
 const QTONE = { waiting: 'gray', called: 'blue', served: 'green', skipped: 'red' } as const
+// 優先：報到時選（75 歲以上自動）；報到後也能改
+const prio = reactive<Record<string, '' | 'disabled' | 'mobility'>>({})
+async function onCheckIn(p: DeskPatient) {
+  const x = prio[p.patientId]
+  await checkIn.run(p.patientId, x ? { priority: x } : {})
+}
+const setPrio = useAction(labDeskApi.setLabPriority, { success: (c) => (c.priority ? `${c.no} 號改為優先` : `${c.no} 號取消優先`) })
+const screenUrl = `${location.origin}${location.pathname}#/queue`
 const TONE: Record<string, 'blue' | 'yellow' | 'green' | 'red' | 'gray'> = { printed: 'blue', collected: 'yellow', received: 'green', rejected: 'red' }
 const open = computed(() => data.value?.checkedIn.filter((p) => p.toPrint.length || p.specimens.some((s) => s.stage === 'printed')) ?? [])
 const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.includes(p)) ?? [])
@@ -49,6 +57,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
         <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
           <span>等候 <b class="tabular text-base text-slate-900">{{ data.queue.waiting.length }}</b> 位</span>
           <span>今天平均等候 <b class="tabular text-base text-slate-900">{{ data.queue.avgWait ?? '—' }}</b> 分鐘</span>
+          <a :href="screenUrl" target="_blank" rel="noopener" class="ml-auto inline-flex items-center gap-1 text-blue-700 hover:underline"><ExternalLink class="h-3.5 w-3.5" />候診螢幕</a>
         </div>
         <div class="flex flex-wrap gap-2">
           <UButton :icon="BellRing" :loading="callNext.pending.value" :disabled="!!data.queue.current || !data.queue.waiting.length" @click="callNext.run()">叫下一位</UButton>
@@ -58,7 +67,10 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
           </template>
         </div>
         <p v-if="data.queue.current" class="text-xs text-slate-500">病人來了就在下方按「印條碼」開始採檢；叫了 {{ data.queue.maxCalls }} 次沒來請過號</p>
-        <p v-if="data.queue.waiting.length" class="text-xs text-slate-600">等候：{{ data.queue.waiting.map((w) => `${w.no} 號${w.returned ? '（過號回來）' : ''}`).join('、') }}</p>
+        <p v-if="data.queue.waiting.length" class="flex flex-wrap items-center gap-1 text-xs text-slate-600">接下來：
+          <span v-for="w in data.queue.waiting" :key="w.no" :class="['rounded px-1', w.priorityLabel ? 'bg-violet-100 text-violet-800' : 'bg-slate-100']">{{ w.no }} 號{{ w.priorityLabel ? `（優先・${w.priorityLabel}）` : '' }}{{ w.returned ? '（過號回來）' : '' }}</span>
+        </p>
+        <p v-if="data.queue.waiting.some((w) => w.priorityLabel)" class="text-xs text-slate-400">優先排在一般前面；連續叫兩位優先後輪一位一般</p>
         <p v-if="data.queue.skipped.length" class="flex flex-wrap items-center gap-2 text-xs text-red-700">過號：
           <span v-for="s in data.queue.skipped" :key="s.no" class="inline-flex items-center gap-1">{{ s.no }} 號 {{ s.patientName }}
             <UButton size="sm" variant="secondary" :icon="Undo2" :loading="back.pending.value" @click="back.run(s.patientId)">回來了</UButton></span>
@@ -73,7 +85,11 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
           <li v-for="p in data.notCheckedIn" :key="p.patientId" class="flex items-center gap-2 px-4 py-2">
             <span class="min-w-0 flex-1"><b>{{ p.patientName }}</b> <span class="text-xs text-slate-500">{{ p.chartNo }}</span>
               <span class="block text-xs text-slate-600">{{ p.toPrint.flatMap((g) => g.tests).join('、') }}</span></span>
-            <UButton size="sm" :loading="checkIn.pending.value" @click="checkIn.run(p.patientId)">報到</UButton>
+            <UBadge v-if="p.autoPriority" tone="purple">75 歲以上・優先</UBadge>
+            <select v-else v-model="prio[p.patientId]" class="form-control w-24 py-1 text-xs" aria-label="優先">
+              <option value="">一般</option><option value="disabled">身心障礙</option><option value="mobility">行動不便</option>
+            </select>
+            <UButton size="sm" :loading="checkIn.pending.value" @click="onCheckIn(p)">報到</UButton>
           </li>
         </ul>
       </UCard>
@@ -92,6 +108,11 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
                 <span class="tabular rounded bg-slate-800 px-1.5 text-xs font-bold text-white">{{ p.checkin?.no }} 號</span>
                 <b>{{ p.patientName }}</b><span class="text-xs text-slate-500">{{ p.chartNo }}・報到 {{ p.checkin?.at.slice(11) }}</span>
                 <UBadge v-if="p.queue" :tone="QTONE[p.queue]">{{ p.queueLabel }}</UBadge>
+                <UBadge v-if="p.priorityLabel" tone="purple">優先・{{ p.priorityLabel }}</UBadge>
+                <select v-else-if="p.queue && p.queue !== 'served'" class="form-control w-28 py-0.5 text-xs" aria-label="改為優先" @change="(ev) => { const v = (ev.target as HTMLSelectElement).value; if (v) setPrio.run(p.patientId, v as 'disabled' | 'mobility') }">
+                  <option value="">設為優先…</option><option value="disabled">身心障礙</option><option value="mobility">行動不便</option>
+                </select>
+                <UButton v-if="p.priorityLabel && p.checkin?.priority !== 'elderly' && p.queue !== 'served'" size="sm" variant="ghost" :loading="setPrio.pending.value" @click="setPrio.run(p.patientId, null)">取消優先</UButton>
                 <UButton v-if="p.toPrint.length" size="sm" class="ml-auto" :icon="Printer" :loading="print.pending.value" :disabled="p.queue === 'waiting' || p.queue === 'skipped'" :title="p.queue === 'waiting' ? '還沒叫到號' : p.queue === 'skipped' ? '已過號' : ''" @click="onPrint(p)">印條碼</UButton>
               </div>
               <p v-if="p.recollect" class="text-xs font-semibold text-red-700" role="alert">檢體被退件（{{ p.specimens.filter((s) => s.rejectedReason).map((s) => s.rejectedReason).join('、') }}），請病人回來重新採檢</p>
