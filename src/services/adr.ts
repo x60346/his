@@ -28,16 +28,16 @@ export interface AdrView extends AdrReport {
 }
 
 function view(r: AdrReport, t: string = now()): AdrView {
-  const a = find.admission(r.admissionId)
-  const d = find.drug(r.drugId)
+  const a = r.admissionId ? find.admission(r.admissionId) : undefined
+  const d = r.drugId ? find.drug(r.drugId) : undefined
   const due = adrDueAt(r)
   const p = find.patient(r.patientId)
   return {
-    ...r, drugName: d?.name ?? r.drugId, patientName: p?.name ?? '', bedNo: find.bed(a?.bedId ?? '')?.bedNo ?? '', admitNo: a?.admitNo ?? '',
+    ...r, drugName: d?.name ?? r.agent ?? r.drugId, patientName: p?.name ?? '', bedNo: find.bed(a?.bedId ?? '')?.bedNo ?? '', admitNo: a?.admitNo ?? '',
     severityLabel: ADR_SEVERITY_LABEL[r.severity], ...(r.serious ? { seriousLabel: ADR_SERIOUS.find((x) => x.key === r.serious)?.label } : {}),
     reportedByName: nameOf.user(r.reportedBy), ...(due ? { dueAt: due } : {}), overdue: !r.assessment && !!due && t > due,
     ...(r.assessment ? { causalityLabel: CAUSALITY_LABEL[r.assessment.causality], assessedByName: nameOf.user(r.assessment.by) } : {}),
-    allergen: d ? allergenOfDrug(d) : r.drugId, allergies: p?.allergies ?? [],
+    allergen: d ? allergenOfDrug(d) : r.agent ?? r.drugId, allergies: p?.allergies ?? [],
   }
 }
 
@@ -136,12 +136,12 @@ export function assessAdr(id: string, input: { answers: NaranjoAnswer[]; note?: 
     const causality = causalityOf(score)
     if (input.addAllergy && !canAddAllergy(causality)) failField('addAllergy', `判定「${CAUSALITY_LABEL[causality]}」（${score} 分）：很可能以上才能加入過敏`)
     const p = must(find.patient(r.patientId), '病患')
-    const d = find.drug(r.drugId)
-    const allergen = d ? allergenOfDrug(d) : r.drugId
+    const d = r.drugId ? find.drug(r.drugId) : undefined
+    const allergen = d ? allergenOfDrug(d) : r.agent ?? r.drugId
     const added = input.addAllergy && !p.allergies.includes(allergen) ? allergen : undefined
     if (added) p.allergies.push(added)
     r.assessment = { by: u.id, at: now(), answers, score, causality, note: input.note?.trim() ?? '', ...(input.addAllergy ? { allergyAdded: allergen } : {}) }
-    audit('藥物不良反應評估', `${nameOf.patient(r.patientId)} ${d?.name}：Naranjo ${score} 分（${CAUSALITY_LABEL[causality]}）${input.addAllergy ? `；加入過敏 ${allergen}${added ? '' : '（已有紀錄）'}` : ''}`)
+    audit('藥物不良反應評估', `${nameOf.patient(r.patientId)} ${d?.name ?? r.agent}：Naranjo ${score} 分（${CAUSALITY_LABEL[causality]}）${input.addAllergy ? `；加入過敏 ${allergen}${added ? '' : '（已有紀錄）'}` : ''}`)
     return view(r)
   })
 }

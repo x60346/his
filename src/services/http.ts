@@ -269,7 +269,7 @@ export function sessionUser(): User | null {
 /** 操作者：帳號＋這次用的作業角色。服務層的角色判斷一律看 role（作業角色），不看 roles */
 export type Actor = User & { role: Role }
 
-const roleName: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價', lab: '醫檢師', diet: '營養師' }
+const roleName: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價', lab: '醫檢師', diet: '營養師', radtech: '放射師' }
 
 /**
  * 取得目前操作者並檢查角色。

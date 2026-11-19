@@ -9,7 +9,7 @@ import { groupByTube, SELF_COLLECT_TUBES, specimenStage, SPECIMEN_STAGE_LABEL, T
 import { nextBarcode, opdSpecimenOf } from './specimen-work'
 import { pendingLabWork } from './lab-work'
 import { find, nameOf } from './views'
-import { avgWait, queueOrder, queueStage, returnOrder, waitingList, QUEUE_MAX_CALLS, QUEUE_STAGE_LABEL, type QueueStage } from './lab-queue-rules'
+import { avgWait, callsSinceReturn, queueOrder, queueStage, returnOrder, waitingList, QUEUE_MAX_CALLS, QUEUE_STAGE_LABEL, type QueueStage } from './lab-queue-rules'
 
 /** 這位病人還沒採檢的門診檢驗（沒有檢體、或檢體被退件的） */
 const toCollect = (patientId: string) => pendingLabWork().filter((w) => w.source === 'opd' && w.patientId === patientId && !opdSpecimenOf(w.key))
@@ -78,7 +78,7 @@ function deskQueue(): DeskQueue {
   const cs = todays()
   const cur = cs.filter((c) => queueStage(c) === 'called').sort((a, b) => a.calls!.at(-1)!.localeCompare(b.calls!.at(-1)!)).at(-1)
   return {
-    ...(cur ? { current: { no: cur.no, patientId: cur.patientId, patientName: nameOf.patient(cur.patientId), calls: cur.calls!.filter((t) => !cur.returnedAt || t > cur.returnedAt).length, calledAt: cur.calls!.at(-1)! } } : {}),
+    ...(cur ? { current: { no: cur.no, patientId: cur.patientId, patientName: nameOf.patient(cur.patientId), calls: callsSinceReturn(cur), calledAt: cur.calls!.at(-1)! } } : {}),
     waiting: waitingList(cs).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), at: c.returnedAt ?? c.at, returned: !!c.returnedAt })),
     skipped: cs.filter((c) => queueStage(c) === 'skipped').sort((a, b) => a.no - b.no).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), skippedAt: c.skippedAt! })),
     ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),
@@ -119,7 +119,7 @@ export function recallLab(patientId: string): Promise<LabCheckin> {
     requireUser('lab')
     const c = checkinOf(patientId)
     if (queueStage(c) !== 'called') fail('這位病人現在沒有在叫號', 'CONFLICT')
-    const n = c.calls!.filter((t) => !c.returnedAt || t > c.returnedAt).length
+    const n = callsSinceReturn(c)
     if (n >= QUEUE_MAX_CALLS) fail(`已經叫了 ${QUEUE_MAX_CALLS} 次，請過號`, 'CONFLICT')
     c.calls!.push(now())
     audit('抽血叫號', `${c.no} 號 ${nameOf.patient(c.patientId)}（第 ${n + 1} 次）`)
@@ -135,6 +135,7 @@ export function skipLab(patientId: string): Promise<LabCheckin> {
     if (queueStage(c) !== 'called') fail('叫號中的病人才能過號', 'CONFLICT')
     c.skippedAt = now()
     delete c.returnedAt
+    delete c.callsAtReturn
     audit('抽血過號', `${c.no} 號 ${nameOf.patient(c.patientId)}（叫了 ${c.calls!.length} 次沒來）`)
     return c
   })
@@ -149,6 +150,7 @@ export function returnLab(patientId: string): Promise<LabCheckin> {
     const cs = todays()
     c.order = returnOrder(waitingList(cs), cs)
     c.returnedAt = now()
+    c.callsAtReturn = c.calls?.length ?? 0
     const ahead = waitingList(cs).filter((x) => queueOrder(x) < c.order!).length
     audit('抽血過號回來', `${c.no} 號 ${nameOf.patient(c.patientId)}：前面還有 ${ahead} 位`)
     return c

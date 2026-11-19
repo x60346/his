@@ -5465,6 +5465,7 @@ try {
     await as('clerk01')
     const ex = await api.examApi.scheduleExam(`O:${io.id}`, `${addDaysT(1)} 09:00`)
     await api.examApi.arriveExam(ex.id)
+    await as('rt01')
     await api.examApi.confirmExamPrep(ex.id, 'npo6', true)
     await api.examApi.completeExam(ex.id)
     ok(db().ipdOrders.find((o) => o.id === io.id).status === 'done', '檢查室完成：住院醫囑一起完成')
@@ -11246,11 +11247,14 @@ try {
     ok(ae.exams.some((x) => x.id === e4.id && x.marConflicts.some((t) => t.startsWith(tmr))), `護理站：明天 09:00 超音波，前後 30 分鐘的給藥 ${ae.exams.find((x) => x.id === e4.id)?.marConflicts.map((t) => t.slice(11)).join('、')}`)
     // 報到、完成
     await as('clerk01')
+    await as('rt01')
     msg = await errOf(() => E.completeExam(e4.id))
     ok(msg.includes('還沒報到'), '還沒報到不能完成')
     await E.arriveExam(e4.id)
+    await as('clerk01')
     msg = await errOf(() => E.scheduleExam('O:IO-EX-4', `${tmr} 10:00`))
     ok(msg.includes('報到'), '報到後不能改時間')
+    await as('rt01')
     msg = await errOf(() => E.completeExam(e4.id))
     ok(msg.includes('禁食'), '腹部超音波：禁食還沒確認不能完成')
     await E.confirmExamPrep(e4.id, 'npo6', true)
@@ -11523,6 +11527,7 @@ try {
 
     // 準備沒完成不能做；取消回待排程
     await as('clerk01')
+    await as('rt01')
     let msg = await errOf(() => E.completeExam(us.id))
     ok(msg.includes('禁食'), `未禁食不能完成 → 「${msg}」`)
     let f = await fieldsOf(() => E.confirmExamPrep(us.id, 'npo6', false, ' '))
@@ -11561,16 +11566,17 @@ try {
 
     // 顯影劑：水化提醒 → 逐項確認 → 完成
     await as('clerk01')
+    await as('rt01')
     msg = await errOf(() => E.confirmExamPrep(ct.id, 'renal', true))
     ok(msg.includes('報到後'), '報到後才確認準備')
     await E.arriveExam(ct.id)
     const r1 = await E.confirmExamPrep(ct.id, 'renal', true)
     ok(r1.prepItems.find((p) => p.id === 'renal').note.includes('CrCl 31') && r1.prepItems.find((p) => p.id === 'renal').note.includes('水化'), '腎功能確認：記下 CrCl 與「已提醒水化」')
-    msg = await errOf(() => E.completeExam(ct.id))
+    msg = await errOf(() => E.completeExam(ct.id, { contrastMl: 80 }))
     ok(msg.includes('同意書') && msg.includes('禁食'), `同意書、禁食還沒確認不能完成 → 「${msg}」`)
     await E.confirmExamPrep(ct.id, 'consent', true)
     await E.confirmExamPrep(ct.id, 'npo6', true)
-    ok((await E.completeExam(ct.id)).stage === 'done' && db().ipdOrders.find((o) => o.id === 'IO-EX-6').status === 'done', '準備都完成 → 可以做（醫囑一起完成）')
+    ok((await E.completeExam(ct.id, { contrastMl: 80 })).stage === 'done' && db().ipdOrders.find((o) => o.id === 'IO-EX-6').status === 'done', '準備都完成 → 可以做（醫囑一起完成）')
 
     // 顯影劑：CrCl < 30 擋
     const sep = db().admissions.find((a) => a.id === ct.admissionId)
@@ -11579,16 +11585,19 @@ try {
     await as('clerk01')
     const e2 = await E.scheduleExam(`O:${o2.id}`, `${tmr} 09:00`)
     await E.arriveExam(e2.id)
+    await as('rt01')
     for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(e2.id, k, true)
     const pt = db().patients.find((p) => p.id === sep.patientId)
     db().labReports.push({ id: 'LR-T-CRE', no: 'LT', patientId: pt.id, procId: 'P008', admissionId: sep.id, doctorId: sep.doctorId, orderedAt: nowStr(), values: [{ code: 'CRE', name: '肌酸酐', unit: 'mg/dL', value: '3.0', flag: 'H', ref: '' }], reportedBy: 'U601', reportedAt: nowStr() })
-    msg = await errOf(() => E.completeExam(e2.id))
+    msg = await errOf(() => E.completeExam(e2.id, { contrastMl: 80 }))
     ok(msg.includes('不能打顯影劑'), `確認後肌酸酐升高（CrCl < 30）：完成時再擋 → 「${msg}」`)
     await E.cancelExam(e2.id, '醫師改檢查')
     const o3w = (await E.examBoard(T)).toSchedule.find((w) => w.key === `O:${o2.id}`)
+    await as('clerk01')
     ok(o3w?.contrast?.level === 'block', '待排程就看得到不能打顯影劑')
     const e3 = await E.scheduleExam(`O:${o2.id}`, `${tmr} 09:30`)
     await E.arriveExam(e3.id)
+    await as('rt01')
     msg = await errOf(() => E.confirmExamPrep(e3.id, 'renal', true))
     ok(msg.includes('不能打顯影劑'), 'CrCl < 30：腎功能那一項不能確認')
     // 算不出（腦梗塞：沒有體重）→ 提醒另行確認
@@ -11599,6 +11608,7 @@ try {
     const e4 = await E.scheduleExam(`O:${o4.id}`, `${tmr} 10:30`)
     ok(e4.contrast?.level === 'unknown', '算不出 CrCl → 提醒先確認腎功能')
     await E.arriveExam(e4.id)
+    await as('rt01')
     const r4 = await E.confirmExamPrep(e4.id, 'renal', true)
     ok(r4.prepItems.find((p) => p.id === 'renal').note.includes('另行確認'), '算不出時確認：記「腎功能已另行確認」')
   }
@@ -11770,8 +11780,9 @@ try {
     const mx = await E.scheduleExam('O:IO-EX-8', `${tmr} 09:00`)
     ok(mx.safety.metformin, '排好之後檢查室清單也看得到 Metformin 提醒')
     await E.arriveExam(mx.id)
+    await as('rt01')
     for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(mx.id, k, true)
-    const done = await E.completeExam(mx.id)
+    const done = await E.completeExam(mx.id, { contrastMl: 80 })
     const alert = db().imagingExams.find((e) => e.id === mx.id).metforminAlert
     ok(alert?.doctorId === dm.doctorId && alert.until === dateUtil.addMinutes(done.doneAt, 48 * 60), '做完：提醒主治暫停 Metformin 48 小時')
     await as(userOf(dm.doctorId))
@@ -11789,8 +11800,9 @@ try {
     // 沒用 Metformin 的做完不提醒
     await as('clerk01')
     await E.arriveExam(sepEx.id)
+    await as('rt01')
     for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(sepEx.id, k, true)
-    await E.completeExam(sepEx.id)
+    await E.completeExam(sepEx.id, { contrastMl: 80 })
     ok(!db().imagingExams.find((e) => e.id === sepEx.id).metforminAlert, '沒用 Metformin：做完不提醒')
   }
 
@@ -12100,10 +12112,11 @@ try {
     // 純函式
     const c0 = { no: 1, at: '2026-11-19 09:00' }
     ok(api.queueStage(c0) === 'waiting' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05'] }) === 'called' && api.queueStage({ ...c0, calls: ['x'], servedAt: 'y' }) === 'served' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05'], skippedAt: '2026-11-19 09:08' }) === 'skipped', '階段：等候、叫號中、已採檢、過號')
-    ok(api.queueStage({ ...c0, calls: ['2026-11-19 09:05'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20' }) === 'waiting' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:30'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20' }) === 'called', '過號回來：重新等候；回來後再叫到＝叫號中')
+    ok(api.queueStage({ ...c0, calls: ['2026-11-19 09:05'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20', callsAtReturn: 1 }) === 'waiting' && api.queueStage({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:30'], skippedAt: '2026-11-19 09:08', returnedAt: '2026-11-19 09:20', callsAtReturn: 1 }) === 'called', '過號回來：重新等候；回來後再叫到＝叫號中')
+    ok(api.queueStage({ ...c0, calls: ['2026-11-19 09:20', '2026-11-19 09:20'], skippedAt: '2026-11-19 09:20', returnedAt: '2026-11-19 09:20', callsAtReturn: 1 }) === 'called' && api.callsSinceReturn({ calls: ['a', 'b', 'c'], returnedAt: 'x', callsAtReturn: 2 }) === 1, '回來和再叫在同一分鐘：還是算叫到了（看叫號次數，不比時間）')
     const w = (o) => ({ no: o, at: 'x' })
     ok(api.returnOrder([w(3), w(4), w(5)], [w(1), w(3), w(4), w(5)]) === 4.5 && api.returnOrder([w(3), w(4)], [w(1), w(3), w(4), w(7)]) === 8 && api.returnOrder([], [w(2)]) === 3, '過號回來：插在下兩位之後（第 2、3 位中間）；等候不到兩位排最後')
-    ok(api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:12'] }) === 12 && api.waitedMinutes(c0) === undefined && api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:40'], returnedAt: '2026-11-19 09:30' }) === 10, '等候分鐘：報到到第一次叫號；過號回來的從回來起算')
+    ok(api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:12'] }) === 12 && api.waitedMinutes(c0) === undefined && api.waitedMinutes({ ...c0, calls: ['2026-11-19 09:05', '2026-11-19 09:40'], returnedAt: '2026-11-19 09:30', callsAtReturn: 1 }) === 10, '等候分鐘：報到到第一次叫號；過號回來的從回來起算')
     ok(api.avgWait([{ ...c0, calls: ['2026-11-19 09:10'] }, { ...c0, calls: ['2026-11-19 09:21'] }, c0]) === 16 && api.avgWait([c0]) === undefined, '平均等候：有叫到的才算')
 
     // 種子
@@ -12159,6 +12172,122 @@ try {
     c = await D.callNextLab()
     ok(c.patientId === others[3].id && d.queue.skipped.length === 3, '接著叫下一位；過號的三位列在過號')
     ok(typeof d.queue.avgWait === 'number', `平均等候 ${d.queue.avgWait} 分鐘`)
+  }
+
+  // 放射師角色：分工（排程櫃台、報到櫃台或放射師、準備與完成放射師，放射科醫師支援）、顯影劑用量與不良反應欄位、
+  // 中度以上自動通報藥師、藥師評估加入過敏後下次含顯影劑檢查要放行、種子、首頁
+  console.log('\n[放射師與顯影劑不良反應]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const keys = (x, c) => Object.keys(api.checkContrastDone(x, c)).sort().join()
+    ok(keys({}, true) === 'contrastMl' && keys({ contrastMl: 0 }, true) === 'contrastMl' && keys({ contrastMl: 201 }, true) === 'contrastMl' && keys({ contrastMl: 80 }, true) === '' && keys({ contrastMl: 1 }, true) === '' && keys({ contrastMl: 200 }, true) === '', '顯影劑用量：1–200 mL')
+    ok(keys({ contrastMl: 80, reaction: {} }, true) === 'action,severity,symptoms' && keys({ contrastMl: 80, reaction: { severity: 'mild', symptoms: '癢', action: '觀察' } }, true) === '', '有反應：嚴重度、症狀、處置都要寫')
+    ok(keys({}, false) === '' && keys({ contrastMl: 50 }, false) === 'contrastMl' && keys({ reaction: { severity: 'mild' } }, false) === 'contrastMl', '不含顯影劑的檢查不能記顯影劑')
+    ok(!api.contrastReactionReportable('mild') && api.contrastReactionReportable('moderate') && api.contrastReactionReportable('severe') && api.contrastAllergy([api.CONTRAST_AGENT]) === api.CONTRAST_AGENT, '中度以上才通報；通報的懷疑物（碘化顯影劑）過敏檢查認得')
+
+    // 種子：放射師帳號、闌尾炎含顯影劑 CT 做完（80 mL、輕度反應不通報）
+    const rt = db().users.find((u) => u.username === 'rt01')
+    const s9 = db().imagingExams.find((e) => e.orderId === 'IO-EX-9')
+    ok(rt?.roles.join() === 'radtech' && s9?.doneBy === rt.id && s9.contrastMl === 80 && s9.contrastReaction?.severity === 'mild' && !s9.contrastReaction.adrId && !db().adrReports.some((r) => r.examId), '種子：放射師完成闌尾炎含顯影劑 CT（80 mL、輕度蕁麻疹，不用通報）')
+    await as('rt01')
+    let b = await E.examBoard(T)
+    ok(b.canPerform && b.canArrive && !b.canSchedule && !b.canClear, '放射師：能報到、確認準備、完成；不能排程、不能放行過敏')
+    const sv = b.rooms.find((r) => r.room === 'CT').exams.find((e) => e.orderId === 'IO-EX-9')
+    ok(sv?.doneByName === rt.name && sv.contrastReaction?.symptoms.includes('蕁麻疹'), '檢查室清單看得到誰完成、用量與反應')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.examArrived >= 1 && dash.examWaiting >= 1, `放射師首頁：已報到待檢查 ${dash.examArrived}、還沒報到 ${dash.examWaiting}`)
+    await as('clerk01')
+    b = await E.examBoard(T)
+    ok(b.canSchedule && b.canArrive && !b.canPerform, '櫃台：排程、報到；不能確認準備、完成')
+
+    // 分工：櫃台不能做、放射師不能排程、其他科醫師不能做、放射科醫師可以支援
+    const ct = b.rooms.find((r) => r.room === 'CT').exams.find((e) => e.orderId === 'IO-EX-6')
+    await E.arriveExam(ct.id)
+    let msg = await errOf(() => E.confirmExamPrep(ct.id, 'npo6', true))
+    ok(msg.includes('放射師'), `櫃台不能確認檢查前準備 → 「${msg}」`)
+    msg = await errOf(() => E.completeExam(ct.id, { contrastMl: 80 }))
+    ok(msg.includes('放射師'), '櫃台不能完成檢查')
+    await as('rt01')
+    msg = await errOf(() => E.scheduleExam('O:IO-EX-8', `${addDaysT(1)} 09:00`))
+    ok(msg.includes('權限'), `放射師不能排程 → 「${msg}」`)
+    const sep = db().admissions.find((a) => a.id === ct.admissionId)
+    await as(userOf(sep.doctorId))
+    msg = await errOf(() => E.confirmExamPrep(ct.id, 'npo6', true))
+    ok(msg.includes('放射師'), '其他科醫師不能確認準備')
+    const rad = db().doctors.find((d) => db().departments.find((x) => x.id === d.deptId)?.code === 'RAD')
+    await as(userOf(rad.id))
+    ok((await E.confirmExamPrep(ct.id, 'npo6', true)).prepItems.find((p) => p.id === 'npo6').ok, '放射科醫師可以支援確認準備')
+
+    // 完成：用量、反應欄位；中度反應自動通報
+    await as('rt01')
+    for (const k of ['consent', 'renal']) await E.confirmExamPrep(ct.id, k, true)
+    let f = await fieldsOf(() => E.completeExam(ct.id))
+    ok(f.contrastMl, '含顯影劑沒寫用量 → 標出')
+    f = await fieldsOf(() => E.completeExam(ct.id, { contrastMl: 80, reaction: { severity: 'moderate', symptoms: ' ', action: '' } }))
+    ok(f.symptoms && f.action, '有反應沒寫症狀、處置 → 標出')
+    ok(!db().imagingExams.find((e) => e.id === ct.id).doneAt, '欄位不對不會完成')
+    const dn = await E.completeExam(ct.id, { contrastMl: 90, reaction: { severity: 'moderate', symptoms: '全身蕁麻疹、輕微喘鳴', action: '給 Diphenhydramine IV，30 分鐘後緩解' } })
+    const adr = db().adrReports.find((r) => r.examId === ct.id)
+    ok(dn.stage === 'done' && dn.contrastMl === 90 && dn.contrastReaction?.adrId === adr?.id && adr.agent === api.CONTRAST_AGENT && adr.drugId === '' && adr.admissionId === sep.id && adr.severity === 'moderate' && !adr.serious && adr.reportedBy === rt.id, '中度反應：完成並自動產生不良反應通報（碘化顯影劑、住院、放射師）')
+    ok(db().auditLogs.some((x) => x.action === '藥物不良反應通報' && x.detail.includes('放射師通報')) && db().auditLogs[0].detail.includes('顯影劑 90 mL'), '稽核：通報、完成（含用量與反應）')
+    // 不含顯影劑的不能記顯影劑
+    const us = db().imagingExams.find((e) => e.orderId === 'IO-EX-5')
+    for (const k of ['npo6']) await E.confirmExamPrep(us.id, k, true)
+    f = await fieldsOf(() => E.completeExam(us.id, { contrastMl: 50 }))
+    ok(f.contrastMl?.includes('不含顯影劑'), '超音波不能記顯影劑用量')
+    ok((await E.completeExam(us.id)).stage === 'done', '不含顯影劑：直接完成')
+
+    // 藥師評估：顯影劑（不在藥品主檔）、很可能 → 加入過敏 → 下次含顯影劑檢查要放行
+    await as('ph01')
+    const rv = (await api.adrApi.listAdrReview()).pending.find((x) => x.id === adr.id)
+    ok(rv?.drugName === api.CONTRAST_AGENT && rv.allergen === api.CONTRAST_AGENT && rv.bedNo, `藥師待評估：懷疑物 ${rv?.drugName}、建議過敏原 ${rv?.allergen}`)
+    const probable = ['yes', 'yes', 'yes', 'unknown', 'no', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown']
+    await api.adrApi.assessAdr(adr.id, { answers: probable, addAllergy: true })
+    const pt = db().patients.find((p) => p.id === sep.patientId)
+    ok(pt.allergies.includes(api.CONTRAST_AGENT), '加入過敏：碘化顯影劑')
+    await as(userOf(sep.doctorId))
+    const o2 = await api.ipdApi.addOrder({ admissionId: sep.id, type: 'stat', category: 'procedure', procId: 'P061', content: '' })
+    await as('clerk01')
+    const e2 = await E.scheduleExam(`O:${o2.id}`, `${addDaysT(1)} 10:00`)
+    ok(e2.safety.allergy?.text === api.CONTRAST_AGENT, '下次含顯影劑檢查：標顯影劑過敏')
+    msg = await errOf(() => E.arriveExam(e2.id))
+    ok(msg.includes('過敏'), '沒放行不能報到')
+
+    // 重度：標過敏性休克（24 小時內評估）
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as(userOf(st.doctorId))
+    const o3 = await api.ipdApi.addOrder({ admissionId: st.id, type: 'stat', category: 'procedure', procId: 'P061', content: '' })
+    await as('clerk01')
+    const e3 = await E.scheduleExam(`O:${o3.id}`, `${addDaysT(1)} 11:00`)
+    await E.arriveExam(e3.id)
+    await as('rt01')
+    for (const k of ['npo6', 'consent', 'renal']) await E.confirmExamPrep(e3.id, k, true)
+    await E.completeExam(e3.id, { contrastMl: 70, reaction: { severity: 'severe', symptoms: '血壓 78/40、呼吸困難', action: '腎上腺素 IM、啟動急救小組' } })
+    const sv3 = db().adrReports.find((r) => r.examId === e3.id)
+    await as('ph01')
+    const pend = (await api.adrApi.listAdrReview()).pending
+    ok(sv3?.serious === 'anaphylaxis' && sv3.severity === 'severe' && pend[0]?.id === sv3.id, '重度反應：標過敏性休克、排在藥師待評估最前面')
+    ok(rv && pend.some((x) => x.id === sv3.id && x.dueAt), '嚴重型：24 小時評估期限')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

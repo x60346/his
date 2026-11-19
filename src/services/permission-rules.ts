@@ -8,7 +8,7 @@
 //   - grantOnly：只能指定給個人（優免核准：不是每個櫃台都能核准）
 import type { Role } from '@/types'
 
-export const ROLE_NAME: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價', lab: '醫檢師', diet: '營養師' }
+export const ROLE_NAME: Record<Role, string> = { admin: '系統管理員', doctor: '醫師', nurse: '護理師', pharmacist: '藥師', clerk: '掛號批價', lab: '醫檢師', diet: '營養師', radtech: '放射師' }
 
 export type PermKey =
   | 'visit.register'

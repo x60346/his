@@ -67,3 +67,31 @@ export const metforminText = (crcl: number | null) => `病人有在用 Metformin
 /** 顯影劑水化建議：生理食鹽水 1 mL/kg/hr（檢查前後），一袋 500 mL */
 export const HYDRATION = { mlPerKgH: 1, volumeMl: 500 }
 export const hydrationRate = (weightKg: number) => Math.max(1, Math.round(weightKg * HYDRATION.mlPerKgH))
+
+// ── 放射師完成含顯影劑的檢查：記用量；有不良反應記嚴重度、症狀、處置（中度以上自動產生不良反應通報給藥師評估） ──
+
+/** 顯影劑用量合理範圍（mL） */
+export const CONTRAST_ML = { min: 1, max: 200 }
+/** 顯影劑不良反應通報的懷疑物（不在藥品主檔）；藥師評估後加入過敏的就是這個字（過敏檢查認得「顯影劑」） */
+export const CONTRAST_AGENT = '碘化顯影劑'
+export type ContrastReactionSeverity = 'mild' | 'moderate' | 'severe'
+export const CONTRAST_REACTION_LABEL: Record<ContrastReactionSeverity, string> = { mild: '輕度（局部蕁麻疹、噁心，觀察即緩解）', moderate: '中度（全身蕁麻疹、喘鳴，需要給藥）', severe: '重度（血壓下降、呼吸困難，需急救）' }
+/** 中度以上自動通報 */
+export const contrastReactionReportable = (s: ContrastReactionSeverity) => s !== 'mild'
+
+/** 完成時的欄位：含顯影劑要有用量；有反應的話嚴重度、症狀、處置都要寫；不含顯影劑不能記顯影劑的東西 */
+export function checkContrastDone(x: { contrastMl?: number; reaction?: { severity?: string; symptoms?: string; action?: string } }, isContrast: boolean): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!isContrast) {
+    if (x.contrastMl !== undefined || x.reaction) e.contrastMl = '這項檢查不含顯影劑'
+    return e
+  }
+  const ml = Number(x.contrastMl)
+  if (x.contrastMl === undefined || !Number.isFinite(ml) || ml < CONTRAST_ML.min || ml > CONTRAST_ML.max) e.contrastMl = `請寫顯影劑用量（${CONTRAST_ML.min}–${CONTRAST_ML.max} mL）`
+  if (x.reaction) {
+    if (!x.reaction.severity || !(x.reaction.severity in CONTRAST_REACTION_LABEL)) e.severity = '請選反應嚴重度'
+    if (!x.reaction.symptoms?.trim()) e.symptoms = '請寫症狀（例：前胸蕁麻疹）'
+    if (!x.reaction.action?.trim()) e.action = '請寫處置（例：觀察 30 分鐘緩解、給抗組織胺）'
+  }
+  return e
+}

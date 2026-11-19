@@ -12,7 +12,7 @@ export interface DatedChange {
 export type Gender = 'M' | 'F'
 /** ER＝急診（24 小時，不排門診表；每天一個急診診次） */
 export type Period = 'AM' | 'PM' | 'NIGHT' | 'ER'
-export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab' | 'diet'
+export type Role = 'admin' | 'doctor' | 'nurse' | 'pharmacist' | 'clerk' | 'lab' | 'diet' | 'radtech'
 
 /** 系統使用者（展示用帳號，密碼明文存於 mock） */
 export interface User {
@@ -874,6 +874,10 @@ export interface ImagingExam {
   metforminAlert?: { doctorId: string; until: string; ackAt?: string; ackBy?: string }
   /** 一鍵開的水化醫囑 */
   hydrationOrderId?: string
+  /** 含顯影劑的：完成時放射師記用量（mL） */
+  contrastMl?: number
+  /** 顯影劑不良反應（完成時記）：嚴重度、症狀、處置；中度以上自動產生不良反應通報（adrId） */
+  contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
 /** 顯影劑過敏放行：醫師確認已開前置用藥（類固醇＋抗組織胺）、寫原因，這一筆影像（key）才能報到 */
@@ -940,6 +944,8 @@ export interface LabCheckin {
   skippedAt?: string
   /** 過號後回來：重新排隊 */
   returnedAt?: string
+  /** 回來時已經叫過幾次（之後的叫號才算這次的）：時間只到分鐘，不能用時間比 */
+  callsAtReturn?: number
   /** 開始採檢（印條碼）：叫號結束 */
   servedAt?: string
   /** 排隊順序（沒有＝號碼）；過號回來的插在目前叫號的下兩位之後 */
@@ -1555,9 +1561,15 @@ export type AdrSeverity = 'mild' | 'moderate' | 'severe'
  */
 export interface AdrReport {
   id: string
-  admissionId: string
+  /** 住院中通報才有；門診影像檢查的顯影劑反應沒有 */
+  admissionId?: string
   patientId: string
+  /** 懷疑的藥（藥品主檔）；不在主檔的（顯影劑）是空字串，看 agent */
   drugId: string
+  /** 不在藥品主檔的懷疑物（例：碘化顯影劑），過敏原就用它 */
+  agent?: string
+  /** 從影像檢查（顯影劑反應）帶出來的 */
+  examId?: string
   onsetAt: string
   symptoms: string
   severity: AdrSeverity

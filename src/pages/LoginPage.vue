@@ -25,7 +25,7 @@ const form = ref<HTMLFormElement>()
 onMounted(() => nextTick(() => form.value?.querySelector<HTMLInputElement>('input')?.focus()))
 
 const { data: accounts } = useQuery(() => authApi.demoAccounts())
-const roleOrder: Role[] = ['doctor', 'nurse', 'clerk', 'pharmacist', 'lab', 'diet', 'admin']
+const roleOrder: Role[] = ['doctor', 'nurse', 'clerk', 'pharmacist', 'lab', 'radtech', 'diet', 'admin']
 // 單一角色的帳號依角色分組；多角色的另成一組（例：護理師＋掛號批價）
 const grouped = computed(() => {
   const list = accounts.value ?? []

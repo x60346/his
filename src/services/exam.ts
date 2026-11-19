@@ -6,11 +6,12 @@
 // 顯影劑看 CrCl：< 30 擋、30–45 提醒水化（住院醫師可一鍵開水化醫囑，ipd.orderContrastHydration）、算不出提醒先確認；
 // 顯影劑過敏：開立醫師（住院另含主治、放射科）確認已開前置用藥並寫原因才放行報到；
 // 有在用 Metformin 且 CrCl < 45（或算不出）：排程、報到時提醒，住院做完後主治首頁「暫停 Metformin 48 小時」要按已處理。規則在 exam-rules
-import type { ContrastClearance, ImagingExam } from '@/types'
+import type { AdrReport, ContrastClearance, ImagingExam } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
-import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage } from './exam-rules'
+import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity } from './exam-rules'
+import { ADR_SEVERITY_LABEL } from './adr-rules'
 import { latestWeight, renalOfPatient } from './renal-work'
 import { addDays } from '@/utils/date'
 import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type ImagingWorkItem } from './imaging-work'
@@ -96,16 +97,34 @@ function view(e: ImagingExam): ExamView {
 /** 還有效的檢查（取消的不算） */
 const liveExams = () => db.imagingExams.filter((e) => !e.cancelled)
 
-/** 排程與檢查室操作：掛號批價（櫃台）或放射科醫師 */
-function requireExamStaff() {
+/**
+ * 檢查室的分工：排程＝櫃台（放射科醫師支援）；報到、取消＝櫃台或放射師（放射科醫師支援）；
+ * 確認檢查前準備、完成檢查＝放射師（放射科醫師支援）。其他科醫師、護理師只能看
+ */
+const isRadDoctor = (u: { doctorId?: string }) => sessionRole() === 'doctor' && isRadiologist(u.doctorId)
+function requireScheduler() {
   const u = requireUser('clerk', 'doctor')
-  if (sessionRole() === 'doctor' && !isRadiologist(u.doctorId)) fail('影像檢查排程由櫃台或放射科處理', 'FORBIDDEN')
+  if (sessionRole() === 'doctor' && !isRadDoctor(u)) fail('影像檢查排程由櫃台或放射科處理', 'FORBIDDEN')
+  return u
+}
+function requireFrontDesk() {
+  const u = requireUser('clerk', 'radtech', 'doctor')
+  if (sessionRole() === 'doctor' && !isRadDoctor(u)) fail('影像檢查報到、取消由櫃台或放射科處理', 'FORBIDDEN')
+  return u
+}
+function requireTech() {
+  const u = requireUser('radtech', 'doctor')
+  if (sessionRole() === 'doctor' && !isRadDoctor(u)) fail('檢查前準備與完成檢查由放射師處理（放射科醫師可支援）', 'FORBIDDEN')
   return u
 }
 
 export interface ExamBoard {
   date: string
   canSchedule: boolean
+  /** 報到、取消（櫃台、放射師、放射科醫師） */
+  canArrive: boolean
+  /** 確認準備、完成（放射師、放射科醫師） */
+  canPerform: boolean
   /** 待排程：還沒做、也還沒排的影像（舊的在前） */
   toSchedule: (ImagingWorkItem & { room: string; roomName: string; minutes: number; prep: string[]; contrast?: ExamView['contrast']; safety: ContrastSafety; cancelledReason?: string })[]
   /** 放射科醫師可以放行顯影劑過敏 */
@@ -115,8 +134,9 @@ export interface ExamBoard {
 
 export function examBoard(date: string): Promise<ExamBoard> {
   return query(() => {
-    requireUser('clerk', 'doctor', 'nurse')
+    requireUser('clerk', 'radtech', 'doctor', 'nurse')
     const u = sessionUser()
+    const radDoc = sessionRole() === 'doctor' && isRadiologist(u?.doctorId)
     const toSchedule = pendingImagingWork()
       .filter((w) => w.awaitingExam && !examOfKey(w.key))
       .map((w) => {
@@ -129,7 +149,9 @@ export function examBoard(date: string): Promise<ExamBoard> {
       })
     return {
       date,
-      canSchedule: sessionRole() === 'clerk' || (sessionRole() === 'doctor' && isRadiologist(u?.doctorId)),
+      canSchedule: sessionRole() === 'clerk' || radDoc,
+      canArrive: sessionRole() === 'clerk' || sessionRole() === 'radtech' || radDoc,
+      canPerform: sessionRole() === 'radtech' || radDoc,
       canClear: sessionRole() === 'doctor' && isRadiologist(u?.doctorId),
       toSchedule,
       rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
@@ -140,7 +162,7 @@ export function examBoard(date: string): Promise<ExamBoard> {
 /** 排程（或改時間：還沒報到的）：檢查室依醫令決定，同一間撞期擋、開放時段內、不能排過去 */
 export function scheduleExam(key: string, start: string): Promise<ExamView> {
   return mutate(() => {
-    const u = requireExamStaff()
+    const u = requireScheduler()
     const w = pendingImagingWork().find((x) => x.key === key)
     if (!w) fail('找不到這筆影像（可能已判讀、已停止），請重新整理', 'CONFLICT')
     const im = imagingOf(w!.procId)
@@ -168,7 +190,7 @@ const examById = (id: string) => must(db.imagingExams.find((x) => x.id === id), 
 /** 報到（病人到檢查室） */
 export function arriveExam(id: string): Promise<ExamView> {
   return mutate(() => {
-    const u = requireExamStaff()
+    const u = requireFrontDesk()
     const e = examById(id)
     if (e.cancelled) fail('這筆檢查已取消', 'CONFLICT')
     if (e.arrivedAt) fail('已經報到了', 'CONFLICT')
@@ -180,26 +202,48 @@ export function arriveExam(id: string): Promise<ExamView> {
   })
 }
 
-/** 檢查完成：要先報到；住院的臨時醫囑一起完成。完成後進判讀清單 */
-export function completeExam(id: string): Promise<ExamView> {
+export interface ExamDoneInput {
+  /** 含顯影劑的要寫用量（mL） */
+  contrastMl?: number
+  /** 顯影劑不良反應（沒有就不填） */
+  reaction?: { severity: ContrastReactionSeverity; symptoms: string; action: string }
+}
+/**
+ * 檢查完成（放射師）：要先報到；住院的臨時醫囑一起完成。完成後進判讀清單。
+ * 含顯影劑的記用量；有不良反應記嚴重度、症狀、處置——中度以上自動產生不良反應通報（懷疑物＝碘化顯影劑），送藥師評估
+ */
+export function completeExam(id: string, input: ExamDoneInput = {}): Promise<ExamView> {
   return mutate(() => {
-    const u = requireExamStaff()
+    const u = requireTech()
     const e = examById(id)
     if (!e.arrivedAt) fail('病人還沒報到', 'CONFLICT')
     if (e.doneAt) fail('已經完成了', 'CONFLICT')
+    failFields(checkContrastDone(input, !!imagingOf(e.procId)?.contrast))
     const miss = examPrepMissing(prepDefs(e.procId), e.prep)
     if (miss.length) fail(`檢查前準備還沒完成：${miss.map((d) => d.label).join('、')}（沒辦法完成的請取消、改期）`, 'CONFLICT')
     const c = contrastOf(e)
     if (c?.level === 'block') fail(c.text, 'CONFLICT')
     const t = now()
-    Object.assign(e, { doneAt: t, doneBy: u.id })
+    Object.assign(e, { doneAt: t, doneBy: u.id, ...(input.contrastMl !== undefined ? { contrastMl: Number(input.contrastMl) } : {}) })
+    if (input.reaction) {
+      const rx = { severity: input.reaction.severity, symptoms: input.reaction.symptoms.trim(), action: input.reaction.action.trim(), at: t, by: u.id }
+      if (contrastReactionReportable(rx.severity)) {
+        const r: AdrReport = {
+          id: newId('ADR'), ...(e.admissionId ? { admissionId: e.admissionId } : {}), patientId: e.patientId, drugId: '', agent: CONTRAST_AGENT, examId: e.id, onsetAt: t,
+          symptoms: rx.symptoms, severity: rx.severity, ...(rx.severity === 'severe' ? { serious: 'anaphylaxis' as const } : {}), action: rx.action, reportedBy: u.id, reportedAt: t,
+        }
+        db.adrReports.push(r)
+        e.contrastReaction = { ...rx, adrId: r.id }
+        audit('藥物不良反應通報', `${nameOf.patient(e.patientId)}：${CONTRAST_AGENT} ${rx.symptoms}（${ADR_SEVERITY_LABEL[rx.severity]}${rx.severity === 'severe' ? '・過敏性休克' : ''}；${find.procedure(e.procId)?.name}，放射師通報）`)
+      } else e.contrastReaction = rx
+    }
     const o = e.orderId ? db.ipdOrders.find((x) => x.id === e.orderId) : undefined
     if (o && o.status === 'active') Object.assign(o, { status: 'done', stopAt: t })
     // 含顯影劑＋Metformin＋腎功能不好：主治首頁提醒暫停 48 小時
     if (e.admissionId && c && onMetformin(e.patientId, e.admissionId, t) && metforminAtRisk(renalOfPatient(e.patientId, e.admissionId, t).crcl)) {
       e.metforminAlert = { doctorId: must(find.admission(e.admissionId), '住院').doctorId, until: addMinutes(t, METFORMIN_HOLD_HOURS * 60) }
     }
-    audit('影像檢查完成', `${nameOf.patient(e.patientId)} ${find.procedure(e.procId)?.name}（${examRoomName(e.room)}）`)
+    audit('影像檢查完成', `${nameOf.patient(e.patientId)} ${find.procedure(e.procId)?.name}（${examRoomName(e.room)}）${e.contrastMl ? `；顯影劑 ${e.contrastMl} mL` : ''}${e.contrastReaction ? `；不良反應 ${CONTRAST_REACTION_LABEL[e.contrastReaction.severity].split('（')[0]}：${e.contrastReaction.symptoms}` : ''}`)
     return view(e)
   })
 }
@@ -207,7 +251,7 @@ export function completeExam(id: string): Promise<ExamView> {
 /** 取消（寫原因）：還沒做完的才能取消；影像回到待排程（住院醫囑照樣執行中） */
 export function cancelExam(id: string, reason: string): Promise<ExamView> {
   return mutate(() => {
-    const u = requireExamStaff()
+    const u = requireFrontDesk()
     const e = examById(id)
     if (e.cancelled) fail('已經取消了', 'CONFLICT')
     if (e.doneAt) fail('已經做完，不能取消', 'CONFLICT')
@@ -222,7 +266,7 @@ export function cancelExam(id: string, reason: string): Promise<ExamView> {
 /** 報到後確認檢查前準備（逐項）：沒完成要寫原因；腎功能那一項看 CrCl（< 30 不能確認） */
 export function confirmExamPrep(id: string, item: string, ok: boolean, note?: string): Promise<ExamView> {
   return mutate(() => {
-    const u = requireExamStaff()
+    const u = requireTech()
     const e = examById(id)
     if (e.cancelled) fail('這筆檢查已取消', 'CONFLICT')
     if (!e.arrivedAt) fail('病人報到後才確認檢查前準備', 'CONFLICT')

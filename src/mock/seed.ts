@@ -261,6 +261,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 醫檢師：登打檢驗結果、發報告
     { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true },
     { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
+    { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true },
   ]
   // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
   // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
@@ -3025,6 +3026,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
     const ap = by('K35')
     if (ap) order('IO-EX-4', ap, 'P016', addMinutes(nowStr, -45))
+    // 放射師：闌尾炎病人今天早上做完含顯影劑腹部 CT（放射師完成、顯影劑 80 mL），檢查後前胸幾顆蕁麻疹（輕度，觀察後消退，不用通報）——待判讀
+    if (ap) {
+      const s9 = later(addMinutes(nowStr, -150), day0)
+      const done = addMinutes(s9, mins('P061'))
+      const o = order('IO-EX-9', ap, 'P061', later(addMinutes(s9, -120), day0), done)
+      const ok = (at: string) => ({ ok: true, at, by: 'U801' })
+      ex(o, s9, {
+        arrivedAt: s9, arrivedBy: 'U101', prep: { npo6: ok(s9), consent: ok(s9), renal: { ...ok(s9), note: '腎功能已另行確認' } }, doneAt: done, doneBy: 'U801', contrastMl: 80,
+        contrastReaction: { severity: 'mild', symptoms: '前胸幾顆蕁麻疹、輕微癢', action: '觀察 30 分鐘後消退，未給藥', at: done, by: 'U801' },
+      })
+    }
     // 檢查前準備與未到：泌尿道感染腹部超音波已報到、但早上吃過早餐（未禁食，不能做）；敗血症含顯影劑腹部 CT 今天稍晚（CrCl 偏低要水化）；
     // 門診一位今天的腰椎 X 光排在 1 小時前、人沒來（未到，開立醫師首頁看得到）
     const uti = by('N39')

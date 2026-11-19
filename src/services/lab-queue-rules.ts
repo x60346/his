@@ -12,13 +12,14 @@ export const QUEUE_RETURN_AFTER = 2
 export type QueueStage = 'waiting' | 'called' | 'served' | 'skipped'
 export const QUEUE_STAGE_LABEL: Record<QueueStage, string> = { waiting: '等候中', called: '叫號中', served: '已採檢', skipped: '過號' }
 
-type C = Pick<LabCheckin, 'no' | 'at' | 'calls' | 'skippedAt' | 'returnedAt' | 'servedAt' | 'order'>
+type C = Pick<LabCheckin, 'no' | 'at' | 'calls' | 'skippedAt' | 'returnedAt' | 'servedAt' | 'order' | 'callsAtReturn'>
+/** 這一輪（過號回來後）叫了幾次：時間只到分鐘，回來和再叫可能同一分鐘，所以用回來時的叫號次數切 */
+export const callsSinceReturn = (c: Pick<C, 'calls' | 'returnedAt' | 'callsAtReturn'>) => (c.calls?.length ?? 0) - (c.returnedAt ? c.callsAtReturn ?? 0 : 0)
 /** 目前在哪一步：開始採檢了＝served；過號還沒回來＝skipped；回來後（或從沒過號）有叫過＝called；其他＝waiting */
 export function queueStage(c: C): QueueStage {
   if (c.servedAt) return 'served'
   if (c.skippedAt && !c.returnedAt) return 'skipped'
-  const last = c.calls?.at(-1)
-  return last && (!c.returnedAt || last > c.returnedAt) ? 'called' : 'waiting'
+  return callsSinceReturn(c) > 0 ? 'called' : 'waiting'
 }
 export const queueOrder = (c: C) => c.order ?? c.no
 /** 等候中的（依排隊順序） */
@@ -32,7 +33,7 @@ export function returnOrder(waiting: C[], all: C[]): number {
 /** 等了幾分鐘才被叫到（報到或回來到第一次叫號；過號回來的從回來起算） */
 export function waitedMinutes(c: C): number | undefined {
   const from = c.returnedAt ?? c.at
-  const first = c.calls?.find((t) => t >= from)
+  const first = c.returnedAt ? c.calls?.[c.callsAtReturn ?? 0] : c.calls?.[0]
   return first ? minutesBetween(from, first) : undefined
 }
 /** 平均等候分鐘（有叫到的才算；四捨五入） */

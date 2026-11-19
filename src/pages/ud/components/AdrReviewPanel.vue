@@ -53,7 +53,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
             <li v-for="x in list" :key="x.id">
               <button type="button" :class="['w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50', x.id === selId && '!bg-brand-50']" @click="selId = x.id">
                 <div class="flex items-center gap-2">
-                  <span class="tabular rounded bg-slate-100 px-1.5 text-xs">{{ x.bedNo || '已出院' }}</span>
+                  <span class="tabular rounded bg-slate-100 px-1.5 text-xs">{{ x.bedNo || (x.admissionId ? '已出院' : '門診') }}</span>
                   <span class="font-medium text-slate-800">{{ x.patientName }}</span>
                   <UBadge v-if="x.seriousLabel" tone="red" class="ml-auto">{{ x.overdue ? '逾時・' : '' }}{{ x.seriousLabel }}</UBadge>
                   <UBadge v-else-if="x.assessment" :tone="canAddAllergy(x.assessment.causality) ? 'red' : 'gray'" class="ml-auto">{{ x.causalityLabel }}</UBadge>
@@ -68,7 +68,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
 
       <UCard v-if="!item" data-detail><UEmpty title="請從左邊選一筆" description="用 Naranjo 量表評估藥物與反應的因果關係" /></UCard>
       <div v-else data-detail class="min-w-0 space-y-3">
-        <UCard :title="`${item.patientName}・${item.drugName}`" :subtitle="`${item.bedNo || '已出院'}・住院號 ${item.admitNo}・發生 ${item.onsetAt.slice(5)}`">
+        <UCard :title="`${item.patientName}・${item.drugName}`" :subtitle="`${item.admissionId ? `${item.bedNo || '已出院'}・住院號 ${item.admitNo}` : '門診'}・發生 ${item.onsetAt.slice(5)}${item.examId ? '・影像檢查時（放射師通報）' : ''}`">
           <div class="space-y-1 text-sm">
             <div><UBadge :tone="item.severity === 'severe' ? 'red' : item.severity === 'moderate' ? 'yellow' : 'gray'">{{ item.severityLabel }}</UBadge> <UBadge v-if="item.seriousLabel" tone="red">{{ item.seriousLabel }}</UBadge> {{ item.symptoms }}</div>
             <div class="text-slate-600">處置：{{ item.action }}</div>
