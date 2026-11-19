@@ -11,8 +11,9 @@ import PacuPanel from '@/components/surgery/PacuPanel.vue'
 import TeamPanel from '@/components/surgery/TeamPanel.vue'
 import SpecimenPanel from '@/components/surgery/SpecimenPanel.vue'
 import PathPanel from '@/components/surgery/PathPanel.vue'
+import OrMetricsPanel from '@/components/surgery/OrMetricsPanel.vue'
 
-import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
+import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
 import { anesthesiaApi, CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
 import type { SurgeryCheckStage } from '@/types'
@@ -23,6 +24,8 @@ import { addMinutes, now, today } from '@/utils/date'
 const auth = useAuth()
 const isNurse = computed(() => auth.user?.role === 'nurse')
 const date = ref(today())
+// 排程與查核／效率指標
+const mode = ref('board')
 const { data, loading } = useQuery(() => surgeryApi.orBoard(date.value), [date])
 const board = computed(() => (data.value?.date === date.value ? data.value : undefined))
 const tone = (s: SurgeryView) => (s.status === 'done' ? 'green' : s.status === 'in-progress' ? 'red' : s.status === 'sent' ? 'purple' : s.status === 'scheduled' ? 'blue' : 'yellow')
@@ -92,10 +95,18 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
 <template>
   <div class="space-y-4">
     <UPageHeader title="手術室" description="排程、送來的病人、三段安全查核（麻醉前、劃刀前暫停確認、離開前）">
-      <input v-model="date" type="date" class="form-control w-44" aria-label="日期" />
+      <input v-if="mode === 'board'" v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
-    <UQueryState :loading="loading && !board" :ready="!!board">
+    <UTabs v-model="mode" :tabs="[{ key: 'board', label: '排程與查核' }, { key: 'metrics', label: '效率' }]" />
+    <OrMetricsPanel v-if="mode === 'metrics'" />
+    <UQueryState v-else :loading="loading && !board" :ready="!!board">
       <template v-if="board">
+        <section v-if="board.lateFirst.length" class="rounded-md border border-red-300 bg-red-50 p-3 text-sm">
+          <h3 class="font-semibold text-red-800">首台延誤 {{ board.lateFirst.length }} 間</h3>
+          <ul class="mt-1 space-y-0.5">
+            <li v-for="x in board.lateFirst" :key="x.id"><button type="button" class="text-left text-red-800 underline-offset-2 hover:underline" @click="caseId = x.id">{{ x.room }} {{ x.start.slice(11) }} {{ x.patientName }}（{{ x.no }}）：排程開始已過 {{ x.minutes }} 分鐘，還沒做麻醉前查核</button></li>
+          </ul>
+        </section>
         <section v-if="board.requested.length" class="rounded-md border border-amber-300 bg-amber-50/50 p-3 text-sm">
           <h3 class="mb-2 font-semibold text-amber-900">待排程 {{ board.requested.length }} 台<span class="ml-2 text-xs font-normal text-slate-500">急刀排最前面（依等級、申請時間）</span></h3>
           <ul class="divide-y divide-amber-100">

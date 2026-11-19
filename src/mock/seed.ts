@@ -2162,6 +2162,43 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         if (s5.record) s5.record.specimen = 'A 疝囊（檢體罐・福馬林）'
       }
     }
+    // 手術室效率：今天 OR1 首台排程 30 分鐘前、病人已送到還沒做麻醉前查核（首台延誤）——前天清創那位病理是鱗狀細胞癌，今天擴大切除；
+    // 骨折那位原排今天 16:00 OR2，早上發燒當天取消、改排明天（SG-SEED-1）
+    {
+      const an = users.find((u) => u.doctorId === 'DR03')!.id
+      const mk = (x: Partial<SurgeryPrepMark> & { by: string; at: string }): SurgeryPrepMark => x
+      if (nowStr >= `${T} 08:45`) {
+        const s3 = surgeries.find((x) => x.id === 'SG-SEED-3')
+        const a6 = s3 && admissions.find((a) => a.id === s3.admissionId)
+        if (s3?.path?.report && a6) {
+          const start = ((t) => addMinutes(t, -(Number(t.slice(15)) % 5)))(addMinutes(nowStr, -30).slice(0, 16))
+          const created = addMinutes(s3.path.report.at, 60)
+          const n = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length + 1
+          surgeries.push({
+            id: 'SG-SEED-6', no: `OR${T.replace(/-/g, '')}${String(n).padStart(3, '0')}`, admissionId: a6.id, patientId: a6.patientId, doctorId: a6.doctorId, procId: 'P040', side: 'na', anesthesia: 'spinal',
+            diagnosis: '薦骨鱗狀細胞癌（慢性壓傷潰瘍惡性變化），擴大切除', requestedDate: T, estMinutes: 60, status: 'sent', createdAt: created,
+            schedule: { room: 'OR1', start, by: 'U202', at: addMinutes(created, 60) },
+            prep: { consent: mk({ by: 'U201', at: addMinutes(created, 120) }), npo: mk({ by: 'U201', at: addMinutes(start, -120) }), siteMark: mk({ by: 'U201', at: addMinutes(start, -120) }), blood: mk({ by: 'U201', at: addMinutes(created, 120), notNeeded: '預估失血少' }), abx: mk({ by: 'U201', at: addMinutes(created, 120), notNeeded: '已在使用 Vancomycin' }) },
+            preAnes: { asa: 3, emergency: false, airway: { mallampati: 3, mouth: 'ok', neck: 'limited', note: '臥床，頸部僵硬' }, difficult: true, npo: { status: 'ok', lastIntake: addMinutes(start, -12 * 60) }, history: { items: ['neuro', 'endocrine'], note: '腦梗塞、糖尿病' }, plan: 'spinal', by: an, at: addMinutes(start, -90) },
+            team: { anesthetist: [{ userId: an, by: 'U202', at: addMinutes(created, 60) }], scrub: [{ userId: 'U208', by: 'U202', at: addMinutes(created, 60) }], circulating: [{ userId: 'U207', by: 'U202', at: addMinutes(created, 60) }] },
+            sentAt: addMinutes(start, -10), sentBy: 'U201', checks: {},
+          })
+        }
+      }
+      const s1 = surgeries.find((x) => x.id === 'SG-SEED-1')
+      const a7 = s1 && admissions.find((a) => a.id === s1.admissionId)
+      if (s1 && a7) {
+        const created = [s1.createdAt, addMinutes(nowStr, -26 * 60)].sort()[0]
+        const n = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length + 1
+        surgeries.push({
+          id: 'SG-SEED-7', no: `OR${T.replace(/-/g, '')}${String(n).padStart(3, '0')}`, admissionId: a7.id, patientId: a7.patientId, doctorId: a7.doctorId, procId: s1.procId, side: s1.side, anesthesia: s1.anesthesia,
+          diagnosis: s1.diagnosis, requestedDate: T, estMinutes: s1.estMinutes, status: 'cancelled', createdAt: created,
+          schedule: { room: 'OR2', start: `${T} 16:00`, by: 'U202', at: addMinutes(created, 60) },
+          prep: {}, checks: {},
+          cancelled: { by: users.find((u) => u.doctorId === a7.doctorId)!.id, at: notFuture(`${T} 09:10`, 5), reason: '病人發燒 38.6°C，延後手術（改排明天）' },
+        })
+      }
+    }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length
   }

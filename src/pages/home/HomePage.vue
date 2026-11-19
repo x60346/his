@@ -56,6 +56,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '急診待排留觀床', count: s.value.erObsBed, hint: '急診醫師決定留觀：排留觀床（OB1–OB6）、印腕帶後開始留觀', route: 'er', icon: Siren, urgent: true },
     { roles: ['doctor'], label: '急診留觀超過 48 小時', count: s.value.erObsOverdue ?? 0, hint: '留觀太久：請決定離院、收住院或轉院（急診看板「結束留觀」）', route: 'er', icon: Siren, urgent: true },
     { roles: ['clerk', 'nurse'], label: '急診收住院待床', count: s.value.erBed, hint: '急診醫師決定收住院、還沒報到：住院中心優先安排床位', route: 'admission', icon: Siren, urgent: true },
+    ...(s.value.orFirstLate !== undefined ? [{ roles: ['nurse'], label: '首台延誤', count: s.value.orFirstLate ?? 0, hint: '今天各房第一台：排程開始過了 15 分鐘還沒做麻醉前查核（手術室頁）', route: 'or', icon: Scissors, urgent: true }] : []),
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },

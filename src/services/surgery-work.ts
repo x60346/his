@@ -190,3 +190,19 @@ export function pathCounts(t: string, doctorId?: string): { ackDue: number; toRe
     toReport: xs.filter((s) => s.path!.received && !s.path!.report).length,
   }
 }
+
+/**
+ * 人員衝突：這個人同一時段已經是別台（還沒結束的）團隊現在的成員。
+ * 時段＝排程開始到預估結束；手術中超過預估的算到現在＋15 分鐘。from＝這台從什麼時候開始要這個人（交班時間）
+ */
+export function teamClash(s: Surgery, userId: string, t: string, from?: string): Surgery | undefined {
+  if (!s.schedule) return undefined
+  const win = (x: Surgery, f?: string): [string, number] => {
+    const st = f && f > x.schedule!.start ? f : x.schedule!.start
+    let end = addMinutes(x.schedule!.start, x.estMinutes)
+    if (x.status === 'in-progress' && end < addMinutes(t.slice(0, 16), 15)) end = addMinutes(t.slice(0, 16), 15)
+    return [st, Math.max(1, Math.round((parseDate(end).getTime() - parseDate(st).getTime()) / 60000))]
+  }
+  const [a, am] = win(s, from)
+  return db.surgeries.find((x) => x.id !== s.id && x.schedule && ['scheduled', 'sent', 'in-progress'].includes(x.status) && TEAM_ORDER.some((r) => teamNow(x, r) === userId) && ((w) => overlaps(a, am, w[0], w[1]))(win(x)))
+}

@@ -2345,6 +2345,8 @@ export interface TeamShift {
   to?: string
   by: string
   at: string
+  /** 同時段已在別台（急刀寫原因放行）：那台的單號與原因 */
+  clash?: { with: string; reason: string }
 }
 export type SurgeryStatus = 'requested' | 'scheduled' | 'sent' | 'in-progress' | 'done' | 'cancelled'
 

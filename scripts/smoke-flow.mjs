@@ -13752,6 +13752,8 @@ try {
     // 種子：腦梗塞住了 32 天（滿 30 天提醒、部分負擔進第二段）；其他人住幾天、費用不多，不提醒
     const long = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63.9'))
     ok(!!long && long.admittedAt.startsWith(addDaysT(-32)) && !long.dischargeSummary?.signedAt, '種子：腦梗塞住院 32 天、還沒准出院')
+    // 種子今天這位病人有一台擴大切除送到手術室（手術室效率的首台延誤示範）；這段測帳務，先把那台當作取消（測試輔助）
+    for (const s of db().surgeries.filter((x) => x.admissionId === long.id && x.status === 'sent')) Object.assign(s, { status: 'cancelled', cancelled: { by: 'U202', at: nowStr(), reason: '測試輔助' } })
     await as('clerk01')
     const lst = await IC.listIpdBilling()
     const li = lst.find((x) => x.admissionId === long.id)
@@ -15643,7 +15645,7 @@ try {
     await as('nurse01')
     let msg = await errOf(() => S.setTeam(sg.id, { circulating: 'U205' }))
     ok(msg.includes('排程後'), '還沒排程不能指定團隊')
-    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 16:00` })
     const opts = (await S.teamOptions(sg.id)).options
     ok(opts.anesthetist.length === 1 && opts.anesthetist[0].id === userOf('DR03').id && !opts.assistant.some((x) => x.id === surgeon.id) && opts.scrub.every((x) => db().users.find((u) => u.id === x.id).roles.includes('nurse')), '可選的人：麻醉醫師只有被指定「麻醉」的、助手不含主刀、刷手流動是護理師')
     const dr02 = userOf(adm.doctorId === 'DR02' ? 'DR01' : 'DR02')
@@ -15956,6 +15958,92 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/pages/pathology/PathologyPage.vue', 'utf8') + readFileSync('src/components/surgery/PathPanel.vue', 'utf8')
     ok(!/db\.|pathCritical|PATH_RECEIVE_HOURS \*|malignant \|\|/.test(page), '要不要確認、逾時由服務層判斷')
+  }
+  // 手術室效率與人員衝突：規則（首台準時 15 分鐘、急刀不算、換台同房相鄰、使用率只算開放時段、當天取消、今天首台延誤）；
+  // 種子（今天 OR1 首台延誤、OR2 當天取消）與首頁、效率；人員同時段在別台擋（擇期不能放行）、急刀寫原因放行（稽核）、交班也擋
+  console.log('\n[手術室效率]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const tomorrow = addDaysT(1)
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const mk = (id, room, start, signIn, signOut, extra = {}) => ({ id, no: id, status: 'done', estMinutes: 60, schedule: { room, start }, checks: { ...(signIn ? { signIn: { at: signIn } } : {}), ...(signOut ? { signOut: { at: signOut } } : {}) }, ...extra })
+    const L = [
+      mk('A1', 'OR1', '2026-03-02 08:00', '2026-03-02 08:10', '2026-03-02 09:30'), mk('A2', 'OR1', '2026-03-02 10:00', '2026-03-02 10:05', '2026-03-02 11:00'),
+      mk('B1', 'OR2', '2026-03-02 08:00', '2026-03-02 08:20', '2026-03-02 09:00'), mk('E1', 'OR3', '2026-03-02 07:00', '2026-03-02 07:00', '2026-03-02 08:30', { urgency: 'immediate' }),
+      mk('C1', 'OR3', '2026-03-02 09:00', null, null, { status: 'cancelled', cancelled: { at: '2026-03-02 07:30', reason: '病人發燒' } }), mk('C2', 'OR3', '2026-03-03 09:00', null, null, { status: 'cancelled', cancelled: { at: '2026-03-01 15:00', reason: '改期' } }),
+    ]
+    const fc = api.firstCaseStats(L, '2026-03-02', '2026-03-02', '2026-03-02 18:00')
+    ok(fc.total === 2 && fc.ontime === 1 && fc.late[0].no === 'B1' && fc.late[0].minutes === 20, `首台：OR1 晚 10 分準時、OR2 晚 20 分延誤；急刀不算首台（${fc.ontime}/${fc.total}）`)
+    const to = api.turnoverStats(L, '2026-03-02', '2026-03-02')
+    ok(to.count === 1 && to.avg === 35 && to.byRoom.OR1.avg === 35, '換台：同房相鄰 09:30 → 10:05 = 35 分')
+    ok(api.openMinutesOf('2026-03-02 07:00', '2026-03-02 08:30') === 30 && api.openMinutesOf('2026-03-02 19:00', '2026-03-03 09:00') === 120, '使用率只算開放時段 08:00–20:00（跨夜也拆開）')
+    const ut = api.utilization(L, ['OR1', 'OR3'], '2026-03-02', '2026-03-02')
+    ok(ut[0].usedMinutes === 135 && ut[0].openMinutes === 720 && ut[1].usedMinutes === 30, `使用率：OR1 在房 80＋55 分／開放 720 分（${ut[0].pct}%）；急刀照算在房時間`)
+    const cs = api.cancelStats(L, '2026-03-01', '2026-03-03')
+    ok(cs.scheduled === 6 && cs.sameDay === 1 && cs.reasons[0].reason === '病人發燒', '當天取消：手術當天取消才算（前一天改期不算）')
+    const lf = api.lateFirstCases([mk('X1', 'OR1', '2026-03-02 08:00', null, null, { status: 'sent' }), mk('X2', 'OR2', '2026-03-02 08:00', '2026-03-02 08:05', null, { status: 'in-progress' }), mk('X3', 'OR3', '2026-03-02 08:20', null, null, { status: 'scheduled' })], '2026-03-02', '2026-03-02 08:30')
+    ok(lf.length === 1 && lf[0].id === 'X1' && lf[0].minutes === 30, '今天首台：過了 15 分鐘還沒麻醉前查核才算（08:20 那台才過 10 分）')
+    const fo = api.firstCaseStats([mk('Y1', 'OR1', '2026-03-02 08:00', null, null, { status: 'sent' }), mk('Y2', 'OR2', '2026-03-02 08:20', null, null, { status: 'scheduled' })], '2026-03-02', '2026-03-02', '2026-03-02 08:30')
+    ok(fo.total === 1 && fo.late[0].no === 'Y1' && fo.late[0].open && fo.late[0].minutes === 30, '還沒查核、已過 15 分鐘的首台也算延誤；還沒到時間的不算')
+    // 種子
+    await as('nurse02')
+    const board = await S.orBoard(T)
+    const s6 = db().surgeries.find((s) => s.id === 'SG-SEED-6')
+    ok(board.lateFirst.length === 1 && board.lateFirst[0].id === s6.id && board.lateFirst[0].room === 'OR1' && board.lateFirst[0].minutes >= 30, `種子：今天 OR1 首台延誤 ${board.lateFirst[0]?.minutes} 分`)
+    ok((await api.dashboardApi.getDashboard()).orFirstLate === 1, '首頁：首台延誤 1（手術排程權限）')
+    await as('clerk01')
+    ok((await api.dashboardApi.getDashboard()).orFirstLate === undefined, '沒有排程權限的看不到')
+    await as('nurse01')
+    const m = await S.orMetrics(30)
+    ok(m.cancel.sameDay === 1 && m.cancel.reasons[0].reason.includes('發燒') && m.firstCase.late.some((x) => x.no === s6.no && x.open) && m.utilization.find((x) => x.room === 'OR3').usedMinutes > 0, `效率：當天取消 1（${m.cancel.reasons[0]?.reason}）、首台 ${m.firstCase.ontime}/${m.firstCase.total}、OR3 使用率 ${m.utilization.find((x) => x.room === 'OR3').pct}%`)
+    // 人員衝突：明天 09:00 OR1 骨折那台已排麻醉 dr03、流動 nurse05
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const surgeon = db().users.find((u) => u.doctorId === adm.doctorId)
+    await as(surgeon.username)
+    const sg = await S.requestSurgery({ admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+    await as('nurse02')
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 09:30` })
+    const dr03 = db().users.find((u) => u.username === 'dr03').id
+    const s1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    let f = await fieldsOf(() => S.setTeam(sg.id, { anesthetist: dr03, circulating: 'U205', scrub: 'U209', clashReason: '想放行' }))
+    ok(f.anesthetist?.includes(s1.no) && f.anesthetist.includes('不能重複排') && f.circulating?.includes('OR1') && !f.scrub, `同時段已在別台：擋（擇期寫原因也不行）：「${f.anesthetist}」`)
+    let v = await S.setTeam(sg.id, { circulating: 'U209', scrub: 'U210' })
+    ok(v.teamRows.find((r) => r.role === 'circulating').userId === 'U209', '換沒衝突的人可以')
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 16:00` })
+    v = await S.setTeam(sg.id, { anesthetist: dr03 })
+    ok(v.teamRows.find((r) => r.role === 'anesthetist').userId === dr03, '改到下午就不衝突（同一位麻醉醫師）')
+    // 急刀：今天，和 OR1 延誤那台撞同一位流動
+    const adm2 = adm
+    await as(db().users.find((u) => u.doctorId === adm2.doctorId).username)
+    const eg = await S.requestSurgery({ admissionId: adm2.id, procId: 'P038', side: 'na', anesthesia: 'general', requestedDate: T, estMinutes: 60, diagnosis: '急性闌尾炎', urgency: 'urgent' })
+    await as('nurse02')
+    const soon = ((t) => dateUtil.addMinutes(t, 5 - (Number(t.slice(15)) % 5)))(nowStr().slice(0, 16))
+    await S.scheduleSurgery(eg.id, { room: 'OR3', start: soon })
+    f = await fieldsOf(() => S.setTeam(eg.id, { circulating: 'U207' }))
+    ok(f.circulating?.includes(s6.no) && f.circulating.includes('急刀可以寫原因放行'), `急刀撞到人：提示可以寫原因放行：「${f.circulating}」`)
+    v = await S.setTeam(eg.id, { circulating: 'U207', scrub: 'U211', clashReason: '夜間人力不足，流動兼顧兩房' })
+    const sh = db().surgeries.find((s) => s.id === eg.id).team.circulating[0]
+    ok(sh.clash.with === s6.no && sh.clash.reason.includes('人力不足') && db().auditLogs[0].detail.includes('放行'), '急刀寫原因放行：記在團隊上、寫稽核')
+    // 交班也擋：OR1 延誤那台做完麻醉前查核後，刷手要換成急刀那台的刷手
+    await as('nurse01')
+    await S.recordCheck(s6.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    f = await fieldsOf(() => S.handoverTeam(s6.id, 'scrub', { userId: 'U211' }))
+    ok(f.userId?.includes(eg.no ?? db().surgeries.find((s) => s.id === eg.id).no) && f.userId.includes('放行'), `交班接手的人同時段在急刀那台：擋（可放行）：「${f.userId}」`)
+    v = await S.handoverTeam(s6.id, 'scrub', { userId: 'U211', clashReason: '急刀先開，刷手兩邊支援' })
+    ok(v.team.scrub.at(-1).clash?.reason.includes('支援'), '寫原因後可以交班')
+    const { readFileSync } = await import('node:fs')
+    const panel = readFileSync('src/components/surgery/OrMetricsPanel.vue', 'utf8')
+    ok(!/db\.|firstCaseStats|turnoverStats|signIn/.test(panel), '效率由服務層算，頁面只畫')
   }
 } catch (e) {
   failed++

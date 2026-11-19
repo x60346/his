@@ -52,6 +52,7 @@ import { downtimeClash, downtimeEnd, examDayOf, outOfHours } from './exam-rules'
 import { planOverdue } from './incident-rules'
 import { emergencyState } from './surgery-rules'
 import { isObsBed, obsOpen } from './bed-work'
+import { lateFirstCases } from './or-metrics-rules'
 
 export interface DashboardStats {
   date: string
@@ -256,6 +257,8 @@ export interface DashboardStats {
   preAnesDue?: number
   preAnesBrief?: number
   emergencyOverdue?: number
+  /** 手術排程：今天首台排程開始過了 15 分鐘還沒做麻醉前查核 */
+  orFirstLate?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -454,7 +457,7 @@ export function getDashboard(): Promise<DashboardStats> {
       ...(() => {
         const me = sessionUser()
         const role = sessionRole()
-        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule } : {}
+        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule, orFirstLate: lateFirstCases(db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted'), today(), now()).length } : {}
       })(),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {

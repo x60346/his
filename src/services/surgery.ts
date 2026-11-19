@@ -7,7 +7,8 @@ import { addDays, addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
-import { bumpedByEmergency, surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
+import { bumpedByEmergency, surgeryOf, surgeryView, teamClash, type SurgeryView } from './surgery-work'
+import { cancelStats, firstCaseStats, lateFirstCases, turnoverStats, utilization } from './or-metrics-rules'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
 import { preIncisionOf } from './prophylaxis-work'
@@ -156,6 +157,8 @@ export interface OrBoard {
   /** 近 30 天急刀時效達成率；擇期被急刀佔用要改期的筆數 */
   emergencyStats: { total: number; ontime: number; pct: number }
   needsReschedule: number
+  /** 這天的首台：排程開始過了 15 分鐘還沒做麻醉前查核（只有看今天才有） */
+  lateFirst: { id: string; room: string; start: string; minutes: number; patientName: string; no: string }[]
 }
 
 export function orBoard(date: string): Promise<OrBoard> {
@@ -170,6 +173,7 @@ export function orBoard(date: string): Promise<OrBoard> {
         .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
       emergencyStats: emergencyRate(db.surgeries.filter((s) => s.createdAt >= `${addDays(today(), -30)} 00:00`), now()),
       needsReschedule: db.surgeries.filter((s) => bumpedByEmergency(s)).length,
+      lateFirst: d === today() ? lateFirstCases(db.surgeries.filter(liveAdm), d, now()).map((x) => ((s) => ({ ...x, patientName: nameOf.patient(s.patientId), no: s.no }))(surgeryOf(x.id)!)) : [],
     }
   })
 }
@@ -333,6 +337,9 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
 
 // ---------- 手術團隊 ----------
 
+const clashText = (userId: string, x: Surgery, urgent: boolean) =>
+  `${nameOf.user(userId)} 同時段在 ${x.schedule!.room} ${x.no} ${nameOf.patient(x.patientId)}（${x.schedule!.start.slice(5)} 起）${urgent ? '：急刀可以寫原因放行' : '，不能重複排'}`
+
 /** 這個人能不能擔任這個角色（醫師：助手；有「麻醉」權限的醫師：麻醉醫師；護理師：刷手、流動） */
 function fitsRole(u: User, role: TeamRole): boolean {
   if (!u.active) return false
@@ -369,7 +376,7 @@ function checkMember(s: Surgery, role: TeamRole, userId: string, others: Partial
  * 指定團隊（排程後、麻醉前查核前；權限「手術排程」）：直接換人，不留交班。空字串＝拿掉。
  * 麻醉前查核之後要換人，走 handoverTeam（記交班時間）
  */
-export function setTeam(id: string, input: Partial<Record<TeamRole, string>>): Promise<SurgeryView> {
+export function setTeam(id: string, input: Partial<Record<TeamRole, string>> & { clashReason?: string }): Promise<SurgeryView> {
   return mutate(() => {
     const u = requirePermission('surgery.schedule')
     const s = must(surgeryOf(id), '手術')
@@ -385,8 +392,16 @@ export function setTeam(id: string, input: Partial<Record<TeamRole, string>>): P
     const t = now()
     const changed = TEAM_ORDER.filter((r) => (next[r] || undefined) !== teamNow(s, r))
     if (!changed.length) fail('團隊沒有變動', 'CONFLICT')
-    s.team = Object.fromEntries(TEAM_ORDER.filter((r) => next[r]).map((r) => [r, teamNow(s, r) === next[r] ? s.team![r]! : [{ userId: next[r]!, by: u.id, at: t }]]))
-    audit('手術團隊', `${audText(s)}：${changed.map((r) => `${TEAM_LABEL[r]} ${next[r] ? nameOf.user(next[r]!) : '（拿掉）'}`).join('、')}`)
+    // 人員衝突（新指定的人）：同時段已在別台 → 擋；急刀（這台或那台）可以寫原因放行
+    const clashes = Object.fromEntries(changed.filter((r) => next[r]).map((r) => [r, teamClash(s, next[r]!, t)]).filter(([, x]) => x)) as Partial<Record<TeamRole, Surgery>>
+    const reason = input.clashReason?.trim()
+    for (const [r, x] of Object.entries(clashes) as [TeamRole, Surgery][]) {
+      const urgent = !!(s.urgency || x.urgency)
+      if (!urgent || !reason) e[r] = clashText(next[r]!, x, urgent)
+    }
+    failFields(e)
+    s.team = Object.fromEntries(TEAM_ORDER.filter((r) => next[r]).map((r) => [r, teamNow(s, r) === next[r] ? s.team![r]! : [{ userId: next[r]!, by: u.id, at: t, ...(clashes[r] ? { clash: { with: clashes[r]!.no, reason: reason! } } : {}) }]]))
+    audit('手術團隊', `${audText(s)}：${changed.map((r) => `${TEAM_LABEL[r]} ${next[r] ? nameOf.user(next[r]!) : '（拿掉）'}${clashes[r] ? `（同時段在 ${clashes[r]!.no}，放行：${reason}）` : ''}`).join('、')}`)
     return surgeryView(s)
   })
 }
@@ -395,7 +410,7 @@ export function setTeam(id: string, input: Partial<Record<TeamRole, string>>): P
  * 交班（麻醉前查核之後到手術完成；護理師記）：這個角色換人，記交班時間（預設現在，可以補記，不早於前一段開始、不早於麻醉前查核）。
  * 助手中途加入也走這裡
  */
-export function handoverTeam(id: string, role: TeamRole, input: { userId: string; at?: string }): Promise<SurgeryView> {
+export function handoverTeam(id: string, role: TeamRole, input: { userId: string; at?: string; clashReason?: string }): Promise<SurgeryView> {
   return mutate(() => {
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
@@ -414,10 +429,39 @@ export function handoverTeam(id: string, role: TeamRole, input: { userId: string
     const last = s.team?.[role]?.at(-1)
     const floor = [s.checks.signIn.at.slice(0, 16), last?.from ?? ''].sort().at(-1)!
     if (at < floor) failField('at', `不能早於 ${floor.slice(11)}（${last?.from === floor ? '前一段開始' : '麻醉前查核'}）`)
+    const clash = teamClash(s, input.userId, t, at)
+    const reason = input.clashReason?.trim()
+    if (clash && (!(s.urgency || clash.urgency) || !reason)) failField('userId', clashText(input.userId, clash, !!(s.urgency || clash.urgency)))
     s.team = { ...(s.team ?? {}) }
     if (last && !last.to) last.to = at
-    s.team[role] = [...(s.team[role] ?? []), { userId: input.userId, from: at, by: u.id, at: t }]
-    audit('手術團隊交班', `${audText(s)}：${TEAM_LABEL[role]} ${cur ? `${nameOf.user(cur)} → ` : ''}${nameOf.user(input.userId)}（${at.slice(11)}）`)
+    s.team[role] = [...(s.team[role] ?? []), { userId: input.userId, from: at, by: u.id, at: t, ...(clash ? { clash: { with: clash.no, reason: reason! } } : {}) }]
+    audit('手術團隊交班', `${audText(s)}：${TEAM_LABEL[role]} ${cur ? `${nameOf.user(cur)} → ` : ''}${nameOf.user(input.userId)}（${at.slice(11)}）${clash ? `；同時段在 ${clash.no}，放行：${reason}` : ''}`)
     return surgeryView(s)
+  })
+}
+
+// ---------- 手術室效率 ----------
+
+export interface OrMetrics {
+  from: string
+  to: string
+  firstCase: ReturnType<typeof firstCaseStats>
+  turnover: ReturnType<typeof turnoverStats>
+  utilization: ReturnType<typeof utilization>
+  cancel: ReturnType<typeof cancelStats> & { reasons: { no: string; date: string; reason: string; patientName: string }[] }
+}
+/** 最近 N 天（含今天）的手術室效率：首台準時、換台、使用率、當天取消 */
+export function orMetrics(days = 30): Promise<OrMetrics> {
+  return query(() => {
+    requireUser('nurse', 'doctor', 'admin')
+    const n = Math.min(Math.max(Math.round(Number(days)) || 30, 1), 180)
+    const to = today()
+    const from = addDays(to, -(n - 1))
+    const list = db.surgeries
+    const c = cancelStats(list, from, to)
+    return {
+      from, to, firstCase: firstCaseStats(list, from, to, now()), turnover: turnoverStats(list, from, to), utilization: utilization(list, OR_ROOMS, from, to),
+      cancel: { ...c, reasons: c.reasons.map((r) => ({ ...r, patientName: nameOf.patient(list.find((x) => x.no === r.no)?.patientId ?? '') })) },
+    }
   })
 }
