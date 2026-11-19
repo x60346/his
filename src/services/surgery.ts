@@ -300,6 +300,8 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
     if (s.status !== 'in-progress') fail('手術還沒開始（或已經完成）', 'CONFLICT')
+    // 麻醉紀錄（局部麻醉不用）：要有麻醉開始與結束
+    if (s.anesthesia !== 'local' && (!s.anes?.startAt || !s.anes.endAt)) fail(`麻醉紀錄還沒有麻醉${s.anes?.startAt ? '結束' : '開始與結束'}時間（由麻醉醫師在麻醉紀錄記），不能完成手術`, 'CONFLICT')
     const miss = CHECK_ITEMS.signOut.items.filter((x) => !(input.items ?? []).includes(x))
     const c = { spongeBefore: Number(input.spongeBefore), spongeAfter: Number(input.spongeAfter), instrumentBefore: Number(input.instrumentBefore), instrumentAfter: Number(input.instrumentAfter) }
     const { fields, mismatch } = countsProblem(c)

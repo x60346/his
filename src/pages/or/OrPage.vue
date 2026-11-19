@@ -6,6 +6,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, CalendarClock, Stethoscope } from 'lucide-vue-next'
 import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
+import AnesRecordPanel from '@/components/surgery/AnesRecordPanel.vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
 import { CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
@@ -170,6 +171,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <UButton v-if="board?.canAnesthesia && ['requested', 'scheduled', 'sent'].includes(current.status)" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="openPre(current)">{{ current.preAnes ? '修改評估' : '麻醉評估' }}</UButton>
         </div>
         <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
+        <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
         <div v-if="current.status === 'scheduled'" class="flex flex-wrap items-center gap-2">
           <p class="text-amber-800">病房還沒送來（術前準備完成後由護理站「送手術室」）。</p>
           <UButton v-if="board?.canSchedule" size="sm" variant="secondary" class="ml-auto" :icon="CalendarClock" @click="reschedule(current)">改期</UButton>

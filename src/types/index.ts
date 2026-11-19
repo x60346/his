@@ -2312,6 +2312,36 @@ export type AnesHistoryKey = 'cardiac' | 'pulmonary' | 'renal' | 'hepatic' | 'en
  * 麻醉前評估（有「麻醉」權限的醫師）：ASA 分級（急刀加 E）、呼吸道（Mallampati、張口、頸部活動；任一不良＝困難插管）、
  * 禁食狀態、重大病史、計畫的麻醉方式（和申請不同要寫原因）。急刀可以先做精簡版（ASA、呼吸道、禁食），病史與計畫事後補
  */
+export type AnesEntryType = 'vital' | 'drug' | 'fluid' | 'output' | 'event'
+export type AnesDrugKey = 'propofol' | 'fentanyl' | 'rocuronium' | 'ephedrine' | 'phenylephrine' | 'atropine' | 'ondansetron' | 'sugammadex'
+export type AnesFluidKind = 'crystalloid' | 'colloid' | 'blood'
+export type AnesOutputKind = 'blood' | 'urine'
+export type AnesEventKind = 'induction' | 'intubation' | 'extubation' | 'position' | 'other'
+/** 麻醉紀錄的一筆：生命徵象、用藥、輸入（輸液、血品）、輸出（失血、尿量）、事件 */
+export interface AnesEntry {
+  id: string
+  type: AnesEntryType
+  at: string
+  sbp?: number
+  dbp?: number
+  hr?: number
+  spo2?: number
+  etco2?: number
+  drug?: AnesDrugKey
+  dose?: number
+  fluid?: AnesFluidKind
+  output?: AnesOutputKind
+  ml?: number
+  event?: AnesEventKind
+  note?: string
+  by: string
+}
+/** 術中麻醉紀錄（有「麻醉」權限的醫師）：麻醉開始、結束與過程中的紀錄；完成手術時要有開始與結束（局部麻醉不用） */
+export interface AnesRecord {
+  startAt?: string
+  endAt?: string
+  entries: AnesEntry[]
+}
 export interface PreAnesthesia {
   asa: AsaClass
   emergency: boolean
@@ -2347,6 +2377,8 @@ export interface Surgery {
   urgency?: SurgeryUrgency
   /** 麻醉前評估 */
   preAnes?: PreAnesthesia
+  /** 術中麻醉紀錄 */
+  anes?: AnesRecord
   note?: string
   status: SurgeryStatus
   createdAt: string

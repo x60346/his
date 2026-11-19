@@ -138,6 +138,16 @@ try {
       s.preAnes = { asa: 2, emergency: !!s.urgency, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, difficult: false, npo: { status: 'unknown' }, history: { items: [] }, plan: s.anesthesia, by: 'U101', at: nowStr() }
     return surgeryRaw.recordCheck(id, stage, items)
   }
+  // 完成手術要有麻醉開始與結束（局部麻醉不用）：其他段落測的是完成本身，沒記的直接補（測試輔助）；要測擋的用 surgeryRaw.finishSurgery
+  surgeryRaw.finishSurgery = api.surgeryApi.finishSurgery
+  api.surgeryApi.finishSurgery = async (id, input) => {
+    const s = dbm.db.surgeries.find((x) => x.id === id)
+    if (s && s.status === 'in-progress' && s.anesthesia !== 'local' && !s.anes?.endAt) {
+      const t = nowStr().slice(0, 16)
+      s.anes = { startAt: s.anes?.startAt ?? s.startAt?.slice(0, 16) ?? t, endAt: t, entries: s.anes?.entries ?? [] }
+    }
+    return surgeryRaw.finishSurgery(id, input)
+  }
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
@@ -15320,6 +15330,128 @@ try {
     const { readFileSync } = await import('node:fs')
     const dlg = readFileSync('src/components/surgery/PreAnesDialog.vue', 'utf8')
     ok(!/mallampati >= 3|db\./.test(dlg), '困難插管與欄位檢查在服務層，評估畫面只收表單')
+  }
+  // 術中麻醉紀錄：欄位、空窗、低血壓低血氧（連續算一次、帶出處置）、合計；種子；開始（Sign In 後、權限、時間）、記錄、補記時間、刪除、結束（不早於最後一筆）；
+  // 沒開始與結束不能完成手術（局部麻醉不用）；完成後不能改
+  console.log('\n[麻醉紀錄]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.anesthesiaApi
+    const S = api.surgeryApi
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const ctx = { startAt: '2026-11-18 10:00', now: '2026-11-18 11:00' }
+    ok(api.checkAnesEntry({ type: 'vital', at: '2026-11-18 10:05' }, ctx).sbp && api.checkAnesEntry({ type: 'vital', at: '2026-11-18 09:59', hr: 80 }, ctx).at && api.checkAnesEntry({ type: 'vital', at: '2026-11-18 11:01', hr: 80 }, ctx).at, '生命徵象至少一項；時間不能早於開始、不能在未來')
+    ok(api.checkAnesEntry({ type: 'vital', at: '2026-11-18 10:05', sbp: 80, dbp: 90 }, ctx).dbp && api.checkAnesEntry({ type: 'vital', at: '2026-11-18 10:05', spo2: 101 }, ctx).spo2, '舒張壓要小於收縮壓、範圍合理')
+    ok(api.checkAnesEntry({ type: 'drug', at: '2026-11-18 10:05', drug: 'ephedrine', dose: 60 }, ctx).dose?.includes('50') && api.checkAnesEntry({ type: 'event', at: '2026-11-18 10:05', event: 'other' }, ctx).note && api.checkAnesEntry({ type: 'output', at: '2026-11-18 10:05', output: 'blood' }, ctx).ml, '劑量上限、其他事件要內容、輸出要 mL')
+    const r = { startAt: '2026-11-18 10:00', entries: [
+      { type: 'vital', at: '2026-11-18 10:05', sbp: 120, spo2: 99 }, { type: 'vital', at: '2026-11-18 10:10', sbp: 84, spo2: 99 }, { type: 'vital', at: '2026-11-18 10:15', sbp: 80, spo2: 88 },
+      { type: 'drug', at: '2026-11-18 10:12', drug: 'phenylephrine', dose: 100 }, { type: 'vital', at: '2026-11-18 10:40', sbp: 110, spo2: 98 },
+      { type: 'fluid', at: '2026-11-18 10:05', fluid: 'crystalloid', ml: 500 }, { type: 'fluid', at: '2026-11-18 10:30', fluid: 'blood', ml: 250 }, { type: 'output', at: '2026-11-18 10:30', output: 'blood', ml: 400 },
+    ] }
+    const al = api.intraopAlerts(r)
+    ok(al.length === 2 && al[0].kind === 'hypotension' && al[0].text.includes('最低 80') && al[0].text.includes('Phenylephrine') && al[1].kind === 'hypoxemia', `連續低血壓算一次、帶出 15 分鐘內用藥；低血氧另列：${al.map((x) => x.text).join('／')}`)
+    const gaps = api.vitalGaps(r, '2026-11-18 11:00')
+    ok(gaps.length === 2 && gaps[0].minutes === 25 && !gaps[0].open && gaps[1].open && gaps[1].minutes === 20, '空窗：10:15–10:40（25 分）、10:40 到現在（20 分，還開著）')
+    const tot = api.anesTotals(r)
+    ok(tot.fluid === 500 && tot.blood === 250 && tot.bloodLoss === 400 && tot.urine === 0, '輸入輸出合計')
+
+    // 種子
+    const s4 = db().surgeries.find((s) => s.id === 'SG-SEED-4')
+    await as('nurse01')
+    let ch = await A.anesChart(s4.id)
+    ok(ch.startAt && ch.endAt && ch.alerts.length === 1 && ch.alerts[0].text.includes('Ephedrine 10') && !ch.gaps.length && ch.totals.bloodLoss === 30 && !ch.canEdit, `種子：昨天急刀完整紀錄、一次低血壓（${ch.alerts[0]?.text}）、護理師只能看`)
+
+    // 一台擇期：送手術室
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    await as(userOf(adm.doctorId))
+    const sg = await S.requestSurgery({ admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+    await as('dr03')
+    await A.savePreAnes(sg.id, { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'unknown' }, history: { items: [] }, plan: 'general' })
+    await as('nurse01')
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(sg.id, k)
+    await S.markPrep(sg.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(sg.id, 'abx', { notNeeded: '乾淨手術' })
+    await S.sendToOr(sg.id)
+    await as('dr03')
+    let msg = await errOf(() => A.startAnes(sg.id))
+    ok(msg.includes('Sign In'), '麻醉前查核之前不能開始麻醉')
+    await as('nurse01')
+    await surgeryRaw.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await expectError(() => A.startAnes(sg.id), '護理師不能開始麻醉')
+    await as(userOf(adm.doctorId))
+    msg = await errOf(() => A.startAnes(sg.id))
+    ok(msg.includes('麻醉'), '沒被指定的醫師不能')
+    await as('dr03')
+    msg = await errOf(() => A.addAnesEntry(sg.id, { type: 'vital', hr: 80 }))
+    ok(msg.includes('麻醉開始'), '還沒開始不能記')
+    const t0 = dateUtil.now().slice(0, 16)
+    let f = await fieldsOf(() => A.startAnes(sg.id, { at: dateUtil.addMinutes(t0, 5) }))
+    ok(f.at?.includes('未來'), '開始時間不能在未來')
+    f = await fieldsOf(() => A.startAnes(sg.id, { at: dateUtil.addMinutes(t0, -60) }))
+    ok(f.at?.includes('麻醉前查核'), '開始時間不能早於麻醉前查核')
+    let v = await A.startAnes(sg.id)
+    ok(v.anes.startAt === t0 && db().auditLogs[0].action === '麻醉開始', '麻醉開始（空白＝現在）、稽核')
+    await expectError(() => A.startAnes(sg.id), '重複開始')
+    ch = await A.addAnesEntry(sg.id, { type: 'vital', sbp: 128, dbp: 76, hr: 88, spo2: 99 })
+    ok(ch.entries.length === 1 && ch.entries[0].at === t0 && ch.entries[0].text === 'BP 128/76・HR 88・SpO2 99%' && ch.canEdit && db().auditLogs[0].action !== '麻醉紀錄', '記生命徵象（不逐筆寫稽核）')
+    f = await fieldsOf(() => A.addAnesEntry(sg.id, { type: 'drug', drug: 'propofol', dose: 0 }))
+    ok(f.dose, '劑量要填')
+    ch = await A.addAnesEntry(sg.id, { type: 'drug', drug: 'propofol', dose: 120 })
+    ok(db().auditLogs[0].action === '麻醉紀錄' && db().auditLogs[0].detail.includes('Propofol 120 mg'), '用藥寫稽核')
+    ch = await A.addAnesEntry(sg.id, { type: 'vital', sbp: 78, dbp: 40 })
+    ok(ch.alerts.length === 1 && ch.alerts[0].kind === 'hypotension', '低收縮壓自動列為術中低血壓')
+    const wrong = ch.entries.find((x) => x.sbp === 78)
+    ch = await A.removeAnesEntry(sg.id, wrong.id)
+    ok(!ch.alerts.length && ch.entries.length === 2 && db().auditLogs[0].action === '刪除麻醉紀錄', '記錯可以刪（寫稽核），低血壓跟著消失')
+    await A.addAnesEntry(sg.id, { type: 'event', event: 'intubation' })
+    // 完成手術：沒結束麻醉擋
+    await as('nurse01')
+    await S.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sg.id)
+    await S.recordCheck(sg.id, 'signOut', api.CHECK_ITEMS.signOut.items).catch(() => {})
+    const fin = { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 }
+    msg = await errOf(() => surgeryRaw.finishSurgery(sg.id, fin))
+    ok(msg.includes('麻醉結束'), `沒結束麻醉不能完成手術：「${msg}」`)
+    await as('dr03')
+    f = await fieldsOf(() => A.endAnes(sg.id, { at: dateUtil.addMinutes(t0, -1) }))
+    ok(f.at?.includes('最後一筆'), '結束不能早於最後一筆紀錄')
+    v = await A.endAnes(sg.id)
+    ok(v.anes.endAt && db().auditLogs[0].action === '麻醉結束' && db().auditLogs[0].detail.includes('失血 0 mL'), '麻醉結束、稽核寫輸入輸出')
+    f = await fieldsOf(() => A.addAnesEntry(sg.id, { type: 'vital', hr: 80, at: dateUtil.addMinutes(v.anes.endAt, 1) }))
+    ok(f.at?.includes('結束'), '結束後補記不能晚於結束')
+    await as('nurse01')
+    v = await surgeryRaw.finishSurgery(sg.id, fin)
+    ok(v.status === 'done', '麻醉結束後可以完成手術')
+    await as('dr03')
+    msg = await errOf(() => A.addAnesEntry(sg.id, { type: 'vital', hr: 80 }))
+    ok(msg.includes('已完成'), '手術完成後麻醉紀錄不能再改')
+    ok(!(await A.anesChart(sg.id)).canEdit, '完成後畫面不能編輯')
+    // 局部麻醉不用麻醉紀錄
+    const sg3 = db().surgeries.find((s) => s.id === 'SG-SEED-3')
+    ok(!(await A.anesChart(sg3.id)).required, '局部麻醉不需要麻醉紀錄')
+    const { readFileSync } = await import('node:fs')
+    const panel = readFileSync('src/components/surgery/AnesRecordPanel.vue', 'utf8')
+    ok(!/db\.|< 90 \?|ANES_VITAL_GAP|anesTotals|intraopAlerts/.test(panel.replace("v.spo2! < 90 ? 'fill-red-600'", '')), '空窗、低血壓低血氧、合計由服務層算，頁面只畫圖')
   }
 } catch (e) {
   failed++

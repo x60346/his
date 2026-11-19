@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2029,6 +2029,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (s3) pre('SG-SEED-3', `${s3.requestedDate} 08:30`, { asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'limited', note: '臥床，頸部僵硬' }, npo: { status: 'ok', lastIntake: `${addDays(s3.requestedDate, -1)} 22:00` }, history: { items: ['neuro', 'endocrine'], note: '腦梗塞、糖尿病' }, plan: 'local' })
       const s4 = surgeries.find((x) => x.id === 'SG-SEED-4')
       if (s4) pre('SG-SEED-4', addMinutes(s4.createdAt, 15), { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'not', lastIntake: addMinutes(s4.createdAt, -180) }, history: { items: [] }, plan: 'general' })
+      // 麻醉紀錄：昨天那台立即急刀完整紀錄——誘導後一次低血壓（收縮壓 82、86），給 Ephedrine 10 mg 後回穩
+      if (s4?.startAt && s4.endAt) {
+        const a0 = addMinutes(s4.sentAt!, 8)
+        const end = s4.endAt
+        let n = 0
+        const E = (at: string, x: Partial<AnesEntry> & Pick<AnesEntry, 'type'>): AnesEntry => ({ id: `AE-SEED-${++n}`, at, by: an, ...x })
+        const entries: AnesEntry[] = []
+        for (let m = 0; addMinutes(a0, m) <= end; m += 5) {
+          const low = m === 15 || m === 20
+          entries.push(E(addMinutes(a0, m), { type: 'vital', sbp: low ? (m === 15 ? 82 : 86) : m === 0 ? 138 : 118 + (m % 10), dbp: low ? 48 : 70, hr: low ? 58 : m === 0 ? 102 : 84, spo2: m === 0 ? 98 : 99, ...(m >= 5 ? { etco2: 35 } : {}) }))
+        }
+        entries.push(
+          E(a0, { type: 'event', event: 'induction' }), E(a0, { type: 'drug', drug: 'propofol', dose: 150 }), E(a0, { type: 'drug', drug: 'fentanyl', dose: 100 }),
+          E(addMinutes(a0, 2), { type: 'drug', drug: 'rocuronium', dose: 50 }), E(addMinutes(a0, 3), { type: 'event', event: 'intubation', note: '7.5 號氣管內管，一次成功' }),
+          E(addMinutes(a0, 5), { type: 'fluid', fluid: 'crystalloid', ml: 500 }), E(addMinutes(a0, 17), { type: 'drug', drug: 'ephedrine', dose: 10 }),
+          E(addMinutes(end, -15), { type: 'drug', drug: 'ondansetron', dose: 4 }), E(addMinutes(end, -10), { type: 'output', output: 'blood', ml: 30 }),
+          E(addMinutes(end, -10), { type: 'fluid', fluid: 'crystalloid', ml: 300 }), E(addMinutes(end, -5), { type: 'drug', drug: 'sugammadex', dose: 200 }),
+          E(addMinutes(end, -5), { type: 'output', output: 'urine', ml: 150 }), E(addMinutes(end, -2), { type: 'event', event: 'extubation' }),
+        )
+        s4.anes = { startAt: a0, endAt: end, entries }
+      }
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length
