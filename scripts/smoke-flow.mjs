@@ -113,13 +113,19 @@ try {
    * 不然每一筆給藥都要先掃腕帶與藥品
    */
   // 責任分床：首頁待辦只算自己的病人——舊的測試都假設看全院，分床另外測（[護理排班與分床] 用 dbm.resetDatabase）
+  // 檢查室開放時段：種子的電腦斷層週六只開上午、週日不開，其他段落排「明天」的檢查遇到週末會被擋——那不是它們要測的。
+  // 一律回到全部預設 08:00–17:00、沒有休診日；要測開放時段的段落自己設
   const resetDb = (scale) => {
     dbm.resetDatabase(scale)
     dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
     dbm.db.nurseAssignments = []
+    dbm.db.examHours = []
+    dbm.db.examClosures = []
   }
   dbm.db.securitySettings = { ...dbm.db.securitySettings, requireScan: false }
   dbm.db.nurseAssignments = []
+  dbm.db.examHours = []
+  dbm.db.examClosures = []
   /** 住院開醫囑時醫師確認交互作用、重複用藥提醒（不是這段要測的東西時用；嚴重的帶原因） */
   const withRxOk = async (input) => ({ ...input, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(input.admissionId, input.drugId)).map((x) => [x.key, '測試確認'])) })
   const dateUtil = await load('/src/utils/date.ts')
@@ -12883,6 +12889,100 @@ try {
     f = await fieldsOf(() => fastRaw.collectDeskSpecimen(red.barcode))
     ok(f.fasting, '抽血櫃台沒答 → 擋')
     ok((await fastRaw.collectDeskSpecimen(red.barcode, { fasting: true })).fastingLabel === '空腹', '答空腹 → 採檢')
+  }
+
+  // 檢查室開放時段：每週幾設定、休診日、時段檢查、下一個空檔跳過不開的日子；設定與權限、改了之後已排的列需改期、一鍵改期、
+  // 排程照設定擋、休診日加與取消、種子（電腦斷層週末）
+  console.log('\n[檢查室開放時段]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式（2026-11-21 是週六、11-22 週日）
+    const hrs = [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }]
+    const cls = [{ date: '2026-11-23', reason: '消防演練' }, { date: '2026-11-24', room: 'US', reason: '保養' }]
+    const day = (room, date) => api.examDayOf(hrs, cls, room, date)
+    ok(api.examDayText(day('CT', '2026-11-20')) === '08:00–17:00' && api.examDayText(day('CT', '2026-11-21')) === '08:00–12:00' && day('CT', '2026-11-22').closed === '週日不開' && day('XR', '2026-11-22').start === '08:00', '每週幾：電腦斷層週六上午、週日不開；其他照預設')
+    ok(day('XR', '2026-11-23').closed?.includes('消防演練') && day('US', '2026-11-24').closed && !day('CT', '2026-11-24').closed, '休診日：全部或某一間')
+    ok(!api.outOfHours('2026-11-21 11:50', 10, day('CT', '2026-11-21')) && api.outOfHours('2026-11-21 11:55', 10, day('CT', '2026-11-21')) && api.outOfHours('2026-11-22 09:00', 10, day('CT', '2026-11-22')) === '週日不開', '時段內：結束要在關門前；不開的回原因')
+    ok(api.checkExamSlot('2026-11-22 09:00', 10, '2026-11-19 10:00', day('CT', '2026-11-22')).start.includes('不開') && !Object.keys(api.checkExamSlot('2026-11-21 09:00', 10, '2026-11-19 10:00', day('CT', '2026-11-21'))).length, '排程檢查照這間這天的時段')
+    ok(api.nextFreeSlot('CT', 10, '2026-11-21 11:55', [], [], undefined, (dt) => day('CT', dt)) === '2026-11-24 08:00', '下一個空檔：週六關門後跳過週日不開、週一休診，到週二 08:00')
+    ok(api.checkExamHours([{ room: 'XR', weekday: 1, start: '10:00', end: '09:00' }]).hours && !Object.keys(api.checkExamHours(hrs)).length, '設定欄位：開始要早於結束')
+
+    // 種子（resetDb 前的原樣）
+    dbm.resetDatabase('small')
+    const seeded = { h: dbm.db.examHours, c: dbm.db.examClosures }
+    resetDb('small')
+    ok(seeded.h.some((x) => x.room === 'CT' && x.weekday === 6 && x.end === '12:00') && seeded.h.some((x) => x.room === 'CT' && x.weekday === 0 && x.closed) && seeded.c.length === 1, '種子：電腦斷層週六只開上午、週日不開；10 天後全院休診（消防演練）')
+
+    // 排好明天的電腦斷層 → 放射科醫師改成明天那個星期不開 → 需改期 → 一鍵改到之後開的時段
+    const tmr = addDaysT(1)
+    const wd = dateUtil.parseDate(`${tmr} 00:00`).getDay()
+    await as('clerk01')
+    const ex = await E.scheduleExam('O:IO-EX-8', `${tmr} 09:00`)
+    let msg = await errOf(() => E.setExamHours([{ room: 'CT', weekday: wd, closed: true }]))
+    ok(msg.includes('權限'), '櫃台不能改開放時段')
+    const nonRad = db().doctors.find((d) => db().departments.find((x) => x.id === d.deptId)?.code !== 'RAD')
+    await as(userOf(nonRad.id))
+    msg = await errOf(() => E.setExamHours([{ room: 'CT', weekday: wd, closed: true }]))
+    ok(msg.includes('放射科'), '其他科醫師不能改')
+    const rad = db().doctors.find((d) => db().departments.find((x) => x.id === d.deptId)?.code === 'RAD')
+    await as(userOf(rad.id))
+    let f = await fieldsOf(() => E.setExamHours([{ room: 'CT', weekday: wd, start: '12:00', end: '09:00' }]))
+    ok(f.hours, '開始晚於結束 → 擋')
+    const r1 = await E.setExamHours([{ room: 'CT', weekday: wd, closed: true }, { room: 'XR', weekday: wd, start: '08:00', end: '17:00' }])
+    ok(r1.needsReschedule >= 1 && db().examHours.length === 1 && db().auditLogs[0].action === '檢查室開放時段', '放射科醫師改：明天那天電腦斷層不開（和預設一樣的不存）、需改期、稽核')
+    await as('clerk01')
+    let b = await E.examBoard(tmr)
+    const cv = b.rooms.find((r) => r.room === 'CT')
+    ok(cv.hoursText.includes('不開') && cv.exams.find((e) => e.id === ex.id)?.downtimeClash?.includes('不開') && b.needsReschedule >= 1, `檢查室清單：電腦斷層（${cv.hoursText}），那筆標需改期`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.examNeedsReschedule >= 1, '櫃台首頁：需改期')
+    f = await fieldsOf(() => E.scheduleExam('O:IO-EX-8', `${tmr} 10:00`))
+    ok(f.start?.includes('不開'), `排程照設定擋 → 「${f.start}」`)
+    const rs = await E.rescheduleNext(ex.id)
+    ok(rs.start.slice(0, 10) !== tmr && !rs.downtimeClash, `一鍵改到之後開的時段：${rs.start}`)
+    // 縮短時段
+    await as(userOf(rad.id))
+    await E.setExamHours([{ room: 'XR', weekday: wd, start: '08:00', end: '10:00' }])
+    await as('clerk01')
+    f = await fieldsOf(() => E.scheduleExam('O:IO-EX-3', `${tmr} 10:00`))
+    ok(f.start?.includes('08:00–10:00'), 'X 光室明天只開到 10:00 → 10:00 排不進去')
+    ok((await E.scheduleExam('O:IO-EX-3', `${tmr} 09:50`)).start === `${tmr} 09:50`, '09:50（10 分鐘）可以')
+    // 休診日
+    const d2 = addDaysT(2)
+    await as(userOf(rad.id))
+    f = await fieldsOf(() => E.addExamClosure({ date: addDaysT(-1), reason: '' }))
+    ok(f.date && f.reason, '過去的日期、沒寫原因 → 擋')
+    await E.addExamClosure({ date: d2, reason: '消防演練' })
+    msg = await errOf(() => E.addExamClosure({ date: d2, room: 'US', reason: '重複' }))
+    ok(msg.includes('已經設過'), '同一天不能重複設')
+    await as('clerk01')
+    f = await fieldsOf(() => E.scheduleExam('O:IO-EX-4', `${d2} 09:00`))
+    ok(f.start?.includes('消防演練'), '休診日排不進去')
+    const st = await E.examHoursSettings()
+    ok(st.rows.length === 28 && st.closures.some((c) => c.date === d2 && c.roomName === '全部檢查室') && !st.canEdit, '設定畫面：4 間 × 7 天、休診日；櫃台只能看')
+    await as(userOf(rad.id))
+    await E.removeExamClosure(st.closures.find((c) => c.date === d2).id)
+    await as('clerk01')
+    ok((await E.scheduleExam('O:IO-EX-4', `${d2} 09:00`)).start === `${d2} 09:00`, '取消休診後可以排')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

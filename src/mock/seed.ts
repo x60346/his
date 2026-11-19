@@ -3378,6 +3378,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,
+    // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
+    examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],
+    examClosures: [{ id: 'XC-SEED-1', date: addDays(T, 10), reason: '院內消防演練', by: 'U001', at: nowStr }],
     dischargePlans,
     vitals,
     nursingNotes,

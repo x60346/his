@@ -1,6 +1,6 @@
 // 影像檢查排程（純函式）：檢查室、開放時段、排程檢查（不能排在過去、要在開放時段內）、同一間撞期、
 // 檢查走到哪一步、和給藥時間衝突。檢查室排程、護理站、判讀清單、測試都用這一份
-import type { ExamRoom, ImagingExam, RoomDowntime } from '@/types'
+import type { ExamClosure, ExamRoom, ExamRoomHours, ImagingExam, RoomDowntime } from '@/types'
 import { addMinutes, parseDate, toDateTimeStr } from '@/utils/date'
 import { overlaps } from './surgery-rules'
 
@@ -20,12 +20,44 @@ export type ExamStage = 'scheduled' | 'arrived' | 'done'
 export const EXAM_STAGE_LABEL: Record<ExamStage, string> = { scheduled: '已排程', arrived: '已報到', done: '已完成' }
 export const examStage = (e: Pick<ImagingExam, 'arrivedAt' | 'doneAt'>): ExamStage => (e.doneAt ? 'done' : e.arrivedAt ? 'arrived' : 'scheduled')
 
-/** 排程時間檢查：不能在過去、要在開放時段內（結束時間也要在關門前） */
-export function checkExamSlot(start: string | undefined, minutes: number, now: string): Record<string, string> {
+/** 某間某天開放的時段：{ start, end }；不開的是 { closed: 原因 } */
+export type ExamDay = { start: string; end: string } | { closed: string }
+export const WEEKDAY_LABEL = ['日', '一', '二', '三', '四', '五', '六']
+/** 依設定算出某間某天的開放時段：休診日優先；再看每週幾的設定；沒設定＝預設 08:00–17:00 */
+export function examDayOf(hours: ExamRoomHours[], closures: Pick<ExamClosure, 'date' | 'room' | 'reason'>[], room: ExamRoom, date: string): ExamDay {
+  const c = closures.find((x) => x.date === date && (!x.room || x.room === room))
+  if (c) return { closed: `休診：${c.reason}` }
+  const wd = parseDate(`${date} 00:00`).getDay()
+  const h = hours.find((x) => x.room === room && x.weekday === wd)
+  if (!h) return EXAM_DAY
+  if (h.closed || !h.start || !h.end) return { closed: `週${WEEKDAY_LABEL[wd]}不開` }
+  return { start: h.start, end: h.end }
+}
+export const examDayText = (d: ExamDay) => ('closed' in d ? d.closed : `${d.start}–${d.end}`)
+/** 這個時段在不在開放時段內（不跨日、結束要在關門前）：不在就回原因 */
+export function outOfHours(start: string, minutes: number, day: ExamDay): string | undefined {
+  if ('closed' in day) return day.closed
+  const end = addMinutes(start, minutes)
+  if (start.slice(11) < day.start || end.slice(11) > day.end || end.slice(0, 10) !== start.slice(0, 10)) return `開放 ${day.start}–${day.end}`
+  return undefined
+}
+
+/** 排程時間檢查：不能在過去、要在開放時段內（結束時間也要在關門前；day＝這間這天的開放時段，預設 08:00–17:00） */
+export function checkExamSlot(start: string | undefined, minutes: number, now: string, day: ExamDay = EXAM_DAY): Record<string, string> {
   if (!start || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(start)) return { start: '請選日期與時間' }
   if (start < now) return { start: '不能排在過去' }
-  const end = addMinutes(start, minutes)
-  if (start.slice(11) < EXAM_DAY.start || end.slice(11) > EXAM_DAY.end || end.slice(0, 10) !== start.slice(0, 10)) return { start: `檢查室開放 ${EXAM_DAY.start}–${EXAM_DAY.end}` }
+  const why = outOfHours(start, minutes, day)
+  if (why) return { start: 'closed' in day ? `這天不開（${why}）` : `檢查室${why}` }
+  return {}
+}
+
+/** 開放時段設定的欄位：每列檢查室、週幾；有開的要有開始與結束（開始早於結束） */
+export function checkExamHours(rows: ExamRoomHours[]): Record<string, string> {
+  for (const [i, r] of rows.entries()) {
+    if (!EXAM_ROOMS.some((x) => x.id === r.room) || !Number.isInteger(r.weekday) || r.weekday < 0 || r.weekday > 6) return { hours: `第 ${i + 1} 列：檢查室或星期不對` }
+    if (r.closed) continue
+    if (!/^\d{2}:\d{2}$/.test(r.start ?? '') || !/^\d{2}:\d{2}$/.test(r.end ?? '') || r.start! >= r.end!) return { hours: `${EXAM_ROOMS.find((x) => x.id === r.room)?.name}週${WEEKDAY_LABEL[r.weekday]}：開始要早於結束（不開請勾「不開」）` }
+  }
   return {}
 }
 
@@ -129,15 +161,14 @@ export function checkDowntime(x: { room?: string; from?: string; to?: string; re
 /**
  * 下一個空檔：after 之後（10 分鐘為一格、開放時段內），同一間沒撞期、沒停機的第一個時段；最多找 14 天
  */
-export function nextFreeSlot(room: ExamRoom, minutes: number, after: string, exams: Pick<ImagingExam, 'id' | 'room' | 'start' | 'minutes'>[], downtimes: DT[], selfId?: string): string | undefined {
+export function nextFreeSlot(room: ExamRoom, minutes: number, after: string, exams: Pick<ImagingExam, 'id' | 'room' | 'start' | 'minutes'>[], downtimes: DT[], selfId?: string, dayOf: (date: string) => ExamDay = () => EXAM_DAY): string | undefined {
   const t0 = parseDate(after)
   t0.setSeconds(0, 0)
   const m = t0.getMinutes()
   if (m % 10) t0.setMinutes(m + (10 - (m % 10)))
   let t = toDateTimeStr(t0)
   for (let i = 0; i < 14 * 24 * 6; i++, t = addMinutes(t, 10)) {
-    const end = addMinutes(t, minutes)
-    if (t.slice(11) < EXAM_DAY.start || end.slice(11) > EXAM_DAY.end || end.slice(0, 10) !== t.slice(0, 10)) continue
+    if (outOfHours(t, minutes, dayOf(t.slice(0, 10)))) continue
     if (examClash(exams, { id: selfId, room, start: t, minutes }) || downtimeClash(downtimes, { room, start: t, minutes })) continue
     return t
   }

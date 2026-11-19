@@ -9,6 +9,7 @@ import { CalendarClock, Check, Wrench, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import ContrastClearDialog from '@/components/ContrastClearDialog.vue'
+import ExamHoursDialog from '@/components/ExamHoursDialog.vue'
 import { CONTRAST_REACTION_LABEL, DOWNTIME_REASON_LABEL, EXAM_DAY, EXAM_ROOMS, examApi, type ExamBoard, type ExamView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, now, today } from '@/utils/date'
@@ -52,6 +53,7 @@ async function confirmFinish() {
   if (await done.run(finishing.value.id, input)) finishing.value = undefined
 }
 // 停機：登記（放射師、放射科醫師）、提早結束；排在停機時段的一鍵排到下一個空檔（櫃台）
+const hoursOpen = ref(false)
 const dtOpen = ref(false)
 const dt = reactive({ room: 'XR', fromD: today(), fromT: '', toD: today(), toT: '', reason: 'maintenance' as 'maintenance' | 'breakdown', note: '' })
 function openDowntime() {
@@ -92,7 +94,8 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="影像檢查室" :description="`排程（${EXAM_DAY.start}–${EXAM_DAY.end}，同一間不能撞期）、報到、確認檢查前準備、完成；完成後才進判讀清單`">
+    <UPageHeader title="影像檢查室" :description="`排程（依各檢查室開放時段，同一間不能撞期）、報到、確認檢查前準備、完成；完成後才進判讀清單`">
+      <UButton variant="secondary" @click="hoursOpen = true">開放時段</UButton>
       <UButton v-if="board?.canPerform" variant="secondary" :icon="Wrench" @click="openDowntime">登記停機</UButton>
       <input v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
@@ -133,7 +136,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
           <p class="text-xs text-slate-500">近 30 天停機：{{ board.downtimeStats.filter((x) => x.count).map((x) => `${x.name} ${x.hours} 小時（${x.count} 次）`).join('、') || '沒有' }}</p>
         </div>
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <UCard v-for="r in board.rooms" :key="r.room" :title="r.name" :padded="false">
+          <UCard v-for="r in board.rooms" :key="r.room" :title="`${r.name}（${r.hoursText}）`" :padded="false">
             <p v-if="!r.exams.length" class="px-4 py-3 text-sm text-slate-400">這天沒有排檢查</p>
             <ul v-else class="divide-y divide-slate-100 text-sm">
               <li v-for="e in r.exams" :key="e.id" class="space-y-1 px-4 py-2">
@@ -182,6 +185,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
         </div>
       </template>
     </UQueryState>
+    <ExamHoursDialog v-model="hoursOpen" />
     <UDialog v-model="dtOpen" title="登記檢查室停機" size="md">
       <div class="space-y-3 text-sm">
         <div class="grid grid-cols-2 gap-3">

@@ -895,6 +895,26 @@ export interface ImagingExam {
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
+/** 檢查室開放時段（每間、每週幾；沒列的＝預設 08:00–17:00）：closed＝這天不開 */
+export interface ExamRoomHours {
+  room: ExamRoom
+  /** 0＝週日、1＝週一…6＝週六 */
+  weekday: number
+  start?: string
+  end?: string
+  closed?: true
+}
+/** 休診日（某一天、某一間或全部） */
+export interface ExamClosure {
+  id: string
+  date: string
+  /** 沒有＝全部檢查室 */
+  room?: ExamRoom
+  reason: string
+  by: string
+  at: string
+}
+
 /** 檢查室設備停機（放射師或放射科醫師登記）：故障或保養，這段時間排不進去、不能報到；已排的列「需改期」。可以提早結束（endedAt） */
 export interface RoomDowntime {
   id: string

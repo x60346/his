@@ -6,11 +6,11 @@
 // 顯影劑看 CrCl：< 30 擋、30–45 提醒水化（住院醫師可一鍵開水化醫囑，ipd.orderContrastHydration）、算不出提醒先確認；
 // 顯影劑過敏：開立醫師（住院另含主治、放射科）確認已開前置用藥並寫原因才放行報到；
 // 有在用 Metformin 且 CrCl < 45（或算不出）：排程、報到時提醒，住院做完後主治首頁「暫停 Metformin 48 小時」要按已處理。規則在 exam-rules
-import type { AdrReport, ContrastClearance, ImagingExam, RoomDowntime } from '@/types'
+import type { AdrReport, ContrastClearance, ExamClosure, ExamRoomHours, ImagingExam, RoomDowntime } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
-import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity, checkDowntime, downtimeClash, downtimeEnd, downtimeHours, downtimeNow, downtimeText, nextFreeSlot, DOWNTIME_REASON_LABEL, type DowntimeReason } from './exam-rules'
+import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity, checkDowntime, downtimeClash, downtimeEnd, downtimeHours, downtimeNow, downtimeText, nextFreeSlot, DOWNTIME_REASON_LABEL, type DowntimeReason, examDayOf, examDayText, outOfHours, checkExamHours, WEEKDAY_LABEL, EXAM_DAY } from './exam-rules'
 import { ADR_SEVERITY_LABEL } from './adr-rules'
 import { latestWeight, renalOfPatient } from './renal-work'
 import { addDays } from '@/utils/date'
@@ -40,6 +40,17 @@ export interface ExamView extends ImagingExam {
 }
 /** 有效的停機（提早結束成零長度的不算） */
 const liveDowntimes = () => db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from)
+/** 某間某天的開放時段（設定＋休診日） */
+const dayOf = (room: ImagingExam['room'], date: string) => examDayOf(db.examHours, db.examClosures, room, date)
+/** 已排、還沒報到的為什麼要改期：碰到停機，或不在開放時段（時段改了、休診） */
+function rescheduleWhy(e: ImagingExam): string | undefined {
+  const d = downtimeClash(liveDowntimes(), e)
+  if (d) return downtimeText(d)
+  const why = outOfHours(e.start, e.minutes, dayOf(e.room, e.start.slice(0, 10)))
+  return why ? `${why}` : undefined
+}
+/** 開放時段由管理員或放射科醫師設定 */
+const canEditHours = () => sessionRole() === 'admin' || (sessionRole() === 'doctor' && isRadiologist(sessionUser()?.doctorId))
 /** 這筆檢查的顯影劑腎功能判斷 */
 const contrastOf = (e: Pick<ImagingExam, 'procId' | 'patientId' | 'admissionId'>) => {
   if (!imagingOf(e.procId)?.contrast) return undefined
@@ -95,7 +106,7 @@ function view(e: ImagingExam): ExamView {
     prepItems: prepDefs(e.procId).map((d) => ({ ...d, ...(e.prep?.[d.id] ? { ok: e.prep[d.id].ok, ...(e.prep[d.id].note ? { note: e.prep[d.id].note } : {}) } : {}) })),
     ...(!e.doneAt && contrastOf(e) ? { contrast: contrastOf(e) } : {}),
     safety: e.doneAt ? {} : safetyOf(e),
-    ...(!e.arrivedAt && !e.cancelled ? ((d) => (d ? { downtimeClash: `${examRoomName(e.room)}${downtimeText(d)}，請改期` } : {}))(downtimeClash(liveDowntimes(), e)) : {}),
+    ...(!e.arrivedAt && !e.cancelled ? ((why) => (why ? { downtimeClash: `${examRoomName(e.room)}${why}，請改期` } : {}))(rescheduleWhy(e)) : {}),
     ...(e.metforminAlert ? { metforminAlertText: `暫停 Metformin 到 ${e.metforminAlert.until.slice(5)}（${METFORMIN_HOLD_HOURS} 小時），複查腎功能再恢復${e.metforminAlert.ackAt ? `；${nameOf.user(e.metforminAlert.ackBy!)} 已處理` : ''}` } : {}),
   }
 }
@@ -130,6 +141,8 @@ export interface ExamBoard {
   canArrive: boolean
   /** 確認準備、完成（放射師、放射科醫師）；也能登記停機 */
   canPerform: boolean
+  /** 開放時段：管理員、放射科醫師可以改 */
+  canEditHours: boolean
   /** 停機：各檢查室這天碰到的（含現在停機中）、近 30 天停機時數、需改期的筆數 */
   downtimes: DowntimeView[]
   downtimeStats: ReturnType<typeof downtimeHours>
@@ -138,7 +151,7 @@ export interface ExamBoard {
   toSchedule: (ImagingWorkItem & { room: string; roomName: string; minutes: number; prep: string[]; contrast?: ExamView['contrast']; safety: ContrastSafety; cancelledReason?: string })[]
   /** 放射科醫師可以放行顯影劑過敏 */
   canClear: boolean
-  rooms: { room: string; name: string; exams: ExamView[] }[]
+  rooms: { room: string; name: string; hoursText: string; exams: ExamView[] }[]
 }
 
 export function examBoard(date: string): Promise<ExamBoard> {
@@ -163,7 +176,8 @@ export function examBoard(date: string): Promise<ExamBoard> {
       canPerform: sessionRole() === 'radtech' || radDoc,
       canClear: sessionRole() === 'doctor' && isRadiologist(u?.doctorId),
       toSchedule,
-      rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
+      canEditHours: canEditHours(),
+      rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, hoursText: examDayText(dayOf(r.id, date)), exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
       downtimes: liveDowntimes().filter((d) => d.from.slice(0, 10) <= date && downtimeEnd(d).slice(0, 10) >= date).sort((a, b) => a.from.localeCompare(b.from)).map((d) => dtView(d)),
       downtimeStats: downtimeHours(db.roomDowntimes, `${addDays(now().slice(0, 10), -30)} 00:00`, now()),
       needsReschedule: needsReschedule().length,
@@ -184,7 +198,7 @@ export function scheduleExam(key: string, start: string): Promise<ExamView> {
     const old = examOfKey(key)
     const wasNoShow = !!old && examNoShow(old, t)
     if (old && old.arrivedAt) fail(`已經${old.doneAt ? '做完' : '報到'}，不能改時間`, 'CONFLICT')
-    failFields(checkExamSlot(start, minutes, t))
+    failFields(checkExamSlot(start, minutes, t, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(start ?? '') ? dayOf(room, start.slice(0, 10)) : undefined))
     const clash = examClash(liveExams().filter((e) => !e.doneAt || e.start >= t.slice(0, 10)), { id: old?.id, room, start, minutes })
     const dc = downtimeClash(liveDowntimes(), { room, start, minutes })
     if (dc) fail(`${examRoomName(room)}這段時間停機（${downtimeText(dc)}）`, 'CONFLICT', 'start')
@@ -217,7 +231,7 @@ function dtView(d: RoomDowntime, t: string = now()): DowntimeView {
   }
 }
 /** 排在停機時段、還沒報到的（需改期） */
-const needsReschedule = () => liveExams().filter((e) => !e.arrivedAt && !!downtimeClash(liveDowntimes(), e))
+const needsReschedule = () => liveExams().filter((e) => !e.arrivedAt && !!rescheduleWhy(e))
 
 /** 登記停機（放射師、放射科醫師）：檢查室、起訖、原因（故障、保養）；之後這段排不進去、不能報到，已排的列「需改期」 */
 export function addDowntime(input: { room: ImagingExam['room']; from: string; to: string; reason: DowntimeReason; note?: string }): Promise<DowntimeView> {
@@ -256,7 +270,7 @@ export function rescheduleNext(id: string): Promise<ExamView> {
     const t = now()
     const d = downtimeClash(liveDowntimes(), e)
     const after = [t, d ? downtimeEnd(d) : t].sort().at(-1)!
-    const slot = nextFreeSlot(e.room, e.minutes, after, liveExams().filter((x) => !x.doneAt || x.start >= t.slice(0, 10)), liveDowntimes(), e.id)
+    const slot = nextFreeSlot(e.room, e.minutes, after, liveExams().filter((x) => !x.doneAt || x.start >= t.slice(0, 10)), liveDowntimes(), e.id, (date) => dayOf(e.room, date))
     if (!slot) fail('兩週內找不到空檔，請手動排', 'CONFLICT')
     const old = e.start
     Object.assign(e, { start: slot!, scheduledAt: t })
@@ -426,5 +440,71 @@ export function admissionExams(admissionId: string): Promise<{ admissionId: stri
     const unscheduled = pendingImagingWork().filter((w) => w.key.startsWith('O:') && w.awaitingExam && !examOfKey(w.key) && db.ipdOrders.find((o) => o.id === w.key.slice(2))?.admissionId === admissionId).map((w) => w.procName)
     const metforminAlerts = db.imagingExams.filter((e) => e.admissionId === admissionId && e.metforminAlert && !e.metforminAlert.ackAt).map(view)
     return { admissionId, exams, unscheduled, metforminAlerts }
+  })
+}
+
+export interface ExamHoursSettings {
+  /** 每間、每週幾（0＝日）：開放時段；沒設定的是預設 */
+  rows: { room: ImagingExam['room']; roomName: string; weekday: number; weekdayLabel: string; start?: string; end?: string; closed: boolean; isDefault: boolean }[]
+  closures: (ExamClosure & { roomName: string; byName: string })[]
+  canEdit: boolean
+}
+/** 開放時段設定（櫃台、放射師、醫師看；管理員、放射科醫師改） */
+export function examHoursSettings(): Promise<ExamHoursSettings> {
+  return query(() => {
+    requireUser('clerk', 'radtech', 'doctor', 'nurse', 'admin')
+    const t = now().slice(0, 10)
+    return {
+      rows: EXAM_ROOMS.flatMap((r) => [1, 2, 3, 4, 5, 6, 0].map((wd) => {
+        const h = db.examHours.find((x) => x.room === r.id && x.weekday === wd)
+        return { room: r.id, roomName: r.name, weekday: wd, weekdayLabel: WEEKDAY_LABEL[wd], ...(h && !h.closed ? { start: h.start, end: h.end } : !h ? { start: EXAM_DAY.start, end: EXAM_DAY.end } : {}), closed: !!h?.closed, isDefault: !h }
+      })),
+      closures: db.examClosures.filter((c) => c.date >= t).sort((a, b) => a.date.localeCompare(b.date)).map((c) => ({ ...c, roomName: c.room ? examRoomName(c.room) : '全部檢查室', byName: nameOf.user(c.by) })),
+      canEdit: canEditHours(),
+    }
+  })
+}
+function requireHoursEditor() {
+  const u = requireUser('admin', 'doctor')
+  if (u.role === 'doctor' && !isRadiologist(u.doctorId)) fail('開放時段由放射科醫師或管理員設定', 'FORBIDDEN')
+  return u
+}
+/** 改開放時段（整張表；和預設一樣的不存）：改了之後排在時段外的檢查列「需改期」 */
+export function setExamHours(rows: ExamRoomHours[]): Promise<{ changed: number; needsReschedule: number }> {
+  return mutate(() => {
+    requireHoursEditor()
+    failFields(checkExamHours(rows ?? []))
+    const keep = rows.filter((r) => r.closed || r.start !== EXAM_DAY.start || r.end !== EXAM_DAY.end).map((r) => (r.closed ? { room: r.room, weekday: r.weekday, closed: true as const } : { room: r.room, weekday: r.weekday, start: r.start, end: r.end }))
+    const before = JSON.stringify(db.examHours)
+    db.examHours = keep
+    const n = needsReschedule().length
+    audit('檢查室開放時段', `${keep.map((r) => `${examRoomName(r.room)}週${WEEKDAY_LABEL[r.weekday]} ${r.closed ? '不開' : `${r.start}–${r.end}`}`).join('、') || '全部預設'}${n ? `；${n} 筆檢查需改期` : ''}`)
+    return { changed: before === JSON.stringify(keep) ? 0 : 1, needsReschedule: n }
+  })
+}
+/** 加休診日（某一間或全部）：那天排不進去，已排的列「需改期」 */
+export function addExamClosure(input: { date: string; room?: ImagingExam['room']; reason: string }): Promise<{ needsReschedule: number }> {
+  return mutate(() => {
+    const u = requireHoursEditor()
+    const e: Record<string, string> = {}
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input?.date ?? '')) e.date = '請選日期'
+    else if (input.date < now().slice(0, 10)) e.date = '不能是過去的日期'
+    if (input?.room && !EXAM_ROOMS.some((r) => r.id === input.room)) e.room = '請選檢查室'
+    if (!input?.reason?.trim()) e.reason = '請寫原因（例：國定假日、消防演練）'
+    failFields(e)
+    if (db.examClosures.some((c) => c.date === input.date && (!c.room || !input.room || c.room === input.room))) fail('這天已經設過休診了', 'CONFLICT')
+    db.examClosures.push({ id: newId('XC'), date: input.date, ...(input.room ? { room: input.room } : {}), reason: input.reason.trim(), by: u.id, at: now() })
+    const n = needsReschedule().length
+    audit('檢查室休診', `${input.date} ${input.room ? examRoomName(input.room) : '全部檢查室'}：${input.reason.trim()}${n ? `；${n} 筆檢查需改期` : ''}`)
+    return { needsReschedule: n }
+  })
+}
+export function removeExamClosure(id: string): Promise<{ ok: true }> {
+  return mutate(() => {
+    requireHoursEditor()
+    const c = must(db.examClosures.find((x) => x.id === id), '休診日')
+    db.examClosures = db.examClosures.filter((x) => x.id !== id)
+    audit('檢查室休診取消', `${c.date} ${c.room ? examRoomName(c.room) : '全部檢查室'}（${c.reason}）`)
+    return { ok: true as const }
   })
 }
