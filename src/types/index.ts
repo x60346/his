@@ -1820,6 +1820,35 @@ export interface MarRecord {
 /** 略過掃描的原因 */
 export type ScanSkipReason = 'wristband' | 'barcode' | 'scanner' | 'emergency'
 
+/** 病安事件類別 */
+export type IncidentCategory = 'fall' | 'medication' | 'line' | 'specimen' | 'other'
+/** 對病人的影響（通報人判斷）：跡近錯失（還沒發生在病人身上）、無傷害、輕度、中度、重度、死亡 */
+export type IncidentHarm = 'near-miss' | 'none' | 'mild' | 'moderate' | 'severe' | 'death'
+/**
+ * 病安異常事件通報：任何臨床人員都能通報（可匿名：系統記得是誰，審查的人看不到）；
+ * 有「病安事件審查」權限的人評定嚴重度（SAC 1 最嚴重～4）、寫原因與改善措施、結案
+ */
+export interface Incident {
+  id: string
+  no: string
+  category: IncidentCategory
+  occurredAt: string
+  /** 發生地點（病房、科別、檢查室…） */
+  location: string
+  patientId?: string
+  description: string
+  harm: IncidentHarm
+  /** 當下的處置 */
+  immediateAction?: string
+  reportedBy: string
+  reportedAt: string
+  anonymous: boolean
+  /** 從掃描不符一鍵帶入的 */
+  fromScanMismatchId?: string
+  status: 'reported' | 'reviewing' | 'closed'
+  review?: { by: string; at: string; sac: 1 | 2 | 3 | 4; cause: string; actions: string; closedAt?: string }
+}
+
 /** 掃描不符（差點給錯）：掃到別人的腕帶、舊腕帶、不是這一劑的藥。當場擋下，記下來給護理長看 */
 export interface ScanMismatch {
   id: string

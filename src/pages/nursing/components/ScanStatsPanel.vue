@@ -60,7 +60,9 @@ const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '�
               <span class="w-32">{{ x.bedNo }} {{ x.patientName }}</span>
               <span class="min-w-0 flex-1 truncate">{{ x.content }}</span>
               <UBadge tone="red">{{ x.kind === 'patient' ? '病人不符' : x.kind === 'specimen' ? '檢體不符' : '藥品不符' }}</UBadge>
-              <span class="w-full text-xs text-red-700">{{ x.message }}（{{ x.nurseName }}）</span>
+              <span class="w-full text-xs text-red-700">{{ x.message }}（{{ x.nurseName }}）
+                <span v-if="x.reported" class="ml-1 text-slate-500">已通報</span>
+                <RouterLink v-else :to="{ name: 'incidents', query: { fromScan: x.id } }" class="ml-1 text-blue-700 underline">通報病安事件</RouterLink></span>
             </li>
           </ul>
         </section>

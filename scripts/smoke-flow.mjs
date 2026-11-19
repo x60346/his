@@ -13178,6 +13178,93 @@ try {
     ok(msg.includes('權限'), '醫師不能用櫃台的待預約清單')
   }
 
+  // 病安異常事件通報：建議 SAC、欄位、統計；種子（跌倒已結案、給藥跡近錯失匿名待審、管路審查中）；通報（匿名、病人、各職類）、掃描不符一鍵帶入、
+  // 不能重複；審查（權限、匿名看不到、儲存、結案要原因與措施、結案後不能改）、首頁
+  console.log('\n[病安事件通報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.incidentApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.sacSuggest('death') === 1 && api.sacSuggest('severe') === 1 && api.sacSuggest('moderate') === 2 && api.sacSuggest('mild') === 3 && api.sacSuggest('near-miss') === 4 && api.sacSuggest('none') === 4, '建議 SAC：死亡、重度 1；中度 2；輕度 3；無傷害、跡近錯失 4')
+    const n0 = '2026-11-19 10:00'
+    ok(Object.keys(api.checkIncident({}, n0)).sort().join() === 'category,description,harm,location,occurredAt' && api.checkIncident({ category: 'fall', occurredAt: '2026-11-19 10:01', location: 'x', description: '1234567890', harm: 'none' }, n0).occurredAt?.includes('未來') && api.checkIncident({ category: 'fall', occurredAt: n0, location: 'x', description: '太短', harm: 'none' }, n0).description, '通報欄位：都要填、不能在未來、經過至少 10 個字')
+    ok(api.checkIncidentReview({ sac: 5 }).sac && !Object.keys(api.checkIncidentReview({ sac: 3 })).length && Object.keys(api.checkIncidentReview({ sac: 3, close: true })).sort().join() === 'actions,cause', '審查：SAC 1–4；結案要原因與措施')
+    const ss = api.incidentStats([{ category: 'fall', harm: 'mild', status: 'closed', reportedAt: '2026-11-18 10:00' }, { category: 'fall', harm: 'none', status: 'reported', reportedAt: '2026-11-19 10:00' }, { category: 'line', harm: 'none', status: 'closed', reportedAt: '2026-10-01 10:00' }], '2026-11-01 00:00')
+    ok(ss.total === 2 && ss.byCategory.find((c) => c.key === 'fall').count === 2 && ss.closeRate === 50 && api.incidentStats([], 'x').closeRate === 100, '統計：期間內件數、依類別、結案率')
+
+    // 種子
+    await as('nurse02')
+    let b = await I.listIncidents()
+    const by = (id) => b.items.find((x) => x.id === id)
+    ok(by('IN-SEED-1')?.status === 'closed' && by('IN-SEED-1').category === 'fall' && by('IN-SEED-2')?.status === 'reported' && by('IN-SEED-2').harm === 'near-miss' && by('IN-SEED-3')?.status === 'reviewing', '種子：跌倒已結案、給藥跡近錯失待審查、管路自拔審查中')
+    ok(by('IN-SEED-2').anonymous && by('IN-SEED-2').reporterName === '匿名' && by('IN-SEED-1').reporterName !== '匿名', '匿名的：審查的人看不到通報人')
+    ok(b.items[0].status === 'reported' && b.pending === 2 && b.stats.total === 3, `審查清單：待審查在前、待處理 ${b.pending}、近 30 天 ${b.stats.total} 件`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.incidentPending === 2, '護理長首頁：病安事件待審查 2')
+    await as('nurse01')
+    const mine = await I.myIncidents()
+    ok(mine.find((x) => x.id === 'IN-SEED-2')?.reporterName === db().users.find((u) => u.username === 'nurse01').name && mine.every((x) => x.mine), '通報人自己看得到匿名通報是自己')
+    let msg = await errOf(() => I.listIncidents())
+    ok(msg.includes('病安事件審查'), '沒被指定的護理師不能審查')
+
+    // 通報
+    let f = await fieldsOf(() => I.reportIncident({ category: 'fall', occurredAt: dateUtil.addMinutes(dateUtil.now(), 10), location: '', description: 'x', harm: 'none' }))
+    ok(f.occurredAt && f.location && f.description, '欄位不對 → 標出')
+    const pt = db().patients[0]
+    const r1 = await I.reportIncident({ category: 'other', occurredAt: dateUtil.addMinutes(dateUtil.now(), -30), location: '5A 病房走廊', patientId: pt.id, description: '病人家屬在走廊滑倒，地板剛拖過沒有放警示牌。', harm: 'mild', anonymous: true })
+    ok(r1.no.startsWith('INC') && r1.status === 'reported' && r1.patientName === pt.name && r1.mine && db().auditLogs[0].action === '病安事件通報' && !db().auditLogs[0].detail.includes('滑倒') && db().auditLogs[0].detail.includes('匿名'), `匿名通報 ${r1.no}（稽核不寫經過與病人）`)
+    await as('lab01')
+    const r2 = await I.reportIncident({ category: 'specimen', occurredAt: dateUtil.now(), location: '檢驗科', description: '收到的檢體標籤姓名和申請單不一致，已退件。', harm: 'near-miss' })
+    ok(r2.status === 'reported' && !r2.anonymous, '醫檢師也能通報（實名）')
+    // 掃描不符一鍵帶入
+    await as('nurse01')
+    const d = await I.incidentDraftFromScan('SM-SEED-1')
+    ok(d.category === 'specimen' && d.harm === 'near-miss' && d.patientId && d.description.includes('病人不對') && d.fromScanMismatchId === 'SM-SEED-1', '掃描不符帶入：檢體、跡近錯失、病人、經過')
+    await I.reportIncident(d)
+    msg = await errOf(() => I.reportIncident(d))
+    ok(msg.includes('已經通報過'), '同一筆掃描不符只能通報一次')
+    const crA = db().admissions.find((a) => a.id === db().scanMismatches.find((m) => m.id === 'SM-SEED-1').admissionId)
+    const st = await api.scanApi.scanStats(db().beds.find((x) => x.id === crA.bedId).ward, T)
+    ok(st.mismatches.find((m) => m.id === 'SM-SEED-1')?.reported, '護理站掃描統計：標已通報')
+
+    // 審查
+    await as('nurse02')
+    b = await I.listIncidents()
+    ok(b.items.find((x) => x.id === r1.id).reporterName === '匿名' && b.items.find((x) => x.id === r2.id).reporterName === db().users.find((u) => u.username === 'lab01').name, '審查清單：匿名的看不到、實名的看得到')
+    const s1 = await I.reviewIncident('IN-SEED-2', { sac: 4, cause: '單位換算看錯' })
+    ok(s1.status === 'reviewing' && s1.sacLabel.includes('4') && s1.reviewerName, '儲存審查 → 審查中')
+    f = await fieldsOf(() => I.reviewIncident('IN-SEED-2', { sac: 4, cause: '單位換算看錯', close: true }))
+    ok(f.actions, '結案要寫改善措施')
+    const c1 = await I.reviewIncident('IN-SEED-2', { sac: 4, cause: '單位換算看錯', actions: 'Heparin 一律用預充式針筒；高警訊藥雙人核對', close: true })
+    ok(c1.status === 'closed' && c1.review.closedAt && db().auditLogs[0].action === '病安事件結案', '結案（稽核）')
+    msg = await errOf(() => I.reviewIncident('IN-SEED-2', { sac: 3 }))
+    ok(msg.includes('已經結案'), '結案後不能再改')
+    await as('admin')
+    dash = await api.dashboardApi.getDashboard()
+    ok((await I.listIncidents()).items.length === 6 && dash.incidentPending === 4, `管理員（預設權限）也能審查；待處理 ${dash.incidentPending}`)
+    const docU = db().users.find((u) => u.roles.includes('doctor') && !(u.grants ?? []).includes('incident.review')).username
+    await as(docU)
+    msg = await errOf(() => I.listIncidents())
+    ok(msg.includes('病安事件審查') && (await I.myIncidents()).length === 0, '醫師沒被指定不能審查（自己的通報清單是空的）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

@@ -155,7 +155,8 @@ export interface ScanStats {
   /** 沒有掃描紀錄（設定關閉時給的） */
   notRequired: number
   skips: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; reason: string; note?: string }[]
-  mismatches: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; kind: 'patient' | 'drug' | 'specimen'; message: string; specimen: boolean }[]
+  /** id：可以一鍵帶入病安通報；reported＝已經通報過 */
+  mismatches: { id: string; at: string; bedNo: string; patientName: string; content: string; nurseName: string; kind: 'patient' | 'drug' | 'specimen'; message: string; specimen: boolean; reported: boolean }[]
   /** 住院採檢（那天採的檢體）：採了幾支、掃描、略過、沒要求；略過的清單 */
   specimens: { collected: number; scanned: number; skipped: number; notRequired: number; skips: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; reason: string; note?: string }[] }
 }
@@ -186,7 +187,7 @@ export function scanStats(ward: string, date: string = today()): Promise<ScanSta
         .sort((x, y) => y.at.localeCompare(x.at)),
       mismatches: db.scanMismatches
         .filter((e) => e.at.startsWith(date) && inWard(e.admissionId))
-        .map((e) => ({ at: e.at, ...label(e.admissionId), content: e.specimenId ? `採檢：${spTests(e.specimenId)}` : content(e.orderId), nurseName: nameOf.user(e.nurseId), kind: e.kind, message: e.message, specimen: !!e.specimenId }))
+        .map((e) => ({ id: e.id, reported: db.incidents.some((x) => x.fromScanMismatchId === e.id), at: e.at, ...label(e.admissionId), content: e.specimenId ? `採檢：${spTests(e.specimenId)}` : content(e.orderId), nurseName: nameOf.user(e.nurseId), kind: e.kind, message: e.message, specimen: !!e.specimenId }))
         .sort((x, y) => y.at.localeCompare(x.at)),
       specimens: ((xs) => ({
         collected: xs.length, scanned: xs.filter((s) => s.scan?.mode === 'scanned').length, skipped: xs.filter((s) => s.scan?.mode === 'skipped').length, notRequired: xs.filter((s) => !s.scan).length,

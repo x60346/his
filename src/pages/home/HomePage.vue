@@ -132,6 +132,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['clerk'], label: '住院待結帳', count: s.value.ipdToBill, hint: '醫師已簽准出院：結清住院費用後才能辦出院', route: 'charge', query: { tab: 'ipd' }, icon: Receipt, urgent: true },
+    { roles: ['admin', 'nurse', 'doctor'], label: '病安事件待審查', count: s.value.incidentPending ?? 0, hint: '病安通報還沒結案的：評定嚴重度、寫原因分析與改善措施', route: 'incidents', icon: ShieldAlert },
     { roles: ['clerk'], label: '醫師建議回診待預約', count: s.value.adviceToBook ?? 0, hint: s.value.adviceOverdue ? `其中 ${s.value.adviceOverdue} 位過了建議日一週還沒掛` : '醫師寫了「幾週後回診」交給櫃台：電話聯絡病人掛號，或標病人自己掛、不回診', route: 'booking', query: { tab: 'advice' }, icon: PhoneCall, urgent: !!s.value.adviceOverdue },
     { roles: ['clerk'], label: '預約未到待追蹤', count: s.value.noShowsToFollow, hint: '出院後回診、醫師約的回診、慢性病的預約沒來：電話聯絡、改約', route: 'booking', query: { tab: 'noshow' }, icon: PhoneCall, urgent: true },
     { roles: ['clerk'], label: '建議期中繳款', count: s.value.ipdInterim, hint: '住很久、累計費用很多的住院病人：可以先收一部分，出院結帳時扣抵', route: 'charge', query: { tab: 'ipd' }, icon: Receipt },

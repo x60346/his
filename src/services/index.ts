@@ -58,6 +58,7 @@ import * as ipc from './ipc'
 import * as er from './er'
 import * as erLab from './er-lab'
 import * as opdAddon from './opd-addon'
+import * as incident from './incident'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -139,6 +140,7 @@ export const ipcApi = overNetwork(ipc)
 export const erApi = overNetwork(er)
 export const erLabApi = overNetwork(erLab)
 export const opdAddonApi = overNetwork(opdAddon)
+export const incidentApi = overNetwork(incident)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -173,6 +175,7 @@ export type { TatBoard, TatOpenView } from './tat'
 export type { LabLimitRow } from './lab-limits'
 export type { ErLabs, ErSpecimenView } from './er-lab'
 export type { OpdAddonOption, AddonDue } from './opd-addon'
+export type { IncidentView, IncidentInput } from './incident'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
@@ -220,6 +223,7 @@ export * from './pharmcare-rules'
 export * from './specimen-rules'
 export * from './lab-queue-rules'
 export * from './tat-rules'
+export * from './incident-rules'
 export * from './lab-schedule-rules'
 export * from './qc-rules'
 export * from './analyzer-rules'

@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -244,7 +244,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     })),
     { id: 'U201', username: 'nurse01', password: '1234', name: '周怡萱', roles: ['nurse'], active: true },
     // nurse02：被指定維護全院（護理）片語（示範：護理部督導）
-    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule', 'nursing.schedule'] },
+    { id: 'U202', username: 'nurse02', password: '1234', name: '孫佩君', roles: ['nurse'], active: true, grants: ['phrase.hospital', 'surgery.schedule', 'nursing.schedule', 'incident.review'] },
     // 排班用的護理師（nurse03–nurse12）：不參與舊的示範資料
     ...['林佳穎', '陳怡君', '黃詩涵', '張雅婷', '吳欣怡', '劉靜宜', '蔡佩珊', '楊淑芬', '許雅雯', '鄭宜蓁'].map((name, i): User => ({ id: `U${203 + i}`, username: `nurse${String(3 + i).padStart(2, '0')}`, password: '1234', name, roles: ['nurse'], active: true, ...(i === 0 ? { grants: ['discharge.plan'] } : {}) })),
     // 加護病房的護理師（nurse13–nurse16）：只排加護病房
@@ -3280,6 +3280,38 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (old) followUpAdvices.push(mk('FA-SEED-4', old, { weeks: 1, reason: '藥物調整後複診' }))
   }
 
+  // 病安異常事件（示範，不抽亂數）：腦梗塞病人前天夜裡跌倒（輕度擦傷，護理長審查已結案）；今天早上給藥前發現 Heparin 抽成 10 倍
+  // （跡近錯失，匿名通報，待審查）；腦梗塞病人鼻胃管自拔（無傷害，審查中：原因寫了、改善措施還沒寫）
+  const incidents: Incident[] = []
+  {
+    const st = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const bedText = (a?: Admission) => { const b = a && beds.find((x) => x.id === a.bedId); return b ? `${b.ward} ${b.bedNo}` : '病房' }
+    const day = (d: string) => d.replace(/-/g, '')
+    const d2 = addDays(T, -2), d1 = addDays(T, -1)
+    const early = [addMinutes(nowStr, -120), `${T} 00:30`].sort().at(-1)!
+    if (st) {
+      incidents.push({
+        id: 'IN-SEED-1', no: `INC${day(d2)}001`, category: 'fall', occurredAt: `${d2} 02:30`, location: bedText(st), patientId: st.patientId,
+        description: '夜間病人自行下床如廁，沒有按叫人鈴，在床邊滑倒，左前臂擦傷約 2 公分。', harm: 'mild', immediateAction: '傷口清潔、通知值班醫師評估，無頭部撞擊',
+        reportedBy: 'U201', reportedAt: `${d2} 03:10`, anonymous: false, status: 'closed',
+        review: { by: 'U202', at: `${d1} 10:00`, sac: 3, cause: '病人跌倒高風險（Morse 55），夜間床欄未拉起、叫人鈴放在病人搆不到的地方', actions: '高風險病人夜間床欄拉起、叫人鈴固定在床欄；每 2 小時巡視提醒如廁', closedAt: `${d1} 10:00` },
+      })
+      incidents.push({
+        id: 'IN-SEED-3', no: `INC${day(T)}002`, category: 'line', occurredAt: [addMinutes(nowStr, -90), `${T} 00:10`].sort().at(-1)!, location: bedText(st), patientId: st.patientId,
+        description: '病人躁動，趁護理師離開床邊時自行拔除鼻胃管，管路完整拔出。', harm: 'none', immediateAction: '通知醫師，評估後重新放置鼻胃管、確認位置',
+        reportedBy: 'U201', reportedAt: [addMinutes(nowStr, -80), `${T} 00:20`].sort().at(-1)!, anonymous: false, status: 'reviewing',
+        review: { by: 'U202', at: [addMinutes(nowStr, -30), `${T} 00:30`].sort().at(-1)!, sac: 4, cause: '病人譫妄躁動，沒有評估是否需要約束或手套', actions: '' },
+      })
+    }
+    const anyAdm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('A41')) ?? admissions.find((a) => a.status === 'admitted')
+    if (anyAdm) incidents.push({
+      id: 'IN-SEED-2', no: `INC${day(T)}001`, category: 'medication', occurredAt: early, location: bedText(anyAdm),
+      description: '準備皮下注射 Heparin 時，抽藥量是醫囑的 10 倍（看錯單位），給藥前雙人核對時發現，沒有給到病人。', harm: 'near-miss', immediateAction: '重新抽藥、雙人核對後給藥',
+      reportedBy: 'U201', reportedAt: early, anonymous: true, status: 'reported',
+    })
+    counters[`incident:${T}`] = incidents.filter((x) => x.no.includes(day(T))).length
+  }
+
   // 檢驗時效（示範）：骨折病人 85 分鐘前開的急件 CRP，護理師 70 分鐘前就採檢了，檢體一直沒送到檢驗科（急件 60 分已逾時，卡在送檢）
   {
     const fx = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
@@ -3414,6 +3446,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],
     followUpAdvices,
+    incidents,
     examClosures: [{ id: 'XC-SEED-1', date: addDays(T, 10), reason: '院內消防演練', by: 'U001', at: nowStr }],
     dischargePlans,
     vitals,
