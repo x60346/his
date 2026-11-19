@@ -131,7 +131,17 @@ try {
   const dateUtil = await load('/src/utils/date.ts')
   const { today, now: nowStr } = dateUtil
   // 麻醉前評估：沒評估不能做麻醉前查核。其他段落測的是查核本身，送來還沒評估的直接補一份（測試輔助）；要測擋的用 surgeryRaw
-  const surgeryRaw = { recordCheck: api.surgeryApi.recordCheck }
+  // 手術團隊：麻醉前查核要流動、麻醉醫師，劃刀前暫停確認要刷手。其他段落沒指定的直接補（流動 nurse05、刷手 nurse06、麻醉 dr03）；要測擋的用 teamRaw
+  const teamRaw = { recordCheck: api.surgeryApi.recordCheck }
+  const fillTeam = (s) => {
+    if (!s || s.status !== 'sent') return
+    const sh = (userId) => [{ userId, by: 'U202', at: nowStr() }]
+    s.team = { ...(s.team ?? {}) }
+    if (!s.team.circulating?.length) s.team.circulating = sh('U205')
+    if (!s.team.scrub?.length) s.team.scrub = sh('U206')
+    if (s.anesthesia !== 'local' && !s.team.anesthetist?.length) s.team.anesthetist = sh(dbm.db.users.find((u) => u.username === 'dr03').id)
+  }
+  const surgeryRaw = { recordCheck: async (id, stage, items) => (fillTeam(dbm.db.surgeries.find((x) => x.id === id)), teamRaw.recordCheck(id, stage, items)) }
   api.surgeryApi.recordCheck = async (id, stage, items) => {
     const s = dbm.db.surgeries.find((x) => x.id === id)
     if (stage === 'signIn' && s && s.status === 'sent' && !s.preAnes)
@@ -15581,6 +15591,120 @@ try {
     const { readFileSync } = await import('node:fs')
     const panel = readFileSync('src/components/surgery/PacuPanel.vue', 'utf8')
     ok(!/db\.|aldreteOf|pacuUnmet|>= 9|<= 4/.test(panel), '轉出條件由服務層判斷，頁面只顯示')
+  }
+  // 手術團隊：規則（缺誰）；種子（明天骨折缺刷手、昨晚急刀刷手交班）；排程後指定（不能是主刀、刷手流動不同人、麻醉要有權限、要排程權限）；
+  // 麻醉前查核要流動與麻醉醫師、劃刀前暫停確認要刷手；查核後只能記交班（時間檢查）；麻醉醫師交班後麻醉紀錄換人寫；完成後不能改
+  console.log('\n[手術團隊]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const A = api.anesthesiaApi
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId)
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const sh = (userId) => [{ userId, by: 'U202', at: '2026-01-01 08:00' }]
+    ok(api.teamMissing({ anesthesia: 'general', team: {} }, 'signIn').join() === 'circulating,anesthetist' && api.teamMissing({ anesthesia: 'local', team: { circulating: sh('U205') } }, 'timeOut').join() === 'scrub', '規則：麻醉前查核要流動、麻醉醫師（局部麻醉不用）；劃刀前暫停確認再加刷手')
+    ok(!api.teamNow({ team: { scrub: [{ userId: 'U206', to: '2026-01-01 09:00' }] } }, 'scrub'), '規則：交出去的那段不算現在的人')
+
+    // 種子
+    await as('nurse01')
+    const s1 = (await S.orBoard(tomorrow)).cases.find((x) => x.id === 'SG-SEED-1')
+    ok(s1.teamMissing.join() === '刷手護理師' && s1.teamRows.find((r) => r.role === 'anesthetist').name === userOf('DR03').name, `種子：明天骨折那台還缺刷手（${s1.teamText}）`)
+    const s4 = db().surgeries.find((s) => s.id === 'SG-SEED-4')
+    ok(s4.team.scrub.length === 2 && s4.team.scrub[0].to === s4.team.scrub[1].from, '種子：昨晚急刀刷手中途交班')
+
+    // 新的一台
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const surgeon = userOf(adm.doctorId)
+    await as(surgeon.username)
+    const sg = await S.requestSurgery({ admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+    await expectError(() => S.setTeam(sg.id, { circulating: 'U205' }), '醫師（沒有手術排程權限）不能指定團隊')
+    await as('nurse01')
+    let msg = await errOf(() => S.setTeam(sg.id, { circulating: 'U205' }))
+    ok(msg.includes('排程後'), '還沒排程不能指定團隊')
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+    const opts = (await S.teamOptions(sg.id)).options
+    ok(opts.anesthetist.length === 1 && opts.anesthetist[0].id === userOf('DR03').id && !opts.assistant.some((x) => x.id === surgeon.id) && opts.scrub.every((x) => db().users.find((u) => u.id === x.id).roles.includes('nurse')), '可選的人：麻醉醫師只有被指定「麻醉」的、助手不含主刀、刷手流動是護理師')
+    const dr02 = userOf(adm.doctorId === 'DR02' ? 'DR01' : 'DR02')
+    let f = await fieldsOf(() => S.setTeam(sg.id, { assistant: surgeon.id, anesthetist: dr02.id, scrub: 'U205', circulating: 'U205' }))
+    ok(f.assistant?.includes('主刀') && f.anesthetist?.includes('麻醉') && f.scrub?.includes('同一個人'), `指定檢查：助手不能是主刀、麻醉要有權限、刷手流動不同人（${Object.values(f).join('／')}）`)
+    f = await fieldsOf(() => S.setTeam(sg.id, { assistant: 'U205' }))
+    ok(f.assistant?.includes('醫師'), '助手要選醫師')
+    let v = await S.setTeam(sg.id, { assistant: dr02.id, anesthetist: userOf('DR03').id, circulating: 'U205' })
+    ok(v.teamRows.find((r) => r.role === 'assistant').name === dr02.name && v.teamMissing.join() === '刷手護理師' && db().auditLogs[0].action === '手術團隊', `指定團隊（稽核）；還缺刷手：${v.teamText}`)
+    v = await S.setTeam(sg.id, { circulating: 'U207' })
+    ok(v.team.circulating.length === 1 && v.team.circulating[0].userId === 'U207' && v.team.assistant[0].userId === dr02.id, '查核前換人：直接換、不留交班，其他角色不動')
+    await expectError(() => S.setTeam(sg.id, { circulating: 'U207' }), '沒有變動')
+    v = await S.setTeam(sg.id, { circulating: '' })
+    await as('dr03')
+    await A.savePreAnes(sg.id, { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'unknown' }, history: { items: [] }, plan: 'general' })
+    await as('nurse01')
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(sg.id, k)
+    await S.markPrep(sg.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(sg.id, 'abx', { notNeeded: '乾淨手術' })
+    await S.sendToOr(sg.id)
+    v = (await S.orBoard(tomorrow)).cases.find((x) => x.id === sg.id)
+    ok(v.teamMissing.join() === '流動護理師', '送到手術室：以麻醉前查核算，缺流動')
+    msg = await errOf(() => teamRaw.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items))
+    ok(msg.includes('流動護理師'), `沒有流動護理師不能做麻醉前查核：「${msg}」`)
+    await S.setTeam(sg.id, { circulating: 'U205' })
+    v = await teamRaw.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    ok(v.checks.signIn && v.teamMissing.join() === '刷手護理師', '流動、麻醉到了可以做麻醉前查核（刷手可以晚點到）')
+    msg = await errOf(() => teamRaw.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items))
+    ok(msg.includes('刷手'), `沒有刷手不能做劃刀前暫停確認：「${msg}」`)
+    msg = await errOf(() => S.setTeam(sg.id, { scrub: 'U206' }))
+    ok(msg.includes('交班'), '麻醉前查核之後不能直接改團隊')
+    const t0 = nowStr().slice(0, 16)
+    f = await fieldsOf(() => S.handoverTeam(sg.id, 'scrub', { userId: 'U205' }))
+    ok(f.userId?.includes('同一個人'), '刷手不能和流動同一人')
+    v = await S.handoverTeam(sg.id, 'scrub', { userId: 'U206' })
+    ok(v.team.scrub.length === 1 && v.team.scrub[0].from === t0, '刷手到場（中途加入走交班，記時間）')
+    await teamRaw.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sg.id)
+    await as('dr03')
+    await A.startAnes(sg.id)
+    // 麻醉醫師交班（給 dr02 也加「麻醉」）
+    ;((u) => (u.grants = [...(u.grants ?? []), 'anesthesia']))(db().users.find((u) => u.id === dr02.id))
+    await as('nurse01')
+    f = await fieldsOf(() => S.handoverTeam(sg.id, 'anesthetist', { userId: dr02.id, at: dateUtil.addMinutes(t0, 5) }))
+    ok(f.at?.includes('未來'), '交班時間不能在未來')
+    f = await fieldsOf(() => S.handoverTeam(sg.id, 'anesthetist', { userId: dr02.id, at: dateUtil.addMinutes(t0, -120) }))
+    ok(f.at?.includes('麻醉前查核'), '交班時間不能早於麻醉前查核')
+    f = await fieldsOf(() => S.handoverTeam(sg.id, 'anesthetist', { userId: userOf('DR03').id }))
+    ok(f.userId?.includes('一樣'), '交給同一個人')
+    v = await S.handoverTeam(sg.id, 'anesthetist', { userId: dr02.id })
+    ok(v.team.anesthetist.length === 2 && v.team.anesthetist[0].to === t0 && v.teamRows.find((r) => r.role === 'anesthetist').name === dr02.name && v.teamText.includes('→') && db().auditLogs[0].action === '手術團隊交班', `麻醉醫師交班：${v.teamText}`)
+    await as('dr03')
+    msg = await errOf(() => A.addAnesEntry(sg.id, { type: 'vital', hr: 80 }))
+    ok(msg.includes(dr02.name), `交班後原麻醉醫師不能再寫：「${msg}」`)
+    ok(!(await A.anesChart(sg.id)).canEdit, '畫面也不能編輯')
+    await as(dr02.username)
+    const ch = await A.addAnesEntry(sg.id, { type: 'vital', hr: 82 })
+    ok(ch.canEdit && ch.anesthetistName === dr02.name, '接手的麻醉醫師可以寫')
+    await A.endAnes(sg.id)
+    await as('nurse01')
+    await S.finishSurgery(sg.id, { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 })
+    msg = await errOf(() => S.handoverTeam(sg.id, 'scrub', { userId: 'U207' }))
+    ok(msg.includes('已完成'), '手術完成後團隊不能再改')
+    const { readFileSync } = await import('node:fs')
+    const panel = readFileSync('src/components/surgery/TeamPanel.vue', 'utf8')
+    ok(!/db\.|permissionsOf|'anesthesia'/.test(panel), '誰能擔任、缺誰由服務層判斷')
   }
 } catch (e) {
   failed++

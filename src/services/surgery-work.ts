@@ -3,7 +3,7 @@
 import type { Admission, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
 import { addMinutes, ageOf, now, parseDate } from '@/utils/date'
-import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, URGENCY_LABEL } from './surgery-rules'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL } from './surgery-rules'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
@@ -50,6 +50,12 @@ export interface SurgeryView extends Surgery {
   preAnesMissing: boolean
   /** 評估畫面用：腎功能（CrCl） */
   renalText: string
+  /** 手術團隊：每個角色現在的人與交班經過 */
+  teamRows: { role: string; label: string; userId?: string; name?: string; shifts: { name: string; from?: string; to?: string }[] }[]
+  /** 下一關（麻醉前查核、劃刀前暫停確認）前團隊還缺的角色；已排程的以劃刀前暫停確認算 */
+  teamMissing: string[]
+  /** 一行的團隊摘要（手術紀錄、交班）：「主刀 X・助手 Y・麻醉 Z・刷手 A・流動 B」 */
+  teamText: string
 }
 /** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
 export function bumpedByEmergency(s: Surgery): Surgery | undefined {
@@ -75,6 +81,9 @@ export function surgeryView(s: Surgery): SurgeryView {
     ...(s.urgency ? { urgencyLabel: URGENCY_LABEL[s.urgency], emergency: emergencyState(s, now()) } : {}),
     ...((b) => (b ? { bumpedBy: `${b.schedule!.room} 被急刀（${URGENCY_LABEL[b.urgency!]}）${b.no} 佔用（${b.schedule!.start.slice(11)} 起），請改期` } : {}))(bumpedByEmergency(s)),
     ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5)}` } : {}),
+    teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
+    teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),
+    teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
     preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),
     renalText: renalOfPatient(s.patientId, a?.status === 'admitted' ? a.id : undefined).text || '沒有近期肌酸酐',
     prepRows: PREP_ITEMS.map((x) => {

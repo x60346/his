@@ -1,11 +1,11 @@
 // 手術排程與術前核對：主治申請 → 手術室排程（權限「手術排程」，同房不能撞）→ 病房術前準備（同意書、禁食、部位標記、備血、預防性抗生素）
 // → 送手術室（準備沒完成擋）→ 麻醉前查核 → 劃刀前暫停確認 → 開始（沒暫停確認擋）→ 離開前查核＋紗布器械計數 → 完成（不符要原因、主刀看得到）
 // → 主刀寫手術紀錄。做完的手術與麻醉費列入住院帳單（surgery-work.surgeryFeeItems）。規則在 surgery-rules
-import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
+import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryUrgency, TeamRole, User } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
-import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
 import { bumpedByEmergency, surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { careRoleOf, requireCare } from './care-team'
@@ -263,6 +263,8 @@ export function recordCheck(id: string, stage: Exclude<SurgeryCheckStage, 'signO
     if (stage === 'signIn' && s.status !== 'sent') fail('病人送到手術室後才能做麻醉前查核', 'CONFLICT')
     if (stage === 'signIn' && !s.preAnes) fail('麻醉前評估還沒做：要由有「麻醉」權限的醫師評估後才能做麻醉前查核', 'CONFLICT')
     if (stage === 'timeOut' && (!s.checks.signIn || s.status !== 'sent')) fail(s.checks.signIn ? '已經開始手術了' : '請先完成麻醉前查核', 'CONFLICT')
+    const lack = s.status === 'sent' ? teamMissing(s, stage) : []
+    if (lack.length) fail(`手術團隊還沒到齊：${lack.map((r) => TEAM_LABEL[r]).join('、')}（在「手術團隊」指定）`, 'CONFLICT', 'team')
     if (s.checks[stage]) fail('這段已經查核過了', 'CONFLICT')
     const need = CHECK_ITEMS[stage].items
     const miss = need.filter((x) => !(items ?? []).includes(x))
@@ -316,6 +318,97 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     // 局部麻醉以外：離開手術室就進恢復室（轉出、病房接回在 anesthesia.ts）
     if (s.anesthesia !== 'local') s.pacu = { inAt: t.slice(0, 16), scores: [] }
     audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}${s.pacu ? '，進恢復室' : ''}`)
+    return surgeryView(s)
+  })
+}
+
+// ---------- 手術團隊 ----------
+
+/** 這個人能不能擔任這個角色（醫師：助手；有「麻醉」權限的醫師：麻醉醫師；護理師：刷手、流動） */
+function fitsRole(u: User, role: TeamRole): boolean {
+  if (!u.active) return false
+  if (role === 'scrub' || role === 'circulating') return u.roles.includes('nurse')
+  if (!u.roles.includes('doctor') || !u.doctorId) return false
+  return role === 'assistant' || permissionsOf({ role: 'doctor', grants: u.grants ?? [] }).includes('anesthesia')
+}
+const surgeonUser = (s: Surgery) => db.users.find((u) => u.doctorId === s.doctorId)?.id
+
+export interface TeamOptions {
+  /** 每個角色可以選的人 */
+  options: Record<TeamRole, { id: string; name: string }[]>
+}
+export function teamOptions(id: string): Promise<TeamOptions> {
+  return query(() => {
+    requireUser('nurse', 'doctor', 'admin')
+    const s = must(surgeryOf(id), '手術')
+    const me = surgeonUser(s)
+    return { options: Object.fromEntries(TEAM_ORDER.map((r) => [r, db.users.filter((u) => fitsRole(u, r) && u.id !== me).map((u) => ({ id: u.id, name: u.name }))])) as TeamOptions['options'] }
+  })
+}
+
+/** 檢查一個角色指定的人：要能擔任、不能是主刀、刷手和流動不能同一人 */
+function checkMember(s: Surgery, role: TeamRole, userId: string, others: Partial<Record<TeamRole, string>>): string | undefined {
+  const u = db.users.find((x) => x.id === userId)
+  if (!u || !fitsRole(u, role)) return role === 'anesthetist' ? '要選有「麻醉」權限的醫師' : role === 'assistant' ? '助手要選醫師' : '要選護理師'
+  if (userId === surgeonUser(s)) return '不能是主刀本人'
+  const pair: TeamRole | undefined = role === 'scrub' ? 'circulating' : role === 'circulating' ? 'scrub' : undefined
+  if (pair && others[pair] === userId) return '刷手和流動不能是同一個人'
+  return undefined
+}
+
+/**
+ * 指定團隊（排程後、麻醉前查核前；權限「手術排程」）：直接換人，不留交班。空字串＝拿掉。
+ * 麻醉前查核之後要換人，走 handoverTeam（記交班時間）
+ */
+export function setTeam(id: string, input: Partial<Record<TeamRole, string>>): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requirePermission('surgery.schedule')
+    const s = must(surgeryOf(id), '手術')
+    if (s.status !== 'scheduled' && s.status !== 'sent') fail(s.status === 'requested' ? '排程後才能指定團隊' : '手術已經開始或結束，不能再改團隊', 'CONFLICT')
+    if (s.checks.signIn) fail('已經做了麻醉前查核：換人請記「交班」', 'CONFLICT')
+    const next: Partial<Record<TeamRole, string>> = Object.fromEntries(TEAM_ORDER.map((r) => [r, r in input ? (input[r] ?? '') : (teamNow(s, r) ?? '')]))
+    const e: Record<string, string> = {}
+    for (const r of TEAM_ORDER) {
+      const why = next[r] ? checkMember(s, r, next[r]!, next) : undefined
+      if (why) e[r] = why
+    }
+    failFields(e)
+    const t = now()
+    const changed = TEAM_ORDER.filter((r) => (next[r] || undefined) !== teamNow(s, r))
+    if (!changed.length) fail('團隊沒有變動', 'CONFLICT')
+    s.team = Object.fromEntries(TEAM_ORDER.filter((r) => next[r]).map((r) => [r, teamNow(s, r) === next[r] ? s.team![r]! : [{ userId: next[r]!, by: u.id, at: t }]]))
+    audit('手術團隊', `${audText(s)}：${changed.map((r) => `${TEAM_LABEL[r]} ${next[r] ? nameOf.user(next[r]!) : '（拿掉）'}`).join('、')}`)
+    return surgeryView(s)
+  })
+}
+
+/**
+ * 交班（麻醉前查核之後到手術完成；護理師記）：這個角色換人，記交班時間（預設現在，可以補記，不早於前一段開始、不早於麻醉前查核）。
+ * 助手中途加入也走這裡
+ */
+export function handoverTeam(id: string, role: TeamRole, input: { userId: string; at?: string }): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const s = must(surgeryOf(id), '手術')
+    if (!(role in TEAM_LABEL)) fail('沒有這個角色')
+    if (!s.checks.signIn || (s.status !== 'sent' && s.status !== 'in-progress')) fail(s.status === 'done' ? '手術已完成，團隊不能再改' : '麻醉前查核之前請直接指定團隊（不用交班）', 'CONFLICT')
+    const cur = teamNow(s, role)
+    if (!input.userId) failField('userId', '請選接手的人')
+    if (input.userId === cur) failField('userId', '和現在的人一樣')
+    const others = Object.fromEntries(TEAM_ORDER.map((r) => [r, teamNow(s, r)])) as Partial<Record<TeamRole, string>>
+    const why = checkMember(s, role, input.userId, { ...others, [role]: undefined })
+    if (why) failField('userId', why)
+    const t = now()
+    const at = input.at?.trim() ? input.at.trim() : t.slice(0, 16)
+    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(at)) failField('at', '請填時間')
+    if (at > t.slice(0, 16)) failField('at', '不能在未來')
+    const last = s.team?.[role]?.at(-1)
+    const floor = [s.checks.signIn.at.slice(0, 16), last?.from ?? ''].sort().at(-1)!
+    if (at < floor) failField('at', `不能早於 ${floor.slice(11)}（${last?.from === floor ? '前一段開始' : '麻醉前查核'}）`)
+    s.team = { ...(s.team ?? {}) }
+    if (last && !last.to) last.to = at
+    s.team[role] = [...(s.team[role] ?? []), { userId: input.userId, from: at, by: u.id, at: t }]
+    audit('手術團隊交班', `${audText(s)}：${TEAM_LABEL[role]} ${cur ? `${nameOf.user(cur)} → ` : ''}${nameOf.user(input.userId)}（${at.slice(11)}）`)
     return surgeryView(s)
   })
 }

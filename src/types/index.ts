@@ -2288,6 +2288,16 @@ export type AnesthesiaType = 'general' | 'spinal' | 'regional' | 'local'
 export type SurgeryPrepKey = 'consent' | 'npo' | 'siteMark' | 'blood' | 'abx'
 /** 手術安全查核三階段：麻醉前（sign in）、劃刀前暫停確認（time out）、離開手術室前（sign out） */
 export type SurgeryCheckStage = 'signIn' | 'timeOut' | 'signOut'
+/** 手術團隊的角色（主刀＝Surgery.doctorId，不在這裡） */
+export type TeamRole = 'assistant' | 'anesthetist' | 'scrub' | 'circulating'
+/** 團隊的一段班：from 沒有＝從頭；交班時前一段記 to、新的一段記 from */
+export interface TeamShift {
+  userId: string
+  from?: string
+  to?: string
+  by: string
+  at: string
+}
 export type SurgeryStatus = 'requested' | 'scheduled' | 'sent' | 'in-progress' | 'done' | 'cancelled'
 
 export interface SurgeryPrepMark {
@@ -2404,6 +2414,8 @@ export interface Surgery {
   anes?: AnesRecord
   /** 恢復室 */
   pacu?: PacuRecord
+  /** 手術團隊（主刀以外）：每個角色依時間排的班，最後一段沒有 to 的是現在的人 */
+  team?: Partial<Record<TeamRole, TeamShift[]>>
   note?: string
   status: SurgeryStatus
   createdAt: string

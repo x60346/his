@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2082,6 +2082,22 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           pacu: { inAt: end, scores: [sc(1, end, [1, 2, 2, 1, 1], 6), sc(2, addMinutes(end, 15), [1, 2, 2, 1, 2], 5), sc(3, addMinutes(end, 30), [1, 2, 2, 1, 2], 5)] },
           record: { performed: '左側腹股溝疝氣修補術（網膜）', findings: '間接型疝氣，疝囊約 4 cm，無嵌頓', bloodLoss: 20, complications: '無', specimen: '無', by: surgeon, at: addMinutes(end, 10) },
         })
+      }
+    }
+    // 手術團隊：流動 nurse05（U205）、刷手 nurse06（U206）、麻醉 dr03；昨晚急刀刷手中途由 nurse07 接手。
+    // 明天骨折那台只排了流動和麻醉（刷手還沒排，劃刀前暫停確認前要補）
+    {
+      const an = users.find((u) => u.doctorId === 'DR03')!.id
+      const asst = (s: Surgery) => users.find((u) => u.doctorId && u.doctorId !== s.doctorId && (u.doctorId === 'DR04' || u.doctorId === 'DR07'))!.id
+      const one = (userId: string, s: Surgery, extra: Partial<TeamShift> = {}): TeamShift => ({ userId, by: 'U202', at: s.schedule!.at, ...extra })
+      for (const s of surgeries) {
+        if (!s.schedule) continue
+        const anes = s.anesthesia !== 'local' ? { anesthetist: [one(an, s)] } : {}
+        if (s.id === 'SG-SEED-1') s.team = { ...anes, circulating: [one('U205', s)] }
+        else if (s.id === 'SG-SEED-4') {
+          const ho = addMinutes(s.startAt!, 30)
+          s.team = { ...anes, circulating: [one('U205', s)], scrub: [one('U206', s, { to: ho }), { userId: 'U207', from: ho, by: 'U205', at: ho }] }
+        } else s.team = { ...anes, ...(s.id !== 'SG-SEED-3' ? { assistant: [one(asst(s), s)] } : {}), scrub: [one('U206', s)], circulating: [one('U205', s)] }
       }
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）

@@ -5,7 +5,7 @@ import { now, parseDate } from '@/utils/date'
 import { db } from '@/mock/db'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser, type Actor } from './http'
 import { aldreteOf, checkPacuScore, PACU_LONG_MINUTES, PACU_SCORE_EVERY, pacuStage, pacuUnmet, anesEntryText, anesTotals, asaText, checkAnesEntry, checkPreAnes, difficultAirway, intraopAlerts, vitalGaps, type AnesEntryInput, type PreAnesInput } from './anesthesia-rules'
-import { ANESTHESIA_LABEL, SIDE_LABEL } from './surgery-rules'
+import { ANESTHESIA_LABEL, SIDE_LABEL, teamNow } from './surgery-rules'
 import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { find, nameOf } from './views'
 
@@ -39,6 +39,13 @@ export function savePreAnes(surgeryId: string, input: PreAnesInput): Promise<Sur
 }
 
 // ---------- 術中麻醉紀錄 ----------
+/** 麻醉紀錄只有這台的麻醉醫師（手術團隊現在的那位，含交班接手的）能寫；局部麻醉沒指定的話，有權限的都可以 */
+const isAnesthetist = (s: Surgery, u: Actor) => ((id) => (id ? id === u.id : s.anesthesia === 'local'))(teamNow(s, 'anesthetist'))
+function requireAnesthetist(s: Surgery, u: Actor) {
+  if (isAnesthetist(s, u)) return
+  const id = teamNow(s, 'anesthetist')
+  fail(id ? `這台的麻醉醫師是 ${nameOf.user(id)}，麻醉紀錄由這位醫師寫（換人請手術室護理師在「手術團隊」記交班）` : '這台還沒指定麻醉醫師（在「手術團隊」指定）', 'FORBIDDEN')
+}
 const editable = (s: Surgery) => {
   if (s.status === 'done') fail('手術已完成，麻醉紀錄不能再改', 'CONFLICT')
   if (s.status !== 'sent' && s.status !== 'in-progress') fail('病人送到手術室後才能記麻醉紀錄', 'CONFLICT')
@@ -55,6 +62,7 @@ export function startAnes(surgeryId: string, input: { at?: string } = {}): Promi
     editable(s)
     if (s.anes?.startAt) fail('麻醉已經開始了', 'CONFLICT')
     if (!s.checks.signIn) fail('請先完成麻醉前查核（Sign In）', 'CONFLICT')
+    requireAnesthetist(s, u)
     const t = now()
     const at = atOf(input.at, t)
     if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(at)) failField('at', '請填時間')
@@ -70,9 +78,10 @@ export function startAnes(surgeryId: string, input: { at?: string } = {}): Promi
 export function endAnes(surgeryId: string, input: { at?: string } = {}): Promise<SurgeryView> {
   return mutate(() => {
     requireUser('doctor')
-    requirePermission('anesthesia')
+    const u = requirePermission('anesthesia')
     const s = must(surgeryOf(surgeryId), '手術')
     editable(s)
+    requireAnesthetist(s, u)
     if (!s.anes?.startAt) fail('麻醉還沒開始', 'CONFLICT')
     if (s.anes.endAt) fail('麻醉已經結束了', 'CONFLICT')
     const t = now()
@@ -95,6 +104,7 @@ export function addAnesEntry(surgeryId: string, input: AnesEntryInput): Promise<
     const u = requirePermission('anesthesia')
     const s = must(surgeryOf(surgeryId), '手術')
     editable(s)
+    requireAnesthetist(s, u)
     if (!s.anes?.startAt) fail('請先按「麻醉開始」', 'CONFLICT')
     const t = now()
     const x = { ...input, at: atOf(input.at, t) }
@@ -121,6 +131,7 @@ export function removeAnesEntry(surgeryId: string, entryId: string): Promise<Ane
     const u = requirePermission('anesthesia')
     const s = must(surgeryOf(surgeryId), '手術')
     editable(s)
+    requireAnesthetist(s, u)
     const e = must(s.anes?.entries.find((x) => x.id === entryId), '紀錄')
     s.anes!.entries = s.anes!.entries.filter((x) => x !== e)
     audit('刪除麻醉紀錄', `${recText(s)}：${e.at.slice(11)} ${anesEntryText(e)}`)
@@ -141,6 +152,8 @@ export interface AnesChart {
   alerts: { at: string; kind: 'hypotension' | 'hypoxemia'; text: string }[]
   totals: { fluid: number; blood: number; bloodLoss: number; urine: number }
   canEdit: boolean
+  /** 這台現在的麻醉醫師 */
+  anesthetistName?: string
 }
 function chartOf(s: Surgery, u: Actor): AnesChart {
   const r = s.anes ?? { entries: [] }
@@ -148,7 +161,8 @@ function chartOf(s: Surgery, u: Actor): AnesChart {
     surgeryId: s.id, required: s.anesthesia !== 'local', ...(r.startAt ? { startAt: r.startAt } : {}), ...(r.endAt ? { endAt: r.endAt } : {}),
     entries: [...r.entries].sort((a, b) => a.at.localeCompare(b.at)).map((x) => ({ ...x, text: anesEntryText(x), byName: nameOf.user(x.by) })),
     gaps: vitalGaps(r, now().slice(0, 16)), alerts: intraopAlerts(r), totals: anesTotals(r),
-    canEdit: u.role === 'doctor' && permissionsOf(u).includes('anesthesia') && (s.status === 'sent' || s.status === 'in-progress'),
+    canEdit: u.role === 'doctor' && permissionsOf(u).includes('anesthesia') && isAnesthetist(s, u) && (s.status === 'sent' || s.status === 'in-progress'),
+    ...((id) => (id ? { anesthetistName: nameOf.user(id) } : {}))(teamNow(s, 'anesthetist')),
   }
 }
 

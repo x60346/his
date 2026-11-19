@@ -1,6 +1,6 @@
 // 手術排程與術前核對（純函式）：左右側、麻醉方式、手術房、術前準備清單、三段安全查核的項目、狀態、排程撞期、紗布器械計數。
 // 服務層把關、病房與手術室畫面、首頁待辦都用這一份
-import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryStatus, SurgeryUrgency } from '@/types'
+import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, SurgerySide, SurgeryStatus, SurgeryUrgency, TeamRole } from '@/types'
 import { addMinutes, parseDate } from '@/utils/date'
 
 export const SIDE_LABEL: Record<SurgerySide, string> = { left: '左側', right: '右側', bilateral: '兩側', na: '不分側' }
@@ -89,4 +89,18 @@ export function emergencyRate(xs: Pick<Surgery, 'urgency' | 'createdAt' | 'sentA
   const done = xs.map((s) => emergencyState(s, now)).filter((x): x is NonNullable<typeof x> => !!x && (x.state === 'ontime' || x.state === 'late'))
   const ontime = done.filter((x) => x.state === 'ontime').length
   return { total: done.length, ontime, pct: done.length ? Math.round((ontime / done.length) * 100) : 100 }
+}
+
+// ---------- 手術團隊 ----------
+export const TEAM_LABEL: Record<TeamRole, string> = { assistant: '助手', anesthetist: '麻醉醫師', scrub: '刷手護理師', circulating: '流動護理師' }
+export const TEAM_ORDER: TeamRole[] = ['assistant', 'anesthetist', 'scrub', 'circulating']
+/** 這個角色現在的人（最後一段、還沒交出去） */
+export const teamNow = (s: Pick<Surgery, 'team'>, role: TeamRole): string | undefined => ((x) => (x && !x.to ? x.userId : undefined))(s.team?.[role]?.at(-1))
+/**
+ * 到這一關前團隊還缺誰：麻醉前查核（Sign In）要流動護理師、麻醉醫師（局部麻醉不用）；
+ * 劃刀前暫停確認（Time Out）再加刷手護理師。助手選填
+ */
+export function teamMissing(s: Pick<Surgery, 'team' | 'anesthesia'>, stage: 'signIn' | 'timeOut'): TeamRole[] {
+  const need: TeamRole[] = ['circulating', ...(s.anesthesia !== 'local' ? (['anesthetist'] as TeamRole[]) : []), ...(stage === 'timeOut' ? (['scrub'] as TeamRole[]) : [])]
+  return need.filter((r) => !teamNow(s, r))
 }

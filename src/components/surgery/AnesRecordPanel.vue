@@ -108,6 +108,7 @@ const e = (k: string) => addAct.fieldErrors.value[k]
       <template v-if="c">
         <div class="flex flex-wrap items-center gap-2">
           <h4 class="font-semibold text-slate-700">麻醉紀錄</h4>
+          <span v-if="c.anesthetistName" class="text-xs text-slate-500">麻醉醫師 {{ c.anesthetistName }}</span>
           <span v-if="!c.required" class="text-xs text-slate-500">局部麻醉：不需要麻醉紀錄</span>
           <template v-else>
             <span class="tabular text-xs text-slate-600">{{ c.startAt ? `${c.startAt.slice(11)} 開始` : '還沒開始' }}{{ c.endAt ? `・${c.endAt.slice(11)} 結束` : c.startAt ? '・進行中' : '' }}</span>

@@ -110,6 +110,7 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <PacuPanel v-if="s.pacu" :surgery-id="s.id" />
           <p v-if="s.preAnesText" class="text-xs" :class="s.preAnes?.difficult ? 'font-medium text-red-700' : 'text-slate-600'">麻醉前評估：{{ s.preAnesText }}（{{ s.preAnesByName }}）</p>
           <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
+          <p v-if="s.team && s.status !== 'cancelled'" class="text-xs text-slate-600">手術團隊：{{ s.teamText }}</p>
           <p v-if="s.cancelled" class="text-xs text-slate-500">已取消：{{ s.cancelled.reason }}・{{ s.cancelledByName }}</p>
 
           <!-- 術前準備 -->
@@ -193,6 +194,7 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
 
     <UDialog v-model="recOpen" :title="`手術紀錄：${recording?.procName ?? ''}`" @submit="submitRec">
       <div class="space-y-3">
+        <p v-if="recording?.team" class="rounded bg-slate-50 px-2 py-1 text-xs text-slate-600">手術團隊：{{ recording.teamText }}</p>
         <UInput v-model="rec.performed" label="實際執行的術式" required :error="recAct.fieldErrors.value.performed" />
         <UTextarea v-model="rec.findings" label="術中發現" :rows="3" required :error="recAct.fieldErrors.value.findings" />
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">

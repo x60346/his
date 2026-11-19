@@ -8,6 +8,7 @@ import { AlertTriangle, CalendarClock, Stethoscope } from 'lucide-vue-next'
 import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
 import AnesRecordPanel from '@/components/surgery/AnesRecordPanel.vue'
 import PacuPanel from '@/components/surgery/PacuPanel.vue'
+import TeamPanel from '@/components/surgery/TeamPanel.vue'
 
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
@@ -143,6 +144,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
                 <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
                 <UBadge v-if="s.bumpedBy" tone="red">需改期</UBadge>
                 <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
+                <UBadge v-if="s.teamMissing.length" tone="yellow">團隊未齊</UBadge>
                 <AlertTriangle v-if="s.countMismatch" class="h-3.5 w-3.5 text-red-600" />
               </div>
               <div class="font-medium text-slate-800">{{ s.patientName }}<span class="ml-1 text-xs font-normal text-slate-500">{{ s.bedNo }}</span></div>
@@ -196,6 +198,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <span v-else class="text-slate-400">沒有評估紀錄</span>
           <UButton v-if="board?.canAnesthesia && ['requested', 'scheduled', 'sent'].includes(current.status)" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="openPre(current)">{{ current.preAnes ? '修改評估' : '麻醉評估' }}</UButton>
         </div>
+        <TeamPanel v-if="current.status !== 'cancelled'" :surgery="current" :can-schedule="!!board?.canSchedule" :is-nurse="isNurse" />
         <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
         <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
         <PacuPanel v-if="current.pacu" :surgery-id="current.id" @changed="reloadPacu" />
