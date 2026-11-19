@@ -106,6 +106,8 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           </div>
           <div class="text-xs text-slate-600">術前診斷：{{ s.diagnosis }}・<template v-if="s.emergency">{{ s.emergency.due.slice(11) }} 前入刀房</template><template v-else>預計 {{ s.requestedDate }}</template><span v-if="s.note">・{{ s.note }}</span></div>
           <p v-if="s.bumpedBy" class="text-xs font-medium text-red-700">{{ s.bumpedBy }}</p>
+          <p v-if="s.preAnesText" class="text-xs" :class="s.preAnes?.difficult ? 'font-medium text-red-700' : 'text-slate-600'">麻醉前評估：{{ s.preAnesText }}（{{ s.preAnesByName }}）</p>
+          <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
           <p v-if="s.cancelled" class="text-xs text-slate-500">已取消：{{ s.cancelled.reason }}・{{ s.cancelledByName }}</p>
 
           <!-- 術前準備 -->

@@ -8,6 +8,8 @@ import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
 import { preIncisionOf } from './prophylaxis-work'
+import { preAnesSummary } from './anesthesia-rules'
+import { renalOfPatient } from './renal-work'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
 
@@ -42,6 +44,12 @@ export interface SurgeryView extends Surgery {
   emergency?: ReturnType<typeof emergencyState>
   /** 擇期手術被急刀佔了同一間房的時段：要改期（說明） */
   bumpedBy?: string
+  /** 麻醉前評估：摘要、誰評的；還沒評估（沒有就不能做麻醉前查核） */
+  preAnesText?: string
+  preAnesByName?: string
+  preAnesMissing: boolean
+  /** 評估畫面用：腎功能（CrCl） */
+  renalText: string
 }
 /** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
 export function bumpedByEmergency(s: Surgery): Surgery | undefined {
@@ -66,6 +74,9 @@ export function surgeryView(s: Surgery): SurgeryView {
     ...(s.schedule ? { scheduleText: `${s.schedule.room} ${s.schedule.start.slice(5)}–${end!.slice(11)}`, scheduleEnd: end } : {}),
     ...(s.urgency ? { urgencyLabel: URGENCY_LABEL[s.urgency], emergency: emergencyState(s, now()) } : {}),
     ...((b) => (b ? { bumpedBy: `${b.schedule!.room} 被急刀（${URGENCY_LABEL[b.urgency!]}）${b.no} 佔用（${b.schedule!.start.slice(11)} 起），請改期` } : {}))(bumpedByEmergency(s)),
+    ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5)}` } : {}),
+    preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),
+    renalText: renalOfPatient(s.patientId, a?.status === 'admitted' ? a.id : undefined).text || '沒有近期肌酸酐',
     prepRows: PREP_ITEMS.map((x) => {
       const m = s.prep[x.key]
       let text = m ? `${m.notNeeded ? `不需要：${m.notNeeded}` : '已完成'}・${who(m)}` : undefined
@@ -108,6 +119,15 @@ export const surgeryOpen = (a: Admission) => db.surgeries.some((s) => s.admissio
 const live = () => db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')
 
 /** 首頁待辦：待排程（手術排程權限）；今天、明天要開但術前準備還沒完成（護理站）；主刀：手術紀錄待寫、計數不符 */
+/** 麻醉前評估待做：還沒評估、要開了的（急刀，或今天明天排的／預計的）；精簡版待補（急刀先做了精簡版） */
+export function preAnesCounts(t: string): { due: number; brief: number } {
+  const tomorrow = addMinutes(`${t.slice(0, 10)} 00:00`, 24 * 60).slice(0, 10)
+  const act = live().filter((s) => ['requested', 'scheduled', 'sent'].includes(s.status))
+  return {
+    due: act.filter((s) => !s.preAnes && (s.urgency || (s.schedule?.start.slice(0, 10) ?? s.requestedDate) <= tomorrow)).length,
+    brief: act.filter((s) => s.preAnes?.brief).length,
+  }
+}
 export function surgeryCounts(t: string, doctorId?: string): { toSchedule: number; prepDue: number; recordDue: number } {
   const today = t.slice(0, 10)
   const tomorrow = addMinutes(`${today} 00:00`, 24 * 60).slice(0, 10)

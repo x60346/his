@@ -4,7 +4,8 @@
 //   - 查核：點一台 → 麻醉前（Sign In）→ 劃刀前暫停確認（Time Out）→ 開始手術（沒暫停確認擋）→ 離開前（Sign Out）＋紗布器械計數 → 完成
 // 病人的過敏、隔離、DNR 在每一台上都看得到；所有規則在服務層（surgery.ts、surgery-rules）
 import { computed, reactive, ref, watch } from 'vue'
-import { AlertTriangle, CalendarClock } from 'lucide-vue-next'
+import { AlertTriangle, CalendarClock, Stethoscope } from 'lucide-vue-next'
+import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
 import { CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
@@ -65,6 +66,13 @@ async function finish() {
   if (!current.value) return
   await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason })
 }
+// ---------- 麻醉前評估 ----------
+const preFor = ref<SurgeryView>()
+const preOpen = computed({ get: () => !!preFor.value, set: (x) => !x && (preFor.value = undefined) })
+function openPre(s: SurgeryView) {
+  caseId.value = undefined
+  preFor.value = s
+}
 const waitText = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} 小時${m % 60 ? ` ${m % 60} 分` : ''}` : `${m} 分`)
 const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.schedule?.room === room)
 </script>
@@ -85,7 +93,12 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <span>{{ s.procName }}（{{ s.sideText }}）・{{ s.anesthesiaText }}・{{ s.estMinutes }} 分</span>
               <span v-if="s.emergency" class="tabular text-xs" :class="s.emergency.state === 'overdue' ? 'font-semibold text-red-700' : 'text-red-600'">已等 {{ waitText(s.emergency.minutes) }}・{{ s.emergency.state === 'overdue' ? `超過時限（${s.emergency.due.slice(11)} 前要入刀房）` : `${s.emergency.due.slice(11)} 前入刀房` }}・主刀 {{ s.doctorName }}</span>
               <span v-else class="text-xs text-slate-500">預計 {{ s.requestedDate }}・主刀 {{ s.doctorName }}</span>
-              <UButton v-if="board.canSchedule" size="sm" class="ml-auto" :icon="CalendarClock" @click="openSched(s)">排程</UButton>
+              <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
+              <UBadge v-else-if="s.preAnes?.brief" tone="yellow">麻醉精簡版</UBadge>
+              <span class="ml-auto flex gap-2">
+                <UButton v-if="board.canAnesthesia" size="sm" variant="secondary" :icon="Stethoscope" @click="openPre(s)">麻醉評估</UButton>
+                <UButton v-if="board.canSchedule" size="sm" :icon="CalendarClock" @click="openSched(s)">排程</UButton>
+              </span>
             </li>
           </ul>
           <p v-if="!board.canSchedule" class="mt-1 text-xs text-slate-500">排程由有「手術排程」權限的人處理。</p>
@@ -105,6 +118,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
                 <UBadge :tone="tone(s)">{{ s.statusLabel }}</UBadge>
                 <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
                 <UBadge v-if="s.bumpedBy" tone="red">需改期</UBadge>
+                <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
                 <AlertTriangle v-if="s.countMismatch" class="h-3.5 w-3.5 text-red-600" />
               </div>
               <div class="font-medium text-slate-800">{{ s.patientName }}<span class="ml-1 text-xs font-normal text-slate-500">{{ s.bedNo }}</span></div>
@@ -118,6 +132,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
       </template>
     </UQueryState>
 
+    <PreAnesDialog v-model="preOpen" :surgery="preFor" />
     <UDialog v-model="schedOpen" :title="`排程：${scheduling?.patientName ?? ''}`" size="sm" @submit="submitSched">
       <div v-if="scheduling" class="space-y-3 text-sm">
         <p class="text-slate-600">{{ scheduling.procName }}（{{ scheduling.sideText }}）・預估 {{ scheduling.estMinutes }} 分・<template v-if="scheduling.emergency">{{ scheduling.emergency.due.slice(11) }} 前要入刀房</template><template v-else>預計 {{ scheduling.requestedDate }}</template></p>
@@ -146,6 +161,13 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <div>{{ current.procName }}・<b class="text-red-700">{{ current.sideText }}</b>・{{ current.anesthesiaText }}・主刀 {{ current.doctorName }}・術前診斷 {{ current.diagnosis }}</div>
           <div :class="current.allergies.length ? 'font-semibold text-red-700' : 'text-slate-500'">過敏：{{ current.allergies.length ? current.allergies.join('、') : '無已知過敏' }}</div>
           <div class="text-xs text-slate-600">術前準備：{{ current.prepRows.map((r) => `${r.label}${r.done ? '✓' : '✗'}`).join('　') }}</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2" :class="current.preAnesMissing ? 'border-amber-300 bg-amber-50' : 'border-slate-200'">
+          <b class="text-slate-700">麻醉前評估</b>
+          <span v-if="current.preAnesText" :class="current.preAnes?.difficult ? 'font-semibold text-red-700' : 'text-slate-700'">{{ current.preAnesText }}<span class="ml-1 text-xs font-normal text-slate-500">{{ current.preAnesByName }}</span></span>
+          <span v-else-if="current.preAnesMissing" class="text-amber-800">還沒評估（評估後才能做麻醉前查核）</span>
+          <span v-else class="text-slate-400">沒有評估紀錄</span>
+          <UButton v-if="board?.canAnesthesia && ['requested', 'scheduled', 'sent'].includes(current.status)" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="openPre(current)">{{ current.preAnes ? '修改評估' : '麻醉評估' }}</UButton>
         </div>
         <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
         <div v-if="current.status === 'scheduled'" class="flex flex-wrap items-center gap-2">

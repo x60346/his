@@ -2305,6 +2305,28 @@ export interface SurgeryPrepMark {
  * 做完自動把術式與麻醉費列入住院帳單
  */
 export type SurgeryUrgency = 'immediate' | 'urgent' | 'semi'
+export type AsaClass = 1 | 2 | 3 | 4 | 5
+export type NpoStatus = 'ok' | 'not' | 'unknown'
+export type AnesHistoryKey = 'cardiac' | 'pulmonary' | 'renal' | 'hepatic' | 'endocrine' | 'neuro'
+/**
+ * 麻醉前評估（有「麻醉」權限的醫師）：ASA 分級（急刀加 E）、呼吸道（Mallampati、張口、頸部活動；任一不良＝困難插管）、
+ * 禁食狀態、重大病史、計畫的麻醉方式（和申請不同要寫原因）。急刀可以先做精簡版（ASA、呼吸道、禁食），病史與計畫事後補
+ */
+export interface PreAnesthesia {
+  asa: AsaClass
+  emergency: boolean
+  airway: { mallampati: 1 | 2 | 3 | 4; mouth: 'ok' | 'limited'; neck: 'ok' | 'limited'; note?: string }
+  difficult: boolean
+  npo: { status: NpoStatus; lastIntake?: string }
+  brief?: boolean
+  history?: { items: AnesHistoryKey[]; note?: string }
+  plan?: AnesthesiaType
+  planReason?: string
+  /** 計畫和申請不同：原本申請的麻醉方式（手術的 anesthesia 改成計畫的，麻醉費照計畫） */
+  changedFrom?: AnesthesiaType
+  by: string
+  at: string
+}
 export interface Surgery {
   id: string
   /** 手術單號 */
@@ -2323,6 +2345,8 @@ export interface Surgery {
   estMinutes: number
   /** 緊急手術（急刀）：立即（1 小時內入刀房）、緊急（6 小時）、次緊急（24 小時）；沒有＝擇期。從申請起算到送手術室 */
   urgency?: SurgeryUrgency
+  /** 麻醉前評估 */
+  preAnes?: PreAnesthesia
   note?: string
   status: SurgeryStatus
   createdAt: string

@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { surgeryCounts } from './surgery-work'
+import { preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -239,6 +239,9 @@ export interface DashboardStats {
   rcaOverdue?: number
   /** 手術排程：急刀還沒入刀房的、已超過時限的 */
   emergencyWaiting?: number
+  /** 麻醉：評估待做（急刀、今明兩天的）、急刀精簡版待補 */
+  preAnesDue?: number
+  preAnesBrief?: number
   emergencyOverdue?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
@@ -353,6 +356,7 @@ export function getDashboard(): Promise<DashboardStats> {
           labAcks: labAckCount(me.doctorId),
           bloodReactions: reactionsToAck(me.doctorId).length,
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
+          ...(permissionsOf({ ...me, role: 'doctor' }).includes('anesthesia') ? ((c) => ({ preAnesDue: c.due, preAnesBrief: c.brief }))(preAnesCounts(now())) : {}),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
           metforminAlerts: db.imagingExams.filter((e) => e.metforminAlert && !e.metforminAlert.ackAt && e.metforminAlert.doctorId === me.doctorId).length,

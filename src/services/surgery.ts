@@ -144,6 +144,8 @@ export interface OrBoard {
   rooms: string[]
   /** 目前的人可以排程（權限「手術排程」） */
   canSchedule: boolean
+  /** 目前的人可以做麻醉評估與紀錄（權限「麻醉」、醫師） */
+  canAnesthesia: boolean
   /** 這天排在各房的（取消的不列） */
   cases: SurgeryView[]
   /** 待排程（不分日期；急刀在前，依等級、申請時間） */
@@ -159,7 +161,7 @@ export function orBoard(date: string): Promise<OrBoard> {
     const d = /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date : today()
     const liveAdm = (s: Surgery) => find.admission(s.admissionId)?.status === 'admitted' || s.status === 'done'
     return {
-      date: d, rooms: OR_ROOMS, canSchedule: permissionsOf(u).includes('surgery.schedule'),
+      date: d, rooms: OR_ROOMS, canSchedule: permissionsOf(u).includes('surgery.schedule'), canAnesthesia: u.role === 'doctor' && permissionsOf(u).includes('anesthesia'),
       cases: db.surgeries.filter((s) => s.schedule?.start.startsWith(d) && s.status !== 'cancelled' && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
       requested: db.surgeries.filter((s) => s.status === 'requested' && find.admission(s.admissionId)?.status === 'admitted')
         .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
@@ -259,6 +261,7 @@ export function recordCheck(id: string, stage: Exclude<SurgeryCheckStage, 'signO
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
     if (stage === 'signIn' && s.status !== 'sent') fail('病人送到手術室後才能做麻醉前查核', 'CONFLICT')
+    if (stage === 'signIn' && !s.preAnes) fail('麻醉前評估還沒做：要由有「麻醉」權限的醫師評估後才能做麻醉前查核', 'CONFLICT')
     if (stage === 'timeOut' && (!s.checks.signIn || s.status !== 'sent')) fail(s.checks.signIn ? '已經開始手術了' : '請先完成麻醉前查核', 'CONFLICT')
     if (s.checks[stage]) fail('這段已經查核過了', 'CONFLICT')
     const need = CHECK_ITEMS[stage].items

@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -238,7 +238,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // dr11（感染科）：被指定「感染管制」，判定院內感染個案
       ...(d.id === 'DR11' ? { grants: ['infection.control'] } : {}),
       // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
-      ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt'] } : {}),
+      ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt', 'anesthesia'] } : {}),
       // dr02（內科主任）：被指定「死亡病例審查」
       ...(d.id === 'DR02' ? { grants: ['mortality.review'] } : {}),
     })),
@@ -2007,6 +2007,28 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         counts: { spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 },
         record: { performed: '右側腹股溝疝氣修補術', findings: '小腸嵌頓約 10 cm，復位後顏色恢復，未切除腸段', bloodLoss: 30, complications: '無', specimen: '無', by: users.find((u) => u.doctorId === hx.doctorId)!.id, at: addMinutes(end, 20) },
       })
+    }
+    // 麻醉前評估（dr03 被指定「麻醉」）：四台都評估過；急診那台急刀（在急診段落）還沒評估
+    {
+      const an = users.find((u) => u.doctorId === 'DR03')!.id
+      const pre = (id: string, at: string, p: Omit<PreAnesthesia, 'by' | 'at' | 'emergency' | 'difficult'>) => {
+        const s = surgeries.find((x) => x.id === id)
+        if (s) s.preAnes = { ...p, emergency: !!s.urgency, difficult: p.airway.mallampati >= 3 || p.airway.mouth === 'limited' || p.airway.neck === 'limited', by: an, at }
+      }
+      const s1 = surgeries.find((x) => x.id === 'SG-SEED-1')
+      if (s1) {
+        const at = notFuture(addMinutes(s1.createdAt, 150), 15)
+        pre('SG-SEED-1', at, { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'not', lastIntake: addMinutes(at, -90) }, history: { items: ['cardiac'], note: '高血壓，藥物控制穩定' }, plan: 'general' })
+      }
+      const s2 = surgeries.find((x) => x.id === 'SG-SEED-2')
+      if (s2) {
+        const at = notFuture(addMinutes(s2.createdAt, 100), 10)
+        pre('SG-SEED-2', at, { asa: 1, airway: { mallampati: 1, mouth: 'ok', neck: 'ok' }, npo: { status: 'ok', lastIntake: addMinutes(s2.createdAt, -360) }, history: { items: [] }, plan: 'general' })
+      }
+      const s3 = surgeries.find((x) => x.id === 'SG-SEED-3')
+      if (s3) pre('SG-SEED-3', `${s3.requestedDate} 08:30`, { asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'limited', note: '臥床，頸部僵硬' }, npo: { status: 'ok', lastIntake: `${addDays(s3.requestedDate, -1)} 22:00` }, history: { items: ['neuro', 'endocrine'], note: '腦梗塞、糖尿病' }, plan: 'local' })
+      const s4 = surgeries.find((x) => x.id === 'SG-SEED-4')
+      if (s4) pre('SG-SEED-4', addMinutes(s4.createdAt, 15), { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'not', lastIntake: addMinutes(s4.createdAt, -180) }, history: { items: [] }, plan: 'general' })
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length

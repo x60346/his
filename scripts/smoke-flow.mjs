@@ -130,6 +130,14 @@ try {
   const withRxOk = async (input) => ({ ...input, rxAlertReasons: Object.fromEntries((await api.ipdApi.orderRxAlerts(input.admissionId, input.drugId)).map((x) => [x.key, '測試確認'])) })
   const dateUtil = await load('/src/utils/date.ts')
   const { today, now: nowStr } = dateUtil
+  // 麻醉前評估：沒評估不能做麻醉前查核。其他段落測的是查核本身，送來還沒評估的直接補一份（測試輔助）；要測擋的用 surgeryRaw
+  const surgeryRaw = { recordCheck: api.surgeryApi.recordCheck }
+  api.surgeryApi.recordCheck = async (id, stage, items) => {
+    const s = dbm.db.surgeries.find((x) => x.id === id)
+    if (stage === 'signIn' && s && s.status === 'sent' && !s.preAnes)
+      s.preAnes = { asa: 2, emergency: !!s.urgency, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, difficult: false, npo: { status: 'unknown' }, history: { items: [] }, plan: s.anesthesia, by: 'U101', at: nowStr() }
+    return surgeryRaw.recordCheck(id, stage, items)
+  }
   http.setLatency(0, 0)
   const T = today()
   const as = (username) => api.authApi.login(username, '1234')
@@ -15205,6 +15213,113 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/pages/or/OrPage.vue', 'utf8')
     ok(!/db\.|URGENCY_MINUTES|createdAt/.test(page) && page.includes('s.emergency.state'), '時效由服務層算（emergencyState），頁面只顯示')
+  }
+  // 麻醉前評估：困難插管判斷、欄位（一次標出、精簡版只有急刀、計畫不同要原因、未來的進食時間）；種子；權限（護理師、沒被指定的醫師、管理員）；
+  // 首頁待做與精簡版待補；精簡版→完整版、計畫改了手術的麻醉方式（改回就還原）；沒評估不能做麻醉前查核；開始後不能改
+  console.log('\n[麻醉前評估]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.anesthesiaApi
+    const S = api.surgeryApi
+    const T = dateUtil.today()
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.difficultAirway({ mallampati: 3, mouth: 'ok', neck: 'ok' }) && api.difficultAirway({ mallampati: 1, mouth: 'ok', neck: 'limited' }) && !api.difficultAirway({ mallampati: 2, mouth: 'ok', neck: 'ok' }), '困難插管：Mallampati III 以上、張口或頸部受限任一')
+    ok(api.asaText({ asa: 3, emergency: true }) === 'ASA 3E' && api.asaText({ asa: 1, emergency: false }) === 'ASA 1', 'ASA 分級急刀加 E')
+    const ctx = { urgent: false, requested: 'general', at: '2026-11-18 10:00' }
+    let e = api.checkPreAnes({}, ctx)
+    ok(e.asa && e.mallampati && e.mouth && e.neck && e.npo && e.history && e.plan, '欄位一次標出')
+    const good = { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'ok', lastIntake: '2026-11-18 00:00' }, history: { items: [] }, plan: 'general' }
+    ok(!Object.keys(api.checkPreAnes(good, ctx)).length, '完整、沒有病史（勾「無」＝空清單）可以')
+    ok(api.checkPreAnes({ ...good, brief: true }, ctx).brief && !Object.keys(api.checkPreAnes({ asa: 2, airway: good.airway, npo: good.npo, brief: true }, { ...ctx, urgent: true })).length, '精簡版只有急刀可以（不用病史與計畫）')
+    ok(api.checkPreAnes({ ...good, plan: 'spinal' }, ctx).planReason && !api.checkPreAnes({ ...good, plan: 'spinal', planReason: '病人要求' }, ctx).planReason, '計畫和申請不同要寫原因')
+    ok(api.checkPreAnes({ ...good, npo: { status: 'not', lastIntake: '2026-11-18 11:00' } }, ctx).lastIntake && api.checkPreAnes({ ...good, npo: { status: 'not' } }, ctx).lastIntake && !api.checkPreAnes({ ...good, npo: { status: 'unknown' } }, ctx).lastIntake, '最後進食時間：要填、不能在未來；不清楚的不用填')
+
+    // 種子
+    const sg1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    const sg3 = db().surgeries.find((s) => s.id === 'SG-SEED-3')
+    const er = db().surgeries.find((s) => s.id === 'SG-SEED-ER')
+    ok(sg1.preAnes.asa === 2 && sg1.preAnes.by === db().users.find((u) => u.username === 'dr03').id && !sg1.preAnes.difficult, '種子：骨折明天那台已評估 ASA 2（dr03）')
+    ok(sg3.preAnes.difficult && sg3.preAnes.plan === 'local', '種子：前天清創那台困難插管、局部麻醉')
+    ok(!er.preAnes, '種子：急診急刀還沒評估')
+    ok(db().users.find((u) => u.username === 'dr03').grants.includes('anesthesia'), '種子：dr03 被指定麻醉')
+
+    // 權限
+    await as('nurse01')
+    ok(!(await S.orBoard(T)).canAnesthesia && (await S.orBoard(T)).requested.find((x) => x.id === er.id).preAnesMissing, '護理師：手術室看得到「未評估」、不能評估')
+    await expectError(() => A.savePreAnes(er.id, good), '護理師不能做麻醉前評估')
+    await as(userOf(er.doctorId))
+    let msg = await errOf(() => A.savePreAnes(er.id, good))
+    ok(msg.includes('麻醉'), `沒被指定的醫師：「${msg}」`)
+    ok((await api.dashboardApi.getDashboard()).preAnesDue === undefined, '沒被指定的醫師首頁沒有這個待辦')
+    await as('admin')
+    await expectError(() => A.savePreAnes(er.id, good), '管理員不能做麻醉前評估')
+
+    // 首頁、精簡版、完整版
+    await as('dr03')
+    ok((await S.orBoard(T)).canAnesthesia, 'dr03 可以評估')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.preAnesDue === 1 && dash.preAnesBrief === 0, '首頁：麻醉前評估待做 1（急診急刀；骨折、闌尾炎已評估）')
+    const npoNow = { status: 'not', lastIntake: dateUtil.addMinutes(dateUtil.now(), -300) }
+    let v = await A.savePreAnes(er.id, { brief: true, asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'ok' }, npo: npoNow })
+    ok(v.preAnes.brief && v.preAnes.emergency && v.preAnes.difficult && v.preAnesText.includes('ASA 3E') && v.preAnesText.includes('困難插管') && v.preAnesText.includes('精簡版') && !v.preAnesMissing, `急刀精簡版：「${v.preAnesText}」`)
+    ok(db().auditLogs[0].action === '麻醉前評估', '稽核：麻醉前評估')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.preAnesDue === 0 && dash.preAnesBrief === 1, '首頁：待做 0、精簡版待補 1')
+    let f = await fieldsOf(() => A.savePreAnes(er.id, { asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'ok' }, npo: npoNow, history: { items: ['pulmonary'] }, plan: 'spinal' }))
+    ok(f.planReason && Object.keys(f).length === 1, '補完整版：計畫和申請不同沒寫原因')
+    v = await A.savePreAnes(er.id, { asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'ok' }, npo: npoNow, history: { items: ['pulmonary', 'pulmonary'], note: '氣喘' }, plan: 'spinal', planReason: '氣喘控制差，避免插管' })
+    ok(!v.preAnes.brief && v.anesthesia === 'spinal' && v.preAnes.changedFrom === 'general' && v.preAnes.history.items.length === 1 && v.preAnesText.includes('原申請全身麻醉'), `改成脊髓麻醉：手術的麻醉方式跟著改、記原申請（${v.preAnesText}）`)
+    ok(db().auditLogs[0].action === '修改麻醉前評估' && db().auditLogs[0].detail.includes('氣喘控制差'), '稽核：修改麻醉前評估（含原因）')
+    ok((await api.dashboardApi.getDashboard()).preAnesBrief === 0, '補完後精簡版待補 0')
+    v = await A.savePreAnes(er.id, { asa: 3, airway: { mallampati: 3, mouth: 'ok', neck: 'ok' }, npo: npoNow, history: { items: ['pulmonary'] }, plan: 'general' })
+    ok(v.anesthesia === 'general' && !v.preAnes.changedFrom && !v.preAnes.planReason, '改回申請的方式：還原、不用原因')
+
+    // 擇期：不能精簡版；沒評估不能做麻醉前查核
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    await as(userOf(adm.doctorId))
+    const el = await S.requestSurgery({ admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+    ok(el.preAnesMissing, '新申請的手術：麻醉未評估')
+    await as('dr03')
+    f = await fieldsOf(() => A.savePreAnes(el.id, { brief: true, asa: 2, airway: good.airway, npo: { status: 'unknown' } }))
+    ok(f.brief, '擇期不能存精簡版')
+    await as('nurse01')
+    await S.scheduleSurgery(el.id, { room: 'OR3', start: `${tomorrow} 09:00` })
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(el.id, k)
+    await S.markPrep(el.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(el.id, 'abx', { notNeeded: '乾淨手術' })
+    await S.sendToOr(el.id)
+    msg = await errOf(() => surgeryRaw.recordCheck(el.id, 'signIn', api.CHECK_ITEMS.signIn.items))
+    ok(msg.includes('麻醉前評估還沒做'), `沒評估不能做麻醉前查核：「${msg}」`)
+    await as('dr03')
+    await A.savePreAnes(el.id, { ...good, npo: { status: 'ok', lastIntake: dateUtil.addMinutes(dateUtil.now(), -600) } })
+    await as('nurse01')
+    v = await surgeryRaw.recordCheck(el.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    ok(v.checks.signIn, '評估後可以做麻醉前查核')
+    await as('dr03')
+    msg = await errOf(() => A.savePreAnes(sg3.id, good))
+    ok(msg.includes('已經開始'), '手術開始後不能改評估')
+    const { readFileSync } = await import('node:fs')
+    const dlg = readFileSync('src/components/surgery/PreAnesDialog.vue', 'utf8')
+    ok(!/mallampati >= 3|db\./.test(dlg), '困難插管與欄位檢查在服務層，評估畫面只收表單')
   }
 } catch (e) {
   failed++

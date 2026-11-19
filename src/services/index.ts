@@ -33,6 +33,7 @@ import * as blood from './blood'
 import * as copy from './copy'
 import * as management from './management'
 import * as surgery from './surgery'
+import * as anesthesia from './anesthesia'
 import * as line from './line'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
@@ -115,6 +116,7 @@ export const bloodApi = overNetwork(blood)
 export const copyApi = overNetwork(copy)
 export const managementApi = overNetwork(management)
 export const surgeryApi = overNetwork(surgery)
+export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
 export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)
@@ -234,6 +236,7 @@ export * from './blood-rules'
 export * from './copy-rules'
 export * from './management-rules'
 export * from './surgery-rules'
+export * from './anesthesia-rules'
 export * from './line-rules'
 export * from './nutrition-rules'
 export * from './delirium-rules'
