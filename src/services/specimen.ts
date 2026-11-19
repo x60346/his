@@ -31,7 +31,7 @@ function view(s: Specimen, t: string = now()): SpecimenView {
   const bed = find.bed(a?.bedId ?? '')
   const stage = specimenStage(s)
   return {
-    ...s, stage, stageLabel: SPECIMEN_STAGE_LABEL[stage], tubeLabel: TUBE_LABEL[s.tube], patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', bedNo: bed?.bedNo ?? (s.admissionId ? '' : '門診'), ward: bed?.ward ?? '',
+    ...s, stage, stageLabel: SPECIMEN_STAGE_LABEL[stage], tubeLabel: TUBE_LABEL[s.tube], patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', bedNo: bed?.bedNo ?? (s.admissionId ? '' : s.er ? '急診' : '門診'), ward: bed?.ward ?? '',
     tests: [...s.orderIds.map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id), ...(s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name ?? k)], late: specimenLate(s, t),
     ...(s.collectedBy ? { collectedByName: nameOf.user(s.collectedBy) } : {}), ...(s.receivedBy ? { receivedByName: nameOf.user(s.receivedBy) } : {}), ...(s.rejected ? { rejectedByName: nameOf.user(s.rejected.by) } : {}),
   }
@@ -98,7 +98,7 @@ export function collectSpecimen(barcode: string): Promise<SpecimenView> {
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}，不能再採檢`, 'CONFLICT')
-    if (!s.admissionId) fail('門診檢體在抽血櫃台採檢', 'CONFLICT')
+    if (!s.admissionId) fail(s.er ? '急診檢體在急診看板「檢驗」床邊採檢' : '門診檢體在抽血櫃台採檢', 'CONFLICT')
     if (find.admission(s.admissionId!)?.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
     const t = now()
     const os = collectRecord(s, u.id, t)

@@ -7,6 +7,7 @@ import { ER_DISPOSITION_LABEL, ER_STAGE_LABEL, erStage, OBS_LONG_HOURS, OBS_TODO
 import { inObsBed } from './bed-work'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
+import { erLabCounts } from './er-lab-work'
 
 export const erDept = () => db.departments.find((d) => d.code === 'ER' && d.active)
 /** 急診醫師（急診科、啟用中）；急診診次掛在第一位名下（申報用），科內醫師都能看 */
@@ -57,6 +58,8 @@ export interface ErBoardItem {
   /** 留觀：床號（還沒排床就沒有）、留觀幾小時、超過 24 小時（看板標紅）、超過 48 小時（首頁待辦） */
   obs?: { bedNo?: string; hours: number; long: boolean; overdue: boolean; ended: boolean; endText?: string }
   history: { level: number; at: string; byName: string; reason: string }[]
+  /** 急診檢驗進度（有送出檢驗才有）：待採檢、待收件、檢驗中、已出、醫師還沒看的新報告 */
+  labs?: { toCollect: number; toReceive: number; inLab: number; reported: number; fresh: number }
 }
 
 const mins = (from: string, to: string) => Math.max(0, Math.round((Date.parse(to.replace(' ', 'T')) - Date.parse(from.replace(' ', 'T'))) / 60000))
@@ -86,6 +89,7 @@ export function erItem(v: Visit, t: string): ErBoardItem {
         ...(e ? { endText: `留觀 ${hours} 小時後${ER_DISPOSITION_LABEL[e.kind]}${e.hospital ? `：${e.hospital}` : ''}${e.kind === 'admit' && adm ? `：${nameOf.dept(adm.deptId)} ${nameOf.doctor(adm.doctorId)}` : ''}${e.note ? `（${e.note}）` : ''}` } : {}) } }
     })() : {}),
     history: (er.history ?? []).map((h) => ({ level: h.level, at: h.at, byName: nameOf.user(h.by), reason: h.reason })),
+    ...((l) => (l ? { labs: l } : {}))(erLabCounts(v)),
   }
 }
 

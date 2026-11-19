@@ -11,6 +11,7 @@ import { AlertTriangle, Siren, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
 import WristbandDialog from '@/components/WristbandDialog.vue'
+import ErLabDialog from '@/components/ErLabDialog.vue'
 import {
   admissionApi, ER_COMPLAINTS, ER_TRANSFER_HOSPITALS, erApi, masterApi, OBS_LONG_HOURS, patientApi, suggestLevel, TRIAGE_LABEL, TRIAGE_LEVELS, TRIAGE_TARGET_MIN,
   type ErBoardItem,
@@ -30,6 +31,10 @@ const stageTone = (i: ErBoardItem) =>
 const OBS_BED_CLASS: Record<string, string> = { empty: 'border-emerald-300 bg-emerald-50 text-emerald-800', occupied: 'border-blue-300 bg-blue-50 text-blue-900', cleaning: 'border-slate-300 bg-slate-100 text-slate-600', reserved: 'border-amber-300 bg-amber-50 text-amber-800' }
 const active = computed(() => (board.value?.items ?? []).filter((i) => !['left', 'admitted'].includes(i.stage)))
 const done = computed(() => (board.value?.items ?? []).filter((i) => ['left', 'admitted'].includes(i.stage)))
+// 急診檢驗（床邊採檢、看報告）
+const labVisit = ref('')
+const labOpen = computed({ get: () => !!labVisit.value, set: (x) => !x && (labVisit.value = '') })
+const labText = (l: NonNullable<ErBoardItem['labs']>) => [l.toCollect && `待採檢 ${l.toCollect}`, l.toReceive && `待收件 ${l.toReceive}`, l.inLab && `檢驗中 ${l.inLab}`, l.reported && `已出 ${l.reported}`].filter(Boolean).join('・')
 
 // ---------- 檢傷掛號 ----------
 const triOpen = ref(false)
@@ -179,6 +184,7 @@ async function submitEnd() {
                 <span class="text-slate-700">{{ i.complaint }}</span>
               </div>
               <div class="tabular text-xs text-slate-500">{{ i.vitalsText }}・到院 {{ atText(i.arrivedAt) }}・檢傷 {{ i.triagedByName }}<span v-if="i.reason" class="text-amber-800">・調整：{{ i.reason }}</span></div>
+              <div v-if="i.labs" class="flex flex-wrap items-center gap-1 text-xs"><span :class="i.labs.toCollect ? 'font-semibold text-amber-800' : 'text-slate-600'">檢驗：{{ labText(i.labs) }}</span><UBadge v-if="i.labs.fresh" tone="blue">新報告 {{ i.labs.fresh }}</UBadge></div>
               <div v-if="i.dispositionText" class="text-xs text-slate-600">去向：{{ i.dispositionText }}<template v-if="i.obs?.endText">；{{ i.obs.endText }}</template></div>
             </div>
             <UBadge :tone="stageTone(i)">{{ i.stageLabel }}<template v-if="i.stage === 'bed'">・等 {{ i.bedWaitMinutes }} 分</template><template v-if="i.stage === 'obs'">・{{ i.obs?.bedNo }}</template></UBadge>
@@ -187,6 +193,7 @@ async function submitEnd() {
               {{ i.stage === 'waiting' ? '等' : '等了' }} {{ i.wait.minutes }} 分／目標 {{ i.wait.target || '立即' }}{{ i.wait.target ? ' 分' : '' }}
             </span>
             <span class="flex gap-1.5">
+              <UButton v-if="i.labs" size="sm" :variant="(board.canTriage && i.labs.toCollect) || (board.canDispose && i.labs.fresh) ? 'primary' : 'secondary'" @click="labVisit = i.visitId">檢驗</UButton>
               <UButton v-if="board.canTriage && i.stage === 'waiting'" size="sm" variant="secondary" @click="openRe(i)">重新檢傷</UButton>
               <UButton v-if="board.canDispose && i.stage === 'deciding'" size="sm" @click="openDis(i)">決定去向</UButton>
               <UButton v-if="board.canTriage && i.stage === 'obs-bed'" size="sm" @click="openBed(i)">排留觀床</UButton>
@@ -316,6 +323,7 @@ async function submitEnd() {
     </UDialog>
 
     <WristbandDialog v-model="wristbandOpen" :admission-id="wristbandFor" />
+    <ErLabDialog v-model="labOpen" :visit-id="labVisit" />
 
     <UDialog v-model="disOpen" :title="`決定去向：${dis?.patientName ?? ''}`" @submit="submitDis">
       <div v-if="dis" class="space-y-3 text-sm">

@@ -14,7 +14,7 @@ import { callOrder, maskName, pickNext, priorityOf, QUEUE_PRIORITY_AGE, QUEUE_PR
 import { avgWait, callsSinceReturn, queueOrder, queueStage, returnOrder, waitingList, QUEUE_MAX_CALLS, QUEUE_STAGE_LABEL, type QueueStage } from './lab-queue-rules'
 
 /** 這位病人還沒採檢的門診檢驗（沒有檢體、或檢體被退件的） */
-const toCollect = (patientId: string) => pendingLabWork().filter((w) => w.source === 'opd' && w.patientId === patientId && !opdSpecimenOf(w.key))
+const toCollect = (patientId: string) => pendingLabWork().filter((w) => w.source === 'opd' && !w.er && w.patientId === patientId && !opdSpecimenOf(w.key))
 const tubeOf = (procId: string) => find.procedure(procId)?.tube ?? 'red'
 const todayOf = () => now().slice(0, 10)
 
@@ -106,7 +106,7 @@ export function labDesk(): Promise<{ date: string; checkedIn: DeskPatient[]; not
     requireUser('lab')
     const d = todayOf()
     const checkedIn = db.labCheckins.filter((c) => c.date === d).sort((a, b) => a.no - b.no).map((c) => deskPatient(c.patientId, d))
-    const waitingIds = [...new Set(pendingLabWork().filter((w) => w.source === 'opd' && !opdSpecimenOf(w.key)).map((w) => w.patientId))].filter((id) => !checkedIn.some((x) => x.patientId === id))
+    const waitingIds = [...new Set(pendingLabWork().filter((w) => w.source === 'opd' && !w.er && !opdSpecimenOf(w.key)).map((w) => w.patientId))].filter((id) => !checkedIn.some((x) => x.patientId === id))
     return { date: d, checkedIn, notCheckedIn: waitingIds.map((id) => deskPatient(id, d)), queue: deskQueue() }
   })
 }
@@ -256,6 +256,7 @@ export function collectDeskSpecimen(barcode: string): Promise<DeskSpecimen> {
     const u = requireUser('lab')
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     if (s.admissionId) fail('住院檢體由護理站採檢', 'CONFLICT')
+    if (s.er) fail('急診檢體由急診護理師床邊採檢', 'CONFLICT')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}`, 'CONFLICT')
     Object.assign(s, { collectedAt: now(), collectedBy: u.id })

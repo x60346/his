@@ -28,12 +28,16 @@ export function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' |
       if (!x) fail('這次看診沒有這項檢驗，請重新整理', 'CONFLICT')
       if (x!.notDone) fail('櫃台已標「未執行」（病人沒做），不能發報告', 'CONFLICT')
       const v = find.visit(e.visitId)
-      if (v?.status !== 'charged' && v?.status !== 'dispensed') fail('病人還沒批價，請先到批價櫃台', 'CONFLICT')
+      // 急診：醫師送出就能做（床邊採檢、離院結帳），不用先批價
+      if (v?.er) {
+        if (v.status === 'cancelled') fail('急診已退掛，不能發報告', 'CONFLICT')
+        if (!x!.orderedAt && e.status !== 'completed') fail('醫師還沒送出這項檢驗', 'CONFLICT')
+      } else if (v?.status !== 'charged' && v?.status !== 'dispensed') fail('病人還沒批價，請先到批價櫃台', 'CONFLICT')
       if (reportedOpd(e.id, b)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
       const sp = opdSpecimenOf(key)
-      if (!sp?.collectedAt) fail('病人還沒在抽血櫃台採檢（或還沒交回檢體），不能發報告', 'CONFLICT')
+      if (!sp?.collectedAt) fail(v?.er ? '急診護理師還沒床邊採檢，不能發報告' : '病人還沒在抽血櫃台採檢（或還沒交回檢體），不能發報告', 'CONFLICT')
       if (!sp!.receivedAt) fail(`檢體還沒收件（條碼 ${sp!.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')
-      base = { patientId: e.patientId, procId: b, doctorId: e.doctorId, orderedAt: e.completedAt ?? e.date, encounterId: e.id }
+      base = { patientId: e.patientId, procId: b, doctorId: e.doctorId, orderedAt: x!.orderedAt ?? e.completedAt ?? e.date, encounterId: e.id }
     } else if (kind === 'O') {
       const o = must(db.ipdOrders.find((x) => x.id === a), '醫囑')
       if (o.category !== 'procedure' || !o.procId) fail('這不是檢驗醫囑')

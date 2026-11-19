@@ -114,6 +114,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['lab'], label: '抽血櫃台待採檢', count: s.value.deskToCollect ?? 0, hint: '已批價的門診檢驗：報到取號、印條碼、採檢（尿液痰液發容器等交回）', route: 'lab', query: { tab: 'desk' }, icon: FlaskConical },
     { roles: ['lab'], label: '檢體待收件', count: s.value.specimenToReceive ?? 0, hint: s.value.specimenLate ? `其中 ${s.value.specimenLate} 支採檢超過 60 分鐘` : '護理站、抽血櫃台已採檢的檢體：掃條碼收件後才能登打', route: 'lab', icon: FlaskConical, urgent: !!s.value.specimenLate },
     { roles: ['nurse'], label: '今天待採檢', count: s.value.labToCollect ?? 0, hint: '住院檢驗（含長期檢驗今天到期的）：在病人分頁「檢體」印條碼、採檢', route: 'nursing', icon: FlaskConical },
+    { roles: ['nurse'], label: '急診檢驗待床邊採檢', count: s.value.erLabToCollect ?? 0, hint: '急診醫師已送出的檢驗：在急診看板按「檢驗」印條碼、採檢（不用先批價）', route: 'er', icon: FlaskConical, urgent: true },
     { roles: ['nurse'], label: '檢體退件待重新採檢', count: s.value.specimenRecollect ?? 0, hint: '檢驗科退件（溶血、量不足…）：在病人分頁「檢體」重新印條碼、採檢', route: 'nursing', icon: FlaskConical, urgent: true },
     { roles: ['doctor'], label: '藥師建議待回覆', count: s.value.pharmCareToReply ?? 0, hint: '我的住院病人：臨床藥師查房的建議（劑量、監測、停藥…），在住院醫囑「藥事照護」分頁接受或不接受', route: 'ipd', icon: Pill },
     { roles: ['doctor'], label: '藥師疑義待回覆', count: s.value.pharmQueries ?? 0, hint: '我的住院病人：藥師對醫囑有疑義，回覆前暫停給藥；在住院醫囑修改、停止或寫理由維持', route: 'ipd', icon: Pill, urgent: true },

@@ -7127,7 +7127,8 @@ try {
     ok(!api.isNoShow({ status: 'registered', date: addDaysT(-1), er: {} }, T) && api.isNoShow({ status: 'registered', date: addDaysT(-1) }, T), '急診沒等到看診不算預約未到')
 
     // 種子
-    const seeded = db().visits.filter((v) => v.er && v.date === T)
+    // 急診檢驗的示範（V-ER-LAB-*）另外算
+    const seeded = db().visits.filter((v) => v.er && v.date === T && !v.id.startsWith('V-ER-LAB'))
     ok(seeded.length === 4 && seeded.every((v) => v.sessionId === `ER-${T}` && v.caseType === 'E1' && v.checkedInAt) && db().sessions.find((s) => s.id === `ER-${T}`)?.period === 'ER', '種子：今天急診 4 位候診（急診診次、案件 E1、已報到）')
     ok(!(await api.scheduleApi.listSessions({ date: T })).some((s) => s.period === 'ER'), '掛號頁的診次清單沒有急診')
     await as('nurse01')
@@ -12430,6 +12431,106 @@ try {
     db().labCheckins = db().labCheckins.filter((x) => x.patientId !== p1.patientId)
     c = await D.checkInLab(p1.patientId, { priority: 'disabled' })
     ok(c.priority === api.priorityOf(dateUtil.ageOf(pt1.birthDate, T), 'disabled') && db().auditLogs[0].detail.includes('優先'), `報到時選優先：${c.priority}（75 歲以上不管選什麼都是 elderly）`)
+  }
+
+  // 急診檢驗與床邊採檢：種子（已採檢待收件、新報告）、檢驗科清單與時效、不經抽血櫃台；醫師存病歷送出（蓋時間、畫面送來的不收、已採檢不能刪）；
+  // 護理師床邊印條碼與採檢（其他地方不能採）；不用批價就能收件發報告；醫師看過新報告；權限
+  console.log('\n[急診檢驗與床邊採檢]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const R = api.erLabApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const erDoc = db().doctors.find((d) => db().departments.find((x) => x.id === d.deptId)?.code === 'ER')
+    const erUser = db().users.find((u) => u.doctorId === erDoc.id).username
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== erDoc.id && db().doctors.find((d) => d.id === u.doctorId)?.deptId !== erDoc.deptId).username
+    const v1 = db().visits.find((v) => v.id === 'V-ER-LAB-1')
+    const e1 = db().encounters.find((e) => e.visitId === v1.id)
+
+    // 種子
+    await as('nurse01')
+    let b = await api.erApi.erBoard()
+    let i1 = b.items.find((x) => x.visitId === v1.id)
+    ok(i1?.labs?.toReceive === 1 && i1.labs.reported === 1 && i1.labs.fresh === 1 && !i1.labs.toCollect && i1.stage === 'seeing', '種子：胸悶看診中——CBC 報告已出（醫師還沒看）、肌酸酐已床邊採檢待收件')
+    ok(db().visits.filter((v) => v.sessionId === `ER-${T}`).sort((a, c) => a.seqNo - c.seqNo).every((v, k, xs) => !k || xs[k - 1].createdAt <= v.createdAt), '看診號依到院先後')
+    await as('lab01')
+    const work = await api.labApi.listLabWork()
+    const w1 = work.find((w) => w.key === `E:${e1.id}:P008`)
+    ok(w1?.er && w1.where === '急診' && w1.awaitingReceipt && v1.status === 'in-consult', '檢驗科清單：急診（看診中、沒批價）已採檢待收件')
+    const desk = await api.labDeskApi.labDesk()
+    ok(![...desk.checkedIn, ...desk.notCheckedIn].some((p) => p.patientId === v1.patientId), '急診的不會出現在門診抽血櫃台')
+    const tb = await api.tatApi.tatBoard()
+    const tw = tb.open.find((x) => x.key === w1.key)
+    ok(tw?.priority === 'stat' && tw.start === e1.procedures[0].orderedAt && tw.segment === 'transport', `時效：急診急件、從醫師送出起算（${tw?.elapsed}/60 分、卡在送檢）`)
+
+    // 醫師存病歷：新加的蓋送出時間、舊的沿用、畫面送來的時間不收、已採檢不能刪
+    await as(erUser)
+    const draftOf = (procs) => ({ subjective: e1.subjective, objective: e1.objective, assessment: e1.assessment, plan: e1.plan, vitals: e1.vitals, diagnoses: e1.diagnoses, medications: [], procedures: procs, refillTimes: 0, admissionRequested: false })
+    const old = e1.procedures.map((p) => ({ procId: p.procId, qty: 1, selfPay: false, orderedAt: '2000-01-01 00:00' }))
+    let saved = await api.opdApi.saveDraft(e1.id, draftOf([...old, { procId: 'P011', qty: 1, selfPay: false, orderedAt: '2000-01-01 00:00' }]))
+    const crp = saved.procedures.find((p) => p.procId === 'P011')
+    ok(crp.orderedAt && crp.orderedAt !== '2000-01-01 00:00' && saved.procedures.find((p) => p.procId === 'P003').orderedAt === e1.procedures[0].orderedAt, '存病歷：新加的 CRP 蓋送出時間、原本的沿用（畫面送來的時間不收）')
+    let msg = await errOf(() => api.opdApi.saveDraft(e1.id, draftOf(old.filter((p) => p.procId !== 'P008'))))
+    ok(msg.includes('已經採檢'), `已採檢的不能從醫令刪掉 → 「${msg}」`)
+    await as('nurse01')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.erLabToCollect >= 1, `護理師首頁：急診檢驗待床邊採檢 ${dash.erLabToCollect}`)
+
+    // 護理師床邊印條碼、採檢
+    let L = await R.erLabs(v1.id)
+    ok(L.canCollect && !L.canSee && L.toPrint.length === 1 && L.toPrint[0].tests.some((t) => t.includes('CRP')), '看板「檢驗」：CRP 待採檢（紅頭）')
+    const xs = await R.printErLabels(v1.id)
+    ok(xs.length === 1 && db().specimens.find((s) => s.barcode === xs[0].barcode).er && db().auditLogs[0].action === '急診檢體條碼', '印條碼：一支、標急診、稽核')
+    msg = await errOf(() => R.printErLabels(v1.id))
+    ok(msg.includes('沒有要採檢'), '印過了不會重印')
+    msg = await errOf(() => api.specimenApi.collectSpecimen(xs[0].barcode))
+    ok(msg.includes('急診看板'), `病房不能採急診檢體 → 「${msg}」`)
+    await as('lab01')
+    msg = await errOf(() => api.labDeskApi.collectDeskSpecimen(xs[0].barcode))
+    ok(msg.includes('急診護理師'), '抽血櫃台不能採急診檢體')
+    msg = await errOf(() => R.printErLabels(v1.id))
+    ok(msg.includes('權限'), '醫檢師不能印急診條碼')
+    msg = await errOf(() => labRaw.reportLab({ key: `E:${e1.id}:P011`, values: { CRP: '0.5' } }))
+    ok(msg.includes('床邊採檢'), `還沒床邊採檢不能發 → 「${msg}」`)
+    await as('nurse01')
+    ok((await R.collectErSpecimen(xs[0].barcode)).stage === 'collected' && db().auditLogs[0].action === '急診床邊採檢', '床邊採檢（稽核）')
+
+    // 檢驗科：不用批價就能收件、發報告
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(xs[0].barcode)
+    const rep = await labRaw.reportLab({ key: `E:${e1.id}:P011`, values: { CRP: '6.2' } })
+    ok(rep.encounterId === e1.id && db().visits.find((v) => v.id === v1.id).status === 'in-consult' && !db().charges.some((c) => c.visitId === v1.id), '看診中、沒批價也能發報告')
+    ok(rep.orderedAt === crp.orderedAt, '報告的開立時間＝醫師送出時間')
+
+    // 醫師看報告：新報告 → 看過清掉；別科醫師、護理師不能
+    await as(erUser)
+    b = await api.erApi.erBoard()
+    i1 = b.items.find((x) => x.visitId === v1.id)
+    ok(i1.labs.fresh === 2 && i1.labs.reported === 2, '看板：CBC、CRP 兩份新報告')
+    L = await R.erLabs(v1.id)
+    ok(L.canSee && L.reports.length === 2 && L.reports.every((r) => r.fresh) && L.reports.find((r) => r.text.includes('6.2'))?.abnormal, '醫師看得到報告（偏高標出）')
+    await as(other)
+    msg = await errOf(() => R.markErLabsSeen(v1.id))
+    ok(msg.includes('急診醫師'), '別科醫師不能確認')
+    await as('nurse01')
+    msg = await errOf(() => R.markErLabsSeen(v1.id))
+    ok(msg.includes('權限'), '護理師不能確認')
+    await as(erUser)
+    await R.markErLabsSeen(v1.id)
+    b = await api.erApi.erBoard()
+    ok(b.items.find((x) => x.visitId === v1.id).labs.fresh === 0 && b.items.find((x) => x.visitId === v1.id).labs.reported === 2, '醫師看過：新報告清掉')
+    await as('nurse01')
+    msg = await errOf(() => R.markErLabsSeen(v1.id))
+    ok(msg.includes('權限'), '護理師不能確認')
+    msg = await errOf(() => R.erLabs(db().visits.find((v) => !v.er).id))
+    ok(msg.includes('不是急診'), '不是急診就醫不能用')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

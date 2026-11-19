@@ -11,6 +11,7 @@ import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, opdInUse, settleRxAlerts } from './rx-alert-work'
 import { audit, fail, must, mutate, query, requireUser, requirePermission } from './http'
 import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
+import { stampErLabs } from './er-lab-work'
 import type { ExpandedOrders } from './orderset'
 
 export interface QueueItem extends VisitView {
@@ -95,7 +96,8 @@ export type EncounterDraft = Pick<
 /** 病歷草稿：「未執行」只能由批價標（charge.markProcedureNotDone），醫師送來的一律拿掉（例：「同前次」帶入舊的醫令） */
 const cleanDraft = (d: EncounterDraft): EncounterDraft => {
   const c = structuredClone(d)
-  if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, ...p }) => p)
+  // 急診檢驗的送出時間由服務層蓋（stampErLabs），畫面送來的不收
+  if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, orderedAt: _o, ...p }) => p)
   // 用藥提醒的確認只在完成看診時由服務層算好存，畫面送來的不收
   delete (c as Partial<Encounter>).rxAlerts
   return c
@@ -105,7 +107,9 @@ export function saveDraft(encounterId: string, draft: EncounterDraft): Promise<E
   return mutate(() => {
     requireUser('doctor')
     const e = editableEncounter(encounterId)
+    const prev = structuredClone(e.procedures)
     Object.assign(e, cleanDraft(draft))
+    stampErLabs(e, must(find.visit(e.visitId), '掛號紀錄'), prev)
     return e
   })
 }
@@ -138,7 +142,9 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     requirePermission('order.write')
     const e = editableEncounter(encounterId)
     const v = must(find.visit(e.visitId), '掛號紀錄')
+    const prev = structuredClone(e.procedures)
     Object.assign(e, cleanDraft(draft))
+    stampErLabs(e, v, prev)
 
     if (!e.diagnoses.length) fail('請至少輸入一個診斷')
     if (!e.diagnoses.some((d) => d.primary)) e.diagnoses[0].primary = true

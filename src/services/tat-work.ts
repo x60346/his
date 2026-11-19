@@ -24,7 +24,8 @@ export function tatTimesOf(key: string): (TatTimes & { priority: TatPriority }) 
     const v = e && find.visit(e.visitId)
     if (!e || !v) return undefined
     const paid = db.charges.find((c) => c.visitId === v.id && !c.voided)?.paidAt
-    const start = v.er ? e.completedAt : paid
+    // 急診從醫師送出算（舊資料沒有送出時間的用看完診）
+    const start = v.er ? e.procedures.find((p) => p.procId === procId)?.orderedAt ?? e.completedAt : paid
     if (!start) return undefined
     const sp = opdSpecimenOf(key)
     return { priority: v.er ? 'stat' : 'routine', ...(TAT_PROC_MINUTES[procId] ? { limit: TAT_PROC_MINUTES[procId] } : {}), start, ...(sp?.collectedAt ? { collectedAt: sp.collectedAt } : {}), ...(sp?.receivedAt ? { receivedAt: sp.receivedAt } : {}) }

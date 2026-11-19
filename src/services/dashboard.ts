@@ -11,7 +11,7 @@ import { pendingRefundOf } from './money'
 import { suspendNoticeVisits } from './schedule'
 import { awaitingPickup } from './pharmacy'
 import { pendingReturn, udCandidate } from './ud-work'
-import { analyzerHeldCount, calloutCounts, deskToCollectCount, labAckCount, labWorkCount } from './lab-work'
+import { analyzerHeldCount, calloutCounts, deskToCollectCount, labAckCount, labWorkCount, pendingLabWork } from './lab-work'
 import { imagingAckCount, imagingWorkCount, noShowOf } from './imaging-work'
 import { abxAttendingTodo, abxPendingCounts, isInfectious } from './abx-work'
 import { openAdvice, stewardTodoCount } from './abx-steward-work'
@@ -188,6 +188,8 @@ export interface DashboardStats {
   specimenToReceive?: number
   specimenLate?: number
   specimenRecollect?: number
+  /** 急診：醫師已送出、還沒床邊採檢的病人數 */
+  erLabToCollect?: number
   /** 檢驗科：抽血櫃台待採檢的門診病人 */
   deskToCollect?: number
   /** 檢驗科：儀器結果待審核（沒通過自動審核） */
@@ -298,7 +300,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
-      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); const tat = tatOpen(); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), tatLate: tat.filter((x) => x.status.state === 'late').length, tatWarn: tat.filter((x) => x.status.state === 'warn').length, deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
+      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); const tat = tatOpen(); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), tatLate: tat.filter((x) => x.status.state === 'late').length, tatWarn: tat.filter((x) => x.status.state === 'warn').length, deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday(), erLabToCollect: new Set(pendingLabWork().filter((w) => w.er && w.awaitingCollection).map((w) => w.patientId)).size } : {}))(sessionRole()),
       ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length } : {}))(sessionRole()),
       ...(sessionRole() === 'radtech' ? ((xs) => ({ examArrived: xs.filter((e) => e.arrivedAt).length, examWaiting: xs.filter((e) => !e.arrivedAt).length }))(db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled)) : {}),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,

@@ -56,6 +56,7 @@ import * as mortality from './mortality'
 import * as pressure from './pressure'
 import * as ipc from './ipc'
 import * as er from './er'
+import * as erLab from './er-lab'
 import * as prevent from './prevent'
 import * as dashboard from './dashboard'
 import * as inventory from './inventory'
@@ -134,6 +135,7 @@ export const mortalityApi = overNetwork(mortality)
 export const pressureApi = overNetwork(pressure)
 export const ipcApi = overNetwork(ipc)
 export const erApi = overNetwork(er)
+export const erLabApi = overNetwork(erLab)
 export const preventApi = overNetwork(prevent)
 export const dashboardApi = overNetwork(dashboard)
 export const inventoryApi = overNetwork(inventory)
@@ -164,6 +166,7 @@ export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'
 export type { TatBoard, TatOpenView } from './tat'
+export type { ErLabs, ErSpecimenView } from './er-lab'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'

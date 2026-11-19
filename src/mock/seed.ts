@@ -3209,6 +3209,41 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 急診檢驗（示範，不抽亂數）：胸悶（2 級）看診中——醫師 73 分鐘前送出 CBC＋肌酸酐，急診護理師床邊採檢：
+  //   CBC（紫頭）已收件、10 分鐘前報告出來（白血球偏高），醫師還沒看（看板「新報告」）；肌酸酐（紅頭）20 分鐘前才採到，等檢驗科收件
+  {
+    const erDoc = codes.doctors.find((d) => codes.departments.find((x) => x.id === d.deptId)?.code === 'ER')
+    const sid = `ER-${T}`
+    const busy = new Set([...admissions.filter((a) => a.status === 'admitted' || a.status === 'reserved').map((a) => a.patientId), ...visits.filter((v) => v.date === T).map((v) => v.patientId)])
+    const p = patients.find((x) => !busy.has(x.id) && visits.some((v) => v.patientId === x.id))
+    const day0 = `${T} 00:00`
+    const at = (m: number) => [addMinutes(nowStr, -m), day0].sort().at(-1)!
+    const day = T.replace(/-/g, '')
+    if (erDoc && p && sessions.some((x) => x.id === sid)) {
+      const vitals = { temp: 36.6, pulse: 108, resp: 22, sbp: 152, dbp: 94, spo2: 95 }
+      const ord = at(73)
+      const v: Visit = {
+        id: 'V-ER-LAB-1', date: T, sessionId: sid, deptId: erDoc.deptId, doctorId: erDoc.id, patientId: p.id, seqNo: next(`seq:${sid}`), identityCode: p.defaultIdentity,
+        caseType: 'E1', cardSeq: String(next(`cardseq:${p.id}`)).padStart(4, '0'), status: 'in-consult', firstVisit: false, preventItems: [], createdAt: at(90), checkedInAt: at(90), calledAt: at(75),
+        er: { arrivedAt: at(90), complaint: '胸悶、冒冷汗', vitals, suggested: 2, level: 2, triagedBy: 'U201', triagedAt: at(90) },
+      }
+      visits.push(v)
+      const eid = 'E-ER-LAB-1'
+      encounters.push({
+        id: eid, visitId: v.id, patientId: p.id, doctorId: erDoc.id, deptId: erDoc.deptId, date: T, subjective: '胸悶、冒冷汗 1 小時', objective: '', assessment: '胸痛', plan: '抽血檢驗，等報告',
+        vitals: { temp: 36.6, pulse: 108, sbp: 152, dbp: 94, spo2: 95 }, diagnoses: [{ icd: 'R07.9', name: '胸痛', primary: true }], medications: [],
+        procedures: ['P003', 'P008'].map((procId) => ({ procId, qty: 1, selfPay: false, orderedAt: ord })), refillTimes: 0, admissionRequested: false, status: 'draft',
+      })
+      specimens.push(
+        { id: 'SP-ER-1', barcode: `S${day}4101`, patientId: p.id, tube: 'purple', orderIds: [], opdKeys: [`E:${eid}:P003`], er: true, createdAt: at(68), printedAt: at(68), printedBy: 'U201', collectedAt: at(60), collectedBy: 'U201', receivedAt: at(50), receivedBy: 'U601' },
+        { id: 'SP-ER-2', barcode: `S${day}4102`, patientId: p.id, tube: 'red', orderIds: [], opdKeys: [`E:${eid}:P008`], er: true, createdAt: at(68), printedAt: at(68), printedBy: 'U201', collectedAt: at(20), collectedBy: 'U201' },
+      )
+      labReports.push({ id: 'LR-ER-1', no: `L${day}9301`, patientId: p.id, procId: 'P003', encounterId: eid, doctorId: erDoc.id, orderedAt: ord, values: buildLabValues(procMap.get('P003')!.labItems!, { WBC: '13.5', Hb: '13.8', HCT: '41', PLT: '265' }, p.gender).values, reportedBy: 'U601', reportedAt: at(10) })
+      // 看診號依到院先後（這位比候診的早到）
+      visits.filter((x) => x.sessionId === sid).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.seqNo - b.seqNo).forEach((x, i) => (x.seqNo = i + 1))
+    }
+  }
+
   // 檢驗時效（示範）：骨折病人 85 分鐘前開的急件 CRP，護理師 70 分鐘前就採檢了，檢體一直沒送到檢驗科（急件 60 分已逾時，卡在送檢）
   {
     const fx = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))

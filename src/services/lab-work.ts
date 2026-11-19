@@ -32,6 +32,8 @@ export interface LabWorkItem {
   analyzerHeld?: boolean
   /** 加做（住院）：掛在已收件的這支檢體（條碼）上，不用再抽 */
   addon?: string
+  /** 急診的檢驗（床邊採檢、不經抽血櫃台） */
+  er?: boolean
   /** 檢驗值的定義（畫面用同一個 judgeLab 即時標示偏高偏低）＋這位病人的參考範圍文字 */
   items: (LabItemDef & { ref: string })[]
 }
@@ -56,14 +58,17 @@ function workItem(base: Omit<LabWorkItem, 'patientName' | 'chartNo' | 'gender' |
 export function pendingLabWork(): LabWorkItem[] {
   const list: LabWorkItem[] = []
   for (const e of db.encounters) {
-    if (e.status !== 'completed') continue
     const v = find.visit(e.visitId)
-    if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
+    if (!v) continue
+    const paid = e.status === 'completed' && (v.status === 'charged' || v.status === 'dispensed')
+    // 急診：醫師存病歷就送出（orderedAt），不用等完成看診、批價；退掛的不算
+    if (!paid && !(v.er && v.status !== 'cancelled')) continue
     for (const x of e.procedures) {
       if (x.notDone || !procItems(x.procId).length || reportedOpd(e.id, x.procId)) continue
-      // 門診：抽血櫃台採檢（或病人交回容器）、檢驗科收件後才能登打
+      if (!paid && !x.orderedAt) continue
+      // 門診：抽血櫃台採檢（或病人交回容器）；急診：急診護理師床邊採檢。檢驗科收件後才能登打
       const sp = opdSpecimenOf(`E:${e.id}:${x.procId}`)
-      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: e.completedAt ?? e.date, ...(!sp?.collectedAt ? { awaitingCollection: true } : !sp.receivedAt ? { awaitingReceipt: sp.barcode } : {}) }))
+      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: v.er ? '急診' : `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: x.orderedAt ?? e.completedAt ?? e.date, ...(v.er ? { er: true } : {}), ...(!sp?.collectedAt ? { awaitingCollection: true } : !sp.receivedAt ? { awaitingReceipt: sp.barcode } : {}) }))
     }
   }
   for (const o of db.ipdOrders) {
@@ -94,7 +99,7 @@ export const analyzerHeldCount = () => db.analyzerResults.filter((x) => x.status
 export const labAckCount = (doctorId: string) => db.labReports.filter((r) => labNeedsAck(r) && canAckLab(r, doctorId)).length
 
 /** 抽血櫃台：今天要採檢的門診病人數（已批價、檢體還沒採檢或容器還沒交回的） */
-export const deskToCollectCount = () => new Set(pendingLabWork().filter((w) => w.source === 'opd' && w.awaitingCollection).map((w) => w.patientId)).size
+export const deskToCollectCount = () => new Set(pendingLabWork().filter((w) => w.source === 'opd' && !w.er && w.awaitingCollection).map((w) => w.patientId)).size
 
 /** 危急值還沒通報的（其中已逾時的） */
 export function calloutCounts(t: string = now()): { pending: number; late: number } {

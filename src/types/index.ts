@@ -300,6 +300,8 @@ export interface ErInfo {
   disposition?: ErDisposition
   /** 留觀結束（去向是留觀才有） */
   obsEnd?: ErObsEnd
+  /** 醫師最後一次看檢驗報告的時間：之後才出來的報告看板標「新報告」 */
+  labsSeenAt?: string
 }
 
 export interface Visit {
@@ -478,6 +480,8 @@ export interface ProcedureOrder {
    * settledAt＝已經算進部分退費（之後不能撤銷）。只有 charge.markProcedureNotDone 能設，存病歷時一律拿掉
    */
   notDone?: { reason: string; by: string; at: string; settledAt?: string }
+  /** 急診檢驗：醫師存病歷時送出的時間（服務層蓋，畫面送來的不收）；送出後檢驗科、急診護理師就看得到，不用等完成看診與批價 */
+  orderedAt?: string
 }
 
 export type EncounterStatus = 'draft' | 'completed'
@@ -842,6 +846,8 @@ export interface Specimen {
   rejected?: { at: string; by: string; reason: string }
   /** 部分退件（儀器發現溶血等，只退受影響的項目）：從哪一支檢體拆出來的（同一支管子、同一個條碼） */
   partOf?: string
+  /** 急診床邊採檢（急診護理師印條碼、採檢；不經抽血櫃台、不用先批價）：opdKeys 是急診看診的檢驗 */
+  er?: true
 }
 
 /** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
