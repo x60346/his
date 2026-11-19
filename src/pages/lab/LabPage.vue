@@ -168,7 +168,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
         </div>
         <div class="text-sm text-slate-600">
           <template v-if="item">{{ item.procName }}・{{ item.where }}・{{ item.doctorName }}・{{ whenText(item.orderedAt) }} 開立</template>
-          <template v-else-if="report">{{ report.procName }}・<span class="tabular">{{ report.no }}</span>・{{ report.reportedByName }} {{ whenText(report.reportedAt) }} 發出{{ report.autoVerified ? '（儀器自動審核）' : '' }}・開立醫師 {{ report.doctorName }}</template>
+          <template v-else-if="report">{{ report.procName }}・<span class="tabular">{{ report.no }}</span>・{{ report.reportedByName }} {{ whenText(report.reportedAt) }} 發出{{ report.autoVerified ? '（儀器自動審核）' : '' }}{{ report.qualityNote ? `・附註：${report.qualityNote}` : '' }}・開立醫師 {{ report.doctorName }}</template>
         </div>
       </template>
       <div v-if="item?.awaitingCollection" class="mx-4 mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600" role="status">{{ item.source === 'opd' ? '病人還沒在抽血櫃台採檢（或還沒交回檢體）' : '護理師還沒採檢（臨時醫囑還沒執行）' }}，採檢、收件後才能登打。</div>

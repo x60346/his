@@ -108,7 +108,7 @@ export function printDeskLabels(patientId: string): Promise<DeskSpecimen[]> {
 export function collectDeskSpecimen(barcode: string): Promise<DeskSpecimen> {
   return mutate(() => {
     const u = requireUser('lab')
-    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
+    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     if (s.admissionId) fail('住院檢體由護理站採檢', 'CONFLICT')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}`, 'CONFLICT')

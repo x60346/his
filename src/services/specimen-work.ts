@@ -62,3 +62,39 @@ export function toRecollect(admissionId?: string): Specimen[] {
 /** 這位住院病人可以拿來加做這個管別的檢體：最新一支同管別、已收件、沒退件的（時限另外看 addonCheck） */
 export const addonSpecimenOf = (admissionId: string, tube: TubeKind) =>
   db.specimens.filter((s) => s.admissionId === admissionId && s.tube === tube && s.receivedAt && !s.rejected).sort((a, b) => (a.collectedAt ?? '').localeCompare(b.collectedAt ?? '')).at(-1)
+
+/** 退件後，裡面已完成的檢驗醫囑回到執行中（待重新採檢）；加做的不再算加做（要重新抽） */
+export function reopenLabOrders(orderIds: string[]) {
+  for (const id of orderIds) {
+    const o = db.ipdOrders.find((x) => x.id === id)
+    if (o && o.status === 'done') {
+      o.status = 'active'
+      delete o.stopAt
+      delete o.addonOf
+    }
+  }
+}
+
+/**
+ * 部分退件（儀器發現溶血等，只退受影響的那幾項）：這幾項從原本的檢體拆出來，記成一支同條碼的退件檢體（partOf 原本的）；
+ * 其他項目留在原本的檢體照常發。全部都退、又還沒發過報告的，直接整支退件
+ */
+export function rejectPart(s: Specimen, keys: string[], by: string, t: string, reason: string): Specimen {
+  const ids = keys.filter((k) => k.startsWith('O:')).map((k) => k.slice(2))
+  const opd = keys.filter((k) => k.startsWith('E:'))
+  const rejected = { at: t, by, reason }
+  const restIds = s.orderIds.filter((id) => !ids.includes(id))
+  const restOpd = (s.opdKeys ?? []).filter((k) => !opd.includes(k))
+  let out: Specimen
+  if (!restIds.length && !restOpd.length) {
+    s.rejected = rejected
+    out = s
+  } else {
+    out = { ...s, id: newId('SP'), orderIds: ids, ...(s.opdKeys ? { opdKeys: opd } : {}), rejected, partOf: s.id }
+    s.orderIds = restIds
+    if (s.opdKeys) s.opdKeys = restOpd
+    db.specimens.push(out)
+  }
+  reopenLabOrders(ids)
+  return out
+}

@@ -11282,8 +11282,12 @@ try {
     // 種子
     await as('lab01')
     let d = await D.labDesk()
-    const [p1, p2, p3] = d.checkedIn
-    ok(d.checkedIn.length === 3 && d.checkedIn.map((p) => p.checkin.no).join() === '1,2,3' && !d.notCheckedIn.length, '種子：今天三位報到（1–3 號），沒有待報到的')
+    // 示範的三位（LC-SEED-1～3）；今天另外本來就有開檢驗、已批價的門診病人（隨日期不同）也已報到、抽完血
+    const [p1, p2, p3] = [1, 2, 3].map((i) => d.checkedIn.find((p) => p.checkin.id === `LC-SEED-${i}`))
+    const n0 = d.checkedIn.length
+    const others = d.checkedIn.filter((p) => !p.checkin.id.match(/^LC-SEED-\d$/))
+    ok(p1 && p2 && p3 && d.checkedIn.map((p) => p.checkin.no).join() === [...Array(n0).keys()].map((i) => i + 1).join() && !d.notCheckedIn.length, `種子：今天 ${n0} 位報到（號碼依報到時間 1–${n0} 號），沒有待報到的`)
+    ok(others.every((p) => !p.toPrint.length && p.specimens.length && p.specimens.every((s) => s.stage !== 'printed')), `種子：本來就有開檢驗的 ${others.length} 位已抽完血（不會留在待報到、待採檢）`)
     ok(p1.toPrint.length === 1 && p1.toPrint[0].tube === 'purple' && !p1.specimens.length, '1 號：CBC 待印條碼（紫頭）')
     ok(!p2.toPrint.length && p2.specimens.length === 1 && p2.specimens[0].tube === 'red' && p2.specimens[0].tests.length === 2 && p2.specimens[0].stage === 'collected', '2 號：飯前血糖＋肌酸酐同一支紅頭、已採檢待收件')
     ok(p3.specimens[0].selfCollect && p3.specimens[0].stageLabel === '容器已發、待交回', '3 號：尿液容器已發、待交回')
@@ -11305,17 +11309,17 @@ try {
     ok(msg.includes('抽血櫃台'), `還沒採檢不能發 → 「${msg}」`)
 
     // 報到：沒有檢驗不能報到；重複報到回原號碼；沒報到不能印條碼
-    const noLab = db().patients.find((p) => ![p1, p2, p3].some((x) => x.patientId === p.id))
+    const noLab = db().patients.find((p) => !d.checkedIn.some((x) => x.patientId === p.id))
     msg = await errOf(() => D.checkInLab(noLab.id))
     ok(msg.includes('沒有已批價'), `沒有待採檢的檢驗不能報到 → 「${msg}」`)
-    ok((await D.checkInLab(p1.patientId)).no === 1, '同一天重複報到：回原本的號碼')
+    ok((await D.checkInLab(p1.patientId)).no === p1.checkin.no, '同一天重複報到：回原本的號碼')
     db().labCheckins = db().labCheckins.filter((c) => c.patientId !== p1.patientId)
     d = await D.labDesk()
     ok(d.notCheckedIn.some((x) => x.patientId === p1.patientId), '沒報到的列在「已批價、待報到」')
     msg = await errOf(() => D.printDeskLabels(p1.patientId))
     ok(msg.includes('報到'), '沒報到不能印條碼')
     const c1 = await D.checkInLab(p1.patientId)
-    ok(c1.no === 4 && db().auditLogs[0].action === '抽血櫃台報到', '報到取號（接著今天的號碼 4 號）、寫稽核')
+    ok(c1.no === n0 + 1 && db().auditLogs[0].action === '抽血櫃台報到', `報到取號（接著今天的號碼 ${n0 + 1} 號）、寫稽核`)
 
     // 印條碼 → 採檢 → 收件 → 發報告
     const xs = await D.printDeskLabels(p1.patientId)
@@ -11388,11 +11392,11 @@ try {
     let b = await A.analyzerBoard()
     const dHeld = b.held.find((h) => h.holds.some((x) => x.rule === 'delta'))
     const qHeld = b.held.find((h) => h.holds.some((x) => x.rule === 'qc'))
-    ok(b.today.total === 5 && b.today.auto === 3 && b.today.pct === 60 && b.autoToday.length === 3, `種子：今天上機 ${b.today.total} 份、自動發出 ${b.today.auto} 份（${b.today.pct}%）`)
-    ok(b.held.length === 2 && dHeld?.rows.find((r) => r.code === 'Hb').holds.length && dHeld.rows.find((r) => r.code === 'Hb').prev && qHeld?.procName.includes('電解質'), '種子：待審核兩筆——CBC 血色素差異檢查（附上次值）、電解質鉀品管被拒絕')
+    ok(b.today.total === 6 && b.today.auto === 3 && b.today.pct === 50 && b.autoToday.length === 3, `種子：今天上機 ${b.today.total} 份、自動發出 ${b.today.auto} 份（${b.today.pct}%）`)
+    ok(b.held.length === 3 && dHeld?.rows.find((r) => r.code === 'Hb').holds.length && dHeld.rows.find((r) => r.code === 'Hb').prev && qHeld?.procName.includes('電解質'), '種子：待審核兩筆——CBC 血色素差異檢查（附上次值）、電解質鉀品管被拒絕')
     ok(db().labReports.filter((r) => r.autoVerified).length === 3, '自動發出的報告標「自動審核」')
     let dash = await api.dashboardApi.getDashboard()
-    ok(dash.analyzerHeld === 2, `檢驗科首頁：儀器待審核 ${dash.analyzerHeld}`)
+    ok(dash.analyzerHeld === 3, `檢驗科首頁：儀器待審核 ${dash.analyzerHeld}`)
     const work = await api.labApi.listLabWork()
     ok(work.find((w) => w.key === dHeld.key)?.analyzerHeld, '待檢驗清單標「儀器待審核」')
     let msg = await errOf(() => labRaw.reportLab({ key: dHeld.key, values: okVals }))
@@ -11421,7 +11425,7 @@ try {
     ok(db().labReports.find((r) => r.id === rd.reportId).values.find((v) => v.code === 'HCT').value === '33', '確認發出時可以改值')
     b = await A.analyzerBoard()
     dash = await api.dashboardApi.getDashboard()
-    ok(!b.held.length && dash.analyzerHeld === 0, '審核完：待審核清空')
+    ok(b.held.length === 1 && b.held[0].blocked && dash.analyzerHeld === 1, '審核完：只剩嚴重溶血那筆（不能發，要退件重抽）')
 
     // 上機：新開的 CBC（住院採檢、收件）→ 自動發出
     const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
@@ -11455,7 +11459,7 @@ try {
     const ld2 = await A.loadAnalyzer(sp2.barcode, { P008: { CRE: '12.0' } })
     ok(ld2.held === 1 && ld2.results[0].holds.map((h) => h.rule).sort().join() === 'critical,delta' && !db().labReports.some((r) => r.orderId === o2.id), '肌酸酐 12：危急值＋差異檢查 → 待審核、還沒發報告')
     b = await A.analyzerBoard()
-    ok(b.today.total === 7 && b.today.auto === 4, `今天比例：${b.today.auto}/${b.today.total}（${b.today.pct}%）`)
+    ok(b.today.total === 8 && b.today.auto === 4, `今天比例：${b.today.auto}/${b.today.total}（${b.today.pct}%）`)
     const rc = await A.releaseAnalyzer(ld2.results[0].id)
     ok(db().labReports.find((r) => r.id === rc.reportId).values[0].critical, '審核發出：危急值照樣標，醫師要確認')
   }
@@ -11852,6 +11856,146 @@ try {
     ok(msg.includes('超過'), '超過時限開立時也擋（要重新採檢）')
     const plain = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
     ok(plain.status === 'active' && !db().ipdOrders.find((x) => x.id === plain.id).addonOf, '不加做：照常待護理站採檢')
+  }
+
+  // 檢體品質指數（溶血、黃疸、脂血）：門檻與受影響項目、附註、模擬、溶血率、種子（嚴重溶血的鉀）、不能發、退件重抽（整支、只退一項）、附註發出、重測、權限
+  console.log('\n[檢體品質指數]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.analyzerApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const defsOf = (id) => db().procedures.find((p) => p.id === id).labItems
+    const lyte = defsOf('P055')
+    const gpt = defsOf('P009')
+    const cre = defsOf('P008')
+    const ix = (H, I = 1, L = 20) => ({ H, I, L })
+    // 純函式
+    ok(api.hilOver({ H: 49, I: 19, L: 499 }).length === 0 && api.hilOver({ H: 50, I: 20, L: 500 }).join() === 'H,I,L', '門檻：溶血 50、黃疸 20、脂血 500（剛好到就算）')
+    const hk = api.hilHolds(lyte, ix(120))
+    ok(hk.length === 1 && hk[0].code === 'K' && hk[0].rule === 'hil' && !hk[0].block && hk[0].text.includes('可能偏高'), `輕度溶血：鉀受影響（鈉不受溶血影響）、可以附註發 →「${hk[0]?.text}」`)
+    const hs = api.hilHolds(lyte, ix(200))
+    ok(hs[0]?.block === true && hs[0].text.includes('嚴重') && hs[0].text.includes('退件重抽'), '嚴重溶血（H ≥ 200）：鉀不能發')
+    ok(api.hilHolds(gpt, ix(250))[0]?.block === undefined && api.hilHolds(gpt, ix(250)).length === 1, '嚴重溶血的 GPT：受影響、但可以附註發（只有鉀擋）')
+    ok(api.hilHolds(lyte, ix(10, 1, 600)).map((h) => h.code).join() === 'NA' && api.hilHolds(cre, ix(10, 25)).map((h) => h.code).join() === 'CRE' && api.hilHolds(cre, ix(300)).length === 0, '脂血影響鈉、黃疸影響肌酸酐；肌酸酐不受溶血影響')
+    const note = api.hilNote([...lyte, ...gpt], ix(120))
+    ok(note?.includes('溶血') && note.includes('H 120') && note.includes(`鉀、${gpt[0].name}可能偏高`) && api.hilNote(lyte, ix(10)) === undefined && api.hilNote(lyte, undefined) === undefined, `報告附註 →「${note}」；指數正常不用附註`)
+    ok(api.hilNote(cre, ix(120)) === undefined, '溶血但這份沒有受影響的項目：不用附註')
+    const s1 = api.simulateIndices('S1')
+    ok(JSON.stringify(s1) === JSON.stringify(api.simulateIndices('S1')) && api.hilOver(s1).length === 0 && ['a', 'b', 'c', 'd', 'e'].every((k) => api.hilOver(api.simulateIndices(k)).length === 0), `模擬指數：同一個 seed 一樣、一般檢體都在門檻下（H ${s1.H}、I ${s1.I}、L ${s1.L}）`)
+    const hr = api.hemolysisRate([{ barcode: 'A', indices: ix(60) }, { barcode: 'A', indices: ix(60) }, { barcode: 'B', indices: ix(5) }, { barcode: 'C' }])
+    ok(hr.total === 2 && hr.hemolyzed === 1 && hr.pct === 50 && api.hemolysisRate([]).pct === 0, '溶血率：同一支檢體算一次、沒量指數的不算')
+    ok(api.autoVerify({ defs: lyte, values: { NA: '138', K: '4.2' }, gender: 'M', prev: {}, qcFailed: [], indices: ix(80) }).map((h) => `${h.rule}:${h.code}`).join() === 'hil:K' && api.autoVerify({ defs: lyte, values: { NA: '138', K: '4.2' }, gender: 'M', prev: {}, qcFailed: [] }).length === 0, '自動審核：有指數才看檢體品質')
+
+    // 種子：肺炎病人電解質嚴重溶血
+    await as('lab01')
+    let b = await A.analyzerBoard()
+    const hh = b.held.find((h) => h.indices?.H >= 200)
+    const pn = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('J18'))
+    ok(hh && hh.patientName === db().patients.find((p) => p.id === pn.patientId).name && hh.blocked && hh.rows.find((r) => r.code === 'K').value === '5.9' && hh.rows.find((r) => r.code === 'K').holds.some((t) => t.includes('嚴重')), '種子：肺炎病人電解質鉀 5.9、檢體嚴重溶血（H 260）→ 不能發')
+    ok(b.hemolysis.total === 4 && b.hemolysis.hemolyzed === 1 && b.hemolysis.pct === 25 && b.hemolysis.byWhere[0].hemolyzed === 1, `種子：近 30 天溶血率 ${b.hemolysis.hemolyzed}/${b.hemolysis.total}（紫頭 CBC 不量指數）；最高的是 ${b.hemolysis.byWhere[0].where}`)
+    ok(db().analyzerResults.filter((x) => x.indices).every((x) => db().specimens.find((s) => s.barcode === x.barcode).tube === 'red'), '只有紅頭檢體有指數')
+    let msg = await errOf(() => A.releaseAnalyzer(hh.id))
+    ok(msg.includes('嚴重溶血'), `嚴重溶血不能發 → 「${msg}」`)
+    const rr = await A.rerunAnalyzer(hh.id, { NA: '137', K: '5.8' })
+    ok(rr.indices.H === 260 && rr.holds.some((h) => h.block), '重測：同一支檢體指數不變，鉀還是不能發')
+    await as('nurse01')
+    msg = await errOf(() => A.recollectAnalyzer(hh.id, '溶血'))
+    ok(msg.includes('權限'), '護理師不能退件重抽')
+    await as('lab01')
+    const f = await fieldsOf(() => A.recollectAnalyzer(hh.id, ' '))
+    ok(!!f.reason, '退件重抽要寫原因')
+    const rc = await A.recollectAnalyzer(hh.id, '溶血（H 260）')
+    const o0 = db().ipdOrders.find((o) => `O:${o.id}` === hh.key)
+    const sp0 = db().specimens.find((s) => s.barcode === hh.barcode && !s.partOf)
+    ok(rc.status === 'recollect' && o0.status === 'active' && !o0.stopAt && sp0.rejected?.reason.includes('溶血') && !db().specimens.some((s) => s.partOf === sp0.id), '退件重抽（檢體只有這一項）：整支退件、醫囑回到待採檢')
+    ok(db().auditLogs[0].action === '檢驗儀器退件重抽', '寫稽核')
+    msg = await errOf(() => A.releaseAnalyzer(hh.id))
+    ok(msg.includes('退件重抽'), '退件後不能再發')
+    await as('nurse01')
+    const ws = await api.specimenApi.wardSpecimens(pn.id)
+    ok(ws.recollect.some((s) => s.orderIds.includes(o0.id)) && ws.toPrint.some((g) => g.orders.some((x) => x.id === o0.id)), '護理站：提醒重新採檢、列在待印條碼')
+    await as('lab01')
+    b = await A.analyzerBoard()
+    ok(!b.held.some((h) => h.id === hh.id) && (await api.labApi.listLabWork()).find((w) => w.key === hh.key)?.awaitingCollection, '待審核拿掉；待檢驗清單標待採檢')
+
+    // 同一支紅頭三項：肌酸酐、電解質、GPT，輕度溶血 → 肌酸酐自動發、電解質與 GPT 待審核
+    const k = api.qcAnalyte('K')
+    await api.qcApi.recordQc({ analyte: 'K', values: k.levels.map((l) => l.mean), correction: '更換試劑重新校正' })
+    const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    await as(userOf(fx.doctorId))
+    const oc = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P008', content: '' })
+    const ol = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P055', content: '' })
+    const og = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P009', content: '' })
+    await as('nurse01')
+    const sp = (await api.specimenApi.printSpecimenLabels(fx.id)).find((x) => x.orderIds.includes(ol.id))
+    ok(sp.orderIds.includes(oc.id) && sp.orderIds.includes(og.id), '三項同一支紅頭')
+    await api.specimenApi.collectSpecimen(sp.barcode)
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(sp.barcode)
+    const ld = await A.loadAnalyzer(sp.barcode, { P008: { CRE: '0.9' }, P055: { NA: '139', K: '4.6' }, P009: { GPT: '28' } }, ix(120))
+    const resOf = (procId) => ld.results.find((x) => x.procId === procId)
+    ok(resOf('P008').status === 'auto' && resOf('P055').status === 'held' && resOf('P009').status === 'held' && resOf('P055').holds.map((h) => h.rule).join() === 'hil' && ld.results.every((x) => x.indices.H === 120), '輕度溶血：肌酸酐不受影響自動發；鉀、GPT 待審核（檢體品質）')
+    b = await A.analyzerBoard()
+    const hl = b.held.find((h) => h.id === resOf('P055').id)
+    ok(hl.qualityNote?.includes('鉀可能偏高') && !hl.blocked, `審核畫面：附註預覽「${hl.qualityNote}」`)
+    ok(b.hemolysis.hemolyzed === 2 && b.hemolysis.total === 5, `溶血率：${b.hemolysis.hemolyzed}/${b.hemolysis.total}（種子嚴重溶血那支退件了也算）`)
+    // GPT：只退這一項
+    const rg = await A.recollectAnalyzer(resOf('P009').id, '溶血')
+    const orig = db().specimens.find((s) => s.id === sp.id)
+    const part = db().specimens.find((s) => s.partOf === sp.id)
+    ok(rg.status === 'recollect' && part?.rejected && part.barcode === sp.barcode && part.orderIds.join() === og.id && !orig.rejected && !orig.orderIds.includes(og.id) && orig.orderIds.includes(ol.id), '只退一項：GPT 拆成同條碼的退件紀錄，原本的檢體留著電解質、肌酸酐')
+    ok(db().ipdOrders.find((o) => o.id === og.id).status === 'active' && db().ipdOrders.find((o) => o.id === oc.id).status === 'done', 'GPT 醫囑回到待採檢；肌酸酐不動')
+    // 電解質：附註發出
+    const rl = await A.releaseAnalyzer(resOf('P055').id)
+    const rep = db().labReports.find((r) => r.id === rl.reportId)
+    ok(rep.qualityNote?.includes('溶血') && rep.qualityNote.includes('鉀可能偏高') && !rep.qualityNote.includes(gpt[0].name), `附註發出：報告寫「${rep.qualityNote}」（只寫這份的項目）`)
+    ok(!db().labReports.find((r) => r.orderId === oc.id).qualityNote, '自動發出的肌酸酐沒有附註')
+    msg = await errOf(() => api.specimenApi.rejectSpecimen(sp.barcode, '溶血'))
+    ok(msg.includes('已經發了報告'), '已經發了報告的檢體不能整支退件')
+    await as('nurse01')
+    const ws2 = await api.specimenApi.wardSpecimens(fx.id)
+    ok(ws2.recollect.some((s) => s.id === part.id) && ws2.toPrint.some((g) => g.orders.some((x) => x.id === og.id)), '護理站：GPT 提醒重新採檢')
+    const sp2 = (await api.specimenApi.printSpecimenLabels(fx.id)).find((x) => x.orderIds.includes(og.id))
+    ok(sp2 && sp2.barcode !== sp.barcode, '重新印條碼是新的一支')
+    msg = await errOf(() => api.specimenApi.collectSpecimen(sp.barcode))
+    ok(msg.includes('收件') && !msg.includes('退件'), `掃原條碼找的是原本那支（已收件），不是拆出來的退件紀錄 → 「${msg}」`)
+    await api.specimenApi.collectSpecimen(sp2.barcode)
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(sp2.barcode)
+    const ld2 = await A.loadAnalyzer(sp2.barcode, { P009: { GPT: '27' } }, ix(8))
+    ok(ld2.auto === 1 && db().labReports.some((r) => r.orderId === og.id && !r.qualityNote), '重抽的檢體沒溶血：GPT 自動發出')
+    // 紫頭不量指數；附註顯示在醫師看的報告
+    const ld3 = await A.loadAnalyzer((await (async () => {
+      await as(userOf(fx.doctorId))
+      const o = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+      await as('nurse01')
+      const s = (await api.specimenApi.printSpecimenLabels(fx.id)).find((x) => x.orderIds.includes(o.id))
+      await api.specimenApi.collectSpecimen(s.barcode)
+      await as('lab01')
+      await api.specimenApi.receiveSpecimen(s.barcode)
+      return s
+    })()).barcode)
+    ok(ld3.results.every((x) => !x.indices), '紫頭（CBC）不量品質指數')
+    await as(userOf(fx.doctorId))
+    const reps = (await api.labApi.patientLabs(fx.patientId)).reports
+    ok(reps.some((r) => r.qualityNote?.includes('鉀可能偏高')), '醫師看的報告有檢體品質附註')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

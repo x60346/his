@@ -2,7 +2,7 @@
 // 只做數值型、上儀器的項目（CBC、生化、電解質、血糖）；文字型（尿液、快篩、抗酸菌、培養）與血液氣體（床邊機）照舊人工登打。
 // 自動審核：品管通過、沒有危急值、和 30 天內上一次差距在範圍內（delta check）、在儀器可測範圍內 → 直接發報告；
 // 任一條沒過 → 待醫檢師審核（標出是哪一條、哪一項）
-import type { AnalyzerResult, AutoVerifyHold, Gender, LabItemDef, QcRun } from '@/types'
+import type { AnalyzerResult, AutoVerifyHold, Gender, LabItemDef, QcRun, SerumIndices } from '@/types'
 import { judgeLab } from './lab-rules'
 import { qcAnalyte, qcStatusToday } from './qc-rules'
 
@@ -30,7 +30,7 @@ export const ANALYZER_ITEMS: Record<string, { lo: number; hi: number; dp: number
 /** delta check 只比 30 天內的上一次 */
 export const DELTA_DAYS = 30
 
-export const AUTO_RULE_LABEL: Record<AutoVerifyHold['rule'], string> = { qc: '品管', critical: '危急值', delta: '差異檢查', amr: '超出可測範圍' }
+export const AUTO_RULE_LABEL: Record<AutoVerifyHold['rule'], string> = { qc: '品管', critical: '危急值', delta: '差異檢查', amr: '超出可測範圍', hil: '檢體品質' }
 
 /** 一個 0–1 的固定亂數（同一個字串永遠一樣：示範資料與測試可重現，不用 Math.random） */
 function unit(s: string): number {
@@ -62,8 +62,8 @@ export function simulateAnalyzer(defs: LabItemDef[], gender: Gender, base: Recor
  * 自動審核：回傳沒通過的規則（空陣列＝可以自動發報告）。
  * qc：這些項目今天品管沒做或被拒絕；prev：30 天內上一次的值
  */
-export function autoVerify(x: { defs: LabItemDef[]; values: Record<string, string>; gender: Gender; prev: Record<string, string | undefined>; qcFailed: string[] }): AutoVerifyHold[] {
-  const holds: AutoVerifyHold[] = []
+export function autoVerify(x: { defs: LabItemDef[]; values: Record<string, string>; gender: Gender; prev: Record<string, string | undefined>; qcFailed: string[]; indices?: SerumIndices }): AutoVerifyHold[] {
+  const holds: AutoVerifyHold[] = x.indices ? hilHolds(x.defs, x.indices) : []
   for (const d of x.defs) {
     const raw = x.values[d.code]
     const a = ANALYZER_ITEMS[d.code]
@@ -84,6 +84,80 @@ export function autoVerify(x: { defs: LabItemDef[]; values: Record<string, strin
     }
   }
   return holds
+}
+
+// ── 檢體品質指數（溶血、黃疸、脂血）：儀器量紅頭檢體的血清，超過門檻的話受影響的項目不能自動發出 ──
+
+export type SerumIndex = keyof SerumIndices
+export const HIL_LABEL: Record<SerumIndex, string> = { H: '溶血', I: '黃疸', L: '脂血' }
+/** 門檻（統一一組）：溶血分輕度（≥ 50）、嚴重（≥ 200）；黃疸 ≥ 20、脂血 ≥ 500 */
+export const HIL_LIMITS = { H: { mild: 50, severe: 200 }, I: 20, L: 500 } as const
+/** 各項目會被哪個指數影響、往哪個方向（溶血：紅血球裡的鉀、GPT、膽紅素跑出來；黃疸干擾酵素法肌酸酐、膽固醇；脂血讓鈉、血糖、CRP 不準） */
+export const HIL_AFFECTS: Record<string, Partial<Record<SerumIndex, string>>> = {
+  K: { H: '可能偏高' },
+  GPT: { H: '可能偏高' },
+  'T-BIL': { H: '可能偏高' },
+  CRE: { I: '可能偏低' },
+  'T-CHO': { I: '可能偏低' },
+  NA: { L: '可能偏低' },
+  'GLU-AC': { L: '可能不準' },
+  CRP: { L: '可能不準' },
+}
+/** 嚴重溶血時不能發（附註也不安全）的項目：只能退件重抽 */
+export const HIL_BLOCK = ['K']
+
+/** 超過門檻的指數 */
+export const hilOver = (ix: SerumIndices): SerumIndex[] =>
+  (['H', 'I', 'L'] as const).filter((k) => ix[k] >= (k === 'H' ? HIL_LIMITS.H.mild : HIL_LIMITS[k]))
+export const hemolyzed = (ix: SerumIndices | undefined) => !!ix && ix.H >= HIL_LIMITS.H.mild
+export const severeHemolysis = (ix: SerumIndices | undefined) => !!ix && ix.H >= HIL_LIMITS.H.severe
+const ixText = (k: SerumIndex, ix: SerumIndices) => `${k === 'H' && ix.H >= HIL_LIMITS.H.severe ? '嚴重' : ''}${HIL_LABEL[k]}（${k} ${ix[k]}）`
+
+/** 檢體品質沒通過的：受影響的每一項一條；嚴重溶血的鉀標 block（不能發） */
+export function hilHolds(defs: Pick<LabItemDef, 'code' | 'name'>[], ix: SerumIndices): AutoVerifyHold[] {
+  const over = hilOver(ix)
+  const out: AutoVerifyHold[] = []
+  for (const d of defs) {
+    const ks = over.filter((k) => HIL_AFFECTS[d.code]?.[k])
+    if (!ks.length) continue
+    const block = HIL_BLOCK.includes(d.code) && severeHemolysis(ix) && ks.includes('H')
+    out.push({
+      rule: 'hil', code: d.code,
+      text: `${d.name}受檢體${ks.map((k) => ixText(k, ix)).join('、')}影響，${ks.map((k) => HIL_AFFECTS[d.code][k]).join('、')}${block ? '：嚴重溶血不能發，請退件重抽' : '：退件重抽或附註發出'}`,
+      ...(block ? { block: true as const } : {}),
+    })
+  }
+  return out
+}
+
+/** 報告附註（醫檢師附註發出時寫在報告上）：沒有受影響的項目＝不用附註 */
+export function hilNote(defs: Pick<LabItemDef, 'code' | 'name'>[], ix: SerumIndices | undefined): string | undefined {
+  if (!ix) return undefined
+  const parts = hilOver(ix).map((k) => {
+    // 同方向的併在一起：「鉀、GPT 可能偏高」
+    const dirs = new Map<string, string[]>()
+    for (const d of defs) {
+      const dir = HIL_AFFECTS[d.code]?.[k]
+      if (dir) dirs.set(dir, [...(dirs.get(dir) ?? []), d.name])
+    }
+    return dirs.size ? `檢體${ixText(k, ix)}：${[...dirs].map(([dir, ns]) => `${ns.join('、')}${dir}`).join('、')}` : ''
+  }).filter(Boolean)
+  return parts.length ? parts.join('；') : undefined
+}
+
+/** 模擬儀器量的指數（同一個 seed 永遠一樣）：一般檢體都很低（H 3–25、I 0–3、L 5–65） */
+export function simulateIndices(seed: string): SerumIndices {
+  return { H: 3 + Math.round(unit(`${seed}:H`) * 22), I: Math.round(unit(`${seed}:I`) * 3), L: 5 + Math.round(unit(`${seed}:L`) * 60) }
+}
+
+/** 溶血率看幾天 */
+export const HEMOLYSIS_DAYS = 30
+/** 溶血率：量過指數的檢體裡，溶血（H ≥ 輕度門檻）的比例（同一支檢體算一次） */
+export function hemolysisRate(rs: Pick<AnalyzerResult, 'barcode' | 'indices'>[]): { total: number; hemolyzed: number; pct: number } {
+  const by = new Map<string, boolean>()
+  for (const r of rs) if (r.indices) by.set(r.barcode, (by.get(r.barcode) ?? false) || hemolyzed(r.indices))
+  const h = [...by.values()].filter(Boolean).length
+  return { total: by.size, hemolyzed: h, pct: by.size ? Math.round((h / by.size) * 100) : 0 }
 }
 
 /** 這些項目裡今天品管沒做或被拒絕的（沒有品管的項目不算） */

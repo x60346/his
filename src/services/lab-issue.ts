@@ -51,7 +51,7 @@ export function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' |
 
 
 /** 發一份數值報告。auto＝儀器自動審核直接發；analyzer＝醫檢師審核儀器結果後發（不受「儀器待審核」擋） */
-export function issueLabReport(key: string, values0: Record<string, string>, u: { id: string }, opts: { auto?: boolean; analyzer?: boolean } = {}): LabReport {
+export function issueLabReport(key: string, values0: Record<string, string>, u: { id: string }, opts: { auto?: boolean; analyzer?: boolean; qualityNote?: string } = {}): LabReport {
     const base = labTarget(key)
     if (!opts.analyzer && db.analyzerResults.some((x) => x.key === key && x.status === 'held')) fail('這項的儀器結果待審核，請到「儀器」審核後發出（或重測）', 'CONFLICT')
     if (base.procId === 'P059') fail('細菌培養請用培養報告登打（檢體、菌種、藥敏）', 'CONFLICT')
@@ -64,7 +64,7 @@ export function issueLabReport(key: string, values0: Record<string, string>, u: 
     const { values, errors } = buildLabValues(defs, values0, p.gender)
     failFields(errors)
     const t = now()
-    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base!, values, reportedBy: u.id, reportedAt: t, ...(opts.auto ? { autoVerified: true } : {}) }
+    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base!, values, reportedBy: u.id, reportedAt: t, ...(opts.auto ? { autoVerified: true } : {}), ...(opts.qualityNote ? { qualityNote: opts.qualityNote } : {}) }
     db.labReports.push(r)
     const crit = values.filter((x) => x.critical)
     audit(`${crit.length ? '發檢驗報告（危急值）' : '發檢驗報告'}${opts.auto ? '（自動審核）' : opts.analyzer ? '（儀器審核）' : ''}`, `${r.no} ${p.name} ${find.procedure(r.procId)?.name}${crit.length ? `：${crit.map((x) => `${x.name} ${x.value}`).join('、')}` : ''}`)

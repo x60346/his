@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -60,6 +60,7 @@ import { udPerDose } from '@/services/ud-rules'
 import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
+import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
@@ -2016,9 +2017,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       })
       // 留觀示範：27 小時前因腹痛到院（3 級），看完診 1 小時後決定留觀、再 10 分鐘排 OB1——已留觀約 26 小時（看板標紅），還沒結束。
       // 留觀住院（急診科、DR12）有護理與飲食醫囑、生命徵象、一筆護理紀錄；費用等結束留觀再算
-      const op = cands[4]
+      // 挑 27 小時前之後沒有就醫的病人：不然就醫序號（卡序）會比後來的門診大、時間卻比較早（隨日期不同才會遇到）
+      const obsAt = addMinutes(nowStr, -27 * 60)
+      const op = cands.slice(demo.length).find((p) => !visits.some((v) => v.patientId === p.id && v.createdAt > obsAt))
       if (op) {
-        const at = addMinutes(nowStr, -27 * 60)
+        const at = obsAt
         const date = at.slice(0, 10)
         const osid = `ER-${date}`
         if (!sessions.some((s) => s.id === osid)) sessions.push({ id: osid, date, period: 'ER', deptId: erDoc.deptId, doctorId: erDoc.id, roomNo: '100', limit: 9999 })
@@ -3083,7 +3086,30 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601' })
       if (i === 2) specimens.push({ id: 'SP-OPD-3', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'urine', orderIds: [], opdKeys: keys, selfCollect: true, createdAt: addMinutes(at, 2), printedAt: addMinutes(at, 2), printedBy: 'U601' })
     })
-    counters[`labdesk:${T}`] = paid.length
+    // 今天已批價、本來就有開檢驗的門診病人（隨日期不同，有時有、有時沒有）：批價後就來報到，已抽血、檢驗科已收件（留在待檢驗）。
+    // 沒有這段的話，這些人會留在「已批價、待報到」，示範的櫃台每天不一樣
+    const upTo = (t: string) => (t > nowStr ? nowStr : t)
+    visits
+      .filter((v) => v.date === T && (v.status === 'charged' || v.status === 'dispensed') && !busy.has(v.patientId) && !paid.some((x) => x.v.patientId === v.patientId))
+      .forEach((v) => {
+        const e = encounters.find((x) => x.visitId === v.id && x.status === 'completed')
+        const c = charges.find((x) => x.visitId === v.id && !x.voided)
+        const labs = (e?.procedures ?? []).filter((p) => procMap.get(p.procId)?.labItems && !p.notDone)
+        if (!e || !c || !labs.length || labCheckins.some((x) => x.patientId === v.patientId)) return
+        const at = upTo(addMinutes(c.paidAt, 5))
+        labCheckins.push({ id: `LC-SEED-N${labCheckins.length + 1}`, no: 0, patientId: v.patientId, date: T, at, by: 'U601' })
+        for (const tube of [...new Set(labs.map((p) => procMap.get(p.procId)!.tube ?? 'red'))]) {
+          const self = SELF_COLLECT_TUBES.includes(tube)
+          const rcv = upTo(addMinutes(at, 20))
+          specimens.push({
+            id: `SP-OPD-N${++n}`, barcode: `S${day}8${String(n).padStart(3, '0')}`, patientId: v.patientId, tube, orderIds: [], opdKeys: labs.filter((p) => (procMap.get(p.procId)!.tube ?? 'red') === tube).map((p) => `E:${e.id}:${p.procId}`), ...(self ? { selfCollect: true } : {}),
+            createdAt: upTo(addMinutes(at, 2)), printedAt: upTo(addMinutes(at, 2)), printedBy: 'U601', collectedAt: upTo(addMinutes(at, 4)), collectedBy: 'U601', receivedAt: rcv, receivedBy: 'U601',
+          })
+        }
+      })
+    // 號碼依報到時間
+    labCheckins.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)).forEach((x, i) => (x.no = i + 1))
+    counters[`labdesk:${T}`] = labCheckins.length
   }
 
   // 過去一年的門診細菌培養（院內藥敏統計用，不抽亂數）：大腸桿菌 32 株（每位病人一株，夠 30 株才算得出可信的敏感率）、
@@ -3107,20 +3133,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // 檢驗儀器自動傳輸與自動審核（示範，不抽亂數）：今天五位住院病人的臨時檢驗都已採檢、收件、上機——
   //   自動審核發出三份：骨折 CBC（和上次差不多）、腦梗塞肌酸酐、蜂窩性組織炎 CRP；
-  //   待審核兩份：闌尾炎 CBC 血色素比昨天掉 2.5（差異檢查）、泌尿道感染電解質（今天鉀品管被拒絕）
+  //   待審核兩份：闌尾炎 CBC 血色素比昨天掉 2.5（差異檢查）、泌尿道感染電解質（今天鉀品管被拒絕）；
+  //   檢體品質（溶血）：肺炎病人電解質鉀 5.9 看起來像高血鉀，其實檢體嚴重溶血（H 260）→ 不能發，要退件重抽。
+  //   紅頭檢體都量品質指數（其他的都正常）
   const analyzerResults: AnalyzerResult[] = []
   {
     const day = T.replace(/-/g, '')
     const at = (min: number) => { const t = addMinutes(nowStr, -min); return t < `${T} 00:00` ? `${T} 00:00` : t }
-    const plan: [string, string, Record<string, string>, boolean][] = [
+    const okIx: SerumIndices = { H: 12, I: 1, L: 25 }
+    const plan: [string, string, Record<string, string>, boolean, SerumIndices?][] = [
       ['S52', 'P003', { WBC: '7.6', Hb: '14.9', HCT: '45', PLT: '241' }, true],
       ['I63', 'P008', { CRE: '1.0' }, true],
       ['L03', 'P011', { CRP: '3.20' }, true],
       ['K35', 'P003', { WBC: '12.8', Hb: '10.6', HCT: '32', PLT: '330' }, false],
       ['N39', 'P055', { NA: '138', K: '4.4' }, false],
+      ['J18', 'P055', { NA: '137', K: '5.9' }, false, { H: 260, I: 1, L: 30 }],
     ]
     let k = 0
-    for (const [dx, procId, vals, auto] of plan) {
+    for (const [dx, procId, vals, auto, ix0] of plan) {
       const a = admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith(dx))
       if (!a) continue
       k++
@@ -3132,7 +3162,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const barcode = `S${day}7${String(k).padStart(3, '0')}`
       specimens.push({ id: `SP-AN-${k}`, barcode, admissionId: a.id, patientId: a.patientId, tube: proc.tube ?? 'red', orderIds: [id], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: at(140 - k * 8), collectedBy: 'U201', receivedAt: at(120 - k * 8), receivedBy: 'U601' })
       const loadedAt = at(90 - k * 8)
-      const x: AnalyzerResult = { id: `AR-SEED-${k}`, key: `O:${id}`, barcode, patientId: a.patientId, procId, values: vals, holds: [], status: auto ? 'auto' : 'held', loadedAt, loadedBy: 'U601' }
+      const ix = (proc.tube ?? 'red') === 'red' ? ix0 ?? okIx : undefined
+      const x: AnalyzerResult = { id: `AR-SEED-${k}`, key: `O:${id}`, barcode, patientId: a.patientId, procId, values: vals, holds: [], status: auto ? 'auto' : 'held', ...(ix ? { indices: ix } : {}), loadedAt, loadedBy: 'U601' }
       if (auto) {
         const r: LabReport = { id: `LR-AN-${k}`, no: `L${day}95${String(k).padStart(2, '0')}`, patientId: a.patientId, procId, orderId: id, admissionId: a.id, doctorId: a.doctorId, orderedAt: t0, values: buildLabValues(proc.labItems!, vals, pt.gender).values, reportedBy: 'U601', reportedAt: loadedAt, autoVerified: true }
         labReports.push(r)
@@ -3142,7 +3173,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         const prev: Record<string, string> = {}
         for (const r of labReports.filter((r) => r.patientId === a.patientId).sort((p, q) => p.reportedAt.localeCompare(q.reportedAt))) for (const v of r.values) prev[v.code] = v.value
         const qcFailed = qcFailedCodes(qcRuns, proc.labItems!.map((d) => d.code), T)
-        x.holds = autoVerify({ defs: proc.labItems!, values: vals, gender: pt.gender, prev, qcFailed })
+        x.holds = autoVerify({ defs: proc.labItems!, values: vals, gender: pt.gender, prev, qcFailed, ...(ix ? { indices: ix } : {}) })
       }
       analyzerResults.push(x)
     }

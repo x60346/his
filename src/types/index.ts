@@ -840,6 +840,8 @@ export interface Specimen {
   receivedAt?: string
   receivedBy?: string
   rejected?: { at: string; by: string; reason: string }
+  /** 部分退件（儀器發現溶血等，只退受影響的項目）：從哪一支檢體拆出來的（同一支管子、同一個條碼） */
+  partOf?: string
 }
 
 /** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
@@ -884,11 +886,20 @@ export interface ContrastClearance {
   reason: string
 }
 
-/** 自動審核沒通過的規則：品管沒過、危急值、和上次差太多（delta check）、超出儀器可測範圍 */
+/** 自動審核沒通過的規則：品管沒過、危急值、和上次差太多（delta check）、超出儀器可測範圍、檢體品質（溶血、黃疸、脂血） */
 export interface AutoVerifyHold {
-  rule: 'qc' | 'critical' | 'delta' | 'amr'
+  rule: 'qc' | 'critical' | 'delta' | 'amr' | 'hil'
   code?: string
   text: string
+  /** 不能發出（嚴重溶血的鉀）：只能退件重抽 */
+  block?: true
+}
+
+/** 血清品質指數（儀器量紅頭檢體）：H 溶血（mg/dL 游離血紅素）、I 黃疸（mg/dL 膽紅素）、L 脂血（mg/dL 脂肪乳劑當量） */
+export interface SerumIndices {
+  H: number
+  I: number
+  L: number
 }
 
 /** 檢驗儀器上機結果（自動傳輸）：通過自動審核直接發報告（auto）；沒過的等醫檢師審核（held → released） */
@@ -901,7 +912,11 @@ export interface AnalyzerResult {
   procId: string
   values: Record<string, string>
   holds: AutoVerifyHold[]
-  status: 'auto' | 'held' | 'released'
+  /** auto 自動發出、held 待審核、released 審核後發出、recollect 退件重抽（檢體品質不好，這項回到待採檢） */
+  status: 'auto' | 'held' | 'released' | 'recollect'
+  /** 檢體品質指數（紅頭才有） */
+  indices?: SerumIndices
+  recollect?: { at: string; by: string; reason: string }
   loadedAt: string
   loadedBy: string
   /** 重測：之前的數值（舊到新） */
@@ -1068,6 +1083,8 @@ export interface LabReport {
   corrections?: { at: string; by: string; reason: string; before: LabValue[] }[]
   /** 儀器自動傳輸、通過自動審核直接發出（沒有人工審核） */
   autoVerified?: boolean
+  /** 檢體品質附註（例：檢體溶血（H 80），鉀、GPT 可能偏高）：醫檢師審核後附註發出 */
+  qualityNote?: string
   /** 危急值通報（醫檢師打電話）：通報給誰（姓名、職稱）、對方複誦確認、時間。和醫師「已知悉」分開，兩個都要有 */
   callout?: { at: string; by: string; to: string; toRole: 'nurse' | 'doctor'; readBack: true; note?: string }
   /** 醫師確認（有危急值或更正過的才需要）：沒有＝待確認 */

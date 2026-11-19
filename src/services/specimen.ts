@@ -6,7 +6,7 @@ import { commitIfPossible, db } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
 import { addonCheck, ADDON_HOURS, checkRejectReason, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
-import { addonSpecimenOf, collectRecord, isLabOrder, labOrderStage, newSpecimen, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
+import { addonSpecimenOf, collectRecord, isLabOrder, labOrderStage, newSpecimen, reopenLabOrders, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
 import { ensureLabDraws } from './ipd'
 import { find, nameOf } from './views'
 
@@ -95,7 +95,7 @@ export function printSpecimenLabels(admissionId: string): Promise<SpecimenView[]
 export function collectSpecimen(barcode: string): Promise<SpecimenView> {
   return mutate(() => {
     const u = requireUser('nurse')
-    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
+    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}，不能再採檢`, 'CONFLICT')
     if (!s.admissionId) fail('門診檢體在抽血櫃台採檢', 'CONFLICT')
@@ -125,7 +125,7 @@ export function labSpecimens(): Promise<{ toReceive: SpecimenView[]; rejected: S
 export function receiveSpecimen(barcode: string): Promise<SpecimenView> {
   return mutate(() => {
     const u = requireUser('lab')
-    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
+    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'collected') fail(st === 'printed' ? '這支檢體還沒採檢' : `這支檢體${SPECIMEN_STAGE_LABEL[st]}`, 'CONFLICT')
     const t = now()
@@ -139,20 +139,14 @@ export function receiveSpecimen(barcode: string): Promise<SpecimenView> {
 export function rejectSpecimen(barcode: string, reason: string): Promise<SpecimenView> {
   return mutate(() => {
     const u = requireUser('lab')
-    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
+    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     const st = specimenStage(s)
     if (st !== 'collected' && st !== 'received') fail(st === 'printed' ? '這支檢體還沒採檢' : '這支檢體已經退件了', 'CONFLICT')
     if (s.orderIds.some((id) => db.labReports.some((r) => r.orderId === id)) || (s.opdKeys ?? []).some((k) => db.labReports.some((r) => r.encounterId === k.split(':')[1] && r.procId === k.split(':')[2]))) fail('已經發了報告，不能退件（有問題請更正報告）', 'CONFLICT')
     failFields(checkRejectReason(reason))
     const t = now()
     s.rejected = { at: t, by: u.id, reason: reason.trim() }
-    for (const id of s.orderIds) {
-      const o = db.ipdOrders.find((x) => x.id === id)
-      if (o && o.status === 'done') {
-        o.status = 'active'
-        delete o.stopAt
-      }
-    }
+    reopenLabOrders(s.orderIds)
     audit('檢體退件', `${s.barcode} ${nameOf.patient(s.patientId)}：${reason.trim()}`)
     return view(s, t)
   })

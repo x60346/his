@@ -1,13 +1,17 @@
 // 檢驗儀器（醫檢師）：收件後的檢體掃條碼「上機」→ 儀器回傳數值（展示用模擬：依上一次的值加小波動）→ 自動審核（analyzer-rules）：
 // 品管通過、沒有危急值、和上次差距在範圍、在儀器可測範圍 → 直接發報告（標「自動審核」）；沒過的進「待審核」，標出哪一條、哪一項，
 // 醫檢師看過後「確認發出」（可改值）或「重測」（同一支檢體再跑一次，舊值留著）。只做數值型、上儀器的項目，其他照舊人工登打。
-// 發報告走和人工登打同一條路（lab-issue）：採檢、收件、品管、單號、稽核都一樣
-import type { AnalyzerResult, AutoVerifyHold, LabFlag } from '@/types'
+// 發報告走和人工登打同一條路（lab-issue）：採檢、收件、品管、單號、稽核都一樣。
+// 紅頭檢體另外量品質指數（溶血、黃疸、脂血）：超過門檻的受影響項目進待審核，醫檢師「退件重抽」（只退這一項，回到待採檢）或「附註發出」；
+// 嚴重溶血的鉀不能發，只能退件重抽
+import type { AnalyzerResult, AutoVerifyHold, LabFlag, SerumIndices } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
-import { autoRate, autoVerify, DELTA_DAYS, isAnalyzerProc, qcFailedCodes, simulateAnalyzer } from './analyzer-rules'
+import { autoRate, autoVerify, DELTA_DAYS, HEMOLYSIS_DAYS, hemolysisRate, hilNote, isAnalyzerProc, qcFailedCodes, simulateAnalyzer, simulateIndices } from './analyzer-rules'
+import { checkRejectReason } from './specimen-rules'
+import { rejectPart } from './specimen-work'
 import { judgeLab, labRefText } from './lab-rules'
 import { issueLabReport } from './lab-issue'
 import { pendingLabWork, procItems, type LabWorkItem } from './lab-work'
@@ -53,6 +57,12 @@ export interface AnalyzerHeldView {
   holds: AutoVerifyHold[]
   rows: AnalyzerRow[]
   reruns: { at: string; values: Record<string, string> }[]
+  /** 檢體品質指數（紅頭才有） */
+  indices?: SerumIndices
+  /** 附註發出時報告上會寫的（有受影響的項目才有） */
+  qualityNote?: string
+  /** 不能發（嚴重溶血的鉀）：只能退件重抽 */
+  blocked: boolean
 }
 export interface AnalyzerLoadable {
   barcode: string
@@ -67,6 +77,14 @@ export interface AnalyzerBoard {
   today: { total: number; auto: number; pct: number }
   /** 今天自動發出的（新的在前） */
   autoToday: { no: string; patientName: string; procName: string; at: string }[]
+  /** 近 30 天溶血率（量過指數的紅頭檢體）：全部、依來源（各病房、門診抽血櫃台），高的在前 */
+  hemolysis: { total: number; hemolyzed: number; pct: number; byWhere: { where: string; total: number; hemolyzed: number; pct: number }[] }
+}
+/** 檢體從哪裡來：住院＝病房、門診＝抽血櫃台 */
+function sourceOf(key: string): string {
+  if (!key.startsWith('O:')) return '門診抽血櫃台'
+  const a = find.admission(db.ipdOrders.find((o) => o.id === key.slice(2))?.admissionId ?? '')
+  return find.bed(a?.bedId ?? '')?.ward ?? '病房'
 }
 
 function heldView(x: AnalyzerResult): AnalyzerHeldView {
@@ -84,6 +102,9 @@ function heldView(x: AnalyzerResult): AnalyzerHeldView {
       }
     }),
     reruns: x.reruns ?? [],
+    ...(x.indices ? { indices: x.indices } : {}),
+    ...((n) => (n && x.holds.some((h) => h.rule === 'hil') ? { qualityNote: n } : {}))(hilNote(procItems(x.procId), x.indices)),
+    blocked: x.holds.some((h) => h.block),
   }
 }
 
@@ -99,10 +120,13 @@ export function analyzerBoard(): Promise<AnalyzerBoard> {
     }
     const d = now().slice(0, 10)
     const todays = db.analyzerResults.filter((x) => x.loadedAt.startsWith(d))
+    const recent = db.analyzerResults.filter((x) => x.indices && x.loadedAt >= `${addDays(d, -HEMOLYSIS_DAYS)} 00:00`)
+    const wheres = [...new Set(recent.map((x) => sourceOf(x.key)))]
     return {
       toLoad,
       held: db.analyzerResults.filter((x) => x.status === 'held').sort((a, b) => a.loadedAt.localeCompare(b.loadedAt)).map(heldView),
       today: autoRate(todays),
+      hemolysis: { ...hemolysisRate(recent), byWhere: wheres.map((w) => ({ where: w, ...hemolysisRate(recent.filter((x) => sourceOf(x.key) === w)) })).sort((a, b) => b.pct - a.pct || a.where.localeCompare(b.where)) },
       autoToday: todays.filter((x) => x.status === 'auto' && x.reportId).sort((a, b) => b.loadedAt.localeCompare(a.loadedAt)).map((x) => ({ no: db.labReports.find((r) => r.id === x.reportId)?.no ?? '', patientName: nameOf.patient(x.patientId), procName: find.procedure(x.procId)?.name ?? '', at: x.loadedAt })),
     }
   })
@@ -110,24 +134,25 @@ export function analyzerBoard(): Promise<AnalyzerBoard> {
 
 /**
  * 上機（掃條碼）：這支檢體上儀器的項目各跑一次 → 自動審核 → 通過的直接發報告、沒過的進待審核。
- * values：指定儀器回傳的數值（依醫令；測試、示範用），沒給就模擬
+ * values：指定儀器回傳的數值（依醫令；測試、示範用），沒給就模擬；indices：指定檢體品質指數（紅頭才量），沒給就模擬
  */
-export function loadAnalyzer(barcode: string, values?: Record<string, Record<string, string>>): Promise<{ auto: number; held: number; results: AnalyzerResult[] }> {
+export function loadAnalyzer(barcode: string, values?: Record<string, Record<string, string>>, indices?: SerumIndices): Promise<{ auto: number; held: number; results: AnalyzerResult[] }> {
   return mutate(() => {
     const u = requireUser('lab')
-    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim()), '檢體（條碼）')
+    const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
     if (s.rejected) fail('這支檢體已退件', 'CONFLICT')
     if (!s.receivedAt) fail('這支檢體還沒收件，請先掃條碼收件', 'CONFLICT')
     const ws = pendingLabWork().filter((w) => keysOf(s).includes(w.key) && loadable(w))
     if (!ws.length) fail('這支檢體沒有要上機的檢驗（已發報告、已上機，或是要人工登打的項目）', 'CONFLICT')
     const t = now()
+    const ix = s.tube === 'red' ? indices ?? simulateIndices(s.barcode) : undefined
     const out: AnalyzerResult[] = []
     for (const w of ws) {
       const defs = procItems(w.procId)
       const prev = flat(prevValues(w.patientId, t))
       const vals = values?.[w.procId] ?? simulateAnalyzer(defs, w.gender, prev, `${s.barcode}:${w.key}`)
-      const holds = autoVerify({ defs, values: vals, gender: w.gender, prev, qcFailed: qcFailed(defs.map((d) => d.code)) })
-      const x: AnalyzerResult = { id: newId('AR'), key: w.key, barcode: s.barcode, patientId: w.patientId, procId: w.procId, values: vals, holds, status: holds.length ? 'held' : 'auto', loadedAt: t, loadedBy: u.id }
+      const holds = autoVerify({ defs, values: vals, gender: w.gender, prev, qcFailed: qcFailed(defs.map((d) => d.code)), ...(ix ? { indices: ix } : {}) })
+      const x: AnalyzerResult = { id: newId('AR'), key: w.key, barcode: s.barcode, patientId: w.patientId, procId: w.procId, values: vals, holds, status: holds.length ? 'held' : 'auto', ...(ix ? { indices: ix } : {}), loadedAt: t, loadedBy: u.id }
       if (!holds.length) x.reportId = issueLabReport(w.key, vals, u, { auto: true }).id
       db.analyzerResults.push(x)
       out.push(x)
@@ -138,14 +163,16 @@ export function loadAnalyzer(barcode: string, values?: Record<string, Record<str
   })
 }
 
-/** 審核後發出：醫檢師看過（可改值）→ 發報告；品管沒過一樣擋（同人工登打） */
+/** 審核後發出：醫檢師看過（可改值）→ 發報告；品管沒過一樣擋（同人工登打）。檢體品質沒過的＝附註發出（報告寫上溶血等）；嚴重溶血的鉀不能發 */
 export function releaseAnalyzer(id: string, values?: Record<string, string>): Promise<AnalyzerResult> {
   return mutate(() => {
     const u = requireUser('lab')
     const x = must(db.analyzerResults.find((v) => v.id === id), '儀器結果')
-    if (x.status !== 'held') fail('這筆已經發出了', 'CONFLICT')
+    if (x.status !== 'held') fail(x.status === 'recollect' ? '這筆已經退件重抽了' : '這筆已經發出了', 'CONFLICT')
+    if (x.holds.some((h) => h.block)) fail(`${x.holds.filter((h) => h.block).map((h) => h.text).join('；')}`, 'CONFLICT')
     const vals = values ?? x.values
-    const r = issueLabReport(x.key, vals, u, { analyzer: true })
+    const note = x.holds.some((h) => h.rule === 'hil') ? hilNote(procItems(x.procId), x.indices) : undefined
+    const r = issueLabReport(x.key, vals, u, { analyzer: true, ...(note ? { qualityNote: note } : {}) })
     Object.assign(x, { values: vals, status: 'released', reportId: r.id, releasedAt: r.reportedAt, releasedBy: u.id })
     return x
   })
@@ -156,14 +183,34 @@ export function rerunAnalyzer(id: string, values?: Record<string, string>): Prom
   return mutate(() => {
     const u = requireUser('lab')
     const x = must(db.analyzerResults.find((v) => v.id === id), '儀器結果')
-    if (x.status !== 'held') fail('這筆已經發出了', 'CONFLICT')
+    if (x.status !== 'held') fail(x.status === 'recollect' ? '這筆已經退件重抽了' : '這筆已經發出了', 'CONFLICT')
     const p = must(find.patient(x.patientId), '病患')
     const defs = procItems(x.procId)
     const t = now()
     ;(x.reruns ??= []).push({ at: t, values: x.values })
     x.values = values ?? simulateAnalyzer(defs, p.gender, x.values, `${x.barcode}:${x.key}:r${x.reruns.length}`)
-    x.holds = autoVerify({ defs, values: x.values, gender: p.gender, prev: flat(prevValues(x.patientId, x.loadedAt)), qcFailed: qcFailed(defs.map((d) => d.code)) })
+    // 同一支檢體再跑：品質指數不會變（溶血的還是溶血）
+    x.holds = autoVerify({ defs, values: x.values, gender: p.gender, prev: flat(prevValues(x.patientId, x.loadedAt)), qcFailed: qcFailed(defs.map((d) => d.code)), ...(x.indices ? { indices: x.indices } : {}) })
     audit('檢驗儀器重測', `${x.barcode} ${p.name} ${find.procedure(x.procId)?.name}（第 ${x.reruns.length} 次重測，操作 ${nameOf.user(u.id)}）`)
+    return x
+  })
+}
+
+/**
+ * 退件重抽（檢體品質不好：溶血、黃疸、脂血，或其他原因）：只退這一項——從檢體拆出來記退件，
+ * 住院醫囑回到待採檢（護理站提醒重新採檢）、門診回到抽血櫃台待重新採檢；同一支檢體其他項目照常發
+ */
+export function recollectAnalyzer(id: string, reason: string): Promise<AnalyzerResult> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const x = must(db.analyzerResults.find((v) => v.id === id), '儀器結果')
+    if (x.status !== 'held') fail(x.status === 'recollect' ? '這筆已經退件重抽了' : '這筆已經發出了，不能退件（有問題請更正報告）', 'CONFLICT')
+    failFields(checkRejectReason(reason))
+    const s = must(db.specimens.find((v) => v.barcode === x.barcode && !v.partOf && !v.rejected), '檢體')
+    const t = now()
+    rejectPart(s, [x.key], u.id, t, reason.trim())
+    Object.assign(x, { status: 'recollect', recollect: { at: t, by: u.id, reason: reason.trim() } })
+    audit('檢驗儀器退件重抽', `${x.barcode} ${nameOf.patient(x.patientId)} ${find.procedure(x.procId)?.name}：${reason.trim()}`)
     return x
   })
 }

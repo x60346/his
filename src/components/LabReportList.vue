@@ -66,6 +66,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
               <span class="ml-1 text-xs text-slate-400">（{{ v.ref }}）</span>
             </li>
           </ul>
+          <p v-if="r.qualityNote" class="mt-1 text-xs font-medium text-cyan-900">檢體品質附註：{{ r.qualityNote }}</p>
           <p v-for="(c, i) in r.corrections ?? []" :key="i" class="mt-1 text-xs text-amber-800">更正 {{ when(c.at) }}：{{ c.reason }}（原：{{ c.before.filter((b) => r.values.find((v) => v.code === b.code)?.value !== b.value).map((b) => `${b.name} ${b.value}`).join('、') }}）</p>
         </article>
         <UButton v-if="!showAll && data.reports.length > 5" size="sm" variant="ghost" @click="showAll = true">顯示全部 {{ data.reports.length }} 份</UButton>
