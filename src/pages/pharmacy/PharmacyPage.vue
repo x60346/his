@@ -10,8 +10,9 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import DrugBagLabels from './components/DrugBagLabels.vue'
 import RestockRequestDialog from '@/components/RestockRequestDialog.vue'
 import ReturnDispenseDialog from './components/ReturnDispenseDialog.vue'
+import DispenseScanDialog from './components/DispenseScanDialog.vue'
 import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
-import { CONTROLLED_LEVEL_LABEL, dispenseOpen, pharmacyApi } from '@/services'
+import { CONTROLLED_LEVEL_LABEL, dispenseOpen, pharmacyApi, scanApi, type DispenseScanInput } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
@@ -81,18 +82,31 @@ const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x)
 // ---------- 發藥前確認身分：請病人說出出生月日，或登記代領人（比對在服務層） ----------
 const pickupOpen = ref(false)
 const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '', idNo: '' })
+// 要求掃描（和住院給藥同一個設定）：先逐項掃藥品條碼，再核對領藥人
+const { data: policy } = useQuery(() => scanApi.scanPolicy())
+const scanOpen = ref(false)
+const scanned = ref<DispenseScanInput>()
 function onDispense() {
   if (!d.value) return
   give.fieldErrors.value = {}
   pickup.value = { proxy: false, birthMMDD: '', proxyName: '', relation: '', idNo: '' }
+  scanned.value = undefined
+  if (policy.value?.requireScan) scanOpen.value = true
+  else pickupOpen.value = true
+}
+function onScanned(x: DispenseScanInput) {
+  scanned.value = x
   pickupOpen.value = true
 }
+// 發藥掃描統計（當天）
+const statsOpen = ref(false)
+const { data: scanStat } = useQuery(async () => (statsOpen.value ? pharmacyApi.dispenseScanStats(date.value) : undefined), [statsOpen, date])
 async function confirmPickup() {
   if (!d.value) return
   const p = pickup.value
   // 第一～三級管制藥：另外登記領藥人身分證號（服務層比對）
   const idNo = d.value.specialRx ? { idNo: p.idNo.trim() } : {}
-  const check = p.proxy ? { proxy: true, proxyName: p.proxyName, relation: p.relation, ...idNo } : { birthMMDD: p.birthMMDD.trim(), ...idNo }
+  const check = { ...(p.proxy ? { proxy: true, proxyName: p.proxyName, relation: p.relation, ...idNo } : { birthMMDD: p.birthMMDD.trim(), ...idNo }), ...(scanned.value ? { scan: scanned.value } : {}) }
   if (await give.run(d.value.id, check)) {
     pickupOpen.value = false
     // 自動帶到下一張；分頁由上面的 watch 跟著那張單的狀態切換
@@ -120,7 +134,7 @@ const print = () => window.print()
     <!-- 清單 -->
     <UCard :padded="false" class="no-print self-start">
       <template #title><span class="text-sm font-semibold text-slate-800">調劑清單</span></template>
-      <template #actions><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></template>
+      <template #actions><div class="flex items-center gap-1"><UButton size="sm" variant="ghost" @click="statsOpen = true">掃描統計</UButton><div class="w-40"><UInput v-model="date" type="date" :max="todayStr" /></div></div></template>
       <div class="px-3 pt-2"><UInput v-model="kw" placeholder="領藥號、姓名、病歷號（Enter 選取）" aria-label="搜尋調劑單" @keydown.enter.prevent="onSearchEnter" /></div>
       <div class="px-3"><UTabs v-model="tab" :tabs="tabs" /></div>
       <UQueryState :loading="loading" :ready="list.length > 0" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的${dispenseStatus[tab].label}單` : `沒有${dispenseStatus[tab].label}的單`">
@@ -257,6 +271,18 @@ const print = () => window.print()
 
     <ReturnDispenseDialog v-if="d" v-model="returnOpen" :dispense="d" />
     <ControlledRxDialog v-model="rxOpen" :encounter-id="d?.encounterId" />
+    <DispenseScanDialog v-model="scanOpen" :dispense-id="d?.id" :pickup-no="d?.pickupNo" :items="d?.items ?? []" :demo-assist="policy?.demoAssist" @done="onScanned" />
+    <UDialog v-model="statsOpen" title="發藥掃描統計" size="lg">
+      <div v-if="scanStat" class="space-y-3 text-sm">
+        <p>{{ scanStat.date }}：發藥 <b>{{ scanStat.dispensed }}</b> 張，掃描核對 <b class="text-emerald-700">{{ scanStat.scanned }}</b>、略過 <b class="text-amber-700">{{ scanStat.skipped }}</b>{{ scanStat.notRequired ? `、設定關閉時發的 ${scanStat.notRequired}` : '' }}；掃描不符（已擋下）<b class="text-red-700">{{ scanStat.mismatches.length }}</b></p>
+        <ul v-if="scanStat.skips.length" class="space-y-0.5 text-xs"><li v-for="(x, i) in scanStat.skips" :key="i">{{ x.at.slice(11) }} 領藥號 {{ x.pickupNo }} {{ x.patientName }}：{{ x.reason }}{{ x.note ? `（${x.note}）` : '' }}・{{ x.pharmacistName }}</li></ul>
+        <ul v-if="scanStat.mismatches.length" class="space-y-0.5 text-xs text-red-800">
+          <li v-for="m in scanStat.mismatches" :key="m.id">{{ m.at.slice(11) }} 領藥號 {{ m.pickupNo }} {{ m.patientName }}：{{ m.message }}（{{ m.pharmacistName }}）
+            <span v-if="m.reported" class="text-slate-500">已通報</span>
+            <RouterLink v-else :to="{ name: 'incidents', query: { fromScan: m.id } }" class="text-blue-700 underline">通報病安事件</RouterLink></li>
+        </ul>
+      </div>
+    </UDialog>
     <UDialog v-model="pickupOpen" title="發藥：確認領藥人" size="sm" @submit="confirmPickup">
       <div v-if="d" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">

@@ -13265,6 +13265,79 @@ try {
     ok(msg.includes('病安事件審查') && (await I.myIncidents()).length === 0, '醫師沒被指定不能審查（自己的通報清單是空的）')
   }
 
+  // 門診發藥掃描：規則（處方上的、拿錯規格、別的藥、不認得）；種子（今天的都有掃描紀錄、略過一張、拿錯規格一次）；開掃描時沒掃擋、
+  // 逐項掃描記不符、少掃一項擋、全部掃完發藥、略過、統計、一鍵帶入病安通報；關掉照舊
+  console.log('\n[門診發藥掃描]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.pharmacyApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    // 純函式
+    const items = [{ nhiCode: 'A001', name: 'Aspirin 100mg', generic: 'aspirin' }, { nhiCode: 'B001', name: 'Metformin 500mg', generic: 'metformin' }]
+    const all = [...items, { nhiCode: 'B002', name: 'Metformin 850mg', generic: 'metformin' }, { nhiCode: 'C001', name: 'Losartan 50mg', generic: 'losartan' }]
+    ok(api.checkDispenseScan(' b001 ', items, all).idx === 1 && api.checkDispenseScan('B002', items, all).message.includes('規格不對') && api.checkDispenseScan('C001', items, all).message.includes('沒有這個藥') && api.checkDispenseScan('Z9', items, all).message.includes('不認得') && !api.checkDispenseScan('', items, all).ok, '發藥掃描：處方上的（哪一項）、拿錯規格、處方沒有的藥、不認得')
+    // 種子
+    await as('ph01')
+    let st = await P.dispenseScanStats(T)
+    ok(st.dispensed >= 2 && st.skipped === 1 && st.scanned === st.dispensed - 1 && st.skips[0].reason.includes('條碼') && st.mismatches.some((m) => m.id === 'DM-SEED-1' && !m.reported), `種子：今天發出 ${st.dispensed} 張都有掃描紀錄（略過 1 張：條碼破損）、拿錯一次被擋`)
+
+    // 開掃描：找一張待調劑的單
+    db().securitySettings = { ...db().securitySettings, requireScan: true, twoPersonDispense: false }
+    // 挑三張待調劑的單（第一張至少兩項藥，測少掃一項）；庫存不夠的先無單進貨補到門診藥局（測的是掃描，不是庫存）
+    const pend = db().dispenses.filter((x) => x.status === 'pending')
+    const d1 = pend.find((x) => db().encounters.find((e) => e.id === x.encounterId).medications.length >= 2)
+    const d2 = pend.find((x) => x.id !== d1.id)
+    // 第三張（測關掉掃描）：示範資料只有兩張待調劑，複製一張（測試輔助）
+    db().dispenses.push({ ...structuredClone(d2), id: 'DP-T3', pickupNo: 999 })
+    const d3 = db().dispenses.find((x) => x.id === 'DP-T3')
+    const opdLoc = db().stockLocations.find((l) => l.dispensesOpd && l.active).id
+    for (const d of [d1, d2, d3]) for (const i of (await P.getDispense(d.id)).items.filter((x) => x.shortage)) await api.inventoryApi.receiveStock({ reason: '緊急調貨（向鄰近藥局借調）', drugId: i.drugId, qty: i.qty + 50, lotNo: `T-${i.drugId}`, expiry: '2030-01-01', locationId: opdLoc })
+    const birth = (d) => db().patients.find((p) => p.id === d.patientId).birthDate.slice(5).replace('-', '')
+    const codesOf = (d) => db().encounters.find((e) => e.id === d.encounterId).medications.map((m) => db().drugs.find((x) => x.id === m.drugId).nhiCode)
+    await P.verifyDispense(d1.id)
+    let msg = await errOf(() => P.dispense(d1.id, { birthMMDD: birth(d1) }))
+    ok(msg.includes('逐項掃描藥品條碼'), '沒掃描不能發藥')
+    const wrongDrug = db().drugs.find((x) => !codesOf(d1).includes(x.nhiCode) && x.active)
+    const n0 = db().dispenseMismatches.length
+    let r = await P.dispenseScanCheck(d1.id, wrongDrug.nhiCode)
+    ok(!r.ok && db().dispenseMismatches.length === n0 + 1 && db().auditLogs[0].action === '掃描不符', `掃到處方沒有的藥 → 「${r.message}」（記下來、稽核）`)
+    r = await P.dispenseScanCheck(d1.id, codesOf(d1)[0])
+    ok(r.ok && r.idx === 0, '掃到處方第一項 → 對')
+    msg = await errOf(() => P.dispense(d1.id, { birthMMDD: birth(d1), scan: { codes: [codesOf(d1)[0]] } }))
+    ok(msg.includes('還沒掃'), `少掃一項不能發 → 「${msg}」`)
+    msg = await errOf(() => P.dispense(d1.id, { birthMMDD: birth(d1), scan: { codes: [...codesOf(d1), wrongDrug.nhiCode] } }))
+    ok(msg.includes('沒有這個藥') || msg.includes('規格不對'), '多掃了處方沒有的藥也擋（服務層再核對）')
+    const g1 = await P.dispense(d1.id, { birthMMDD: birth(d1), scan: { codes: codesOf(d1) } })
+    ok(g1.status === 'dispensed' && db().dispenses.find((x) => x.id === d1.id).scan?.mode === 'scanned' && db().auditLogs.find((x) => x.action === '發藥').detail.includes('已掃描核對'), '全部掃完 → 發藥（記已掃描）')
+    // 略過
+    await P.verifyDispense(d2.id)
+    msg = await errOf(() => P.dispense(d2.id, { birthMMDD: birth(d2), scan: { skip: 'x' } }))
+    ok(msg.includes('略過'), '略過要選原因')
+    await P.dispense(d2.id, { birthMMDD: birth(d2), scan: { skip: 'scanner', note: '掃描槍沒電' } })
+    ok(db().dispenses.find((x) => x.id === d2.id).scan?.mode === 'skipped', '略過（掃描器故障）→ 照樣發、記未掃描')
+    st = await P.dispenseScanStats(T)
+    ok(st.skips.some((x) => x.note === '掃描槍沒電') && st.mismatches.length >= 2, '統計：略過（原因）、掃描不符')
+    // 病安通報
+    const dft = await api.incidentApi.incidentDraftFromScan('DM-SEED-1')
+    ok(dft.category === 'medication' && dft.location === '門診藥局' && dft.harm === 'near-miss' && dft.patientId && dft.description.includes('領藥號'), '差點發錯一鍵帶入病安通報（給藥、門診藥局、跡近錯失）')
+    await api.incidentApi.reportIncident(dft)
+    ok((await P.dispenseScanStats(T)).mismatches.find((m) => m.id === 'DM-SEED-1').reported, '統計標已通報')
+    // 關掉掃描
+    db().securitySettings = { ...db().securitySettings, requireScan: false }
+
+    await P.verifyDispense(d3.id)
+    await P.dispense(d3.id, { birthMMDD: birth(d3) })
+    ok(db().dispenses.find((x) => x.id === d3.id).status === 'dispensed' && !db().dispenses.find((x) => x.id === d3.id).scan, '掃描設定關閉：不用掃（沒有掃描紀錄）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

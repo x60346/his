@@ -63,3 +63,18 @@ export function checkSpecimenScan(code: string, target: { barcode: string; patie
   if (hit.patientId === target.patientId) return { ok: false, message: `這是同一位病人的另一支檢體（${hit.barcode}：${hit.tests}），不是要採的這支` }
   return { ok: false, message: `檢體不對！這是 ${hit.patientName} 的檢體（${hit.barcode}），不是這位病人的` }
 }
+
+/**
+ * 門診發藥：掃到的藥品條碼（健保碼）是不是處方上的藥。是＝回傳第幾項；掃過的再掃一次也算對（不重複計）；
+ * 處方沒有的藥（同成分別的規格會講清楚）、不認得的條碼都擋
+ */
+export function checkDispenseScan(code: string, items: { nhiCode: string; name: string; generic?: string }[], all: { nhiCode: string; name: string; generic?: string }[]): ScanResult & { idx?: number } {
+  const c = normalizeCode(code)
+  if (!c) return { ok: false, message: '請掃描藥品條碼' }
+  const idx = items.findIndex((i) => normalizeCode(i.nhiCode) === c)
+  if (idx >= 0) return { ok: true, message: `藥品正確：${items[idx].name}`, idx }
+  const hit = all.find((d) => normalizeCode(d.nhiCode) === c)
+  if (!hit) return { ok: false, message: `不認得的藥品條碼（${c}）：請確認藥品` }
+  const same = items.find((i) => i.generic && i.generic === hit.generic)
+  return { ok: false, message: same ? `規格不對！掃到的是 ${hit.name}，處方是 ${same.name}` : `藥品不對！掃到的是 ${hit.name}，這張處方沒有這個藥` }
+}

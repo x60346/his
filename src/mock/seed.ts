@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -3312,6 +3312,21 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     counters[`incident:${T}`] = incidents.filter((x) => x.no.includes(day(T))).length
   }
 
+  // 門診發藥掃描（示範，不抽亂數）：今天發出的都有掃描紀錄，其中一張藥品條碼破損略過；另有一次拿錯規格被擋下（差點發錯）
+  const dispenseMismatches: DispenseMismatch[] = []
+  {
+    const todays = dispenses.filter((d) => d.dispensedAt?.startsWith(T)).sort((a, b) => a.dispensedAt!.localeCompare(b.dispensedAt!))
+    todays.forEach((d, i) => (d.scan = i === 1 ? { mode: 'skipped', reason: 'barcode', note: '藥品條碼破損，人工核對藥名與劑量' } : { mode: 'scanned' }))
+    const d0 = todays[0]
+    const e0 = d0 && encounters.find((e) => e.id === d0.encounterId)
+    const dr = e0?.medications[0] && drugMap.get(e0.medications[0].drugId)
+    const wrong = dr && (codes.drugs.find((x) => x.id !== dr.id && x.generic === dr.generic) ?? codes.drugs.find((x) => x.id !== dr.id && x.category === dr.category))
+    if (d0 && dr && wrong) {
+      const same = wrong.generic === dr.generic
+      dispenseMismatches.push({ id: 'DM-SEED-1', at: addMinutes(d0.dispensedAt!, -1), pharmacistId: d0.dispensedBy ?? 'U301', dispenseId: d0.id, code: wrong.nhiCode, message: same ? `規格不對！掃到的是 ${wrong.name}，處方是 ${dr.name}` : `藥品不對！掃到的是 ${wrong.name}，這張處方沒有這個藥` })
+    }
+  }
+
   // 檢驗時效（示範）：骨折病人 85 分鐘前開的急件 CRP，護理師 70 分鐘前就採檢了，檢體一直沒送到檢驗科（急件 60 分已逾時，卡在送檢）
   {
     const fx = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
@@ -3447,6 +3462,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],
     followUpAdvices,
     incidents,
+    dispenseMismatches,
     examClosures: [{ id: 'XC-SEED-1', date: addDays(T, 10), reason: '院內消防演練', by: 'U001', at: nowStr }],
     dischargePlans,
     vitals,

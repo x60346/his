@@ -753,7 +753,19 @@ export interface Dispense {
   returnReason?: string
   /** 退藥紀錄：可以分次、只退部分品項或數量 */
   returns?: DispenseReturn[]
+  /** 發藥前逐項掃藥品條碼（和住院給藥同一個「要求掃描」設定）；略過要寫原因 */
+  scan?: { mode: 'scanned' } | { mode: 'skipped'; reason: ScanSkipReason; note?: string }
   createdAt: string
+}
+
+/** 門診發藥掃描不符（差點發錯）：掃到處方沒有的藥、拿錯規格。當場擋下，記下來給藥局主管看 */
+export interface DispenseMismatch {
+  id: string
+  at: string
+  pharmacistId: string
+  dispenseId: string
+  code: string
+  message: string
 }
 
 /** 門診退藥（一次）。idx＝處方第幾項（對應病歷的 medications 與調劑單的 txnIds） */

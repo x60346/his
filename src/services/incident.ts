@@ -55,7 +55,7 @@ export function reportIncident(input: IncidentInput): Promise<IncidentView> {
     failFields(checkIncident(input ?? {}, t))
     if (input.patientId) must(find.patient(input.patientId), '病患')
     if (input.fromScanMismatchId) {
-      must(db.scanMismatches.find((m) => m.id === input.fromScanMismatchId), '掃描不符紀錄')
+      must(db.scanMismatches.find((m) => m.id === input.fromScanMismatchId) ?? db.dispenseMismatches.find((m) => m.id === input.fromScanMismatchId), '掃描不符紀錄')
       if (db.incidents.some((x) => x.fromScanMismatchId === input.fromScanMismatchId)) fail('這筆掃描不符已經通報過了', 'CONFLICT')
     }
     const no = `INC${t.slice(0, 10).replace(/-/g, '')}${String(nextCounter(`incident:${t.slice(0, 10)}`)).padStart(3, '0')}`
@@ -75,6 +75,15 @@ export function reportIncident(input: IncidentInput): Promise<IncidentView> {
 export function incidentDraftFromScan(mismatchId: string): Promise<IncidentInput> {
   return query(() => {
     requireUser(...CLINICAL)
+    // 門診發藥的掃描不符（差點發錯）
+    const dm = db.dispenseMismatches.find((x) => x.id === mismatchId)
+    if (dm) {
+      const d = db.dispenses.find((x) => x.id === dm.dispenseId)
+      return {
+        category: 'medication' as const, occurredAt: dm.at, location: '門診藥局', ...(d ? { patientId: d.patientId } : {}),
+        description: `門診發藥（領藥號 ${d?.pickupNo ?? ''}）前掃描發現不符，當場擋下：${dm.message}`, harm: 'near-miss' as const, immediateAction: '換成處方上的藥、重新掃描核對後發藥', fromScanMismatchId: dm.id,
+      }
+    }
     const m = must(db.scanMismatches.find((x) => x.id === mismatchId), '掃描不符紀錄')
     const a = find.admission(m.admissionId)
     const bed = a?.bedId ? find.bed(a.bedId) : undefined

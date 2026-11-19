@@ -1,7 +1,7 @@
 // 門診藥局：調劑清單、核對、發藥（扣庫存）。
 // 扣庫存一律透過 inventory.postStock：寫異動帳、依 FEFO 扣批號；這裡不直接改 drug.stock。
 // 狀態：pending（待調劑）→ verified（已核對）→ dispensed（已發藥，掛號狀態同步為 dispensed）。
-import type { Dispense, DispenseReturn, DispenseStatus, Drug, StockTxn } from '@/types'
+import type { Dispense, DispenseReturn, DispenseStatus, Drug, ScanSkipReason, StockTxn } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, query, requireUser, sessionUser, requirePermission } from './http'
@@ -16,6 +16,8 @@ import { consumeWitness, returnScrapRef, WITNESS_MIN, witnessFor } from './witne
 import { effectiveTiming, timingApplies, timingText } from './drug-rules'
 import { find, nameOf, patientBrief, type PatientBrief, stockLoc } from './views'
 import { erBillMode } from './er-rules'
+import { checkDispenseScan, SCAN_SKIP_LABEL, type ScanResult } from './scan-rules'
+import { scanDemoAssist, scanRequired } from './scan-work'
 
 export interface DispenseItem {
   drugId: string
@@ -202,6 +204,88 @@ export interface PickupCheckInput {
   relation?: string
   /** 第一～三級管制藥：領藥人的身分證號（本人要和病人資料相同） */
   idNo?: string
+  /** 逐項掃藥品條碼（要求掃描時）：掃到的條碼，或略過（原因＋說明） */
+  scan?: DispenseScanInput
+}
+export type DispenseScanInput = { codes: string[] } | { skip: ScanSkipReason; note?: string }
+const rxItems = (d: Dispense) => dispenseView(d).items.map((i) => ((dr) => ({ nhiCode: dr?.nhiCode ?? '', name: i.drugName, generic: dr?.generic }))(find.drug(i.drugId)))
+
+/** 發藥前的最後一關：要求掃描時，處方每一項都要掃到（多掃了處方沒有的藥也擋），或選略過原因 */
+function settleDispenseScan(d: Dispense, scan: DispenseScanInput | undefined): Dispense['scan'] {
+  if (!scanRequired()) return undefined
+  if (!scan) fail('請逐項掃描藥品條碼（掃不了請選略過原因）', 'CONFLICT', 'scan')
+  if ('skip' in scan!) {
+    if (!SCAN_SKIP_LABEL[scan.skip]) failField('scan', '請選擇略過掃描的原因')
+    const note = scan.note?.trim()
+    return { mode: 'skipped', reason: scan.skip, ...(note ? { note } : {}) }
+  }
+  const items = rxItems(d)
+  const hit = new Set<number>()
+  for (const c of scan!.codes ?? []) {
+    const r = checkDispenseScan(c, items, db.drugs)
+    if (!r.ok) fail(r.message, 'CONFLICT', 'scan')
+    hit.add(r.idx!)
+  }
+  const miss = items.filter((_, i) => !hit.has(i))
+  if (miss.length) fail(`還沒掃：${miss.map((x) => x.name).join('、')}`, 'CONFLICT', 'scan')
+  return { mode: 'scanned' }
+}
+
+/** 發藥前逐項掃描：回傳對不對（哪一項）、不丟錯；不符記下來（差點發錯）。真正發藥時服務層再核對一次 */
+export function dispenseScanCheck(id: string, code: string): Promise<ScanResult & { idx?: number }> {
+  return mutate(() => {
+    const ph = requirePermission('dispense')
+    const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
+    const r = checkDispenseScan(code, rxItems(d), db.drugs)
+    const c = (code ?? '').trim()
+    if (!r.ok && c) {
+      db.dispenseMismatches.push({ id: newId('DM'), at: now(), pharmacistId: ph.id, dispenseId: d.id, code: c, message: r.message })
+      audit('掃描不符', `門診發藥 領藥號 ${d.pickupNo} ${nameOf.patient(d.patientId)}：${r.message}`)
+    }
+    return r
+  })
+}
+
+/** 模擬掃描（示範用）：處方上每一項的條碼、同成分別的規格或別的藥 */
+export function dispenseScanDemo(id: string): Promise<{ options: { label: string; code: string; right: boolean }[] }> {
+  return query(() => {
+    requirePermission('dispense')
+    if (!scanDemoAssist()) fail('示範用模擬掃描已關閉', 'FORBIDDEN')
+    const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
+    const items = dispenseView(d).items.map((i) => find.drug(i.drugId)!).filter(Boolean)
+    const options = items.map((dr) => ({ label: `正確：${dr.name}`, code: dr.nhiCode, right: true }))
+    const first = items[0]
+    const wrong = first && (db.drugs.find((x) => x.id !== first.id && x.active && x.generic === first.generic) ?? db.drugs.find((x) => x.active && !items.some((i) => i.id === x.id) && x.category === first.category))
+    if (wrong) options.push({ label: `拿錯：${wrong.name}`, code: wrong.nhiCode, right: false })
+    return { options }
+  })
+}
+
+export interface DispenseScanStats {
+  date: string
+  dispensed: number
+  scanned: number
+  skipped: number
+  notRequired: number
+  skips: { at: string; pickupNo: number; patientName: string; pharmacistName: string; reason: string; note?: string }[]
+  /** id：可以一鍵帶入病安通報；reported＝已經通報過 */
+  mismatches: { id: string; at: string; pickupNo: number; patientName: string; pharmacistName: string; message: string; reported: boolean }[]
+}
+/** 門診藥局某一天的發藥掃描統計 */
+export function dispenseScanStats(date: string): Promise<DispenseScanStats> {
+  return query(() => {
+    requireUser('pharmacist', 'admin')
+    const ds = db.dispenses.filter((d) => d.dispensedAt?.startsWith(date))
+    const sk = ds.filter((d) => d.scan?.mode === 'skipped')
+    return {
+      date, dispensed: ds.length, scanned: ds.filter((d) => d.scan?.mode === 'scanned').length, skipped: sk.length, notRequired: ds.filter((d) => !d.scan).length,
+      skips: sk.map((d) => { const s = d.scan as { mode: 'skipped'; reason: ScanSkipReason; note?: string }; return { at: d.dispensedAt!, pickupNo: d.pickupNo, patientName: nameOf.patient(d.patientId), pharmacistName: nameOf.user(d.dispensedBy ?? ''), reason: SCAN_SKIP_LABEL[s.reason], ...(s.note ? { note: s.note } : {}) } }).sort((a, b) => b.at.localeCompare(a.at)),
+      mismatches: db.dispenseMismatches.filter((m) => m.at.startsWith(date)).map((m) => {
+        const d = db.dispenses.find((x) => x.id === m.dispenseId)
+        return { id: m.id, at: m.at, pickupNo: d?.pickupNo ?? 0, patientName: nameOf.patient(d?.patientId ?? ''), pharmacistName: nameOf.user(m.pharmacistId), message: m.message, reported: db.incidents.some((x) => x.fromScanMismatchId === m.id) }
+      }).sort((a, b) => b.at.localeCompare(a.at)),
+    }
+  })
 }
 
 export function dispense(id: string, check: PickupCheckInput = {}): Promise<DispenseView> {
@@ -232,6 +316,9 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
       else if (check.proxy && idNo === p.idNo.toUpperCase()) v.add('idNo', '這是病人本人的身分證號：本人領藥請取消「他人代領」')
     }
     v.done()
+    // 逐項掃藥品條碼（要求掃描時）
+    const sc = settleDispenseScan(d, check.scan)
+    if (sc) d.scan = sc
     d.pickupCheck = { ...(check.proxy ? { method: 'proxy' as const, proxyName: check.proxyName!.trim(), relation: check.relation!.trim() } : { method: 'birth' as const }), ...(special ? { idNo } : {}) }
     const view = dispenseView(d)
     assertStock(view)
@@ -244,7 +331,7 @@ export function dispense(id: string, check: PickupCheckInput = {}): Promise<Disp
     must(find.visit(d.visitId), '掛號紀錄').status = 'dispensed'
     // 逾期處方不擋，但發出去要留紀錄：日後查得到是藥師知情下發的
     const late = view.rxExpired ? `（處方已逾有效期：${view.date} 開立、有效至 ${view.rxValidUntil}）` : ''
-    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）${late}`)
+    audit('發藥', `領藥號 ${d.pickupNo} ${view.patientName}（${check.proxy ? `代領：${d.pickupCheck.proxyName}／${d.pickupCheck.relation}` : '本人，核對生日'}）${late}${sc ? (sc.mode === 'scanned' ? '；已掃描核對' : `；未掃描（${SCAN_SKIP_LABEL[sc.reason]}${sc.note ? `：${sc.note}` : ''}）`) : ''}`)
     return dispenseView(d)
   })
 }
