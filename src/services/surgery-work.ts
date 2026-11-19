@@ -3,7 +3,7 @@
 import type { Admission, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
 import { addMinutes, ageOf, now, parseDate } from '@/utils/date'
-import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL } from './surgery-rules'
+import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, POSTOP_DUE_HOURS, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL } from './surgery-rules'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
@@ -56,6 +56,10 @@ export interface SurgeryView extends Surgery {
   teamMissing: string[]
   /** 一行的團隊摘要（手術紀錄、交班）：「主刀 X・助手 Y・麻醉 Z・刷手 A・流動 B」 */
   teamText: string
+  /** 術後醫囑：還沒開（手術完成、住院中）；完成超過 4 小時還沒開 */
+  postopDue: boolean
+  postopLate: boolean
+  postopText?: string
 }
 /** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
 export function bumpedByEmergency(s: Surgery): Surgery | undefined {
@@ -84,6 +88,8 @@ export function surgeryView(s: Surgery): SurgeryView {
     teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
     teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),
     teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
+    ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted'),
+    ...(s.postop ? { postopText: `${s.postop.at.slice(5)} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
     preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),
     renalText: renalOfPatient(s.patientId, a?.status === 'admitted' ? a.id : undefined).text || '沒有近期肌酸酐',
     prepRows: PREP_ITEMS.map((x) => {
@@ -151,4 +157,10 @@ export function surgeryCounts(t: string, doctorId?: string): { toSchedule: numbe
     prepDue: live().filter((s) => s.status === 'scheduled' && s.schedule && s.schedule.start.slice(0, 10) <= tomorrow && prepMissing(s).length).length,
     recordDue: doctorId ? db.surgeries.filter((s) => s.status === 'done' && !s.record && s.doctorId === doctorId).length : 0,
   }
+}
+
+/** 主刀首頁：術後醫囑待開（手術完成、住院中、還沒開）；完成超過 4 小時還沒開 */
+export function postopCounts(t: string, doctorId: string): { due: number; late: number } {
+  const xs = live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId)
+  return { due: xs.length, late: xs.filter((s) => s.endAt && (parseDate(t).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS).length }
 }

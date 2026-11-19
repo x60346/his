@@ -60,6 +60,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },
     { roles: ['nurse'], label: '術後待接回', count: s.value.pacuToReceive ?? 0, hint: '恢復室已轉出，病房護理師在病人「手術」分頁按接回', route: 'nursing', icon: ShieldAlert, urgent: false },
+    { roles: ['doctor'], label: '術後醫囑待開', count: s.value.postopDue ?? 0, hint: s.value.postopLate ? `其中 ${s.value.postopLate} 台完成超過 4 小時：在住院醫囑「手術」分頁按「術後醫囑」` : '我主刀、已完成的手術：套用術式的組套或沿用術前醫囑，術前禁食醫囑停或保留（住院醫囑「手術」分頁）', route: 'ipd', icon: Scissors, urgent: !!s.value.postopLate },
     { roles: ['doctor'], label: '手術紀錄待寫', count: s.value.opRecordsDue ?? 0, hint: '我主刀、已完成的手術：在住院醫囑「手術」分頁寫手術紀錄', route: 'ipd', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: '疼痛 ≥4 處置後 1 小時還沒重評（全院；護理站生命徵象記疼痛分數就算重評）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: '導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（全院，護理站「管路」分頁）', route: 'nursing', icon: Droplet },

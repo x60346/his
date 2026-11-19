@@ -347,6 +347,14 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
     return o
 }
 
+/**
+ * 服務層內部（術後組套批次開立）：和 addOrder 同一份建立與檢查（停用、過敏、重複、劑量、交互作用、管制藥執照）。
+ * 呼叫端自己在 mutate 裡、自己檢查照護關係、自己寫稽核
+ */
+export function createOrderInternal(user: ReturnType<typeof requireUser>, admissionId: string, input: OrderInput, t: string): IpdOrder {
+  return createOrder(user, activeAdmission(admissionId), input, t)
+}
+
 export function addOrder(input: OrderInput): Promise<OrderView> {
   return mutate(() => {
     const user = requirePermission('order.write')

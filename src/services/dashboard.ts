@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { pacuCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { pacuCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -170,6 +170,9 @@ export interface DashboardStats {
   rrtPending?: number
   weanDue?: number
   opRecordsDue?: number
+  /** 主刀：術後醫囑待開、完成超過 4 小時還沒開 */
+  postopDue?: number
+  postopLate?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   /** 藥師：住院醫囑待審核（其中臨時醫囑） */
@@ -360,6 +363,7 @@ export function getDashboard(): Promise<DashboardStats> {
           labAcks: labAckCount(me.doctorId),
           bloodReactions: reactionsToAck(me.doctorId).length,
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
+          ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('anesthesia') ? ((c) => ({ preAnesDue: c.due, preAnesBrief: c.brief }))(preAnesCounts(now())) : {}),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),

@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -1924,6 +1924,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 一：骨折病人明天 09:00 OR1 開放性復位術（右側，全身麻醉），術前準備做一半（同意書、備血不需要；禁食、部位標記、抗生素還沒）
   // 二：闌尾炎病人 OR2 腹腔鏡闌尾切除術（今天 15:00；重建時已過 13:00 改明天 13:00），術前準備都好了——護理站送手術室、手術室走完三段查核
   const surgeries: Surgery[] = []
+  const postopSets: PostopSet[] = []
   {
     const tomorrow = addDays(T, 1)
     const later = (a: string, b: string) => (a > b ? a : b)
@@ -2099,6 +2100,44 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           s.team = { ...anes, circulating: [one('U205', s)], scrub: [one('U206', s, { to: ho }), { userId: 'U207', from: ho, by: 'U205', at: ho }] }
         } else s.team = { ...anes, ...(s.id !== 'SG-SEED-3' ? { assistant: [one(asst(s), s)] } : {}), scrub: [one('U206', s)], circulating: [one('U205', s)] }
       }
+    }
+    // 術後醫囑：前天清創、昨晚急刀已開（沿用術前醫囑）；今天恢復室那台（SG-SEED-5）還沒開——主刀有個人組套「疝氣修補術後（常用）」，
+    // 術前的禁食醫囑還在（要選停或保留）。外科另有科室組套「腹腔鏡闌尾切除術後」
+    {
+      for (const s of surgeries) {
+        if ((s.id === 'SG-SEED-3' || s.id === 'SG-SEED-4') && s.endAt)
+          s.postop = { by: users.find((u) => u.doctorId === s.doctorId)!.id, at: addMinutes(s.endAt, 25), orderIds: [], npoStopped: [], npoKept: [], note: s.id === 'SG-SEED-3' ? '局部清創，沿用術前醫囑' : '急刀術後沿用原醫囑，止痛另開' }
+      }
+      const s5 = surgeries.find((x) => x.id === 'SG-SEED-5')
+      if (s5?.sentAt) {
+        const npoAt = addMinutes(s5.sentAt, -9 * 60)
+        for (const o of ipdOrders.filter((o) => o.admissionId === s5.admissionId && o.category === 'diet' && o.type === 'long' && o.status === 'active')) Object.assign(o, { status: 'stopped', stopAt: npoAt, stopAckAt: addMinutes(npoAt, 10), stopAckBy: 'U201' })
+        ipdOrders.push({ id: 'IO-NPO-SG5', admissionId: s5.admissionId, type: 'long', category: 'diet', content: '禁食（術前）', diet: { kind: 'npo', note: '術前' }, startAt: npoAt, status: 'active', doctorId: s5.doctorId, createdAt: npoAt, ackAt: addMinutes(npoAt, 10), ackBy: 'U201' })
+        s5.prep.npo = { ...s5.prep.npo!, refId: 'IO-NPO-SG5' }
+        const at = addMinutes(s5.createdAt, -30 * 24 * 60)
+        postopSets.push({
+          id: 'PS-SEED-1', name: '疝氣修補術後（常用）', procId: 'P039', scope: 'personal', doctorId: s5.doctorId,
+          items: [
+            { type: 'long', category: 'medication', drugId: 'M001', content: 'Acetaminophen 500mg', dose: 1, freq: 'QID', route: 'PO' },
+            { type: 'long', category: 'medication', drugId: 'M031', content: 'Tramadol 50mg', dose: 1, freq: 'PRN', route: 'PO' },
+            { type: 'long', category: 'diet', content: '流質飲食', diet: { kind: 'liquid', note: '排氣後改軟質' } },
+            { type: 'long', category: 'nursing', content: '術後 6 小時可下床活動' },
+            { type: 'long', category: 'nursing', content: '傷口冰敷 20 分鐘 Q4H，觀察陰囊腫脹' },
+          ],
+          createdAt: at, updatedAt: at,
+        })
+      }
+      const at = addMinutes(nowStr, -60 * 24 * 60)
+      postopSets.push({
+        id: 'PS-SEED-2', name: '腹腔鏡闌尾切除術後', procId: 'P038', scope: 'dept', doctorId: 'DR04', deptId: 'D03', updatedBy: 'DR04',
+        items: [
+          { type: 'long', category: 'medication', drugId: 'M001', content: 'Acetaminophen 500mg', dose: 1, freq: 'QID', route: 'PO' },
+          { type: 'long', category: 'medication', drugId: 'M036', content: 'Ceftriaxone 1g Inj', dose: 1, freq: 'Q12H', route: 'IV' },
+          { type: 'long', category: 'diet', content: '流質飲食', diet: { kind: 'liquid', note: '術後當天清流' } },
+          { type: 'long', category: 'nursing', content: '術後第一天下床活動、鼓勵深呼吸咳嗽' },
+        ],
+        createdAt: at, updatedAt: at,
+      })
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）
     counters[`surgery:${T}`] = surgeries.filter((x) => x.no.startsWith(`OR${T.replace(/-/g, '')}`)).length
@@ -3540,6 +3579,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     stockTxns,
     restockRequests,
     orderSets,
+    postopSets,
     phrases,
     hospitalScale: scale,
     stockLocations,

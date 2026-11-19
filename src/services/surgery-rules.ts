@@ -104,3 +104,6 @@ export function teamMissing(s: Pick<Surgery, 'team' | 'anesthesia'>, stage: 'sig
   const need: TeamRole[] = ['circulating', ...(s.anesthesia !== 'local' ? (['anesthetist'] as TeamRole[]) : []), ...(stage === 'timeOut' ? (['scrub'] as TeamRole[]) : [])]
   return need.filter((r) => !teamNow(s, r))
 }
+
+/** 手術完成多久還沒開術後醫囑，主刀首頁標紅（小時） */
+export const POSTOP_DUE_HOURS = 4

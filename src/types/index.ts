@@ -520,6 +520,32 @@ export type EncounterStatus = 'draft' | 'completed'
  * 醫師個人組套（常用處方）：診斷、藥品、處置，可選帶主訴與計畫文字。
  * 屬於醫師自己的設定，不是醫療紀錄——可以直接刪除（刪除寫稽核）。
  */
+/** 術後醫囑組套的一項：住院醫囑的草稿（套用時才逐項檢查停用、過敏、重複、劑量、腎功能） */
+export interface PostopItem {
+  type: 'long' | 'stat'
+  category: IpdOrderCategory
+  drugId?: string
+  procId?: string
+  content: string
+  dose?: number
+  freq?: string
+  route?: string
+  diet?: { kind: DietKind; note?: string }
+}
+/** 術後醫囑組套：綁術式；個人或科室共用（同門診組套） */
+export interface PostopSet {
+  id: string
+  name: string
+  procId: string
+  scope: 'personal' | 'dept'
+  doctorId: string
+  deptId?: string
+  updatedBy?: string
+  items: PostopItem[]
+  createdAt: string
+  updatedAt: string
+}
+
 export interface OrderSet {
   id: string
   /** 建立的醫師；個人組套只有他看得到 */
@@ -2416,6 +2442,8 @@ export interface Surgery {
   pacu?: PacuRecord
   /** 手術團隊（主刀以外）：每個角色依時間排的班，最後一段沒有 to 的是現在的人 */
   team?: Partial<Record<TeamRole, TeamShift[]>>
+  /** 術後醫囑：主刀（或本科醫師）手術完成後開了（套組套，或沿用術前醫囑）；術前的禁食醫囑停或保留 */
+  postop?: { by: string; at: string; setId?: string; setName?: string; orderIds: string[]; npoStopped: string[]; npoKept: string[]; note?: string }
   note?: string
   status: SurgeryStatus
   createdAt: string

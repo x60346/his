@@ -24,6 +24,7 @@ import type {
   MarRecord, ScanMismatch, RiskAssessment, RiskSettings,
   NursingNote,
   OrderSet,
+  PostopSet,
   Phrase,
   HospitalScale,
   StockLocation,
@@ -208,6 +209,8 @@ export interface Database {
   referrals: ReferralOut[]
   /** 組套（常用處方）：醫師個人或科室共用 */
   orderSets: OrderSet[]
+  /** 術後醫囑組套（綁術式） */
+  postopSets: PostopSet[]
   /** 醫師個人片語 */
   phrases: Phrase[]
   /** 醫院規模（重建時選） */
@@ -232,7 +235,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 149
+export const SCHEMA_VERSION = 150
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

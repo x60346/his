@@ -15706,6 +15706,102 @@ try {
     const panel = readFileSync('src/components/surgery/TeamPanel.vue', 'utf8')
     ok(!/db\.|permissionsOf|'anesthesia'/.test(panel), '誰能擔任、缺誰由服務層判斷')
   }
+  // 術後醫囑：種子（恢復室那台待開、前兩台已沿用、主刀個人組套與外科科室組套、術前禁食醫囑）；護理師與非本科醫師不能開；
+  // 預覽（重複要確認、停用的藥不能套）；禁食要選、組套有飲食不能保留、要確認的沒確認擋、不能套的不能選；套用（醫囑、禁食停、稽核、首頁）；
+  // 不能重開；沿用術前醫囑要原因、超過 4 小時標紅；存組套（名稱、科室共用別科看不到、別科不能刪）
+  console.log('\n[術後醫囑]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.postopApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId)
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const s5 = db().surgeries.find((s) => s.id === 'SG-SEED-5')
+    const surgeon = userOf(s5.doctorId)
+    await as(surgeon.username)
+    let view = (await api.surgeryApi.patientSurgeries(s5.admissionId)).list.find((x) => x.id === s5.id)
+    ok(view.postopDue && !view.postopLate, '種子：恢復室那台術後醫囑待開（完成 40 分鐘，還沒標紅）')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.postopDue >= 1 && dash.postopLate === 0, `主刀首頁：術後醫囑待開 ${dash.postopDue}`)
+    let plan = await P.postopPlan(s5.id)
+    ok(plan.canWrite && plan.sets.length === 1 && plan.sets[0].name === '疝氣修補術後（常用）' && plan.npoOrders.length === 1 && plan.npoOrders[0].id === 'IO-NPO-SG5', '種子：主刀的個人組套（外科闌尾組套不是這個術式不列）、術前禁食醫囑')
+    ok(['SG-SEED-3', 'SG-SEED-4'].every((id) => db().surgeries.find((s) => s.id === id).postop?.note), '種子：前兩台已沿用術前醫囑')
+    // 誰能開
+    await as('nurse01')
+    plan = await P.postopPlan(s5.id)
+    ok(!plan.canWrite && !plan.sets.length, '護理師只能看')
+    await expectError(() => P.applyPostop(s5.id, { note: 'x', npo: {} }), '護理師不能開術後醫囑')
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== s5.doctorId && u.doctorId !== db().admissions.find((a) => a.id === s5.admissionId).doctorId && u.doctorId === 'DR11')
+    await as(other.username)
+    await expectError(() => P.applyPostop(s5.id, { note: 'x', npo: {} }), '不是這位病人的本科醫師不能開')
+    // 預覽：先開一筆 Acetaminophen（組套第 1 項就變成重複要確認）、把 Tramadol 停用（第 2 項不能套）
+    await as(surgeon.username)
+    await api.ipdApi.addOrder(await withRxOk({ admissionId: s5.admissionId, type: 'long', category: 'medication', drugId: 'M001', content: '', dose: 1, freq: 'TID', route: 'PO', allowDuplicate: true }))
+    db().drugs.find((d) => d.id === 'M031').active = false
+    const setId = plan.sets?.[0]?.id ?? 'PS-SEED-1'
+    let pv = await P.postopPreview(s5.id, setId)
+    ok(pv[0].status === 'confirm' && pv[0].notes.some((x) => x.includes('已有執行中')) && pv[1].status === 'blocked' && pv[1].notes[0].includes('停用') && pv[3].status === 'ok', `預覽：重複要確認、停用的不能套、護理醫囑可以直接套（${pv.map((x) => x.status).join('、')}）`)
+    // 套用的檢查
+    let f = await fieldsOf(() => P.applyPostop(s5.id, { setId, items: [0, 2, 3, 4], confirmed: [0], npo: {} }))
+    ok(f['npo.IO-NPO-SG5']?.includes('停止或保留'), '禁食醫囑要選停或保留')
+    f = await fieldsOf(() => P.applyPostop(s5.id, { setId, items: [0, 2, 3, 4], confirmed: [0], npo: { 'IO-NPO-SG5': 'keep' } }))
+    ok(f['npo.IO-NPO-SG5']?.includes('取代'), '組套有長期飲食醫囑：禁食不能保留')
+    f = await fieldsOf(() => P.applyPostop(s5.id, { setId, items: [0, 3], npo: { 'IO-NPO-SG5': 'stop' } }))
+    ok(f.items?.includes('要確認'), '要確認的沒確認擋下')
+    f = await fieldsOf(() => P.applyPostop(s5.id, { setId, items: [1, 3], npo: { 'IO-NPO-SG5': 'stop' } }))
+    ok(f.items?.includes('停用'), '不能套的不能選')
+    f = await fieldsOf(() => P.applyPostop(s5.id, { setId, items: [], npo: { 'IO-NPO-SG5': 'stop' } }))
+    ok(f.items, '套組套至少選一項')
+    ok(db().ipdOrders.find((o) => o.id === 'IO-NPO-SG5').status === 'active', '擋下時什麼都沒改（禁食還在）')
+    const before = db().ipdOrders.length
+    const r = await P.applyPostop(s5.id, { setId, items: [0, 2, 3, 4], confirmed: [0], npo: { 'IO-NPO-SG5': 'stop' } })
+    const made = db().ipdOrders.filter((o) => r.orderIds.includes(o.id))
+    ok(r.orderIds.length === 4 && db().ipdOrders.length === before + 4 && made.some((o) => o.category === 'diet' && o.diet.kind === 'liquid' && o.status === 'active') && made.filter((o) => o.drugId === 'M001').length === 1 && made.find((o) => o.drugId === 'M001').pharm, `套用 4 項：醫囑照常建立（給藥要藥師審核）：${made.map((o) => o.content).join('、')}`)
+    ok(db().ipdOrders.find((o) => o.id === 'IO-NPO-SG5').status === 'stopped' && db().surgeries.find((s) => s.id === s5.id).postop.npoStopped[0] === 'IO-NPO-SG5', '術前禁食醫囑停止')
+    ok(db().auditLogs[0].action === '術後醫囑' && db().auditLogs[0].detail.includes('疝氣修補術後（常用）') && db().auditLogs[0].detail.includes('停止禁食'), '稽核')
+    view = (await api.surgeryApi.patientSurgeries(s5.admissionId)).list.find((x) => x.id === s5.id)
+    ok(!view.postopDue && view.postopText.includes('套用「疝氣修補術後（常用）」4 項') && view.postopText.includes('禁食停止'), `手術分頁顯示：${view.postopText}`)
+    ok((await api.dashboardApi.getDashboard()).postopDue === dash.postopDue - 1, '首頁待開少一台')
+    await expectError(() => P.applyPostop(s5.id, { note: '再一次', npo: {} }), '開過了不能再開')
+    // 沿用術前醫囑、超過 4 小時（測試輔助：把昨晚急刀的術後醫囑拿掉）
+    const s4 = db().surgeries.find((s) => s.id === 'SG-SEED-4')
+    delete s4.postop
+    const s4doc = userOf(s4.doctorId)
+    await as(s4doc.username)
+    view = (await api.surgeryApi.patientSurgeries(s4.admissionId)).list.find((x) => x.id === s4.id)
+    ok(view.postopDue && view.postopLate && (await api.dashboardApi.getDashboard()).postopLate >= 1, '手術完成超過 4 小時還沒開：標紅、首頁標示')
+    f = await fieldsOf(() => P.applyPostop(s4.id, { npo: {} }))
+    ok(f.note, '不套組套要寫原因')
+    await P.applyPostop(s4.id, { npo: {}, note: '沿用術前醫囑' })
+    ok(db().surgeries.find((s) => s.id === s4.id).postop.orderIds.length === 0 && db().auditLogs[0].detail.includes('沿用術前醫囑'), '沿用術前醫囑（稽核）')
+    // 存組套
+    await as(surgeon.username)
+    plan = await P.postopPlan(s5.id)
+    ok(!plan.canWrite && plan.doneText && plan.orderOptions.length >= 4, '開過後還可以存組套（列出執行中的醫囑）')
+    f = await fieldsOf(() => P.savePostopSet(s5.id, { name: '', scope: 'dept', orderIds: [] }))
+    ok(f.name && f.orderIds, '組套名稱、醫囑要選')
+    const pick = made.filter((o) => o.category !== 'medication').map((o) => o.id)
+    const set = await P.savePostopSet(s5.id, { name: '疝氣術後（科室）', scope: 'dept', orderIds: pick })
+    ok(set.items.length === pick.length && set.items.some((x) => x.diet?.kind === 'liquid') && set.deptName && db().auditLogs[0].action === '新增術後組套', `存成科室組套：${set.itemTexts.join('、')}`)
+    const sameDept = db().users.find((u) => u.doctorId && u.doctorId !== s5.doctorId && db().doctors.find((d) => d.id === u.doctorId).deptId === db().doctors.find((d) => d.id === s5.doctorId).deptId)
+    await as('dr11')
+    await expectError(() => P.deletePostopSet(set.id), '別科醫師不能刪科室組套')
+    if (sameDept) {
+      await as(sameDept.username)
+      await P.deletePostopSet(set.id)
+      ok(!db().postopSets.some((x) => x.id === set.id), '同科醫師可以刪科室組套')
+    }
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/components/surgery/PostopDialog.vue', 'utf8')
+    ok(!/db\.|createOrder|checkAllergies|doseLevel/.test(page), '檢查在服務層，頁面只收選擇')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

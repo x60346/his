@@ -8,6 +8,7 @@ import { Plus, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import PacuPanel from './PacuPanel.vue'
+import PostopDialog from './PostopDialog.vue'
 import { ANESTHESIA_LABEL, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
@@ -50,6 +51,9 @@ async function confirmCancel(reason: string) {
 }
 
 // ---------- 手術紀錄 ----------
+// 術後醫囑（套組套或沿用術前醫囑）
+const postopFor = ref<string>()
+const postopOpen = computed({ get: () => !!postopFor.value, set: (x) => !x && (postopFor.value = undefined) })
 const recording = ref<SurgeryView>()
 const recOpen = computed({ get: () => !!recording.value, set: (x) => !x && (recording.value = undefined) })
 const rec = reactive({ performed: '', findings: '', bloodLoss: undefined as number | undefined, complications: '', specimen: '' })
@@ -144,8 +148,11 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
             <div>術式：{{ s.record.performed }}・失血 {{ s.record.bloodLoss }} ml・併發症 {{ s.record.complications }}・檢體 {{ s.record.specimen }}</div>
             <div class="whitespace-pre-line">術中發現：{{ s.record.findings }}</div>
           </div>
+          <p v-if="s.postopText" class="text-xs text-slate-600">術後醫囑：{{ s.postopText }}</p>
+          <p v-else-if="s.postopDue" class="text-xs" :class="s.postopLate ? 'font-semibold text-red-700' : 'text-amber-800'">術後醫囑還沒開{{ s.postopLate ? '（手術完成超過 4 小時）' : '' }}</p>
           <div v-if="isDoctor" class="flex gap-2">
             <UButton v-if="s.status === 'done' && !s.record" size="sm" @click="openRec(s)">寫手術紀錄</UButton>
+            <UButton v-if="s.status === 'done'" size="sm" :variant="s.postopDue ? 'primary' : 'secondary'" @click="postopFor = s.id">術後醫囑</UButton>
             <UButton v-if="v.canRequest && ['requested', 'scheduled'].includes(s.status)" size="sm" variant="ghost" class="text-red-700" @click="cancelling = s">取消手術</UButton>
           </div>
         </section>
@@ -192,6 +199,7 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
       </template>
     </UDialog>
 
+    <PostopDialog v-model="postopOpen" :surgery-id="postopFor" />
     <UDialog v-model="recOpen" :title="`手術紀錄：${recording?.procName ?? ''}`" @submit="submitRec">
       <div class="space-y-3">
         <p v-if="recording?.team" class="rounded bg-slate-50 px-2 py-1 text-xs text-slate-600">手術團隊：{{ recording.teamText }}</p>
