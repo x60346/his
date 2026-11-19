@@ -80,6 +80,8 @@ export interface OrderView extends IpdOrder {
   pendingQuery?: { reason: string; byName: string; at: string }
   doctorName: string
   highAlert: boolean
+  /** 要空腹的檢驗（飯前血糖等）：護理師執行（採檢）時要答有沒有空腹 */
+  needsFasting: boolean
   freqLabel: string
   /** 服用時機短字（飯前、飯後…）；不適用為空字串 */
   timingShort: string
@@ -118,6 +120,7 @@ export const orderView = (o: IpdOrder): OrderView => {
     ...(q ? { pendingQuery: { reason: q.reason, byName: nameOf.user(q.by), at: q.at } } : {}),
     doctorName: nameOf.doctor(o.doctorId),
     highAlert: drug?.highAlert ?? false,
+    needsFasting: !!(o.procId && find.procedure(o.procId)?.fasting),
     freqLabel: o.freq ? find.freq(o.freq)?.label ?? o.freq : '',
     timingShort: o.category === 'medication' && o.type === 'long' ? timingText(o.timing, o.freq ?? '', o.route ?? '', true) : '',
     unit: drug ? doseUnitOf(drug) : '',

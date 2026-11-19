@@ -8,7 +8,7 @@ import { find } from './views'
 import { buildLabValues } from './lab-rules'
 import { awaitingReceipt } from './specimen'
 import { qcBlockers } from './qc-rules'
-import { opdSpecimenOf } from './specimen-work'
+import { opdSpecimenOf, specimenOfOrder } from './specimen-work'
 import { procItems, reportedIpd, reportedOpd } from './lab-work'
 
 export function nextLabNo(at: string): string {
@@ -69,7 +69,11 @@ export function issueLabReport(key: string, values0: Record<string, string>, u: 
     const { values, errors } = buildLabValues(defs, values0, p.gender)
     failFields(errors)
     const t = now()
-    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base!, values, reportedBy: u.id, reportedAt: t, ...(opts.auto ? { autoVerified: true } : {}), ...(opts.qualityNote ? { qualityNote: opts.qualityNote } : {}) }
+    // 要空腹的檢驗、採檢時沒空腹：報告附註「非空腹採檢」（和檢體品質附註合在一起）
+    const sp = base!.orderId ? specimenOfOrder(base!.orderId) : opdSpecimenOf(key)
+    const fastNote = find.procedure(base!.procId)?.fasting && sp?.fasting?.ok === false ? `非空腹採檢${sp.fasting.note ? `（${sp.fasting.note}）` : ''}` : ''
+    const note = [opts.qualityNote, fastNote].filter(Boolean).join('；')
+    const r: LabReport = { id: newId('LR'), no: nextLabNo(t), ...base!, values, reportedBy: u.id, reportedAt: t, ...(opts.auto ? { autoVerified: true } : {}), ...(note ? { qualityNote: note } : {}) }
     db.labReports.push(r)
     const crit = values.filter((x) => x.critical)
     audit(`${crit.length ? '發檢驗報告（危急值）' : '發檢驗報告'}${opts.auto ? '（自動審核）' : opts.analyzer ? '（儀器審核）' : ''}`, `${r.no} ${p.name} ${find.procedure(r.procId)?.name}${crit.length ? `：${crit.map((x) => `${x.name} ${x.value}`).join('、')}` : ''}`)

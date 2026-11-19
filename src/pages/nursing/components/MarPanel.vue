@@ -8,6 +8,7 @@ import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WitnessDialog from '@/components/WitnessDialog.vue'
 import ScanDialog from '@/components/ScanDialog.vue'
+import FastingCollect from '@/components/FastingCollect.vue'
 import { checkGivenAt, MAR_BACKDATE_MAX_MIN, MAR_EARLY_MIN, marUrgency, nursingApi, SCAN_SKIP_LABEL, scanApi, witnessApi, type ScanInput, type AdmissionView, type MarView, type MarUrgency, type PrnView } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
@@ -231,7 +232,17 @@ async function complete(o: OrderView) {
     reasonFor.value = { kind: 'force-stat', order: o }
     return
   }
+  // 要空腹的檢驗：問有沒有空腹（沒空腹照樣採，記原因）
+  if (o.needsFasting) {
+    fastFor.value = o
+    return
+  }
   if (await ui.confirm({ title: '執行臨時醫囑', message: `確認已完成「${o.content}」？`, okText: '已完成' })) done.run(o.id)
+}
+const fastFor = ref<OrderView>()
+const fastOpen = computed({ get: () => !!fastFor.value, set: (x) => !x && (fastFor.value = undefined) })
+async function fastDone(opts: { fasting?: boolean; note?: string }) {
+  if (fastFor.value && (await done.run(fastFor.value.id, undefined, opts))) fastFor.value = undefined
 }
 </script>
 
@@ -380,5 +391,12 @@ async function complete(o: OrderView) {
       :approve="approveResidual"
       @approved="onResidualApproved"
     />
+    <UDialog v-model="fastOpen" title="執行檢驗（要空腹）" size="sm">
+      <p v-if="fastFor" class="text-sm">「{{ fastFor.content }}」要空腹：病人有空腹嗎？沒空腹照樣採，標籤與報告會註明非空腹。</p>
+      <template #footer>
+        <UButton variant="secondary" @click="fastFor = undefined">取消</UButton>
+        <FastingCollect :needs-fasting="true" :pending="done.pending.value" @collect="fastDone" />
+      </template>
+    </UDialog>
   </div>
 </template>

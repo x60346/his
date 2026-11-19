@@ -7,7 +7,7 @@ import { now } from '@/utils/date'
 import { audit, fail, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
 import { groupByTube, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL } from './specimen-rules'
-import { nextBarcode, opdSpecimenOf } from './specimen-work'
+import { chunksByVolume, nextBarcode, opdSpecimenOf } from './specimen-work'
 import { pendingLabWork } from './lab-work'
 import { erLabCounts } from './er-lab-work'
 import { isErDoctor } from './er-work'
@@ -87,9 +87,9 @@ export function printErLabels(visitId: string): Promise<ErSpecimenView[]> {
     const items = toCollect(e?.id)
     if (!items.length) fail('沒有要採檢的檢驗（醫師還沒送出，或都印過了）', 'CONFLICT')
     const t = now()
-    const out: Specimen[] = groupByTube(items.map((w) => ({ tube: tubeOf(w.procId), w }))).map((g) => ({
-      id: newId('SP'), barcode: nextBarcode(t), patientId: v.patientId, tube: g.tube, orderIds: [], opdKeys: g.items.map((x) => x.w.key), er: true, createdAt: t, printedAt: t, printedBy: u.id,
-    }))
+    const out: Specimen[] = groupByTube(items.map((w) => ({ tube: tubeOf(w.procId), w }))).flatMap((g) => chunksByVolume(g.tube, g.items, (x) => x.w.procId).map((c) => ({
+      id: newId('SP'), barcode: nextBarcode(t), patientId: v.patientId, tube: g.tube, orderIds: [], opdKeys: c.map((x) => x.w.key), er: true as const, createdAt: t, printedAt: t, printedBy: u.id,
+    })))
     db.specimens.push(...out)
     audit('急診檢體條碼', `${nameOf.patient(v.patientId)}：${out.map((s) => `${TUBE_LABEL[s.tube]}（${(s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name).join('、')}）`).join('；')}`)
     return out.map(spView)

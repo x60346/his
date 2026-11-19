@@ -42,3 +42,26 @@ export function addonCheck(sp: Pick<Specimen, 'tube' | 'collectedAt' | 'received
   if (t > until) return { ok: false, reason: `超過可加做時限（${TUBE_LABEL[tube]} ${h} 小時，採檢 ${sp.collectedAt.slice(5)}）：要重新採檢` }
   return { ok: true, until }
 }
+
+/** 一支管子裝得下多少檢體（mL）：同管別的檢驗合起來超過就拆成兩支條碼 */
+export const TUBE_CAPACITY_ML: Record<TubeKind, number> = { purple: 3, red: 5, gas: 1, urine: 10, swab: 5, sputum: 5, culture: 10 }
+/** 依量拆支：照順序裝，裝不下就開新的一支（單項就超過容量的自己一支） */
+export function splitByVolume<T>(items: T[], ml: (x: T) => number, capacity: number): T[][] {
+  const out: T[][] = []
+  let cur: T[] = []
+  let used = 0
+  for (const x of items) {
+    const v = ml(x)
+    if (cur.length && used + v > capacity) {
+      out.push(cur)
+      cur = []
+      used = 0
+    }
+    cur.push(x)
+    used += v
+  }
+  if (cur.length) out.push(cur)
+  return out
+}
+/** 空腹確認的文字（標籤、報告附註） */
+export const fastingText = (f: { ok: boolean; note?: string } | undefined) => (!f ? '' : f.ok ? '空腹' : `非空腹${f.note ? `（${f.note}）` : ''}`)

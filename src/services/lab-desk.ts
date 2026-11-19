@@ -5,8 +5,8 @@ import type { LabCheckin, Specimen } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, must, mutate, query, requireUser } from './http'
-import { groupByTube, SELF_COLLECT_TUBES, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL } from './specimen-rules'
-import { nextBarcode, opdSpecimenOf } from './specimen-work'
+import { fastingText, groupByTube, SELF_COLLECT_TUBES, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL } from './specimen-rules'
+import { chunksByVolume, needsFasting, nextBarcode, opdSpecimenOf, recordFasting } from './specimen-work'
 import { pendingLabWork } from './lab-work'
 import { find, nameOf } from './views'
 import { ageOf } from '@/utils/date'
@@ -28,12 +28,15 @@ export interface DeskSpecimen {
   stage: string
   stageLabel: string
   rejectedReason?: string
+  needsFasting: boolean
+  fastingLabel?: string
 }
 const spView = (s: Specimen): DeskSpecimen => {
   const st = specimenStage(s)
   return {
     id: s.id, barcode: s.barcode, tube: s.tube, tubeLabel: TUBE_LABEL[s.tube], tests: (s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name ?? k), selfCollect: !!s.selfCollect, stage: st,
     stageLabel: s.selfCollect && st === 'printed' ? '容器已發、待交回' : s.selfCollect && st === 'collected' ? '已交回、待收件' : SPECIMEN_STAGE_LABEL[st], ...(s.rejected ? { rejectedReason: s.rejected.reason } : {}),
+    needsFasting: needsFasting(s), ...(s.fasting ? { fastingLabel: fastingText(s.fasting) } : {}),
   }
 }
 
@@ -239,10 +242,11 @@ export function printDeskLabels(patientId: string): Promise<DeskSpecimen[]> {
     const items = toCollect(patientId)
     if (!items.length) fail('沒有要採檢的檢驗', 'CONFLICT')
     const t = now()
-    const out: Specimen[] = groupByTube(items.map((w) => ({ tube: tubeOf(w.procId), w }))).map((g) => ({
-      id: newId('SP'), barcode: nextBarcode(t), patientId, tube: g.tube, orderIds: [], opdKeys: g.items.map((x) => x.w.key), ...(SELF_COLLECT_TUBES.includes(g.tube) ? { selfCollect: true } : {}),
+    // 同管別合併；量超過一支管的容量就拆成兩支
+    const out: Specimen[] = groupByTube(items.map((w) => ({ tube: tubeOf(w.procId), w }))).flatMap((g) => chunksByVolume(g.tube, g.items, (x) => x.w.procId).map((c) => ({
+      id: newId('SP'), barcode: nextBarcode(t), patientId, tube: g.tube, orderIds: [], opdKeys: c.map((x) => x.w.key), ...(SELF_COLLECT_TUBES.includes(g.tube) ? { selfCollect: true as const } : {}),
       createdAt: t, printedAt: t, printedBy: u.id,
-    }))
+    })))
     db.specimens.push(...out)
     ck!.servedAt ??= t
     audit('門診檢體條碼', `${nameOf.patient(patientId)}：${out.map((s) => `${TUBE_LABEL[s.tube]}（${(s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name).join('、')}）${s.selfCollect ? '發容器' : ''}`).join('；')}`)
@@ -250,8 +254,8 @@ export function printDeskLabels(patientId: string): Promise<DeskSpecimen[]> {
   })
 }
 
-/** 採檢（抽血）或病人交回容器：檢體記採檢，送檢驗科收件 */
-export function collectDeskSpecimen(barcode: string): Promise<DeskSpecimen> {
+/** 採檢（抽血）或病人交回容器：檢體記採檢，送檢驗科收件。有要空腹的檢驗要答病人有沒有空腹（沒空腹不擋，記原因） */
+export function collectDeskSpecimen(barcode: string, opts: { fasting?: boolean; note?: string } = {}): Promise<DeskSpecimen> {
   return mutate(() => {
     const u = requireUser('lab')
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
@@ -259,8 +263,9 @@ export function collectDeskSpecimen(barcode: string): Promise<DeskSpecimen> {
     if (s.er) fail('急診檢體由急診護理師床邊採檢', 'CONFLICT')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}`, 'CONFLICT')
+    recordFasting(s, opts, u.id, now())
     Object.assign(s, { collectedAt: now(), collectedBy: u.id })
-    audit(s.selfCollect ? '門診檢體交回' : '門診採檢', `${s.barcode} ${nameOf.patient(s.patientId)}`)
+    audit(s.selfCollect ? '門診檢體交回' : '門診採檢', `${s.barcode} ${nameOf.patient(s.patientId)}${s.fasting ? `（${fastingText(s.fasting)}）` : ''}`)
     return spView(s)
   })
 }

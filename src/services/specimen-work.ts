@@ -3,6 +3,8 @@
 import type { Admission, IpdOrder, Specimen, TubeKind } from '@/types'
 import { db, newId } from '@/mock/db'
 import { find } from './views'
+import { failField } from './http'
+import { splitByVolume, TUBE_CAPACITY_ML } from './specimen-rules'
 
 /** 住院檢驗醫囑：臨時、處置類、主檔有檢驗項目的 */
 export const isLabOrder = (o: IpdOrder) => o.category === 'procedure' && o.type === 'stat' && !!o.procId && !!find.procedure(o.procId)?.labItems?.length
@@ -97,4 +99,25 @@ export function rejectPart(s: Specimen, keys: string[], by: string, t: string, r
   }
   reopenLabOrders(ids)
   return out
+}
+
+/** 這支檢體在驗哪些檢驗醫令（住院醫囑、門診或急診的看診醫令） */
+export const specimenProcIds = (s: Pick<Specimen, 'orderIds' | 'opdKeys'>) => [
+  ...s.orderIds.map((id) => db.ipdOrders.find((o) => o.id === id)?.procId).filter((x): x is string => !!x),
+  ...(s.opdKeys ?? []).map((k) => k.split(':')[2]),
+]
+/** 這支檢體有沒有要空腹的檢驗 */
+export const needsFasting = (s: Pick<Specimen, 'orderIds' | 'opdKeys'>) => specimenProcIds(s).some((id) => find.procedure(id)?.fasting)
+/** 依量拆支（同管別的檢驗合起來超過一支管的容量）：每一組各印一支條碼 */
+export const chunksByVolume = <T>(tube: TubeKind, items: T[], procIdOf: (x: T) => string) =>
+  splitByVolume(items, (x) => find.procedure(procIdOf(x))?.specimenMl ?? 0.5, TUBE_CAPACITY_ML[tube])
+
+/**
+ * 採檢時記空腹（有要空腹的檢驗才要答）：沒答擋（欄位 fasting）；沒空腹不擋，記原因（標籤、報告註明非空腹）。
+ * 沒有要空腹的檢驗，送來的答案不收
+ */
+export function recordFasting(s: Specimen, input: { fasting?: boolean; note?: string } | undefined, by: string, t: string) {
+  if (!needsFasting(s)) return
+  if (input?.fasting !== true && input?.fasting !== false) failField('fasting', `這支有要空腹的檢驗（${specimenProcIds(s).filter((id) => find.procedure(id)?.fasting).map((id) => find.procedure(id)?.name).join('、')}），請確認病人有沒有空腹`)
+  s.fasting = { ok: input!.fasting!, ...(input!.fasting === false && input!.note?.trim() ? { note: input!.note.trim() } : {}), at: t, by }
 }

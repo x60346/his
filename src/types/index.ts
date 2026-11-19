@@ -855,6 +855,8 @@ export interface Specimen {
   partOf?: string
   /** 急診床邊採檢（急診護理師印條碼、採檢；不經抽血櫃台、不用先批價）：opdKeys 是急診看診的檢驗 */
   er?: true
+  /** 有要空腹的檢驗：採檢時確認病人有沒有空腹（沒有空腹不擋，記原因；標籤、報告註明非空腹） */
+  fasting?: { ok: boolean; note?: string; at: string; by: string }
 }
 
 /** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
@@ -1004,6 +1006,10 @@ export interface Procedure {
   labItems?: LabItemDef[]
   /** 檢體容器（試管別）：同一位病人同管別的檢驗合併成一支條碼 */
   tube?: TubeKind
+  /** 檢驗要空腹（飯前血糖、膽固醇、三酸甘油酯）：採檢時要確認病人有沒有空腹 */
+  fasting?: true
+  /** 每次需要的檢體量（mL）：同管別合起來超過一支管的容量就拆成兩支條碼 */
+  specimenMl?: number
   /**
    * 檢驗時限（主檔可編，空白＝預設）：急件、一般時效（分鐘）、危急值通報時限（分鐘）、不計時效（培養這類要好幾天的）。
    * 修改要寫原因，留在 labLimitHistory

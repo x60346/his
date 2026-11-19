@@ -37,7 +37,7 @@ import { recentIcuOut } from './icu-move-work'
 import { autoCallRrt, newsStateOf, openRrt } from './news-work'
 import type { NewsLevel } from './news-rules'
 import { openPharmQuery } from './pharm-rules'
-import { collectRecord, isLabOrder, newSpecimen, specimenOfOrder, tubeOfOrder } from './specimen-work'
+import { collectRecord, isLabOrder, newSpecimen, recordFasting, specimenOfOrder, tubeOfOrder } from './specimen-work'
 import { ppeOf } from './iso-rules'
 
 export interface WardPatient extends AdmissionView {
@@ -555,7 +555,7 @@ function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefin
 
 /** 執行臨時醫囑（檢驗、處置等非給藥） */
 /** 回傳 { ok: true }：讓呼叫端分得出「成功」與「失敗被擋」（void 的話兩者都是 undefined） */
-export function completeStatOrder(orderId: string, force?: { reason: string }): Promise<{ ok: true }> {
+export function completeStatOrder(orderId: string, force?: { reason: string }, fasting?: { fasting?: boolean; note?: string }): Promise<{ ok: true }> {
   return mutate(() => {
     const nurse = requirePermission('mar.give')
     const o = must(db.ipdOrders.find((x) => x.id === orderId), '醫囑')
@@ -569,6 +569,8 @@ export function completeStatOrder(orderId: string, force?: { reason: string }): 
     if (isLabOrder(o)) {
       const s = specimenOfOrder(o.id)
       const sp = s && !s.collectedAt ? s : newSpecimen(must(find.admission(o.admissionId), '住院紀錄'), tubeOfOrder(o), [o.id], nurse.id, t, true)
+      // 有要空腹的檢驗：要答有沒有空腹（沒空腹不擋，記原因）
+      recordFasting(sp, fasting, nurse.id, t)
       const os = collectRecord(sp, nurse.id, t)
       audit(forced ? '疑問期間仍執行' : '採檢', `${sp.barcode} ${os.map((x) => x.content).join('、')}${forced ? `：${forced}` : ''}`)
       return { ok: true as const }

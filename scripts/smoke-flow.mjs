@@ -95,6 +95,12 @@ try {
     }
     return imagingRaw.reportImaging(input)
   }
+  // 採檢空腹確認：有要空腹的檢驗（飯前血糖、膽固醇、三酸甘油酯）採檢時要答有沒有空腹。其他段落測的是採檢本身，
+  // 沒帶答案的一律當「有空腹」；要測這條規則的段落用 fastRaw（沒包裝的原函式）
+  const fastRaw = { collectSpecimen: api.specimenApi.collectSpecimen, collectDeskSpecimen: api.labDeskApi.collectDeskSpecimen, completeStatOrder: api.nursingApi.completeStatOrder }
+  api.specimenApi.collectSpecimen = (barcode, opts) => fastRaw.collectSpecimen(barcode, opts ?? { fasting: true })
+  api.labDeskApi.collectDeskSpecimen = (barcode, opts) => fastRaw.collectDeskSpecimen(barcode, opts ?? { fasting: true })
+  api.nursingApi.completeStatOrder = (id, force, fasting) => fastRaw.completeStatOrder(id, force, fasting ?? { fasting: true })
   // 出院用藥整合：簽署出院病摘時每一項居家用藥都要決定恢復或停用。其他段落測的是別的規則，沒帶 homeMedPlan 的一律「全部恢復」；
   // 要測這條規則的段落自己帶 homeMedPlan（帶空物件 {} 就是什麼都沒決定）
   {
@@ -12803,6 +12809,80 @@ try {
     await as('nurse01')
     msg = await errOf(() => L.labLimitList())
     ok(msg.includes('權限'), '護理師不能看')
+  }
+
+  // 採檢空腹與檢體量：依量拆支、空腹文字；種子（主檔、血糖非空腹與報告附註）；病房印條碼拆兩支、採檢要答空腹（沒答擋、沒空腹照採記原因）、
+  // 報告附註非空腹（只有要空腹的項目）、沒有要空腹的不收答案、護理站執行臨時檢驗也要答、抽血櫃台也要答
+  console.log('\n[採檢空腹與檢體量]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const v = (ml) => ({ ml })
+    const ch = api.splitByVolume([v(2), v(2), v(2), v(6), v(1)], (x) => x.ml, 5)
+    ok(ch.map((c) => c.map((x) => x.ml).join('+')).join(' | ') === '2+2 | 2 | 6 | 1', '依量拆支：照順序裝，裝不下開新的一支（單項超過容量自己一支）')
+    ok(api.splitByVolume([v(2.5), v(2.5)], (x) => x.ml, 5).length === 1 && api.TUBE_CAPACITY_ML.red === 5 && api.TUBE_CAPACITY_ML.purple === 3, '剛好裝滿算一支；紅頭 5 mL、紫頭 3 mL')
+    ok(api.fastingText({ ok: true }) === '空腹' && api.fastingText({ ok: false, note: '吃過早餐' }) === '非空腹（吃過早餐）' && api.fastingText(undefined) === '', '空腹文字')
+    // 種子
+    const pr = (id) => db().procedures.find((p) => p.id === id)
+    ok(pr('P004').fasting && pr('P006').fasting && pr('P007').fasting && !pr('P008').fasting && pr('P003').specimenMl === 1 && pr('P008').specimenMl === 0.5, '主檔：飯前血糖、膽固醇、三酸甘油酯要空腹；每項檢體量')
+    const crSp = db().specimens.find((s) => s.id === 'SP-CR-1')
+    ok(crSp.fasting?.ok === false && crSp.fasting.note === '早上吃過早餐' && db().labReports.find((r) => r.id === 'LR-CR-1').qualityNote.includes('非空腹'), '種子：糖尿病病人臨時血糖非空腹（早上吃過早餐）、報告附註')
+
+    // 病房：八項紅頭 5.5 mL → 拆兩支
+    const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    await as(userOf(fx.doctorId))
+    const procs = ['P004', 'P006', 'P007', 'P008', 'P009', 'P011', 'P055', 'P060']
+    const os = []
+    for (const p of procs) os.push(await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: p, content: '' }))
+    const lst = await api.ipdApi.listOrders(fx.id)
+    ok(lst.find((o) => o.id === os[0].id).needsFasting && !lst.find((o) => o.id === os[3].id).needsFasting, '醫囑清單標出要空腹的檢驗')
+    await as('nurse01')
+    const labels = (await api.specimenApi.printSpecimenLabels(fx.id)).filter((s) => s.orderIds.some((id) => os.some((o) => o.id === id)))
+    const ml = (s) => s.orderIds.reduce((n, id) => n + pr(db().ipdOrders.find((o) => o.id === id).procId).specimenMl, 0)
+    ok(labels.length === 2 && labels.every((s) => s.tube === 'red' && ml(s) <= 5) && labels.reduce((n, s) => n + s.orderIds.length, 0) === 8, `紅頭 5.5 mL 超過一支（5 mL）→ 拆成兩支（${labels.map(ml).join('、')} mL）`)
+    const fastTube = labels.find((s) => s.needsFasting)
+    const plainTube = labels.find((s) => !s.needsFasting)
+    ok(fastTube && plainTube, '一支有要空腹的檢驗、一支沒有')
+    let f = await fieldsOf(() => fastRaw.collectSpecimen(fastTube.barcode))
+    ok(f.fasting?.includes('飯前血糖'), `有要空腹的沒答 → 擋（${f.fasting}）`)
+    const c1 = await fastRaw.collectSpecimen(fastTube.barcode, { fasting: false, note: '吃過早餐' })
+    ok(c1.fastingLabel === '非空腹（吃過早餐）' && db().auditLogs[0].detail.includes('非空腹'), '沒空腹照樣採：記原因、稽核')
+    const c2 = await fastRaw.collectSpecimen(plainTube.barcode, { fasting: false, note: 'x' })
+    ok(!c2.fastingLabel && !db().specimens.find((s) => s.barcode === plainTube.barcode).fasting, '沒有要空腹的檢驗：答案不收')
+    await as('lab01')
+    await api.specimenApi.receiveSpecimen(fastTube.barcode)
+    const rg = await labRaw.reportLab({ key: `O:${os[0].id}`, values: { 'GLU-AC': '135' } })
+    const rc = await labRaw.reportLab({ key: `O:${os[3].id}`, values: { CRE: '0.9' } })
+    ok(rg.qualityNote === '非空腹採檢（吃過早餐）' && !rc.qualityNote, '報告：飯前血糖附註非空腹；同一支的肌酸酐不用附註')
+    // 護理站執行臨時檢驗（沒印條碼直接執行）也要答
+    await as(userOf(fx.doctorId))
+    const o2 = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P007', content: '' })
+    await as('nurse01')
+    f = await fieldsOf(() => fastRaw.completeStatOrder(o2.id))
+    ok(f.fasting, '護理站執行要空腹的臨時檢驗：沒答擋')
+    await fastRaw.completeStatOrder(o2.id, undefined, { fasting: true })
+    ok(db().specimens.find((s) => s.orderIds.includes(o2.id)).fasting?.ok === true, '答空腹 → 記在檢體')
+    // 抽血櫃台：2 號退件重抽（飯前血糖＋肌酸酐）也要答
+    await as('lab01')
+    const d0 = await api.labDeskApi.labDesk()
+    const p2 = d0.checkedIn.find((p) => p.checkin.id === 'LC-SEED-2')
+    await api.specimenApi.rejectSpecimen(p2.specimens[0].barcode, '溶血')
+    const xs = await api.labDeskApi.printDeskLabels(p2.patientId)
+    const red = xs.find((s) => s.tube === 'red')
+    ok(red.needsFasting, '抽血櫃台：重印的紅頭有要空腹的檢驗')
+    f = await fieldsOf(() => fastRaw.collectDeskSpecimen(red.barcode))
+    ok(f.fasting, '抽血櫃台沒答 → 擋')
+    ok((await fastRaw.collectDeskSpecimen(red.barcode, { fasting: true })).fastingLabel === '空腹', '答空腹 → 採檢')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

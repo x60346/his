@@ -3291,8 +3291,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const rep = addMinutes(nowStr, -50) < day0 ? day0 : addMinutes(nowStr, -50)
       const t0 = addMinutes(rep, -40) < day0 ? day0 : addMinutes(rep, -40)
       ipdOrders.push({ id: 'IO-CR-1', admissionId: dm.id, type: 'stat', category: 'procedure', procId: 'P004', content: `${procMap.get('P004')!.name}（意識變差）`, startAt: t0, status: 'done', stopAt: t0, doctorId: dm.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201' })
-      specimens.push({ id: 'SP-CR-1', barcode: `S${T.replace(/-/g, '')}6001`, admissionId: dm.id, patientId: dm.patientId, tube: 'red', orderIds: ['IO-CR-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: t0, collectedBy: 'U201', receivedAt: t0, receivedBy: 'U601' })
-      labReports.push({ id: 'LR-CR-1', no: `L${T.replace(/-/g, '')}9401`, patientId: dm.patientId, procId: 'P004', orderId: 'IO-CR-1', admissionId: dm.id, doctorId: dm.doctorId, orderedAt: t0, values: buildLabValues(procMap.get('P004')!.labItems!, { 'GLU-AC': '32' }, pt.gender).values, reportedBy: 'U601', reportedAt: rep,
+      specimens.push({ id: 'SP-CR-1', barcode: `S${T.replace(/-/g, '')}6001`, admissionId: dm.id, patientId: dm.patientId, tube: 'red', orderIds: ['IO-CR-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: t0, collectedBy: 'U201', receivedAt: t0, receivedBy: 'U601',
+        // 空腹確認：早上吃過早餐（臨時抽的，不是空腹）——報告附註非空腹採檢
+        fasting: { ok: false, note: '早上吃過早餐', at: t0, by: 'U201' } })
+      labReports.push({ id: 'LR-CR-1', no: `L${T.replace(/-/g, '')}9401`, patientId: dm.patientId, procId: 'P004', orderId: 'IO-CR-1', admissionId: dm.id, doctorId: dm.doctorId, orderedAt: t0, values: buildLabValues(procMap.get('P004')!.labItems!, { 'GLU-AC': '32' }, pt.gender).values, reportedBy: 'U601', reportedAt: rep, qualityNote: '非空腹採檢（早上吃過早餐）',
         // 沒聯絡上一次：發出 8 分鐘後打給病房護理師，電話沒人接（再一次沒聯絡上就要改通報主治）
         calloutAttempts: [{ at: [addMinutes(rep, 8), nowStr].sort()[0], by: 'U601', to: nurse.name, toRole: 'nurse', note: '電話沒人接' }] })
     }

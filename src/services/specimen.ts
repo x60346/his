@@ -5,8 +5,8 @@ import type { Specimen } from '@/types'
 import { commitIfPossible, db } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failFields, must, mutate, query, requireUser } from './http'
-import { addonCheck, ADDON_HOURS, checkRejectReason, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
-import { addonSpecimenOf, collectRecord, isLabOrder, labOrderStage, newSpecimen, reopenLabOrders, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
+import { addonCheck, ADDON_HOURS, checkRejectReason, fastingText, groupByTube, specimenLate, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL, type SpecimenStage } from './specimen-rules'
+import { addonSpecimenOf, chunksByVolume, collectRecord, isLabOrder, labOrderStage, needsFasting, newSpecimen, recordFasting, reopenLabOrders, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
 import { ensureLabDraws } from './ipd'
 import { find, nameOf } from './views'
 
@@ -24,6 +24,9 @@ export interface SpecimenView extends Specimen {
   collectedByName?: string
   receivedByName?: string
   rejectedByName?: string
+  /** 有要空腹的檢驗（採檢時要答）；答了的文字（空腹／非空腹（原因）） */
+  needsFasting: boolean
+  fastingLabel?: string
 }
 function view(s: Specimen, t: string = now()): SpecimenView {
   const a = s.admissionId ? find.admission(s.admissionId) : undefined
@@ -34,6 +37,7 @@ function view(s: Specimen, t: string = now()): SpecimenView {
     ...s, stage, stageLabel: SPECIMEN_STAGE_LABEL[stage], tubeLabel: TUBE_LABEL[s.tube], patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', bedNo: bed?.bedNo ?? (s.admissionId ? '' : s.er ? '急診' : '門診'), ward: bed?.ward ?? '',
     tests: [...s.orderIds.map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id), ...(s.opdKeys ?? []).map((k) => find.procedure(k.split(':')[2])?.name ?? k)], late: specimenLate(s, t),
     ...(s.collectedBy ? { collectedByName: nameOf.user(s.collectedBy) } : {}), ...(s.receivedBy ? { receivedByName: nameOf.user(s.receivedBy) } : {}), ...(s.rejected ? { rejectedByName: nameOf.user(s.rejected.by) } : {}),
+    needsFasting: needsFasting(s), ...(s.fasting ? { fastingLabel: fastingText(s.fasting) } : {}),
   }
 }
 
@@ -83,7 +87,8 @@ export function printSpecimenLabels(admissionId: string): Promise<SpecimenView[]
     if (a.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
     const t = now()
     const groups = groupByTube(activeLabOrders(a.id).filter((o) => labOrderStage(o) === 'toCollect').map((o) => ({ tube: tubeOfOrder(o), o })))
-    for (const g of groups) newSpecimen(a, g.tube, g.items.map((x) => x.o.id), u.id, t, false)
+    // 同管別合併；量超過一支管的容量就拆成兩支
+    for (const g of groups) for (const c of chunksByVolume(g.tube, g.items, (x) => x.o.procId ?? '')) newSpecimen(a, g.tube, c.map((x) => x.o.id), u.id, t, false)
     const labels = db.specimens.filter((s) => s.admissionId === a.id && specimenStage(s) === 'printed')
     if (!labels.length) fail('沒有要採檢的檢驗', 'CONFLICT')
     if (groups.length) audit('印檢體條碼', `${a.admitNo} ${nameOf.patient(a.patientId)}：${groups.map((g) => `${TUBE_LABEL[g.tube]}（${g.items.map((x) => x.o.content).join('、')}）`).join('；')}`)
@@ -91,8 +96,8 @@ export function printSpecimenLabels(admissionId: string): Promise<SpecimenView[]
   })
 }
 
-/** 採檢（護理師掃條碼或在清單上按）：檢體記採檢、裡面的檢驗醫囑一起完成 */
-export function collectSpecimen(barcode: string): Promise<SpecimenView> {
+/** 採檢（護理師掃條碼或在清單上按）：檢體記採檢、裡面的檢驗醫囑一起完成。有要空腹的檢驗要答病人有沒有空腹（沒空腹不擋，記原因） */
+export function collectSpecimen(barcode: string, opts: { fasting?: boolean; note?: string } = {}): Promise<SpecimenView> {
   return mutate(() => {
     const u = requireUser('nurse')
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
@@ -101,9 +106,10 @@ export function collectSpecimen(barcode: string): Promise<SpecimenView> {
     if (!s.admissionId) fail(s.er ? '急診檢體在急診看板「檢驗」床邊採檢' : '門診檢體在抽血櫃台採檢', 'CONFLICT')
     if (find.admission(s.admissionId!)?.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
     const t = now()
+    recordFasting(s, opts, u.id, t)
     const os = collectRecord(s, u.id, t)
     if (!os.length) fail('這支檢體的醫囑都停止了，不用採檢', 'CONFLICT')
-    audit('採檢', `${s.barcode} ${nameOf.patient(s.patientId)}：${os.map((o) => o.content).join('、')}`)
+    audit('採檢', `${s.barcode} ${nameOf.patient(s.patientId)}：${os.map((o) => o.content).join('、')}${s.fasting ? `（${fastingText(s.fasting)}）` : ''}`)
     return view(s, t)
   })
 }

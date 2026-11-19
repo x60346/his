@@ -6,6 +6,7 @@ import { computed, ref } from 'vue'
 import { Printer, ScanLine } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
+import FastingCollect from '@/components/FastingCollect.vue'
 import { specimenApi, TUBE_COLOR, type SpecimenView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -52,14 +53,15 @@ async function onScan() {
       <section>
         <h4 class="mb-1 font-semibold text-slate-700">待採檢（已印條碼）</h4>
         <form v-if="isNurse && v.printed.length" class="mb-2 flex items-end gap-2" @submit.prevent="onScan">
-          <UInput v-model="code" class="flex-1" label="掃條碼採檢" placeholder="S2026…" />
+          <UInput v-model="code" class="flex-1" label="掃條碼採檢" placeholder="S2026…" :error="collect.fieldErrors.value.fasting ? `${collect.fieldErrors.value.fasting}：請在下方按「採檢（空腹）」或「非空腹」` : undefined" />
           <UButton type="submit" size="sm" :icon="ScanLine" :loading="collect.pending.value">採檢</UButton>
         </form>
         <p v-if="!v.printed.length" class="text-xs text-slate-400">沒有</p>
         <ul v-else class="divide-y divide-slate-100 rounded border border-slate-200">
           <li v-for="s in v.printed" :key="s.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
-            <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
-            <UButton v-if="isNurse" size="sm" variant="secondary" :loading="collect.pending.value" @click="collect.run(s.barcode)">採檢</UButton>
+            <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-[8rem] flex-1">{{ s.tests.join('、') }}</span>
+            <UBadge v-if="s.needsFasting" tone="purple">要空腹</UBadge>
+            <FastingCollect v-if="isNurse" :needs-fasting="s.needsFasting" :pending="collect.pending.value" @collect="(o) => collect.run(s.barcode, o)" />
           </li>
         </ul>
       </section>
@@ -70,6 +72,7 @@ async function onScan() {
           <li v-for="s in [...v.waiting, ...v.received]" :key="s.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
             <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
             <span class="tabular text-xs text-slate-500">採檢 {{ s.collectedAt?.slice(11) }} {{ s.collectedByName }}</span>
+            <UBadge v-if="s.fastingLabel" :tone="s.fastingLabel === '空腹' ? 'gray' : 'yellow'">{{ s.fastingLabel }}</UBadge>
             <UBadge :tone="s.stage === 'received' ? 'green' : s.late ? 'red' : 'yellow'">{{ s.stage === 'received' ? '已收件' : s.late ? '待收件・逾時' : '待收件' }}</UBadge>
           </li>
         </ul>

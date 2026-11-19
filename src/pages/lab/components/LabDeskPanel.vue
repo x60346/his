@@ -7,6 +7,7 @@ import { computed, reactive, ref } from 'vue'
 import { BellRing, ExternalLink, Printer, ScanLine, SkipForward, Ticket, Undo2 } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
+import FastingCollect from '@/components/FastingCollect.vue'
 import { labDeskApi, TUBE_COLOR, type DeskPatient, type DeskSpecimen } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
@@ -98,7 +99,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
         <template #title><span class="flex items-center gap-2 text-sm font-semibold">今天報到（{{ data.date.slice(5) }}）</span></template>
         <div class="space-y-3 p-3 text-sm">
           <form class="flex items-end gap-2" @submit.prevent="onScan">
-            <UInput v-model="code" class="flex-1" label="掃條碼採檢／收回容器" placeholder="S2026…" :error="collect.fieldErrors.value.barcode" />
+            <UInput v-model="code" class="flex-1" label="掃條碼採檢／收回容器" placeholder="S2026…" :error="collect.fieldErrors.value.barcode ?? (collect.fieldErrors.value.fasting ? `${collect.fieldErrors.value.fasting}：請在下方按「採檢（空腹）」或「非空腹」` : undefined)" />
             <UButton type="submit" :icon="ScanLine" :loading="collect.pending.value">採檢</UButton>
           </form>
           <p v-if="!open.length" class="text-xs text-slate-400">報到的病人都採檢完了</p>
@@ -123,7 +124,8 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
                 <li v-for="s in p.specimens" :key="s.id" class="flex flex-wrap items-center gap-2">
                   <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube as keyof typeof TUBE_COLOR]]" /><span class="tabular">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
                   <UBadge :tone="TONE[s.stage] ?? 'gray'">{{ s.stageLabel }}</UBadge>
-                  <UButton v-if="s.stage === 'printed'" size="sm" variant="secondary" :loading="collect.pending.value" @click="collect.run(s.barcode)">{{ s.selfCollect ? '收回' : '採檢' }}</UButton>
+                  <UBadge v-if="s.fastingLabel" :tone="s.fastingLabel === '空腹' ? 'gray' : 'yellow'">{{ s.fastingLabel }}</UBadge>
+                  <FastingCollect v-if="s.stage === 'printed'" :needs-fasting="s.needsFasting" :label="s.selfCollect ? '收回' : '採檢'" :pending="collect.pending.value" @collect="(o) => collect.run(s.barcode, o)" />
                 </li>
               </ul>
             </li>

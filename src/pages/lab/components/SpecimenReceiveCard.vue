@@ -36,7 +36,7 @@ async function confirmReject(reason: string) {
           <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" :title="s.tubeLabel" />
           <span class="tabular text-xs">{{ s.barcode }}</span>
           <span class="font-medium">{{ s.bedNo }} {{ s.patientName }}</span>
-          <span class="min-w-0 flex-1 text-xs text-slate-600">{{ s.tests.join('、') }}</span>
+          <span class="min-w-0 flex-1 text-xs text-slate-600">{{ s.tests.join('、') }}<span v-if="s.fastingLabel && s.fastingLabel !== '空腹'" class="ml-1 font-semibold text-amber-800">{{ s.fastingLabel }}</span></span>
           <span :class="['tabular text-xs', s.late ? 'font-semibold text-red-700' : 'text-slate-500']">採檢 {{ s.collectedAt?.slice(11) }}{{ s.late ? '・逾時' : '' }}</span>
           <UButton size="sm" variant="ghost" @click="rejecting = s">退件</UButton>
           <UButton size="sm" :loading="receive.pending.value" @click="receive.run(s.barcode)">收件</UButton>
