@@ -13,7 +13,7 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser, s
 import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
-import { calloutRate, calloutStatus, checkCallout, CALLOUT_ROLE_LABEL } from './callout-rules'
+import { calloutEscalated, calloutRate, calloutStatus, calloutTarget, checkCallout, checkCalloutAttempt, CALLOUT_ROLE_LABEL } from './callout-rules'
 import { addDays } from '@/utils/date'
 import { canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
@@ -45,6 +45,12 @@ export interface LabReportView extends LabReport {
   calloutDue?: string
   calloutOnTime?: boolean
   calloutByName?: string
+  /** 沒聯絡上的次數、要不要升級、這次要通報誰（提示文字） */
+  calloutTries: number
+  calloutEscalated: boolean
+  calloutTarget: string
+  /** 住院：主治醫師；門診：同科其他醫師（升級時建議打給誰） */
+  calloutSuggest: string[]
   /** 住院：病房床號；門診：科別門診 */
   where: string
   /** 檢驗值的定義＋這位病人的參考範圍（更正時畫面用來即時標示） */
@@ -61,8 +67,19 @@ const whereOf = (r: LabReport) => {
   return e ? `${nameOf.dept(e.deptId)}門診` : '門診'
 }
 
+/** 住院的主治醫師（升級通報的對象） */
+const attendingOf = (r: LabReport) => (r.admissionId ? find.admission(r.admissionId)?.doctorId : undefined)
+/** 升級時建議打給誰：住院＝主治；門診＝同科其他醫師 */
+function suggestOf(r: LabReport): string[] {
+  const att = attendingOf(r)
+  if (r.admissionId) return att ? [nameOf.doctor(att)] : []
+  const dept = find.doctor(r.doctorId)?.deptId
+  return db.doctors.filter((d) => d.deptId === dept && d.id !== r.doctorId).map((d) => d.name)
+}
+
 function reportView(r: LabReport): LabReportView {
   const p = find.patient(r.patientId)
+  const att = attendingOf(r)
   return {
     ...r,
     procName: find.procedure(r.procId)?.name ?? r.procId,
@@ -76,6 +93,10 @@ function reportView(r: LabReport): LabReportView {
     ...(r.ackBy ? { ackByName: nameOf.user(r.ackBy) } : {}),
     ...((c) => ({ calloutState: c.status, ...(c.due ? { calloutDue: c.due } : {}), ...(c.ontime !== undefined ? { calloutOnTime: c.ontime } : {}) }))(calloutStatus(r, now())),
     ...(r.callout ? { calloutByName: nameOf.user(r.callout.by) } : {}),
+    calloutTries: r.calloutAttempts?.length ?? 0,
+    calloutEscalated: calloutEscalated(r),
+    calloutTarget: calloutTarget(r.orderId ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}) }),
+    calloutSuggest: suggestOf(r),
     where: whereOf(r),
     items: procItems(r.procId).map((d) => ({ ...d, ref: labRefText(d, p?.gender ?? 'M') })),
   }
@@ -177,11 +198,28 @@ export function calloutLab(id: string, input: { to: string; toRole: 'nurse' | 'd
     const r = must(db.labReports.find((x) => x.id === id), '檢驗報告')
     if (!r.values.some((v) => v.critical)) fail('這份報告沒有危急值，不需要通報', 'CONFLICT')
     if (r.callout) fail('這份報告已經通報過了', 'CONFLICT')
-    failFields(checkCallout(input ?? {}, r.admissionId ? 'ipd' : 'opd'))
+    const escalated = calloutEscalated(r)
+    failFields(checkCallout(input ?? {}, r.admissionId ? 'ipd' : 'opd', { escalated, orderingDoctor: nameOf.doctor(r.doctorId) }))
     const t = now()
     const late = calloutStatus(r, t).status === 'late'
-    r.callout = { at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, readBack: true, ...(input.note?.trim() ? { note: input.note.trim() } : {}) }
-    audit(late ? '危急值通報（逾時）' : '危急值通報', `${r.no} ${nameOf.patient(r.patientId)}：${r.values.filter((v) => v.critical).map((v) => `${v.name} ${v.value}`).join('、')} → ${CALLOUT_ROLE_LABEL[input.toRole]} ${r.callout.to}（已複誦）`)
+    r.callout = { at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, readBack: true, ...(input.note?.trim() ? { note: input.note.trim() } : {}), ...(escalated ? { escalated: true as const } : {}) }
+    audit(late ? '危急值通報（逾時）' : '危急值通報', `${r.no} ${nameOf.patient(r.patientId)}：${r.values.filter((v) => v.critical).map((v) => `${v.name} ${v.value}`).join('、')} → ${CALLOUT_ROLE_LABEL[input.toRole]} ${r.callout.to}（已複誦${escalated ? `；前 ${r.calloutAttempts!.length} 次沒聯絡上，升級通報` : r.calloutAttempts?.length ? `；之前 ${r.calloutAttempts.length} 次沒聯絡上` : ''}）`)
+    return reportView(r)
+  })
+}
+
+/** 危急值打電話沒聯絡上（沒人接、不在單位）：記打給誰、幾點；連續兩次就要改通報下一層。30 分鐘時限照算，不會因此停表 */
+export function calloutFailed(id: string, input: { to: string; toRole: 'nurse' | 'doctor'; note?: string }): Promise<LabReportView> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const r = must(db.labReports.find((x) => x.id === id), '檢驗報告')
+    if (!r.values.some((v) => v.critical)) fail('這份報告沒有危急值，不需要通報', 'CONFLICT')
+    if (r.callout) fail('這份報告已經通報過了', 'CONFLICT')
+    failFields(checkCalloutAttempt(input ?? {}, r.admissionId ? 'ipd' : 'opd'))
+    const t = now()
+    ;(r.calloutAttempts ??= []).push({ at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, ...(input.note?.trim() ? { note: input.note.trim() } : {}) })
+    const n = r.calloutAttempts.length
+    audit('危急值通報沒聯絡上', `${r.no} ${nameOf.patient(r.patientId)}：打給${CALLOUT_ROLE_LABEL[input.toRole]} ${input.to.trim()}${input.note?.trim() ? `（${input.note.trim()}）` : ''}，第 ${n} 次${calloutEscalated(r) ? '，要改通報下一層' : ''}`)
     return reportView(r)
   })
 }

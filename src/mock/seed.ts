@@ -3191,7 +3191,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
 
   // 危急值通報（示範，不抽亂數）：過去的危急值報告都通報過（住院給護理師、門診給開立醫師；一筆門診 45 分鐘才通報＝逾時）；
-  // 今天糖尿病病人臨時血糖 32（低血糖危急值）50 分鐘前發出，還沒通報（逾時，檢驗科首頁紅色）
+  // 今天糖尿病病人臨時血糖 32（低血糖危急值）50 分鐘前發出，還沒通報（逾時，檢驗科首頁紅色）；8 分鐘後打給病房護理師沒人接（沒聯絡上一次）
   {
     const nurse = users.find((u) => u.roles.includes('nurse'))!
     const docName = (id: string) => codes.doctors.find((d) => d.id === id)?.name ?? ''
@@ -3211,7 +3211,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const t0 = addMinutes(rep, -40) < day0 ? day0 : addMinutes(rep, -40)
       ipdOrders.push({ id: 'IO-CR-1', admissionId: dm.id, type: 'stat', category: 'procedure', procId: 'P004', content: `${procMap.get('P004')!.name}（意識變差）`, startAt: t0, status: 'done', stopAt: t0, doctorId: dm.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201' })
       specimens.push({ id: 'SP-CR-1', barcode: `S${T.replace(/-/g, '')}6001`, admissionId: dm.id, patientId: dm.patientId, tube: 'red', orderIds: ['IO-CR-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: t0, collectedBy: 'U201', receivedAt: t0, receivedBy: 'U601' })
-      labReports.push({ id: 'LR-CR-1', no: `L${T.replace(/-/g, '')}9401`, patientId: dm.patientId, procId: 'P004', orderId: 'IO-CR-1', admissionId: dm.id, doctorId: dm.doctorId, orderedAt: t0, values: buildLabValues(procMap.get('P004')!.labItems!, { 'GLU-AC': '32' }, pt.gender).values, reportedBy: 'U601', reportedAt: rep })
+      labReports.push({ id: 'LR-CR-1', no: `L${T.replace(/-/g, '')}9401`, patientId: dm.patientId, procId: 'P004', orderId: 'IO-CR-1', admissionId: dm.id, doctorId: dm.doctorId, orderedAt: t0, values: buildLabValues(procMap.get('P004')!.labItems!, { 'GLU-AC': '32' }, pt.gender).values, reportedBy: 'U601', reportedAt: rep,
+        // 沒聯絡上一次：發出 8 分鐘後打給病房護理師，電話沒人接（再一次沒聯絡上就要改通報主治）
+        calloutAttempts: [{ at: [addMinutes(rep, 8), nowStr].sort()[0], by: 'U601', to: nurse.name, toRole: 'nurse', note: '電話沒人接' }] })
     }
   }
 

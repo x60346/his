@@ -8,6 +8,26 @@ export const CALLOUT_MINUTES = 30
 export const CALLOUT_ROLE_LABEL = { nurse: '護理師', doctor: '醫師' } as const
 
 type R = Pick<LabReport, 'values' | 'reportedAt' | 'corrections' | 'callout'>
+
+/** 沒聯絡上幾次要升級（改通報下一層） */
+export const CALLOUT_ESCALATE_AFTER = 2
+/** 沒聯絡上的常見原因 */
+export const CALLOUT_FAIL_REASONS = ['電話沒人接', '忙線中', '不在單位', '開刀中']
+/** 要升級了沒：沒聯絡上的次數到門檻 */
+export const calloutEscalated = (r: Pick<LabReport, 'calloutAttempts'>) => (r.calloutAttempts?.length ?? 0) >= CALLOUT_ESCALATE_AFTER
+/** 這次要通報誰（畫面提示）：住院—病房護理師或主治，升級後只能主治；門診—開立醫師，升級後同科其他醫師 */
+export function calloutTarget(source: 'opd' | 'ipd', escalated: boolean, x: { attendingName?: string; doctorName: string }): string {
+  if (source === 'ipd') return escalated ? `已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上：改通報主治醫師${x.attendingName ? ` ${x.attendingName}` : ''}` : `住院：通報病房護理師或主治醫師${x.attendingName ? ` ${x.attendingName}` : ''}`
+  return escalated ? `開立醫師 ${x.doctorName} 已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上：改通報同科其他醫師` : `門診：通報開立醫師 ${x.doctorName}`
+}
+/** 沒聯絡上的欄位：打給誰（姓名、職稱）；門診只能打給醫師 */
+export function checkCalloutAttempt(x: { to?: string; toRole?: string }, source: 'opd' | 'ipd'): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!x.to?.trim()) e.to = '請寫打給誰'
+  if (x.toRole !== 'nurse' && x.toRole !== 'doctor') e.toRole = '請選職稱'
+  else if (source === 'opd' && x.toRole !== 'doctor') e.toRole = '門診危急值要通報醫師'
+  return e
+}
 /** 危急值從什麼時候開始要通報：第一版就有危急值＝發出時間；更正後才變危急值＝那次更正的時間 */
 export function criticalSince(r: R): string | undefined {
   if (!r.values.some((v) => v.critical)) return undefined
@@ -41,12 +61,17 @@ export function calloutRate(rs: R[], now: string): { total: number; ontime: numb
   return { total: xs.length, ontime, pct: xs.length ? Math.round((ontime / xs.length) * 100) : 100 }
 }
 
-/** 通報欄位檢查：受話者姓名、職稱、複誦（住院可選護理師或醫師；門診只有醫師） */
-export function checkCallout(x: { to?: string; toRole?: string; readBack?: boolean }, source: 'opd' | 'ipd'): Record<string, string> {
+/**
+ * 通報欄位檢查：受話者姓名、職稱、複誦（住院可選護理師或醫師；門診只有醫師）。
+ * 升級後（連續兩次沒聯絡上）：住院只能通報醫師（主治）；門診不能再是開立醫師（同科其他醫師）
+ */
+export function checkCallout(x: { to?: string; toRole?: string; readBack?: boolean }, source: 'opd' | 'ipd', esc?: { escalated: boolean; orderingDoctor?: string }): Record<string, string> {
   const e: Record<string, string> = {}
   if (!x.to?.trim()) e.to = '請寫受話者姓名'
+  else if (esc?.escalated && source === 'opd' && esc.orderingDoctor && x.to.trim() === esc.orderingDoctor) e.to = `開立醫師已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上，請改通報同科其他醫師`
   if (x.toRole !== 'nurse' && x.toRole !== 'doctor') e.toRole = '請選受話者職稱'
   else if (source === 'opd' && x.toRole !== 'doctor') e.toRole = '門診危急值要通報開立醫師'
+  else if (esc?.escalated && x.toRole !== 'doctor') e.toRole = `已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上，要改通報主治醫師`
   if (!x.readBack) e.readBack = '要請對方複誦病人姓名、項目與數值，並確認無誤'
   return e
 }

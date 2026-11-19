@@ -1086,7 +1086,9 @@ export interface LabReport {
   /** 檢體品質附註（例：檢體溶血（H 80），鉀、GPT 可能偏高）：醫檢師審核後附註發出 */
   qualityNote?: string
   /** 危急值通報（醫檢師打電話）：通報給誰（姓名、職稱）、對方複誦確認、時間。和醫師「已知悉」分開，兩個都要有 */
-  callout?: { at: string; by: string; to: string; toRole: 'nurse' | 'doctor'; readBack: true; note?: string }
+  callout?: { at: string; by: string; to: string; toRole: 'nurse' | 'doctor'; readBack: true; note?: string; escalated?: true }
+  /** 危急值打電話沒聯絡上（沒人接、不在單位）：打給誰、幾點。連續兩次要改通報下一層（住院→主治、門診→同科其他醫師）；30 分鐘時限照算 */
+  calloutAttempts?: { at: string; by: string; to: string; toRole: 'nurse' | 'doctor'; note?: string }[]
   /** 醫師確認（有危急值或更正過的才需要）：沒有＝待確認 */
   ackBy?: string
   ackAt?: string

@@ -11998,6 +11998,88 @@ try {
     ok(reps.some((r) => r.qualityNote?.includes('鉀可能偏高')), '醫師看的報告有檢體品質附註')
   }
 
+  // 危急值沒聯絡上與升級：次數門檻、通報對象提示、欄位、種子（沒聯絡上一次）、兩次後住院只能通報主治、門診不能再是開立醫師、時限照算、稽核、權限
+  console.log('\n[危急值沒聯絡上與升級]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const L = api.labApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.CALLOUT_ESCALATE_AFTER === 2 && !api.calloutEscalated({}) && !api.calloutEscalated({ calloutAttempts: [{}] }) && api.calloutEscalated({ calloutAttempts: [{}, {}] }), '升級：連續兩次沒聯絡上')
+    ok(api.calloutTarget('ipd', false, { attendingName: '甲', doctorName: '乙' }).includes('護理師') && api.calloutTarget('ipd', true, { attendingName: '甲', doctorName: '乙' }).includes('主治醫師 甲') && api.calloutTarget('opd', false, { doctorName: '乙' }).includes('開立醫師 乙') && api.calloutTarget('opd', true, { doctorName: '乙' }).includes('同科其他醫師'), '通報對象提示：住院護理師或主治→升級只能主治；門診開立醫師→升級同科其他醫師')
+    ok(Object.keys(api.checkCalloutAttempt({}, 'ipd')).sort().join() === 'to,toRole' && api.checkCalloutAttempt({ to: 'A', toRole: 'nurse' }, 'opd').toRole && !Object.keys(api.checkCalloutAttempt({ to: 'A', toRole: 'nurse' }, 'ipd')).length, '沒聯絡上的欄位：打給誰、職稱（門診只能醫師）')
+    const okIn = { to: 'A', toRole: 'nurse', readBack: true }
+    ok(api.checkCallout(okIn, 'ipd', { escalated: true }).toRole?.includes('主治') && !Object.keys(api.checkCallout({ ...okIn, toRole: 'doctor' }, 'ipd', { escalated: true })).length && !Object.keys(api.checkCallout(okIn, 'ipd', { escalated: false })).length, '升級後住院不能再通報護理師')
+    ok(api.checkCallout({ ...okIn, toRole: 'doctor' }, 'opd', { escalated: true, orderingDoctor: 'A' }).to?.includes('同科其他醫師') && !Object.keys(api.checkCallout({ ...okIn, toRole: 'doctor' }, 'opd', { escalated: false, orderingDoctor: 'A' })).length, '升級後門診不能再是開立醫師')
+
+    // 種子：糖尿病病人血糖 32，已打給護理師一次沒人接
+    await as('lab01')
+    let b = await L.calloutBoard()
+    let cr = b.pending.find((r) => r.id === 'LR-CR-1')
+    const dm = db().admissions.find((a) => a.id === cr.admissionId)
+    const attName = db().doctors.find((d) => d.id === dm.doctorId).name
+    ok(cr.calloutTries === 1 && !cr.calloutEscalated && cr.calloutAttempts[0].note === '電話沒人接' && cr.calloutAttempts[0].toRole === 'nurse' && cr.calloutAttempts[0].at >= cr.reportedAt && cr.calloutTarget.includes('護理師') && cr.calloutSuggest[0] === attName, `種子：血糖 32 已打給護理師一次沒人接；升級對象主治 ${attName}`)
+    const due0 = cr.calloutDue
+
+    // 權限、欄位
+    await as('nurse01')
+    let msg = await errOf(() => L.calloutFailed('LR-CR-1', { to: 'x', toRole: 'nurse' }))
+    ok(msg.includes('權限'), '護理師不能記沒聯絡上')
+    await as('lab01')
+    let f = await fieldsOf(() => L.calloutFailed('LR-CR-1', { to: ' ', toRole: 'x' }))
+    ok(f.to && f.toRole, '沒寫打給誰、職稱 → 標出')
+    const plain = db().labReports.find((r) => !r.values.some((v) => v.critical))
+    msg = await errOf(() => L.calloutFailed(plain.id, { to: 'x', toRole: 'nurse' }))
+    ok(msg.includes('沒有危急值'), '沒有危急值不用記')
+
+    // 第二次沒聯絡上 → 要升級
+    const nurse = db().users.find((u) => u.roles.includes('nurse'))
+    cr = await L.calloutFailed('LR-CR-1', { to: nurse.name, toRole: 'nurse', note: '不在單位' })
+    ok(cr.calloutTries === 2 && cr.calloutEscalated && cr.calloutTarget.includes(`主治醫師 ${attName}`) && cr.calloutDue === due0 && ['late', 'pending'].includes(cr.calloutState), `第二次沒聯絡上：要改通報主治、時限照算（期限仍是 ${due0.slice(11)}）`)
+    ok(db().auditLogs[0].action === '危急值通報沒聯絡上' && db().auditLogs[0].detail.includes('第 2 次') && db().auditLogs[0].detail.includes('下一層'), '稽核：第幾次、要改通報下一層')
+    f = await fieldsOf(() => L.calloutLab('LR-CR-1', { to: nurse.name, toRole: 'nurse', readBack: true }))
+    ok(f.toRole?.includes('主治'), '升級後不能再通報護理師')
+    const done = await L.calloutLab('LR-CR-1', { to: attName, toRole: 'doctor', readBack: true })
+    ok(done.callout.escalated && done.calloutState === 'done' && db().auditLogs[0].detail.includes('升級通報') && db().auditLogs[0].detail.includes('2 次沒聯絡上'), '通報主治：記升級通報、稽核寫前面沒聯絡上幾次')
+    msg = await errOf(() => L.calloutFailed('LR-CR-1', { to: 'x', toRole: 'nurse' }))
+    ok(msg.includes('已經通報'), '通報後不能再記沒聯絡上')
+    await as('nurse01')
+    const pl = (await L.patientLabs(done.patientId)).reports.find((r) => r.id === 'LR-CR-1')
+    ok(pl.callout.escalated && pl.calloutAttempts.length === 2, '護理站看報告：看得到升級通報與沒聯絡上的紀錄')
+
+    // 門診：開立醫師兩次沒聯絡上 → 改通報同科其他醫師
+    await as('lab01')
+    const opd = db().labReports.find((r) => r.encounterId && r.values.some((v) => v.critical))
+    delete opd.callout // 測試：當作還沒通報
+    const docName = db().doctors.find((d) => d.id === opd.doctorId).name
+    f = await fieldsOf(() => L.calloutFailed(opd.id, { to: docName, toRole: 'nurse' }))
+    ok(f.toRole, '門診沒聯絡上也只能是醫師')
+    await L.calloutFailed(opd.id, { to: docName, toRole: 'doctor', note: '開刀中' })
+    let ov = await L.calloutFailed(opd.id, { to: docName, toRole: 'doctor', note: '開刀中' })
+    const dept = db().doctors.find((d) => d.id === opd.doctorId).deptId
+    ok(ov.calloutEscalated && ov.calloutTarget.includes('同科其他醫師') && ov.calloutSuggest.length && !ov.calloutSuggest.includes(docName) && ov.calloutSuggest.every((n) => db().doctors.find((d) => d.name === n).deptId === dept), `門診升級：建議同科其他醫師（${ov.calloutSuggest.join('、')}）`)
+    f = await fieldsOf(() => L.calloutLab(opd.id, { to: docName, toRole: 'doctor', readBack: true }))
+    ok(f.to?.includes('同科其他醫師'), '升級後不能再通報開立醫師')
+    ov = await L.calloutLab(opd.id, { to: ov.calloutSuggest[0], toRole: 'doctor', readBack: true })
+    ok(ov.callout.escalated && ov.callout.to !== docName, '通報同科醫師：記升級通報')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
