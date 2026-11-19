@@ -1859,6 +1859,17 @@ export interface Incident {
   fromScanMismatchId?: string
   status: 'reported' | 'reviewing' | 'closed'
   review?: { by: string; at: string; sac: 1 | 2 | 3 | 4; cause: string; actions: string; closedAt?: string }
+  /** 根本原因分析（SAC 1–2 結案前必做；3–4 可選）：時間序列、原因分類、根本原因、行動計畫（全部完成才能結案） */
+  rca?: IncidentRca
+}
+export type RcaCause = 'staff' | 'equipment' | 'process' | 'environment' | 'communication' | 'patient'
+export interface IncidentRca {
+  timeline: { at: string; event: string }[]
+  causes: RcaCause[]
+  rootCause: string
+  plans: { id: string; action: string; owner: string; due: string; status: 'open' | 'done'; doneAt?: string; doneBy?: string }[]
+  by: string
+  at: string
 }
 
 /** 掃描不符（差點給錯）：掃到別人的腕帶、舊腕帶、不是這一劑的藥。當場擋下，記下來給護理長看 */

@@ -8,6 +8,7 @@ import { UBadge, UButton, UCard, UCheckbox, UInput, UPageHeader, UQueryState, US
 import { INCIDENT_CATEGORY_LABEL, INCIDENT_HARM_LABEL, incidentApi, patientApi, SAC_LABEL, type IncidentView } from '@/services'
 import type { IncidentCategory, IncidentHarm } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
+import RcaEditor from './RcaEditor.vue'
 import { now } from '@/utils/date'
 
 const route = useRoute()
@@ -113,11 +114,14 @@ const sacOptions = [1, 2, 3, 4].map((v) => ({ value: v, label: SAC_LABEL[v as 1 
               <span class="text-xs text-slate-600">{{ x.occurredAt.slice(5) }}・{{ x.location }}{{ x.patientName ? `・${x.patientName}` : '' }}</span>
               <span class="text-xs text-slate-500">通報：{{ x.reporterName }}</span>
               <UBadge v-if="x.sacLabel" tone="purple">{{ x.sacLabel }}</UBadge>
+              <UBadge v-if="x.rcaRequired && !x.rcaDone" tone="red">RCA 未完成</UBadge>
+              <UBadge v-if="x.overduePlans" tone="red">計畫過期 {{ x.overduePlans }}</UBadge>
               <UButton size="sm" variant="ghost" class="ml-auto" @click="opened = opened === x.id ? undefined : x.id">{{ opened === x.id ? '收起' : x.status === 'closed' ? '看內容' : '審查' }}</UButton>
             </div>
             <div v-if="opened === x.id" class="space-y-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs">
               <p>{{ x.description }}</p>
               <p v-if="x.immediateAction" class="text-slate-600">當下處置：{{ x.immediateAction }}</p>
+              <RcaEditor v-if="x.rcaRequired || x.rca || x.status !== 'closed'" :x="x" />
               <template v-if="x.status !== 'closed'">
                 <USelect v-model="rvOf(x).sac" class="w-48" label="嚴重度" :options="sacOptions" :error="review.fieldErrors.value.sac" />
                 <UTextarea v-model="rvOf(x).cause" label="原因分析" :rows="2" :error="review.fieldErrors.value.cause" />
@@ -126,6 +130,7 @@ const sacOptions = [1, 2, 3, 4].map((v) => ({ value: v, label: SAC_LABEL[v as 1 
                   <UButton size="sm" variant="secondary" :loading="review.pending.value" @click="review.run(x.id, { ...rvOf(x) })">儲存審查</UButton>
                   <UButton size="sm" :loading="review.pending.value" @click="review.run(x.id, { ...rvOf(x), close: true })">結案</UButton>
                 </div>
+                <p v-if="review.fieldErrors.value.rca" class="text-right text-red-600">{{ review.fieldErrors.value.rca }}</p>
               </template>
               <template v-else>
                 <p><b>原因分析：</b>{{ x.review?.cause }}</p>

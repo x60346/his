@@ -1,12 +1,12 @@
 // 病安異常事件通報：任何臨床人員都能通報（跌倒、給藥、管路、檢體、其他），可選匿名——系統記得是誰（通報人自己看得到），
 // 審查的人看不到。給藥、採檢的「掃描不符」可以一鍵帶入（跡近錯失）。
 // 有「病安事件審查」權限的人（預設管理員，可指定護理長等個人）評定嚴重度（SAC）、寫原因分析與改善措施、結案；30 天統計。規則在 incident-rules
-import type { Incident, IncidentCategory, IncidentHarm } from '@/types'
+import type { Incident, IncidentCategory, IncidentHarm, RcaCause } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, now } from '@/utils/date'
 import { audit, fail, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { find, nameOf } from './views'
-import { checkIncident, checkIncidentReview, incidentStats, INCIDENT_CATEGORY_LABEL, INCIDENT_HARM_LABEL, INCIDENT_STATUS_LABEL, SAC_LABEL, sacSuggest } from './incident-rules'
+import { checkRca, planOverdue, rcaComplete, rcaRequired, RCA_CAUSE_LABEL, checkIncident, checkIncidentReview, incidentStats, INCIDENT_CATEGORY_LABEL, INCIDENT_HARM_LABEL, INCIDENT_STATUS_LABEL, SAC_LABEL, sacSuggest } from './incident-rules'
 
 const CLINICAL = ['doctor', 'nurse', 'pharmacist', 'lab', 'radtech', 'clerk', 'diet', 'admin'] as const
 
@@ -23,6 +23,10 @@ export interface IncidentView extends Omit<Incident, 'reportedBy'> {
   sacSuggested: 1 | 2 | 3 | 4
   sacLabel?: string
   reviewerName?: string
+  /** RCA：這筆一定要做（SAC 1–2）、做完了沒、過期的行動計畫幾項 */
+  rcaRequired: boolean
+  rcaDone: boolean
+  overduePlans: number
 }
 function view(x: Incident, me: string): IncidentView {
   const { reportedBy, ...rest } = x
@@ -32,6 +36,7 @@ function view(x: Incident, me: string): IncidentView {
     ...(p ? { patientName: p.name, chartNo: p.chartNo } : {}),
     reporterName: x.anonymous && reportedBy !== me ? '匿名' : nameOf.user(reportedBy), mine: reportedBy === me, sacSuggested: sacSuggest(x.harm),
     ...(x.review ? { sacLabel: SAC_LABEL[x.review.sac], reviewerName: nameOf.user(x.review.by) } : {}),
+    rcaRequired: rcaRequired(x.review?.sac), rcaDone: rcaComplete(x.rca), overduePlans: (x.rca?.plans ?? []).filter((p) => planOverdue(p, now().slice(0, 10))).length,
   }
 }
 
@@ -120,6 +125,10 @@ export function reviewIncident(id: string, input: { sac: number; cause?: string;
     const x = must(db.incidents.find((v) => v.id === id), '病安事件')
     if (x.status === 'closed') fail('已經結案了', 'CONFLICT')
     failFields(checkIncidentReview(input ?? {}))
+    // SAC 1–2 結案前要完成 RCA（行動計畫都做完）；3–4 有做 RCA 的，計畫也要做完
+    if (input.close && (rcaRequired(Number(input.sac)) || x.rca) && !rcaComplete(x.rca)) {
+      fail(rcaRequired(Number(input.sac)) ? `${SAC_LABEL[Number(input.sac) as 1 | 2]}的事件要先完成根本原因分析（RCA），行動計畫都完成才能結案` : 'RCA 的行動計畫還沒全部完成，不能結案', 'CONFLICT', 'rca')
+    }
     const t = now()
     x.review = { by: u.id, at: t, sac: Number(input.sac) as 1 | 2 | 3 | 4, cause: input.cause?.trim() ?? '', actions: input.actions?.trim() ?? '', ...(input.close ? { closedAt: t } : {}) }
     x.status = input.close ? 'closed' : 'reviewing'
@@ -130,3 +139,46 @@ export function reviewIncident(id: string, input: { sac: number; cause?: string;
 
 /** 首頁／頁面用：這個人能不能審查 */
 export const incidentAccess = (): Promise<{ canReview: boolean }> => query(() => ({ canReview: permissionsOf(requireUser(...CLINICAL)).includes('incident.review') }))
+
+export interface RcaInput {
+  timeline: { at: string; event: string }[]
+  causes: RcaCause[]
+  rootCause: string
+  /** 已經有的計畫帶 id（狀態沿用），新加的不帶 */
+  plans: { id?: string; action: string; owner: string; due: string }[]
+}
+/** 儲存根本原因分析（病安事件審查）：結案前都可以改；計畫的完成狀態沿用（要完成用 completeRcaPlan） */
+export function saveRca(id: string, input: RcaInput): Promise<IncidentView> {
+  return mutate(() => {
+    const u = requirePermission('incident.review')
+    const x = must(db.incidents.find((v) => v.id === id), '病安事件')
+    if (x.status === 'closed') fail('已經結案了', 'CONFLICT')
+    failFields(checkRca(input ?? {}))
+    const t = now()
+    const old = x.rca?.plans ?? []
+    x.rca = {
+      timeline: input.timeline.map((r) => ({ at: r.at, event: r.event.trim() })).sort((a, b) => a.at.localeCompare(b.at)),
+      causes: [...new Set(input.causes)], rootCause: input.rootCause.trim(),
+      plans: input.plans.map((p) => {
+        const o = p.id ? old.find((x) => x.id === p.id) : undefined
+        return { id: o?.id ?? newId('RP'), action: p.action.trim(), owner: p.owner.trim(), due: p.due, status: o?.status ?? 'open', ...(o?.doneAt ? { doneAt: o.doneAt, doneBy: o.doneBy } : {}) }
+      }),
+      by: u.id, at: t,
+    }
+    if (x.status === 'reported') x.status = 'reviewing'
+    audit('病安事件 RCA', `${x.no}：${x.rca.causes.map((c) => RCA_CAUSE_LABEL[c]).join('、')}；行動計畫 ${x.rca.plans.length} 項`)
+    return view(x, u.id)
+  })
+}
+/** 行動計畫完成 */
+export function completeRcaPlan(id: string, planId: string): Promise<IncidentView> {
+  return mutate(() => {
+    const u = requirePermission('incident.review')
+    const x = must(db.incidents.find((v) => v.id === id), '病安事件')
+    const p = must(x.rca?.plans.find((v) => v.id === planId), '行動計畫')
+    if (p.status === 'done') fail('已經完成了', 'CONFLICT')
+    Object.assign(p, { status: 'done', doneAt: now(), doneBy: u.id })
+    audit('病安事件行動計畫完成', `${x.no}：${p.action}（${p.owner}）`)
+    return view(x, u.id)
+  })
+}

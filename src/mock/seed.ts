@@ -3309,6 +3309,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       description: '準備皮下注射 Heparin 時，抽藥量是醫囑的 10 倍（看錯單位），給藥前雙人核對時發現，沒有給到病人。', harm: 'near-miss', immediateAction: '重新抽藥、雙人核對後給藥',
       reportedBy: 'U201', reportedAt: early, anonymous: true, status: 'reported',
     })
+    // RCA（示範）：三天前泌尿道感染病人被給了隔壁床的降血壓藥（中度：血壓降到 88/52，觀察後回穩）——SAC 2，RCA 進行中：
+    // 時間序列、原因（人員、流程）、根本原因已寫；兩項行動計畫，一項完成、一項後天到期
+    const uti = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('N39'))
+    if (uti) {
+      const d3 = addDays(T, -3)
+      incidents.push({
+        id: 'IN-SEED-4', no: `INC${day(d3)}001`, category: 'medication', occurredAt: `${d3} 09:05`, location: bedText(uti), patientId: uti.patientId,
+        description: '早上給藥時拿了隔壁床的藥盒，病人服下 Amlodipine 10mg（不是他的藥），半小時後血壓 88/52。', harm: 'moderate', immediateAction: '通知醫師、每 15 分鐘量血壓、平躺觀察，2 小時後回穩',
+        reportedBy: 'U201', reportedAt: `${d3} 10:00`, anonymous: false, status: 'reviewing',
+        review: { by: 'U202', at: `${d3} 15:00`, sac: 2, cause: '藥盒拿錯床', actions: '' },
+        rca: {
+          timeline: [{ at: `${d3} 08:50`, event: '交班延誤，給藥時間壓縮' }, { at: `${d3} 09:00`, event: '同時推兩床的藥，藥盒沒有逐床分開' }, { at: `${d3} 09:05`, event: '沒有掃腕帶就給藥（掃描器沒電，選了略過）' }, { at: `${d3} 09:35`, event: '病人頭暈，量血壓 88/52 才發現' }],
+          causes: ['staff', 'process', 'equipment'], rootCause: '給藥車一次放兩床藥盒、掃描器沒有備用電池，略過掃描後只靠口頭核對姓名',
+          plans: [
+            { id: 'RP-SEED-1', action: '每台給藥車配備用電池，交班時檢查電量', owner: '護理長 孫佩君', due: addDays(T, -1), status: 'done', doneAt: `${addDays(T, -1)} 16:00`, doneBy: 'U202' },
+            { id: 'RP-SEED-2', action: '給藥車改成一次只放一床藥盒，全病房教育訓練', owner: '護理部 督導', due: addDays(T, 2), status: 'open' },
+          ],
+          by: 'U202', at: `${addDays(T, -2)} 14:00`,
+        },
+      })
+    }
     counters[`incident:${T}`] = incidents.filter((x) => x.no.includes(day(T))).length
   }
 

@@ -49,6 +49,7 @@ import { QC_ANALYTES, qcStatusToday } from './qc-rules'
 import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
 import { tatOpen } from './tat-work'
 import { downtimeClash, downtimeEnd, examDayOf, outOfHours } from './exam-rules'
+import { planOverdue } from './incident-rules'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -232,8 +233,9 @@ export interface DashboardStats {
   ipdInterim: number
   /** 預約未到、臨床上要追（出院後回診、醫師約的回診、慢性病）、最近 14 天、還沒結案的（櫃台待辦；和未到追蹤清單同一個判斷） */
   noShowsToFollow: number
-  /** 病安事件審查：還沒結案的 */
+  /** 病安事件審查：還沒結案的；RCA 行動計畫過期的 */
   incidentPending?: number
+  rcaOverdue?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -396,7 +398,7 @@ export function getDashboard(): Promise<DashboardStats> {
             swapToRespond: db.shiftRequests.filter((r) => r.targetId === me.id && r.status === 'pending-peer').length,
             myRequestResults: db.shiftRequests.filter((r) => r.requesterId === me.id && ['approved', 'rejected', 'declined'].includes(r.status) && (r.decidedAt ?? r.peer?.at ?? '') >= addMinutes(t, -24 * 60)).length,
           } : {}),
-          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length, rcaOverdue: db.incidents.flatMap((x) => x.rca?.plans ?? []).filter((p) => planOverdue(p, today())).length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length, clustersOpen: currentClusters().filter((c) => !c.decision).length, notifiableOverdue: db.admissions.flatMap(pendingNotifiable).filter((p) => p.dueAt < t).length } : {}),

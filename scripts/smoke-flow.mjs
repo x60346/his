@@ -13215,9 +13215,9 @@ try {
     const by = (id) => b.items.find((x) => x.id === id)
     ok(by('IN-SEED-1')?.status === 'closed' && by('IN-SEED-1').category === 'fall' && by('IN-SEED-2')?.status === 'reported' && by('IN-SEED-2').harm === 'near-miss' && by('IN-SEED-3')?.status === 'reviewing', '種子：跌倒已結案、給藥跡近錯失待審查、管路自拔審查中')
     ok(by('IN-SEED-2').anonymous && by('IN-SEED-2').reporterName === '匿名' && by('IN-SEED-1').reporterName !== '匿名', '匿名的：審查的人看不到通報人')
-    ok(b.items[0].status === 'reported' && b.pending === 2 && b.stats.total === 3, `審查清單：待審查在前、待處理 ${b.pending}、近 30 天 ${b.stats.total} 件`)
+    ok(b.items[0].status === 'reported' && b.pending === 3 && b.stats.total === 4, `審查清單：待審查在前、待處理 ${b.pending}、近 30 天 ${b.stats.total} 件`)
     let dash = await api.dashboardApi.getDashboard()
-    ok(dash.incidentPending === 2, '護理長首頁：病安事件待審查 2')
+    ok(dash.incidentPending === 3, '護理長首頁：病安事件待審查 3（含 RCA 進行中的那筆）')
     await as('nurse01')
     const mine = await I.myIncidents()
     ok(mine.find((x) => x.id === 'IN-SEED-2')?.reporterName === db().users.find((u) => u.username === 'nurse01').name && mine.every((x) => x.mine), '通報人自己看得到匿名通報是自己')
@@ -13258,7 +13258,7 @@ try {
     ok(msg.includes('已經結案'), '結案後不能再改')
     await as('admin')
     dash = await api.dashboardApi.getDashboard()
-    ok((await I.listIncidents()).items.length === 6 && dash.incidentPending === 4, `管理員（預設權限）也能審查；待處理 ${dash.incidentPending}`)
+    ok((await I.listIncidents()).items.length === 7 && dash.incidentPending === 5, `管理員（預設權限）也能審查；待處理 ${dash.incidentPending}`)
     const docU = db().users.find((u) => u.roles.includes('doctor') && !(u.grants ?? []).includes('incident.review')).username
     await as(docU)
     msg = await errOf(() => I.listIncidents())
@@ -13336,6 +13336,79 @@ try {
     await P.verifyDispense(d3.id)
     await P.dispense(d3.id, { birthMMDD: birth(d3) })
     ok(db().dispenses.find((x) => x.id === d3.id).status === 'dispensed' && !db().dispenses.find((x) => x.id === d3.id).scan, '掃描設定關閉：不用掃（沒有掃描紀錄）')
+  }
+
+  // 根本原因分析（RCA）：必做的 SAC、計畫過期、完成條件、欄位；種子（SAC 2 進行中）；SAC 1–2 沒做完不能結案、存 RCA（欄位、計畫狀態沿用）、
+  // 計畫完成後結案、過期計畫首頁、SAC 3–4 可選（做了也要完成）、權限、結案後唯讀
+  console.log('\n[根本原因分析]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.incidentApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.rcaRequired(1) && api.rcaRequired(2) && !api.rcaRequired(3) && !api.rcaRequired(undefined), 'SAC 1–2 一定要做 RCA')
+    ok(api.planOverdue({ status: 'open', due: '2026-11-18' }, '2026-11-19') && !api.planOverdue({ status: 'open', due: '2026-11-19' }, '2026-11-19') && !api.planOverdue({ status: 'done', due: '2026-01-01' }, '2026-11-19'), '計畫過期：期限過了還沒完成（當天不算）')
+    const full = { timeline: [{ at: 'x', event: 'y' }], causes: ['staff'], rootCause: 'r', plans: [{ status: 'done' }] }
+    ok(api.rcaComplete(full) && !api.rcaComplete({ ...full, plans: [{ status: 'done' }, { status: 'open' }] }) && !api.rcaComplete({ ...full, plans: [] }) && !api.rcaComplete(undefined), 'RCA 完成：四項都有、計畫都完成')
+    ok(Object.keys(api.checkRca({})).sort().join() === 'causes,plans,rootCause,timeline' && api.checkRca({ ...full, timeline: [{ at: '2026-11-19 10:00', event: 'x' }], plans: [{ action: 'a', owner: '', due: '2026-12-01' }] }).plans && !Object.keys(api.checkRca({ timeline: [{ at: '2026-11-19 10:00', event: 'x' }], causes: ['process'], rootCause: 'r', plans: [{ action: 'a', owner: 'b', due: '2026-12-01' }] })).length, 'RCA 欄位：時間序列、原因、根本原因、計畫（內容負責人期限）')
+
+    // 種子
+    await as('nurse02')
+    let b = await I.listIncidents()
+    const s4 = b.items.find((x) => x.id === 'IN-SEED-4')
+    ok(s4?.review.sac === 2 && s4.rcaRequired && !s4.rcaDone && s4.rca.plans.length === 2 && s4.rca.plans.filter((p) => p.status === 'done').length === 1 && s4.overduePlans === 0 && s4.rca.causes.includes('process'), '種子：給錯病人降血壓藥 SAC 2，RCA 進行中（兩項計畫：一完成、一後天到期）')
+    let msg = await errOf(() => I.reviewIncident('IN-SEED-4', { sac: 2, cause: '藥盒拿錯床', actions: '見 RCA', close: true }))
+    ok(msg.includes('根本原因分析'), `SAC 2 計畫沒做完不能結案 → 「${msg}」`)
+    // 存 RCA：欄位、計畫狀態沿用
+    let f = await fieldsOf(() => I.saveRca('IN-SEED-4', { timeline: [], causes: [], rootCause: '', plans: [] }))
+    ok(f.timeline && f.causes && f.rootCause && f.plans, 'RCA 欄位不對 → 標出')
+    const cur = db().incidents.find((x) => x.id === 'IN-SEED-4').rca
+    const saved = await I.saveRca('IN-SEED-4', { timeline: cur.timeline, causes: [...cur.causes, 'communication'], rootCause: cur.rootCause, plans: [...cur.plans.map((p) => ({ id: p.id, action: p.action, owner: p.owner, due: p.due })), { action: '交班表加入給藥時間提醒', owner: '單位護理長', due: addDaysT(7) }] })
+    ok(saved.rca.plans.length === 3 && saved.rca.plans.find((p) => p.id === 'RP-SEED-1').status === 'done' && saved.rca.plans.filter((p) => p.status === 'open').length === 2 && saved.rca.causes.includes('communication') && db().auditLogs[0].action === '病安事件 RCA', '再存一次：已完成的計畫狀態沿用、加一項新計畫、加一個原因（稽核）')
+    await I.completeRcaPlan('IN-SEED-4', 'RP-SEED-2')
+    msg = await errOf(() => I.completeRcaPlan('IN-SEED-4', 'RP-SEED-2'))
+    ok(msg.includes('已經完成'), '不能重複完成')
+    for (const p of db().incidents.find((x) => x.id === 'IN-SEED-4').rca.plans.filter((x) => x.status === 'open')) await I.completeRcaPlan('IN-SEED-4', p.id)
+    const c4 = await I.reviewIncident('IN-SEED-4', { sac: 2, cause: '藥盒拿錯床', actions: '見 RCA 行動計畫', close: true })
+    ok(c4.status === 'closed' && c4.rcaDone, '計畫都完成 → 可以結案')
+    msg = await errOf(() => I.saveRca('IN-SEED-4', { timeline: cur.timeline, causes: cur.causes, rootCause: 'x', plans: [{ action: 'a', owner: 'b', due: addDaysT(1) }] }))
+    ok(msg.includes('已經結案'), '結案後 RCA 唯讀')
+
+    // SAC 1：沒做 RCA 不能結案；過期的計畫上首頁
+    await as('nurse01')
+    const sev = await I.reportIncident({ category: 'fall', occurredAt: dateUtil.addMinutes(dateUtil.now(), -60), location: '6B 病房', description: '病人下床時跌倒，髖部骨折需要開刀。', harm: 'severe' })
+    msg = await errOf(() => I.saveRca(sev.id, { timeline: [{ at: dateUtil.now(), event: 'x' }], causes: ['staff'], rootCause: 'x', plans: [{ action: 'a', owner: 'b', due: addDaysT(1) }] }))
+    ok(msg.includes('病安事件審查'), '沒有審查權限不能寫 RCA')
+    await as('nurse02')
+    msg = await errOf(() => I.reviewIncident(sev.id, { sac: 1, cause: '跌倒', actions: '加強衛教', close: true }))
+    ok(msg.includes('SAC 1'), 'SAC 1 沒做 RCA 不能結案')
+    const sr = await I.saveRca(sev.id, { timeline: [{ at: dateUtil.addMinutes(dateUtil.now(), -60), event: '病人自行下床' }], causes: ['patient', 'environment'], rootCause: '夜燈不足、病人不知道要按鈴', plans: [{ action: '全病房換夜燈', owner: '總務', due: addDaysT(-1) }] })
+    ok(sr.status === 'reviewing' && sr.overduePlans === 1, '存 RCA → 審查中；計畫期限已過＝過期')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.rcaOverdue === 1, '首頁：RCA 行動計畫過期 1')
+    await I.completeRcaPlan(sev.id, sr.rca.plans[0].id)
+    ok((await I.reviewIncident(sev.id, { sac: 1, cause: '跌倒', actions: '見 RCA', close: true })).status === 'closed', '完成後 SAC 1 可以結案')
+    // SAC 3–4：不做 RCA 也能結案；做了就要完成
+    ok((await I.reviewIncident('IN-SEED-2', { sac: 4, cause: '看錯單位', actions: '高警訊藥雙人核對', close: true })).status === 'closed', 'SAC 4 沒做 RCA 也能結案')
+    await I.saveRca('IN-SEED-3', { timeline: [{ at: dateUtil.now(), event: '病人自拔鼻胃管' }], causes: ['patient'], rootCause: '譫妄未評估約束需要', plans: [{ action: '每班評估譫妄', owner: '單位', due: addDaysT(3) }] })
+    msg = await errOf(() => I.reviewIncident('IN-SEED-3', { sac: 4, cause: 'x', actions: 'y', close: true }))
+    ok(msg.includes('行動計畫還沒全部完成'), 'SAC 4 做了 RCA：計畫沒完成不能結案')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
