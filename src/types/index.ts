@@ -857,6 +857,8 @@ export interface Specimen {
   er?: true
   /** 有要空腹的檢驗：採檢時確認病人有沒有空腹（沒有空腹不擋，記原因；標籤、報告註明非空腹） */
   fasting?: { ok: boolean; note?: string; at: string; by: string }
+  /** 住院採檢的病人辨識（掃腕帶＋掃檢體條碼）：設定要求掃描時才有；略過要寫原因 */
+  scan?: { mode: 'scanned' } | { mode: 'skipped'; reason: ScanSkipReason; note?: string }
 }
 
 /** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
@@ -1801,7 +1803,9 @@ export interface ScanMismatch {
   /** 要給藥的那位病人 */
   admissionId: string
   orderId: string
-  kind: 'patient' | 'drug'
+  /** 採檢時的不符（掃錯腕帶、掃到別人的檢體）：哪一支檢體 */
+  specimenId?: string
+  kind: 'patient' | 'drug' | 'specimen'
   /** 掃到的條碼 */
   code: string
   /** 當時畫面上的說明（例：這是 503-2 董雅惠的腕帶） */

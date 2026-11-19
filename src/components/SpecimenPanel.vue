@@ -7,7 +7,8 @@ import { Printer, ScanLine } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
 import FastingCollect from '@/components/FastingCollect.vue'
-import { specimenApi, TUBE_COLOR, type SpecimenView } from '@/services'
+import ScanDialog from '@/components/ScanDialog.vue'
+import { scanApi, SCAN_SKIP_LABEL, specimenApi, TUBE_COLOR, type ScanInput, type SpecimenView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 
@@ -26,9 +27,31 @@ async function onPrint() {
 const doPrint = () => window.print()
 const code = ref('')
 const collect = useAction(specimenApi.collectSpecimen, { success: (s) => `已採檢 ${s.barcode}：${s.tests.join('、')}，送檢驗科` })
+// 病人辨識（和給藥同一個設定）：要求掃描時，按採檢先開掃描（腕帶＋檢體條碼），通過或寫了略過原因才送出
+const { data: policy } = useQuery(() => scanApi.scanPolicy())
+const pending = ref<{ s: SpecimenView; opts: { fasting?: boolean; note?: string } }>()
+const scanOpen = ref(false)
+function startCollect(s: SpecimenView, opts: { fasting?: boolean; note?: string }) {
+  if (!policy.value?.requireScan) return void collect.run(s.barcode, opts)
+  pending.value = { s, opts }
+  scanOpen.value = true
+}
+async function onScanned(x: ScanInput) {
+  const p = pending.value
+  if (!p) return
+  pending.value = undefined
+  await collect.run(p.s.barcode, { ...p.opts, scan: 'skip' in x ? x : { patientCode: x.patientCode, specimenCode: x.drugCode } })
+}
 async function onScan() {
+  const s = v.value?.printed.find((x) => x.barcode === code.value.trim())
+  if (policy.value?.requireScan && s) {
+    code.value = ''
+    if (!s.needsFasting) return startCollect(s, {})
+  }
   if (code.value.trim() && (await collect.run(code.value.trim()))) code.value = ''
 }
+const scanTarget = computed(() => (pending.value ? { admissionId: props.admissionId, orderId: '', patientLabel: pending.value.s.patientName, content: `採檢 ${pending.value.s.barcode}：${pending.value.s.tests.join('、')}`, needDrug: true } : undefined))
+const scanLabel = (s: SpecimenView) => (!s.scan ? '' : s.scan.mode === 'scanned' ? '已掃描核對' : `未掃描（${SCAN_SKIP_LABEL[s.scan.reason]}）`)
 </script>
 
 <template>
@@ -61,7 +84,7 @@ async function onScan() {
           <li v-for="s in v.printed" :key="s.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
             <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-[8rem] flex-1">{{ s.tests.join('、') }}</span>
             <UBadge v-if="s.needsFasting" tone="purple">要空腹</UBadge>
-            <FastingCollect v-if="isNurse" :needs-fasting="s.needsFasting" :pending="collect.pending.value" @collect="(o) => collect.run(s.barcode, o)" />
+            <FastingCollect v-if="isNurse" :needs-fasting="s.needsFasting" :pending="collect.pending.value" @collect="(o) => startCollect(s, o)" />
           </li>
         </ul>
       </section>
@@ -70,9 +93,10 @@ async function onScan() {
         <h4 class="mb-1 font-semibold text-slate-700">已採檢</h4>
         <ul class="divide-y divide-slate-100 rounded border border-slate-200">
           <li v-for="s in [...v.waiting, ...v.received]" :key="s.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
-            <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
+            <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube]]" /><span class="tabular text-xs">{{ s.barcode }}</span><span class="min-w-[8rem] flex-1">{{ s.tests.join('、') }}</span>
             <span class="tabular text-xs text-slate-500">採檢 {{ s.collectedAt?.slice(11) }} {{ s.collectedByName }}</span>
             <UBadge v-if="s.fastingLabel" :tone="s.fastingLabel === '空腹' ? 'gray' : 'yellow'">{{ s.fastingLabel }}</UBadge>
+            <UBadge v-if="s.scan" :tone="s.scan.mode === 'scanned' ? 'green' : 'yellow'">{{ scanLabel(s) }}</UBadge>
             <UBadge :tone="s.stage === 'received' ? 'green' : s.late ? 'red' : 'yellow'">{{ s.stage === 'received' ? '已收件' : s.late ? '待收件・逾時' : '待收件' }}</UBadge>
           </li>
         </ul>
@@ -80,6 +104,7 @@ async function onScan() {
     </div>
   </UQueryState>
 
+  <ScanDialog v-model="scanOpen" :target="scanTarget" :specimen-id="pending?.s.id" :demo-assist="policy?.demoAssist" @done="onScanned" />
   <UDialog :model-value="!!labels" title="檢體條碼標籤" size="lg" @update:model-value="(x: boolean) => !x && (labels = undefined)">
     <div class="print-area grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div v-for="s in labels ?? []" :key="s.id" class="rounded border border-slate-800 p-2 text-xs">

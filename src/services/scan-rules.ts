@@ -4,7 +4,7 @@ import type { ScanSkipReason } from '@/types'
 
 export const SCAN_SKIP_LABEL: Record<ScanSkipReason, string> = {
   wristband: '腕帶損壞或未配戴',
-  barcode: '藥品條碼無法讀取',
+  barcode: '條碼無法讀取（藥品或檢體）',
   scanner: '掃描器故障',
   emergency: '緊急狀況',
 }
@@ -51,4 +51,15 @@ export function checkDrugScan(code: string, target: { nhiCode: string; name: str
   if (c === normalizeCode(target.nhiCode)) return { ok: true, message: `藥品正確：${target.name}` }
   const hit = all.find((d) => normalizeCode(d.nhiCode) === c)
   return { ok: false, message: hit ? `藥品不對！掃到的是 ${hit.name}，這一劑是 ${target.name}` : `不認得的藥品條碼（${c}）：請確認藥品` }
+}
+
+/** 採檢：檢體條碼要是這一支（掃到同一位病人的別支、別人的檢體、不認得的都擋，訊息說清楚是誰的） */
+export function checkSpecimenScan(code: string, target: { barcode: string; patientId: string; tests: string }, all: { barcode: string; patientId: string; patientName: string; tests: string }[]): ScanResult {
+  const c = normalizeCode(code)
+  if (!c) return { ok: false, message: '請掃描檢體條碼' }
+  if (c === normalizeCode(target.barcode)) return { ok: true, message: `檢體正確：${target.barcode}（${target.tests}）` }
+  const hit = all.find((s) => normalizeCode(s.barcode) === c)
+  if (!hit) return { ok: false, message: `不認得的檢體條碼（${c}）：請確認標籤` }
+  if (hit.patientId === target.patientId) return { ok: false, message: `這是同一位病人的另一支檢體（${hit.barcode}：${hit.tests}），不是要採的這支` }
+  return { ok: false, message: `檢體不對！這是 ${hit.patientName} 的檢體（${hit.barcode}），不是這位病人的` }
 }

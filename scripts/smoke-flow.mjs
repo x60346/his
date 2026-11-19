@@ -12985,6 +12985,86 @@ try {
     ok((await E.scheduleExam('O:IO-EX-4', `${d2} 09:00`)).start === `${d2} 09:00`, '取消休診後可以排')
   }
 
+  // 採檢病人辨識：檢體條碼核對規則；種子（略過一支、掃錯病人一次）；開掃描時沒掃擋、逐步掃描記不符、掃錯擋、對了記已掃描、略過寫原因、
+  // 護理站執行臨時檢驗導到檢體分頁、統計、模擬掃描選單；關掉掃描照舊
+  console.log('\n[採檢病人辨識]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const SC = api.scanApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    // 純函式
+    const tg = { barcode: 'S1', patientId: 'P1', tests: 'CBC' }
+    const all = [{ barcode: 'S1', patientId: 'P1', patientName: '甲', tests: 'CBC' }, { barcode: 'S2', patientId: 'P1', patientName: '甲', tests: 'CRP' }, { barcode: 'S3', patientId: 'P2', patientName: '乙', tests: 'GPT' }]
+    ok(api.checkSpecimenScan(' s1 ', tg, all).ok && !api.checkSpecimenScan('', tg, all).ok, '檢體條碼：大小寫、空白不影響；沒掃不算')
+    ok(api.checkSpecimenScan('S2', tg, all).message.includes('同一位病人的另一支') && api.checkSpecimenScan('S3', tg, all).message.includes('乙 的檢體') && api.checkSpecimenScan('X9', tg, all).message.includes('不認得'), '掃到同病人別支、別人的檢體、不認得的條碼：說清楚')
+    ok(api.SCAN_SKIP_LABEL.barcode.includes('檢體'), '略過原因：條碼無法讀取（藥品或檢體）')
+    // 種子
+    const tat = db().specimens.find((s) => s.id === 'SP-TAT-1')
+    const cr = db().specimens.find((s) => s.id === 'SP-CR-1')
+    const sm = db().scanMismatches.find((x) => x.id === 'SM-SEED-1')
+    ok(tat.scan?.mode === 'skipped' && tat.scan.reason === 'wristband' && cr.scan?.mode === 'scanned' && sm?.specimenId === cr.id && sm.kind === 'patient', '種子：骨折 CRP 腕帶破損略過、加護病房血糖先掃錯隔壁床腕帶（擋下）後掃描採檢')
+    const crA = db().admissions.find((a) => a.id === cr.admissionId)
+    const ward = db().beds.find((b) => b.id === crA.bedId).ward
+    await as('nurse01')
+    let st = await SC.scanStats(ward, T)
+    ok(st.mismatches.some((x) => x.specimen && x.content.includes('採檢') && x.kind === 'patient') && st.specimens.scanned >= 1, `護理站統計（${ward}）：採檢掃描、掃描不符（差點採錯）`)
+
+    // 開掃描
+    db().securitySettings = { ...db().securitySettings, requireScan: true }
+    const fx = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    const other = db().admissions.find((a) => a.status === 'admitted' && a.id !== fx.id)
+    await as(userOf(fx.doctorId))
+    const o1 = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P009', content: '' })
+    const o2 = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P003', content: '' })
+    await as('nurse01')
+    const msg0 = await errOf(() => api.nursingApi.completeStatOrder(o1.id))
+    ok(msg0.includes('檢體'), `要掃描時，護理站不能直接執行檢驗 → 「${msg0}」`)
+    const labels = await api.specimenApi.printSpecimenLabels(fx.id)
+    const red = labels.find((s) => s.orderIds.includes(o1.id))
+    const purple = labels.find((s) => s.orderIds.includes(o2.id))
+    let msg = await errOf(() => fastRaw.collectSpecimen(red.barcode, {}))
+    ok(msg.includes('掃描病人腕帶與檢體條碼'), '沒掃描不能採檢')
+    // 逐步掃描：掃錯腕帶、掃錯檢體都記下來
+    const n0 = db().scanMismatches.length
+    let r = await SC.specimenScanCheck({ specimenId: red.id, kind: 'patient', code: other.admitNo })
+    ok(!r.ok && r.message.includes('病人不對'), `掃到別人的腕帶 → 「${r.message}」`)
+    r = await SC.specimenScanCheck({ specimenId: red.id, kind: 'specimen', code: purple.barcode })
+    ok(!r.ok && r.message.includes('同一位病人的另一支'), '掃到同一位病人的另一支檢體 → 擋')
+    ok(db().scanMismatches.length === n0 + 2 && db().scanMismatches.at(-1).kind === 'specimen' && db().scanMismatches.at(-1).specimenId === red.id && db().auditLogs[0].action === '掃描不符', '不符記下來（差點採錯）、稽核')
+    ok((await SC.specimenScanCheck({ specimenId: red.id, kind: 'patient', code: fx.admitNo })).ok && (await SC.specimenScanCheck({ specimenId: red.id, kind: 'specimen', code: red.barcode })).ok, '對的腕帶、對的檢體 → 通過')
+    // 採檢：服務層再核對
+    msg = await errOf(() => fastRaw.collectSpecimen(red.barcode, { scan: { patientCode: other.admitNo, specimenCode: red.barcode } }))
+    ok(msg.includes('病人不對'), '畫面送錯的也擋（服務層再核對）')
+    const c1 = await fastRaw.collectSpecimen(red.barcode, { scan: { patientCode: fx.admitNo, specimenCode: red.barcode } })
+    ok(c1.scan?.mode === 'scanned' && db().auditLogs[0].detail.includes('已掃描核對'), '掃描核對通過 → 採檢（記已掃描）')
+    msg = await errOf(() => fastRaw.collectSpecimen(purple.barcode, { scan: { skip: 'x' } }))
+    ok(msg.includes('略過'), '略過要選原因')
+    const c2 = await fastRaw.collectSpecimen(purple.barcode, { scan: { skip: 'scanner', note: '掃描器沒電' } })
+    ok(c2.scan?.mode === 'skipped' && c2.scan.reason === 'scanner' && db().auditLogs[0].detail.includes('未掃描'), '略過（掃描器故障）→ 照樣採、記未掃描')
+    st = await SC.scanStats(db().beds.find((b) => b.id === fx.bedId).ward, T)
+    ok(st.specimens.scanned >= 1 && st.specimens.skips.some((x) => x.note === '掃描器沒電') && st.mismatches.some((x) => x.kind === 'specimen'), '統計：採檢掃描、略過（原因）、檢體不符')
+    // 模擬掃描選單
+    await as(userOf(fx.doctorId))
+    const o3 = await api.ipdApi.addOrder({ admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P011', content: '' })
+    await as('nurse01')
+    const sp3 = (await api.specimenApi.printSpecimenLabels(fx.id)).find((s) => s.orderIds.includes(o3.id))
+    const demo = await SC.specimenScanDemo(sp3.id)
+    ok(demo.options.some((x) => x.kind === 'patient' && x.right) && demo.options.some((x) => x.kind === 'patient' && !x.right) && demo.options.some((x) => x.kind === 'specimen' && x.right) && demo.options.some((x) => x.kind === 'specimen' && !x.right), '模擬掃描：本人、別人的腕帶；這支、別人的檢體')
+    // 關掉掃描：照舊
+    db().securitySettings = { ...db().securitySettings, requireScan: false }
+    const c3 = await fastRaw.collectSpecimen(sp3.barcode, {})
+    ok(c3.stage === 'collected' && !c3.scan, '掃描設定關閉：不用掃（檢體沒有掃描紀錄）')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {
@@ -13026,7 +13106,7 @@ try {
     // 種子
     const inpt = db().admissions.filter((a) => a.status === 'admitted')
     ok(inpt.every((a) => a.wristband?.printedAt === a.admittedAt), `種子：住院中的 ${inpt.length} 位報到時都印了腕帶`)
-    ok(db().mar.filter((m) => m.status === 'given').every((m) => m.scan) && db().scanMismatches.length === 0, '種子：已給的藥都有掃描紀錄、沒有不符')
+    ok(db().mar.filter((m) => m.status === 'given').every((m) => m.scan) && db().scanMismatches.filter((x) => !x.specimenId).length === 0, '種子：已給的藥都有掃描紀錄、沒有給藥的不符（採檢的另計）')
     const ward = db().beds.find((b) => b.id === inpt[0].bedId).ward
     await as('nurse01')
     const st0 = await SA.scanStats(ward, T)
@@ -13048,12 +13128,12 @@ try {
     let msg = await errOf(() => NA.executeMar(m1.id, 'given'))
     ok(msg.includes('請先掃描'), `沒掃描就給藥 → 「${msg}」`)
     let r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'patient', code: other.admitNo })
-    ok(!r.ok && r.message.includes(db().patients.find((p) => p.id === other.patientId).name) && db().scanMismatches.length === 1 && db().auditLogs[0].action === '掃描不符', `掃到別人的腕帶 → 「${r.message}」，記下這次差點給錯、寫稽核`)
+    ok(!r.ok && r.message.includes(db().patients.find((p) => p.id === other.patientId).name) && db().scanMismatches.filter((x) => !x.specimenId).length === 1 && db().auditLogs[0].action === '掃描不符', `掃到別人的腕帶 → 「${r.message}」，記下這次差點給錯、寫稽核`)
     r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'patient', code: adm.admitNo })
     ok(r.ok && r.message.includes('病人正確'), `本人腕帶 → 「${r.message}」`)
     const wrong = db().drugs.find((d) => d.id !== 'M001' && d.active)
     r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'drug', code: wrong.nhiCode })
-    ok(!r.ok && r.message.includes(wrong.name) && db().scanMismatches.length === 2 && db().scanMismatches[1].kind === 'drug', `拿錯藥 → 「${r.message}」`)
+    ok(!r.ok && r.message.includes(wrong.name) && db().scanMismatches.filter((x) => !x.specimenId).length === 2 && db().scanMismatches.filter((x) => !x.specimenId)[1].kind === 'drug', `拿錯藥 → 「${r.message}」`)
     r = await SA.scanCheck({ admissionId: adm.id, orderId: o1.id, kind: 'drug', code: drug.nhiCode })
     ok(r.ok, '正確的藥 → 通過')
     msg = await errOf(() => NA.executeMar(m1.id, 'given', '', undefined, undefined, undefined, { patientCode: other.admitNo, drugCode: drug.nhiCode }))

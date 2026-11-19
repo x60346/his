@@ -14,7 +14,11 @@ const props = defineProps<{
   /** 要給的這一劑：病人、醫囑、畫面上顯示的說明 */
   target?: { admissionId: string; orderId: string; patientLabel: string; content: string; needDrug: boolean }
   demoAssist?: boolean
+  /** 採檢模式：第二步掃檢體條碼（不是藥品）；specimenId＝要採的這支 */
+  specimenId?: string
 }>()
+const isSp = computed(() => !!props.specimenId)
+const what = computed(() => (isSp.value ? '檢體' : '藥品'))
 const open = defineModel<boolean>({ default: false })
 const emit = defineEmits<{ done: [scan: ScanInput] }>()
 
@@ -42,15 +46,18 @@ watch(open, (o) => {
 })
 
 const check = useAction(scanApi.scanCheck)
+const spCheck = useAction(scanApi.specimenScanCheck)
+const runCheck = (kind: 'patient' | 'drug', code: string) =>
+  isSp.value ? spCheck.run({ specimenId: props.specimenId!, kind: kind === 'drug' ? 'specimen' : 'patient', code }) : check.run({ admissionId: props.target!.admissionId, orderId: props.target!.orderId, kind, code })
 async function scanPatient() {
   if (!props.target || !pCode.value.trim()) return
-  pRes.value = (await check.run({ admissionId: props.target.admissionId, orderId: props.target.orderId, kind: 'patient', code: pCode.value })) ?? undefined
+  pRes.value = (await runCheck('patient', pCode.value)) ?? undefined
   if (pRes.value?.ok && props.target.needDrug) focus('d')
   else if (pRes.value && !pRes.value.ok) focus('p')
 }
 async function scanDrug() {
   if (!props.target || !dCode.value.trim()) return
-  dRes.value = (await check.run({ admissionId: props.target.admissionId, orderId: props.target.orderId, kind: 'drug', code: dCode.value })) ?? undefined
+  dRes.value = (await runCheck('drug', dCode.value)) ?? undefined
   if (dRes.value && !dRes.value.ok) focus('d')
 }
 const allOk = computed(() => !!pRes.value?.ok && (!props.target?.needDrug || !!dRes.value?.ok))
@@ -66,7 +73,7 @@ function proceedSkip() {
 }
 
 // 示範用模擬掃描：選一個就當作掃描槍掃了它
-const { data: demo } = useQuery(async () => (open.value && props.demoAssist && props.target ? scanApi.scanDemoCodes(props.target.admissionId, props.target.orderId) : undefined), [open, () => props.target?.orderId])
+const { data: demo } = useQuery(async () => (open.value && props.demoAssist && props.target ? (isSp.value ? scanApi.specimenScanDemo(props.specimenId!) : scanApi.scanDemoCodes(props.target.admissionId, props.target.orderId)) : undefined), [open, () => props.target?.orderId, () => props.specimenId])
 const demoPick = ref('')
 watch(demoPick, async (k) => {
   if (!k) return
@@ -84,7 +91,7 @@ watch(demoPick, async (k) => {
 </script>
 
 <template>
-  <UDialog v-model="open" title="給藥前核對：掃描條碼" size="md">
+  <UDialog v-model="open" :title="isSp ? '採檢前核對：掃描條碼' : '給藥前核對：掃描條碼'" size="md">
     <div v-if="target" class="space-y-3 text-sm">
       <div class="rounded-md bg-slate-50 px-3 py-2">
         <div class="font-medium text-slate-800">{{ target.content }}</div>
@@ -99,19 +106,19 @@ watch(demoPick, async (k) => {
           </p>
         </form>
         <form v-if="target.needDrug" @submit.prevent="scanDrug">
-          <UInput ref="dInput" v-model="dCode" label="2. 掃描藥品條碼" placeholder="掃描或輸入藥品條碼，按 Enter" autocomplete="off" :disabled="!pRes?.ok" />
+          <UInput ref="dInput" v-model="dCode" :label="`2. 掃描${what}條碼`" :placeholder="`掃描或輸入${what}條碼，按 Enter`" autocomplete="off" :disabled="!pRes?.ok" />
           <p v-if="dRes" :class="['mt-1 flex items-start gap-1.5', dRes.ok ? 'text-emerald-700' : 'text-base font-bold text-red-700']" :role="dRes.ok ? 'status' : 'alert'">
             <component :is="dRes.ok ? CheckCircle2 : XCircle" class="mt-0.5 h-4 w-4 shrink-0" />{{ dRes.message }}
           </p>
         </form>
         <div v-if="demoAssist && demo?.options.length" class="rounded-md border border-dashed border-slate-300 px-3 py-2">
-          <USelect v-model="demoPick" label="示範：模擬掃描（展示用，沒有掃描槍時選一個當作掃了它）" placeholder="選擇要「掃」的條碼" :options="demo.options.map((o, i) => ({ value: String(i), label: `${o.kind === 'patient' ? '腕帶' : '藥品'}：${o.label}` }))" />
+          <USelect v-model="demoPick" label="示範：模擬掃描（展示用，沒有掃描槍時選一個當作掃了它）" placeholder="選擇要「掃」的條碼" :options="demo.options.map((o, i) => ({ value: String(i), label: `${o.kind === 'patient' ? '腕帶' : o.kind === 'specimen' ? '檢體' : '藥品'}：${o.label}` }))" />
         </div>
         <button type="button" class="text-xs text-slate-500 underline hover:text-slate-700" @click="skipping = true">掃描不了？略過掃描</button>
       </template>
 
       <template v-else>
-        <p class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">略過掃描要靠人工核對：再看一次腕帶上的姓名與出生日期、藥袋上的藥名與劑量。給藥紀錄會標「未掃描」，護理站的掃描統計會列出來。</p>
+        <p class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">{{ isSp ? '略過掃描要靠人工核對：再看一次腕帶上的姓名與出生日期、檢體標籤上的姓名與病歷號。檢體會標「未掃描」，護理站的掃描統計會列出來。' : '略過掃描要靠人工核對：再看一次腕帶上的姓名與出生日期、藥袋上的藥名與劑量。給藥紀錄會標「未掃描」，護理站的掃描統計會列出來。' }}</p>
         <USelect v-model="skipReason" label="略過原因" placeholder="請選擇" :options="SCAN_SKIP_REASONS.map((r) => ({ value: r, label: SCAN_SKIP_LABEL[r] }))" />
         <UInput v-model="skipNote" label="說明（選填）" placeholder="例：掃描器沒電，充電中" />
         <button type="button" class="text-xs text-slate-500 underline hover:text-slate-700" @click="skipping = false">回到掃描</button>
@@ -119,8 +126,8 @@ watch(demoPick, async (k) => {
     </div>
     <template #footer>
       <UButton variant="secondary" @click="open = false">取消</UButton>
-      <UButton v-if="!skipping" variant="success" :icon="ScanLine" :disabled="!allOk" @click="proceed">確認，繼續給藥</UButton>
-      <UButton v-else variant="danger" :disabled="!skipReason" @click="proceedSkip">略過掃描，繼續給藥</UButton>
+      <UButton v-if="!skipping" variant="success" :icon="ScanLine" :disabled="!allOk" @click="proceed">{{ isSp ? '確認，繼續採檢' : '確認，繼續給藥' }}</UButton>
+      <UButton v-else variant="danger" :disabled="!skipReason" @click="proceedSkip">{{ isSp ? '略過掃描，繼續採檢' : '略過掃描，繼續給藥' }}</UButton>
     </template>
   </UDialog>
 </template>

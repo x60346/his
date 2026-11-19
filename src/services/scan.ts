@@ -4,8 +4,9 @@ import type { Admission, MarRecord, ScanMismatch, ScanSkipReason } from '@/types
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requirePermission, requireUser } from './http'
-import { checkDrugScan, checkPatientScan, SCAN_SKIP_LABEL, type ScanResult } from './scan-rules'
-import { allScanAdmissions, orderDrug, scanAdmission, scanDemoAssist, scanRequired } from './scan-work'
+import { checkDrugScan, checkPatientScan, checkSpecimenScan, SCAN_SKIP_LABEL, type ScanResult } from './scan-rules'
+import { allScanAdmissions, orderDrug, scanAdmission, scanDemoAssist, scanRequired, scanSpecimens, scanSpecimenTarget } from './scan-work'
+import { specimenProcIds } from './specimen-work'
 import { admissionView, find, nameOf } from './views'
 
 
@@ -115,7 +116,7 @@ export function scanCheck(input: { admissionId: string; orderId: string; kind: '
 // ---------- 示範用模擬掃描 ----------
 
 export interface ScanDemoCodes {
-  options: { label: string; kind: 'patient' | 'drug'; code: string; right: boolean }[]
+  options: { label: string; kind: 'patient' | 'drug' | 'specimen'; code: string; right: boolean }[]
 }
 
 /** 模擬掃描選單：這位病人的腕帶、別床病人的腕帶、舊腕帶（有的話）、對的藥、同成分別的規格或別的藥。設定關閉時不提供 */
@@ -154,7 +155,9 @@ export interface ScanStats {
   /** 沒有掃描紀錄（設定關閉時給的） */
   notRequired: number
   skips: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; reason: string; note?: string }[]
-  mismatches: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; kind: 'patient' | 'drug'; message: string }[]
+  mismatches: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; kind: 'patient' | 'drug' | 'specimen'; message: string; specimen: boolean }[]
+  /** 住院採檢（那天採的檢體）：採了幾支、掃描、略過、沒要求；略過的清單 */
+  specimens: { collected: number; scanned: number; skipped: number; notRequired: number; skips: { at: string; bedNo: string; patientName: string; content: string; nurseName: string; reason: string; note?: string }[] }
 }
 
 /** 某病房某一天的給藥掃描統計：病人以「現在住哪個病房」算（轉床的跟著走） */
@@ -183,8 +186,53 @@ export function scanStats(ward: string, date: string = today()): Promise<ScanSta
         .sort((x, y) => y.at.localeCompare(x.at)),
       mismatches: db.scanMismatches
         .filter((e) => e.at.startsWith(date) && inWard(e.admissionId))
-        .map((e) => ({ at: e.at, ...label(e.admissionId), content: content(e.orderId), nurseName: nameOf.user(e.nurseId), kind: e.kind, message: e.message }))
+        .map((e) => ({ at: e.at, ...label(e.admissionId), content: e.specimenId ? `採檢：${spTests(e.specimenId)}` : content(e.orderId), nurseName: nameOf.user(e.nurseId), kind: e.kind, message: e.message, specimen: !!e.specimenId }))
         .sort((x, y) => y.at.localeCompare(x.at)),
+      specimens: ((xs) => ({
+        collected: xs.length, scanned: xs.filter((s) => s.scan?.mode === 'scanned').length, skipped: xs.filter((s) => s.scan?.mode === 'skipped').length, notRequired: xs.filter((s) => !s.scan).length,
+        skips: xs.filter((s) => s.scan?.mode === 'skipped').map((s) => {
+          const sc = s.scan as { mode: 'skipped'; reason: ScanSkipReason; note?: string }
+          return { at: s.collectedAt!, ...label(s.admissionId!), content: `採檢：${spTests(s.id)}`, nurseName: nameOf.user(s.collectedBy ?? ''), reason: SCAN_SKIP_LABEL[sc.reason], ...(sc.note ? { note: sc.note } : {}) }
+        }).sort((x, y) => y.at.localeCompare(x.at)),
+      }))(db.specimens.filter((s) => s.admissionId && !s.partOf && s.collectedAt?.startsWith(date) && inWard(s.admissionId))),
     }
+  })
+}
+const spTests = (id: string) => ((s) => (s ? specimenProcIds(s).map((p) => find.procedure(p)?.name ?? p).join('、') : ''))(db.specimens.find((x) => x.id === id))
+
+// ---------- 住院採檢的病人辨識 ----------
+
+/** 採檢前逐步掃描（先腕帶、再檢體條碼）：回傳對不對、不丟錯；不符記下來（差點採錯）。真正採檢時服務層再核對一次 */
+export function specimenScanCheck(input: { specimenId: string; kind: 'patient' | 'specimen'; code: string }): Promise<ScanResult> {
+  return mutate(() => {
+    const nurse = requireUser('nurse')
+    const s = must(db.specimens.find((x) => x.id === input.specimenId), '檢體')
+    if (!s.admissionId) fail('住院檢體才在病房掃描採檢')
+    const a = must(find.admission(s.admissionId!), '住院紀錄')
+    const r = input.kind === 'patient' ? checkPatientScan(input.code, scanAdmission(a), allScanAdmissions()) : checkSpecimenScan(input.code, scanSpecimenTarget(s), scanSpecimens())
+    const code = (input.code ?? '').trim()
+    if (!r.ok && code) {
+      db.scanMismatches.push({ id: newId('SM'), at: now(), nurseId: nurse.id, admissionId: a.id, orderId: s.orderIds[0] ?? '', specimenId: s.id, kind: input.kind, code, message: r.message })
+      audit('掃描不符', `${a.admitNo} ${nameOf.patient(a.patientId)} 採檢 ${s.barcode}：${r.message}`)
+    }
+    return r
+  })
+}
+
+/** 採檢的模擬掃描選單：本人腕帶、別床病人的腕帶、這支檢體、別人的檢體（同病房還沒採的） */
+export function specimenScanDemo(specimenId: string): Promise<ScanDemoCodes> {
+  return query(() => {
+    requireUser('nurse')
+    if (!scanDemoAssist()) fail('示範用模擬掃描已關閉', 'FORBIDDEN')
+    const s = must(db.specimens.find((x) => x.id === specimenId), '檢體')
+    const a = must(find.admission(s.admissionId ?? ''), '住院紀錄')
+    const bedOf = (x: Admission) => find.bed(x.bedId ?? '')?.bedNo ?? ''
+    const options: ScanDemoCodes['options'] = [{ label: `本人腕帶（${bedOf(a)} ${nameOf.patient(a.patientId)}）`, kind: 'patient', code: a.admitNo, right: true }]
+    const other = db.admissions.find((x) => x.status === 'admitted' && x.id !== a.id && find.bed(x.bedId ?? '')?.ward === find.bed(a.bedId ?? '')?.ward) ?? db.admissions.find((x) => x.status === 'admitted' && x.id !== a.id)
+    if (other) options.push({ label: `別床病人的腕帶（${bedOf(other)} ${nameOf.patient(other.patientId)}）`, kind: 'patient', code: other.admitNo, right: false })
+    options.push({ label: `這支檢體（${s.barcode}）`, kind: 'specimen', code: s.barcode, right: true })
+    const wrong = db.specimens.find((x) => x.id !== s.id && x.admissionId && x.patientId !== s.patientId && !x.partOf)
+    if (wrong) options.push({ label: `別人的檢體（${wrong.barcode} ${nameOf.patient(wrong.patientId)}）`, kind: 'specimen', code: wrong.barcode, right: false })
+    return { options }
   })
 }

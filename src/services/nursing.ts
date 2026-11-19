@@ -15,7 +15,7 @@ import { riskStateOf } from './risk-work'
 import { RISK_REASON_LABEL, RISK_SCALE_NAME } from './risk-rules'
 import { activeIsolations, placementFor } from './flag-work'
 import { ISOLATION_REVIEW_TEXT, isolationReviewDue, isoText } from './flag-rules'
-import { scanText, settleScan, type ScanInput } from './scan-work'
+import { scanRequired, scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
@@ -569,6 +569,8 @@ export function completeStatOrder(orderId: string, force?: { reason: string }, f
     if (isLabOrder(o)) {
       const s = specimenOfOrder(o.id)
       const sp = s && !s.collectedAt ? s : newSpecimen(must(find.admission(o.admissionId), '住院紀錄'), tubeOfOrder(o), [o.id], nurse.id, t, true)
+      // 要掃描核對的醫院（和給藥同一個設定）：檢驗要在「檢體」印條碼、掃腕帶與檢體條碼採檢，不能從這裡直接執行
+      if (scanRequired()) fail('採檢要掃描核對病人：請到病人分頁「檢體」印條碼，掃腕帶與檢體條碼採檢', 'CONFLICT')
       // 有要空腹的檢驗：要答有沒有空腹（沒空腹不擋，記原因）
       recordFasting(sp, fasting, nurse.id, t)
       const os = collectRecord(sp, nurse.id, t)

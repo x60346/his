@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  SerumIndices, RoomDowntime, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, RoomDowntime, ScanMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -3267,7 +3267,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const t0 = [addMinutes(nowStr, -85), day0].sort().at(-1)!
       const col = [addMinutes(nowStr, -70), t0].sort().at(-1)!
       ipdOrders.push({ id: 'IO-TAT-1', admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P011', content: procMap.get('P011')!.name, startAt: t0, status: 'done', stopAt: col, doctorId: fx.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201' })
-      specimens.push({ id: 'SP-TAT-1', barcode: `S${T.replace(/-/g, '')}5001`, admissionId: fx.id, patientId: fx.patientId, tube: 'red', orderIds: ['IO-TAT-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: col, collectedBy: 'U201' })
+      // 採檢病人辨識：腕帶浸濕破損，略過掃描（人工核對）
+      specimens.push({ id: 'SP-TAT-1', barcode: `S${T.replace(/-/g, '')}5001`, admissionId: fx.id, patientId: fx.patientId, tube: 'red', orderIds: ['IO-TAT-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: col, collectedBy: 'U201', scan: { mode: 'skipped', reason: 'wristband', note: '腕帶浸濕破損，人工核對姓名與出生日期' } })
     }
   }
 
@@ -3338,7 +3339,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     admissions,
     ipdOrders,
     mar,
-    scanMismatches: [],
+    // 採檢掃錯病人（示範）：加護病房血糖那支採檢前，先掃到隔壁床的腕帶，當場擋下；改掃本人後採檢（檢體記已掃描）
+    scanMismatches: ((): ScanMismatch[] => {
+      const sp = specimens.find((s) => s.id === 'SP-CR-1')
+      const a = sp && admissions.find((x) => x.id === sp.admissionId)
+      const other = a && admissions.find((x) => x.status === 'admitted' && x.id !== a.id && beds.find((b) => b.id === x.bedId)?.ward === beds.find((b) => b.id === a.bedId)?.ward)
+      if (!sp || !a || !other) return []
+      sp.scan = { mode: 'scanned' }
+      const ob = beds.find((b) => b.id === other.bedId)?.bedNo ?? ''
+      const ab = beds.find((b) => b.id === a.bedId)?.bedNo ?? ''
+      const nm = (pid: string) => patients.find((p) => p.id === pid)?.name ?? ''
+      return [{ id: 'SM-SEED-1', at: sp.collectedAt!, nurseId: 'U201', admissionId: a.id, orderId: sp.orderIds[0], specimenId: sp.id, kind: 'patient', code: other.admitNo, message: `病人不對！這是 ${ob} ${nm(other.patientId)} 的腕帶，不是 ${ab} ${nm(a.patientId)}` }]
+    })(),
     riskAssessments,
     isolations,
     dnrRecords,

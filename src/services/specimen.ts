@@ -9,6 +9,8 @@ import { addonCheck, ADDON_HOURS, checkRejectReason, fastingText, groupByTube, s
 import { addonSpecimenOf, chunksByVolume, collectRecord, isLabOrder, labOrderStage, needsFasting, newSpecimen, recordFasting, reopenLabOrders, specimenOfOrder, toRecollect, tubeOfOrder } from './specimen-work'
 import { ensureLabDraws } from './ipd'
 import { find, nameOf } from './views'
+import { settleSpecimenScan, type SpecimenScanInput } from './scan-work'
+import { SCAN_SKIP_LABEL } from './scan-rules'
 
 export interface SpecimenView extends Specimen {
   stage: SpecimenStage
@@ -97,7 +99,7 @@ export function printSpecimenLabels(admissionId: string): Promise<SpecimenView[]
 }
 
 /** 採檢（護理師掃條碼或在清單上按）：檢體記採檢、裡面的檢驗醫囑一起完成。有要空腹的檢驗要答病人有沒有空腹（沒空腹不擋，記原因） */
-export function collectSpecimen(barcode: string, opts: { fasting?: boolean; note?: string } = {}): Promise<SpecimenView> {
+export function collectSpecimen(barcode: string, opts: { fasting?: boolean; note?: string; scan?: SpecimenScanInput } = {}): Promise<SpecimenView> {
   return mutate(() => {
     const u = requireUser('nurse')
     const s = must(db.specimens.find((x) => x.barcode === barcode?.trim() && !x.partOf), '檢體（條碼）')
@@ -106,10 +108,13 @@ export function collectSpecimen(barcode: string, opts: { fasting?: boolean; note
     if (!s.admissionId) fail(s.er ? '急診檢體在急診看板「檢驗」床邊採檢' : '門診檢體在抽血櫃台採檢', 'CONFLICT')
     if (find.admission(s.admissionId!)?.status !== 'admitted') fail('病人不在住院中', 'CONFLICT')
     const t = now()
+    // 病人辨識：掃腕帶＋檢體條碼（和給藥同一個設定；略過要寫原因）
+    const sc = settleSpecimenScan(must(find.admission(s.admissionId!), '住院紀錄'), s, opts.scan)
+    if (sc) s.scan = sc
     recordFasting(s, opts, u.id, t)
     const os = collectRecord(s, u.id, t)
     if (!os.length) fail('這支檢體的醫囑都停止了，不用採檢', 'CONFLICT')
-    audit('採檢', `${s.barcode} ${nameOf.patient(s.patientId)}：${os.map((o) => o.content).join('、')}${s.fasting ? `（${fastingText(s.fasting)}）` : ''}`)
+    audit('採檢', `${s.barcode} ${nameOf.patient(s.patientId)}：${os.map((o) => o.content).join('、')}${s.fasting ? `（${fastingText(s.fasting)}）` : ''}${sc ? `；${sc.mode === 'scanned' ? '已掃描核對' : `未掃描（${SCAN_SKIP_LABEL[sc.reason]}${sc.note ? `：${sc.note}` : ''}）`}` : ''}`)
     return view(s, t)
   })
 }
