@@ -82,7 +82,7 @@ const STAGE = { in: { label: '恢復室中', tone: 'purple' }, out: { label: '�
       </div>
       <p v-if="p.outText" class="text-xs text-slate-600">{{ p.outText }}</p>
       <div v-if="p.stage === 'out'" class="flex items-center gap-2">
-        <p class="text-xs text-amber-800">已轉出，等病房護理師接回。</p>
+        <p class="text-xs text-amber-800">{{ p.day ? '日間手術：已轉出恢復室，接著在手術室「日間手術」評 PADSS、回家。' : '已轉出，等病房護理師接回。' }}</p>
         <UButton v-if="p.canReceive" size="sm" class="ml-auto" :loading="recvAct.pending.value" @click="receive">接回病房</UButton>
       </div>
       <p v-if="p.receivedText" class="text-xs text-emerald-700">{{ p.receivedText }}</p>

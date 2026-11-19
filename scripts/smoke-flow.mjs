@@ -1504,7 +1504,8 @@ try {
 
   {
     // 種子：已出院的都有醫師簽署的病摘，簽署不晚於出院；有一位住院中的已准予出院（展示住院中心辦理）
-    const dis = dbm.db.admissions.filter((a) => a.status === 'discharged')
+    // 日間手術回家不用出院病摘（另測）
+    const dis = dbm.db.admissions.filter((a) => a.status === 'discharged' && !a.day)
     const bad = dis.filter((a) => !a.dischargeSummary?.signedAt || a.dischargeSummary.signedAt > a.dischargedAt || a.dischargeSummary.dischargeType !== a.dischargeType)
     ok(dis.length > 0 && bad.length === 0, `已出院 ${dis.length} 筆都有醫師簽署的病摘，簽署 ≤ 出院、轉歸一致`)
     const ready = (await api.admissionApi.listAdmissions({ status: ['admitted'] })).filter((a) => a.dischargeReady)
@@ -5656,7 +5657,8 @@ try {
 
     // 種子
     // 死亡出院的帳單之後由家屬結（不在出院前結帳）：另外測
-    const disc = db().admissions.filter((a) => a.status === 'discharged' && a.dischargeType !== '死亡')
+    // 日間手術回家後才結帳（另測）
+    const disc = db().admissions.filter((a) => a.status === 'discharged' && a.dischargeType !== '死亡' && !a.day)
     const ipdCharges = db().charges.filter((c) => c.admissionId)
     ok(disc.length > 0 && disc.every((a) => ipdCharges.some((c) => c.admissionId === a.id && !c.voided && c.ipd.days === B.ipdDays(a.admittedAt, a.dischargedAt) && c.paidAt < a.dischargedAt)), `種子：已出院的 ${disc.length} 位都有住院收據（出院前結帳、天數正確）`)
     const nos = db().charges.map((c) => c.receiptNo)
@@ -5672,8 +5674,9 @@ try {
     await expectError(() => IC.listIpdBilling(), '護理師看住院結帳')
     await as('clerk01')
     const lst = await IC.listIpdBilling()
-    ok(lst.filter((x) => !x.death)[0].admissionId === ready.id && lst.filter((x) => !x.death)[0].dischargeReady && lst.some((x) => x.admissionId === notReady.id && !x.dischargeReady), '住院結帳清單：准出院的排最前面（死亡出院待家屬結帳的另外標）')
-    ok((await api.dashboardApi.getDashboard()).ipdToBill === db().admissions.filter((x) => (x.status === 'admitted' && x.dischargeSummary?.signedAt) || (x.dischargeType === '死亡' && !db().charges.some((c) => c.admissionId === x.id && !c.voided))).length, '櫃台首頁「住院待結帳」＝准出院還沒結帳＋死亡出院待家屬結帳的人數')
+    const reg = lst.filter((x) => !x.death && !db().admissions.find((a) => a.id === x.admissionId)?.day) // 日間手術回家待結帳另測
+    ok(reg[0].admissionId === ready.id && reg[0].dischargeReady && lst.some((x) => x.admissionId === notReady.id && !x.dischargeReady), '住院結帳清單：准出院的排最前面（死亡出院待家屬結帳的另外標）')
+    ok((await api.dashboardApi.getDashboard()).ipdToBill === db().admissions.filter((x) => (x.status === 'admitted' && x.dischargeSummary?.signedAt) || ((x.dischargeType === '死亡' || x.day?.out) && !db().charges.some((c) => c.admissionId === x.id && !c.voided))).length, '櫃台首頁「住院待結帳」＝准出院還沒結帳＋死亡出院待家屬結帳＋日間手術回家待結帳的人數')
     const nv = await IC.getIpdBill(notReady.id)
     ok(nv.bill && nv.blocked?.includes('簽准出院'), '還沒准出院：可看試算、標出不能結帳')
     msg = await errOf(() => IC.payIpd(notReady.id, { payMethod: 'card', received: 0 }))
@@ -5989,7 +5992,7 @@ try {
     ok(api.riskFactors('pressure', pres({ activity: 1, mobility: 2 })).length === 2 && api.riskFactors('fall', fall({ iv: 20 }))[0].startsWith('靜脈輸液'), '高風險因子：Morse 有分的題、Braden 1–2 分的題')
 
     // 種子
-    const inpt = db().admissions.filter((a) => a.status === 'admitted')
+    const inpt = db().admissions.filter((a) => a.status === 'admitted' && !a.day) // 日間手術不做住院的跌倒壓傷評估（簡化版）
     ok(inpt.every((a) => db().riskAssessments.some((r) => r.admissionId === a.id && r.scale === 'fall')), '種子：住院中的病人都評過跌倒')
     const stroke = inpt.find((a) => a.diagnosis.startsWith('I63'))
     const strokeView = (await api.admissionApi.getAdmission(stroke.id))
@@ -7691,7 +7694,7 @@ try {
     ok((await NA.listNutritionWork()).toAssess.find((x) => x.admissionId === a.id)?.reassess, '重篩又 ≥3：再列待評估（標重評）')
 
     // 護理站：篩檢期限、本班待辦
-    const fresh = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !db().nutritionScreens.some((s) => s.admissionId === x.id))
+    const fresh = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.bedId && !db().nutritionScreens.some((s) => s.admissionId === x.id))
     if (fresh) {
       await as('nurse01')
       const ward = db().beds.find((b) => b.id === fresh.bedId).ward
@@ -10783,7 +10786,8 @@ try {
     // 種子
     const dm = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
     const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
-    ok(db().admissions.filter((a) => a.status === 'admitted' && !a.obs).every((a) => a.medRec), '種子：住院中的病人都有居家用藥清單')
+    // 日間手術（當天回家）不建居家用藥清單
+    ok(db().admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.day).every((a) => a.medRec), '種子：住院中的病人都有居家用藥清單')
     await as(userOf(dm.doctorId))
     let v = await M.getMedRec(dm.id)
     ok(v.state === 'pending' && v.items.length === 3 && v.items.some((x) => x.source === 'outside') && v.canDecide && v.items.find((x) => x.drugId === 'M015').activeOrderId, '種子：糖尿病病人清單 3 項（含院外銀杏）待主治決定；Metformin 已有住院醫囑')
@@ -16142,6 +16146,149 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/pages/pathology/PathologyPage.vue', 'utf8') + readFileSync('src/components/surgery/SpecimenPanel.vue', 'utf8')
     ok(!/db\.|FROZEN_MINUTES|> 20|frozenState/.test(page), '逾時與一致率由服務層算')
+  }
+  // 日間手術：規則（PADSS、回家條件一次列出、階段、隔天追蹤）；種子（昨天回家待追蹤、今天第二期 PADSS 8、今天待報到）與首頁；
+  // 帳單不收病房費、回家後結帳不用病摘；PADSS（護理師、欄位）、回家（條件、陪同、衛教、稽核）；電話追蹤；
+  // 申請（醫師、病人已住院、日期）；ASA 4 不能報到；沒報到不能送手術室；報到、做完、轉住院（要原因與床）；取消
+  console.log('\n[日間手術]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.dayApi
+    const S = api.surgeryApi
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    const full = { vitals: 2, activity: 2, ponv: 2, pain: 2, bleeding: 2 }
+    ok(api.padssOf(full) === 10 && api.padssOf({ ...full, pain: 1, activity: 1 }) === 8, 'PADSS 合計')
+    ok(Object.keys(api.checkPadss({ vitals: 2, pain: 3 })).length === 4, 'PADSS 每項 0–2 都要評')
+    let un = api.dayDischargeUnmet({ ...full, pain: 0, at: 'x' }, 40, {})
+    ok(un.length === 4 && un[0].includes('8 分') && un[1].includes('40 分鐘前') && un[2].includes('陪同') && un[3].includes('衛教'), `回家條件一次列出：${un.join('／')}`)
+    ok(!api.dayDischargeUnmet({ ...full, at: 'x' }, 10, { escort: '太太', teaching: true }).length, '達到 9 分、30 分鐘內、陪同、衛教：可以回家')
+    ok(api.dayStage({ status: 'admitted', day: {} }, { status: 'done', pacu: { inAt: 'x', scores: [] } }) === 'pacu' && api.dayStage({ status: 'admitted', day: {} }, { status: 'done' }) === 'phase2' && api.dayStage({ status: 'reserved', day: {} }, { status: 'scheduled' }) === 'reserved', '階段：恢復室第一期、局部麻醉直接第二期、待報到')
+    ok(api.dayFollowUpDue({ day: { out: { at: '2026-03-01 12:00' } } }, '2026-03-02') && !api.dayFollowUpDue({ day: { out: { at: '2026-03-02 12:00' } } }, '2026-03-02'), '回家隔天起要電話追蹤')
+    // 種子
+    const a1 = db().admissions.find((a) => a.id === 'A-DAY-1')
+    const a2 = db().admissions.find((a) => a.id === 'A-DAY-2')
+    const a3 = db().admissions.find((a) => a.id === 'A-DAY-3')
+    ok(a1?.status === 'discharged' && a1.day.out && !a1.day.followUp && a2?.status === 'admitted' && !a2.bedId && a3?.status === 'reserved', '種子：昨天回家待追蹤、今天第二期（沒有病房床）、今天待報到')
+    await as('nurse01')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.dayToCheckIn === 1 && dash.dayPhase2 === 1 && dash.dayFollowUp === 1, '護理師首頁：日間手術待報到 1、待出院評估 1、待電話追蹤 1')
+    let board = await D.dayBoard(T)
+    const i2 = board.items.find((x) => x.admissionId === a2.id)
+    ok(board.items[0].admissionId === a2.id && i2.stage === 'phase2' && i2.latest.total === 8 && i2.padssUnmet[0].includes('8 分') && i2.canScore && board.followUps.some((x) => x.admissionId === a1.id), '看板：第二期排最前、PADSS 8 還不能回家；待追蹤')
+    // 帳單
+    await as('clerk01')
+    const billing = await api.ipdChargeApi.listIpdBilling()
+    ok(billing.some((x) => x.admissionId === a1.id && x.dischargeReady), '住院結帳清單：昨天回家的日間手術（待結帳）')
+    const bv = await api.ipdChargeApi.getIpdBill(a1.id)
+    ok(bv.bill && !bv.bill.lines.some((l) => /病房費|護理費|診察費/.test(l.name)) && bv.bill.lines.some((l) => l.name.includes('疝氣')), `不收病房費、護理費、診察費；有手術費（${bv.bill.lines.map((l) => l.name).join('、')}）`)
+    const ch = await api.ipdChargeApi.payIpd(a1.id, { payMethod: 'card' })
+    ok(ch.receiptNo && !(await api.ipdChargeApi.listIpdBilling()).some((x) => x.admissionId === a1.id && !x.receiptNo), '回家後結帳（不用出院病摘）')
+    await expectError(() => api.ipdChargeApi.payIpd(a2.id, { payMethod: 'card' }), '還在院內的日間手術不能先結帳')
+    // PADSS、回家
+    await as('nurse01')
+    let msg = await errOf(() => D.dischargeDay(a2.id, { escort: '太太', teaching: true }))
+    ok(msg.includes('PADSS 8') && msg.includes('轉住院'), `PADSS 8 不能回家：「${msg}」`)
+    await as(db().users.find((u) => u.doctorId === 'DR04').username)
+    await expectError(() => D.recordPadss(a2.id, full), '醫師不能評 PADSS')
+    await as('nurse01')
+    let f = await fieldsOf(() => D.recordPadss(a2.id, { vitals: 2 }))
+    ok(f.pain && f.bleeding, 'PADSS 欄位')
+    let it = await D.recordPadss(a2.id, full)
+    ok(it.latest.total === 10 && !it.padssUnmet.length, '重評 10 分')
+    msg = await errOf(() => D.dischargeDay(a2.id, { escort: ' ', teaching: false }))
+    ok(msg.includes('陪同') && msg.includes('衛教'), '要陪同、要衛教')
+    it = await D.dischargeDay(a2.id, { escort: '太太', teaching: true })
+    ok(it.stage === 'out' && db().admissions.find((a) => a.id === a2.id).status === 'discharged' && db().admissions.find((a) => a.id === a2.id).dischargeType === '日間手術出院' && db().auditLogs[0].action === '日間手術回家', '回家（稽核）')
+    // 電話追蹤
+    f = await fieldsOf(() => D.recordDayFollowUp(a1.id, { reached: true }))
+    ok(f.ok, '聯絡上要選有沒有問題')
+    f = await fieldsOf(() => D.recordDayFollowUp(a1.id, { reached: false }))
+    ok(f.note, '沒聯絡上要寫')
+    it = await D.recordDayFollowUp(a1.id, { reached: false, note: '打兩次沒人接，明天再打' })
+    ok(it.followUpDue && (await api.dashboardApi.getDashboard()).dayFollowUp === 1, '沒聯絡上：還要再打')
+    it = await D.recordDayFollowUp(a1.id, { reached: true, ok: false, note: '傷口微滲血，請明天回門診換藥' })
+    ok(!it.followUpDue && it.followUpText.includes('有問題') && db().auditLogs[0].action === '日間手術電話追蹤', '聯絡上、有問題（稽核）')
+    await expectError(() => D.recordDayFollowUp(a1.id, { reached: true, ok: true }), '追蹤過了')
+    // 申請
+    const doc = db().users.find((u) => u.doctorId === 'DR04')
+    await as(doc.username)
+    const pts = db().patients.filter((p) => !p.deceasedAt && !db().admissions.some((a) => a.patientId === p.id && (a.status === 'reserved' || a.status === 'admitted')))
+    const busyPt = db().admissions.find((a) => a.status === 'admitted').patientId
+    f = await fieldsOf(() => D.requestDaySurgery({ patientId: busyPt, procId: 'P001', side: 'left', anesthesia: 'local', date: addDaysT(-1), estMinutes: 60, diagnosis: '' }))
+    ok(f.patientId?.includes('住院') && f.procId && f.date && f.diagnosis, '申請檢查：病人已住院、不是術式、日期過去、診斷')
+    const req = { procId: 'P039', side: 'right', anesthesia: 'local', date: T, estMinutes: 60, diagnosis: '右側腹股溝疝氣' }
+    const v1 = await D.requestDaySurgery({ ...req, patientId: pts[0].id })
+    const ad1 = db().admissions.find((a) => a.id === v1.admissionId)
+    ok(ad1.status === 'reserved' && ad1.day.surgeryId === v1.id && ad1.deptId === 'D03' && v1.status === 'requested', '申請：建日間手術住院預約＋待排程手術')
+    await as('nurse02')
+    ok((await S.orBoard(T)).requested.some((x) => x.id === v1.id), '手術室待排程看得到（還沒報到也排得到）')
+    const soon = ((t) => dateUtil.addMinutes(t, 60 - (Number(t.slice(15)) % 5)))(nowStr().slice(0, 16))
+    await S.scheduleSurgery(v1.id, { room: 'OR3', start: soon })
+    await as('dr03')
+    await api.anesthesiaApi.savePreAnes(v1.id, { asa: 4, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'unknown' }, history: { items: ['cardiac'] }, plan: 'local' })
+    await as('nurse01')
+    board = await D.dayBoard(T)
+    ok(board.items.find((x) => x.admissionId === ad1.id).asaTooHigh, '看板標「ASA 4 不適合日間」')
+    msg = await errOf(() => D.checkInDay(ad1.id))
+    ok(msg.includes('ASA 4'), `ASA 4 不能報到：「${msg}」`)
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(v1.id, k)
+    await S.markPrep(v1.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(v1.id, 'abx', { notNeeded: '乾淨手術' })
+    msg = await errOf(() => S.sendToOr(v1.id))
+    ok(msg.includes('還沒報到'), '沒報到不能送手術室')
+    await as('dr03')
+    await api.anesthesiaApi.savePreAnes(v1.id, { asa: 2, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, npo: { status: 'unknown' }, history: { items: [] }, plan: 'local' })
+    await as('nurse01')
+    it = await D.checkInDay(ad1.id)
+    ok(it.stage === 'checkedIn' && it.admitNo && db().admissions.find((a) => a.id === ad1.id).status === 'admitted' && !db().admissions.find((a) => a.id === ad1.id).bedId, '報到：產生住院號、不排病房床')
+    await S.sendToOr(v1.id)
+    await S.recordCheck(v1.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(v1.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(v1.id)
+    ok((await D.dayBoard(T)).items.find((x) => x.admissionId === ad1.id).stage === 'inOr', '手術中')
+    await S.finishSurgery(v1.id, { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 })
+    it = (await D.dayBoard(T)).items.find((x) => x.admissionId === ad1.id)
+    ok(it.stage === 'phase2' && !it.surgery.pacu, '局部麻醉做完直接第二期（不進恢復室）')
+    await as(doc.username)
+    ok(!(await api.dashboardApi.getDashboard()).postopDue || !(await api.surgeryApi.patientSurgeries(ad1.id)).list[0].postopDue, '日間手術不列「術後醫囑待開」')
+    await as('nurse01')
+    await D.recordPadss(ad1.id, { ...full, pain: 0, activity: 1 })
+    await as(doc.username)
+    f = await fieldsOf(() => D.convertDay(ad1.id, { reason: '', bedId: '' }))
+    ok(f.reason && f.bedId, '轉住院要原因與床')
+    const bed = db().beds.find((b) => b.status === 'empty' && !/加護|留觀/.test(b.ward))
+    it = await D.convertDay(ad1.id, { reason: '疼痛控制不佳', bedId: bed.id })
+    const ad1n = db().admissions.find((a) => a.id === ad1.id)
+    ok(it.stage === 'converted' && ad1n.bedId === bed.id && ad1n.status === 'admitted' && db().auditLogs[0].action === '日間手術轉住院', `轉住院：${it.convertedText}`)
+    await as('clerk01')
+    ok((await api.ipdChargeApi.getIpdBill(ad1.id)).bill.lines.some((l) => /病房費/.test(l.name)), '轉住院後照住院收病房費')
+    // 取消
+    await as(doc.username)
+    const v2 = await D.requestDaySurgery({ ...req, patientId: pts[1].id, date: addDaysT(2) })
+    f = await fieldsOf(() => D.cancelDaySurgery(v2.admissionId, ''))
+    ok(f.reason, '取消要原因')
+    await D.cancelDaySurgery(v2.admissionId, '病人改期')
+    ok(db().admissions.find((a) => a.id === v2.admissionId).status === 'cancelled' && db().surgeries.find((s) => s.id === v2.id).status === 'cancelled', '取消：手術與住院預約一起取消')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/components/surgery/DayPanel.vue', 'utf8')
+    ok(!/db\.|padssOf|>= 9|PADSS_FRESH/.test(page), '回家條件由服務層判斷')
   }
 } catch (e) {
   failed++

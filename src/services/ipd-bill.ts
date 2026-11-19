@@ -141,8 +141,9 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
   const days = Math.max(1, diffDays(from, to.slice(0, 10)))
   const { lines: base, meta } = calcIpdChargeLines({
     identity, from, to,
-    beds: bedSegments(a, from, to, days),
-    daily: db.procedures.filter((x) => x.dailyFee && x.active),
+    // 日間手術（沒轉住院）：不排病房床、不收病房費護理費診察費
+    beds: a.day && !a.day.converted ? [] : bedSegments(a, from, to, days),
+    daily: a.day && !a.day.converted ? [] : db.procedures.filter((x) => x.dailyFee && x.active),
     drugs: drugsOf(a),
     procedures: [...proceduresOf(a), ...mealItems(a, from, days)],
     copay: db.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
@@ -156,6 +157,8 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
 /** 帳單算到哪一天：出院了算到出院那天（死亡出院：送太平間後才結帳） */
 export const billEndOf = (a: Admission) => (a.status === 'discharged' && a.dischargedAt ? a.dischargedAt.slice(0, 10) : today())
 /** 死亡出院、還沒結帳：家屬之後來結（住院結帳清單、櫃台待辦） */
+/** 日間手術回家了、還沒結帳：櫃台之後結（不用出院病摘） */
+export const dayToBill = (a: Admission) => a.status === 'discharged' && !!a.day?.out && !a.day.converted && !activeIpdChargeOf(a.id)
 export const deathToBill = (a: Admission) => a.status === 'discharged' && a.dischargeType === '死亡' && !!a.death && !activeIpdChargeOf(a.id)
 
 /** 這次住院目前有效的住院收據（沒作廢、沒退費） */

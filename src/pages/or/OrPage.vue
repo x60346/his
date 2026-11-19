@@ -12,6 +12,7 @@ import TeamPanel from '@/components/surgery/TeamPanel.vue'
 import SpecimenPanel from '@/components/surgery/SpecimenPanel.vue'
 import PathPanel from '@/components/surgery/PathPanel.vue'
 import OrMetricsPanel from '@/components/surgery/OrMetricsPanel.vue'
+import DayPanel from '@/components/surgery/DayPanel.vue'
 
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
@@ -97,8 +98,9 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
     <UPageHeader title="手術室" description="排程、送來的病人、三段安全查核（麻醉前、劃刀前暫停確認、離開前）">
       <input v-if="mode === 'board'" v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
-    <UTabs v-model="mode" :tabs="[{ key: 'board', label: '排程與查核' }, { key: 'metrics', label: '效率' }]" />
+    <UTabs v-model="mode" :tabs="[{ key: 'board', label: '排程與查核' }, { key: 'day', label: '日間手術' }, { key: 'metrics', label: '效率' }]" />
     <OrMetricsPanel v-if="mode === 'metrics'" />
+    <DayPanel v-else-if="mode === 'day'" />
     <UQueryState v-else :loading="loading && !board" :ready="!!board">
       <template v-if="board">
         <section v-if="board.lateFirst.length" class="rounded-md border border-red-300 bg-red-50 p-3 text-sm">

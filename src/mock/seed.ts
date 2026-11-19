@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -3617,6 +3617,59 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         // 沒聯絡上一次：發出 8 分鐘後打給病房護理師，電話沒人接（再一次沒聯絡上就要改通報主治）
         calloutAttempts: [{ at: [addMinutes(rep, 8), nowStr].sort()[0], by: 'U601', to: nurse.name, toRole: 'nurse', note: '電話沒人接' }] })
     }
+  }
+
+  // 日間手術（示範，不抽亂數）：局部麻醉疝氣修補——
+  //   一：昨天做完、PADSS 10 分由兒子陪同回家，今天待電話追蹤；帳單還沒結（住院結帳清單）
+  //   二：今天 40 分鐘前做完，PADSS 8 分（疼痛、活動各 1），還不能回家
+  //   三：今天稍後排在 OR2，麻醉前評估 ASA 2，待報到
+  // 放在種子最後：其他示範先挑病人。挑現在沒住院、沒預約、今天沒掛急診的成年人（18 歲以上）：今天以後沒有掛號的、沒住過院的優先，再依年輕
+  {
+    const ever = new Set(admissions.map((x) => x.patientId))
+    const busy = new Set([...admissions.filter((x) => x.status === 'reserved' || x.status === 'admitted').map((x) => x.patientId), ...visits.filter((v) => v.date >= T && v.er).map((v) => v.patientId)])
+    const booked = new Set(visits.filter((v) => v.date >= T).map((v) => v.patientId))
+    const free = patients.filter((p) => !busy.has(p.id) && !p.deceasedAt && Number(T.slice(0, 4)) - Number(p.birthDate.slice(0, 4)) >= 18)
+      .sort((x, y) => Number(booked.has(x.id)) - Number(booked.has(y.id)) || Number(ever.has(x.id)) - Number(ever.has(y.id)) || y.birthDate.localeCompare(x.birthDate))
+    const doc = codes.doctors.find((d) => d.id === 'DR04')!
+    const docUser = users.find((u) => u.doctorId === doc.id)!.id
+    const an = users.find((u) => u.doctorId === 'DR03')!.id
+    const mk = (by: string, at: string, extra: Partial<SurgeryPrepMark> = {}): SurgeryPrepMark => ({ by, at, ...extra })
+    const sno = (d: string) => { const n = (counters[`surgery:${d}`] ?? surgeries.filter((x) => x.no.startsWith(`OR${d.replace(/-/g, '')}`)).length) + 1; counters[`surgery:${d}`] = n; return `OR${d.replace(/-/g, '')}${String(n).padStart(3, '0')}` }
+    const make = (k: number, pt: Patient, start: string, stage: 'out' | 'phase2' | 'reserved') => {
+      const created = addMinutes(start, -7 * 24 * 60)
+      const end = addMinutes(start, 50)
+      const aid = `A-DAY-${k}`
+      const sid = `SG-DAY-${k}`
+      const done = stage !== 'reserved'
+      const sch = { room: 'OR2', start, by: 'U202', at: addMinutes(created, 60) }
+      const sg: Surgery = {
+        id: sid, no: sno(created.slice(0, 10)), admissionId: aid, patientId: pt.id, doctorId: doc.id, procId: 'P039', side: k === 2 ? 'left' : 'right', anesthesia: 'local',
+        diagnosis: `K40.90 ${k === 2 ? '左' : '右'}側腹股溝疝氣`, requestedDate: start.slice(0, 10), estMinutes: 60, status: done ? 'done' : 'scheduled', createdAt: created, schedule: sch,
+        preAnes: { asa: 2, emergency: false, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, difficult: false, npo: { status: 'unknown' }, history: { items: [] }, plan: 'local', by: an, at: addMinutes(created, 24 * 60) },
+        team: { scrub: [{ userId: 'U210', by: 'U202', at: sch.at }], circulating: [{ userId: 'U212', by: 'U202', at: sch.at }] },
+        prep: done ? { consent: mk('U212', addMinutes(start, -60)), npo: mk('U212', addMinutes(start, -60), { notNeeded: '局部麻醉' }), siteMark: mk('U212', addMinutes(start, -60)), blood: mk('U212', addMinutes(start, -60), { notNeeded: '日間手術，預估失血少' }), abx: mk('U212', addMinutes(start, -60), { notNeeded: '乾淨手術不需預防性抗生素' }) } : {},
+        checks: done ? { signIn: { by: 'U212', at: addMinutes(start, -10) }, timeOut: { by: 'U212', at: addMinutes(start, -2) }, signOut: { by: 'U212', at: end } } : {},
+        ...(done ? { sentAt: addMinutes(start, -20), sentBy: 'U212', startAt: start, endAt: end, counts: { spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 }, noSpecimen: true,
+          record: { performed: '腹股溝疝氣修補術（局部麻醉，網膜）', findings: '間接型疝氣，疝囊約 3 cm', bloodLoss: 10, complications: '無', specimen: '無', by: docUser, at: addMinutes(end, 10) } } : {}),
+      }
+      surgeries.push(sg)
+      const admitted = addMinutes(start, -90)
+      const pd = (i: number, at: string, v: [number, number, number, number, number]): PadssScore => ({ id: `PD-SEED-${k}-${i}`, at, vitals: v[0] as 0 | 1 | 2, activity: v[1] as 0 | 1 | 2, ponv: v[2] as 0 | 1 | 2, pain: v[3] as 0 | 1 | 2, bleeding: v[4] as 0 | 1 | 2, by: 'U212' })
+      const day: Admission['day'] = { surgeryId: sid,
+        ...(stage === 'out' ? { padss: [pd(1, addMinutes(end, 30), [2, 1, 2, 1, 2]), pd(2, addMinutes(end, 60), [2, 2, 2, 2, 2])], out: { at: addMinutes(end, 70), by: 'U212', padss: 10, escort: '兒子（陪同回家）' } } : {}),
+        ...(stage === 'phase2' ? { padss: [pd(1, addMinutes(end, 20), [2, 1, 2, 1, 2])] } : {}) }
+      admissions.push({
+        id: aid, admitNo: done ? `I${admitted.slice(2, 10).replace(/-/g, '')}${String(next('admitNo')).padStart(3, '0')}` : '', patientId: pt.id, deptId: doc.deptId, doctorId: doc.id, preferBedClass: '健保床',
+        reason: '日間手術', diagnosis: sg.diagnosis, status: stage === 'out' ? 'discharged' : stage === 'phase2' ? 'admitted' : 'reserved', reservedAt: created, expectedDate: start.slice(0, 10),
+        ...(done ? { admittedAt: admitted, wristband: { printedAt: admitted, printedBy: 'U212', reprints: [] } } : {}), ...(stage === 'out' ? { dischargedAt: day.out!.at, dischargeType: '日間手術出院' } : {}), day,
+      })
+    }
+    const y = addDays(T, -1)
+    if (free[0]) make(1, free[0], `${y} 10:00`, 'out')
+    const s2 = ((t) => addMinutes(t, -(Number(t.slice(15)) % 5)))(addMinutes(nowStr, -90).slice(0, 16))
+    if (free[1]) make(2, free[1], s2, 'phase2')
+    const s3 = ((t) => addMinutes(t, 5 - (Number(t.slice(15)) % 5)))(addMinutes(nowStr, 90).slice(0, 16))
+    if (free[2]) make(3, free[2], s3, 'reserved')
   }
 
   return {

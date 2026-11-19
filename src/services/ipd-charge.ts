@@ -8,7 +8,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
 import { checkCash, IPD_COPAY_DEFAULT, outstandingOf } from './billing'
 import { nextReceiptNo } from './money'
-import { activeIpdChargeOf, billEndOf, deathToBill, dischargeRxPending, interimAvailable, interimHeld, interimSettings, interimSuggestion, ipdBillOf, refundInterim, type IpdBill } from './ipd-bill'
+import { activeIpdChargeOf, billEndOf, dayToBill, deathToBill, dischargeRxPending, interimAvailable, interimHeld, interimSettings, interimSuggestion, ipdBillOf, refundInterim, type IpdBill } from './ipd-bill'
 import { admissionView, find, nameOf, type AdmissionView } from './views'
 import type { PayInput } from './charge'
 
@@ -42,14 +42,14 @@ export function listIpdBilling(): Promise<IpdBillingItem[]> {
     requireUser('clerk', 'admin')
     const t = today()
     return db.admissions
-      .filter((a) => (!a.obs || a.obs.outcome === 'admit') && (a.status === 'admitted' || (a.status === 'discharged' && a.dischargedAt?.startsWith(t)) || deathToBill(a)))
+      .filter((a) => (!a.obs || a.obs.outcome === 'admit') && (a.status === 'admitted' || (a.status === 'discharged' && a.dischargedAt?.startsWith(t)) || deathToBill(a) || dayToBill(a)))
       .map((a) => {
         const v = admissionView(a)
         const c = activeIpdChargeOf(a.id)
         const suggest = a.status === 'admitted' && !c ? interimSuggestion(a, ipdBillOf(a)) : undefined
         return {
           admissionId: a.id, admitNo: a.admitNo, patientName: v.patientName, chartNo: v.chartNo, bedNo: v.bed?.bedNo ?? '', deptName: v.deptName, doctorName: v.doctorName,
-          admittedAt: a.admittedAt ?? '', days: v.days, dischargeReady: v.dischargeReady || deathToBill(a), status: a.status as 'admitted' | 'discharged',
+          admittedAt: a.admittedAt ?? '', days: v.days, dischargeReady: v.dischargeReady || deathToBill(a) || dayToBill(a), status: a.status as 'admitted' | 'discharged',
           ...(a.death ? { death: true } : {}),
           ...(c ? { receiptNo: c.receiptNo, patientTotal: c.patientTotal } : {}),
           interimPaid: interimHeld(a), ...(suggest ? { suggestInterim: suggest } : {}),
@@ -118,12 +118,13 @@ export function getIpdBill(admissionId: string): Promise<IpdBillView> {
     if (c) {
       const canVoid = a.status === 'discharged' ? '病人已出院，住院收據不能作廢' : c.paidAt.slice(0, 10) !== today() ? '不是今天收的，不能作廢' : c.repayments?.length ? '欠款已收回過，不能作廢' : undefined
       view.charge = { ...c, cashierName: nameOf.user(c.cashierId), outstanding: outstandingOf(c), ...(canVoid ? { canVoid } : {}) }
-    } else if (deathToBill(a)) {
+    } else if (deathToBill(a) || dayToBill(a)) {
       view.bill = ipdBillOf(a, billEndOf(a))
     } else if (a.status === 'admitted') {
       view.bill = ipdBillOf(a)
       if (a.death) view.blocked = '病人已宣告死亡：送太平間後由家屬結帳'
-      if (!a.dischargeSummary?.signedAt) view.blocked = '醫師還沒簽准出院：可以先看試算，簽准後才能結帳'
+      if (a.day && !a.day.converted) view.blocked = '日間手術：病人回家後再結帳'
+      else if (!a.dischargeSummary?.signedAt) view.blocked = '醫師還沒簽准出院：可以先看試算，簽准後才能結帳'
       else if (dischargeRxPending(a)) view.blocked = '出院帶藥還沒調劑：住院藥局調好（扣帳）後帳單才完整，才能結帳'
     }
     view.interim = interimViewOf(a, view.bill)
@@ -136,10 +137,11 @@ export function payIpd(admissionId: string, input: Pick<PayInput, 'payMethod' | 
   return mutate(() => {
     const cashier = requirePermission('charge.pay')
     const a = must(find.admission(admissionId), '住院紀錄')
-    const dead = deathToBill(a)
+    const dead = deathToBill(a) || dayToBill(a)
+    if (a.day && !a.day.converted && a.status === 'admitted') fail('日間手術：病人回家後再結帳', 'CONFLICT')
     if (a.status !== 'admitted' && !dead) fail('只有住院中的病人可以結帳', 'CONFLICT')
     if (a.status === 'admitted' && a.death) fail('病人已宣告死亡：送太平間後由家屬結帳', 'CONFLICT')
-    if (!a.dischargeSummary?.signedAt) fail('醫師還沒簽准出院，不能結帳', 'CONFLICT')
+    if (!a.dischargeSummary?.signedAt && !dayToBill(a)) fail('醫師還沒簽准出院，不能結帳', 'CONFLICT')
     if (activeIpdChargeOf(a.id)) fail('這次住院已經結帳了', 'CONFLICT')
     if (dischargeRxPending(a)) fail('出院帶藥還沒調劑：請住院藥局先調劑，再結帳', 'CONFLICT')
     const bill = ipdBillOf(a, billEndOf(a))

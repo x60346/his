@@ -60,6 +60,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },
+    { roles: ['nurse'], label: '日間手術', count: (s.value.dayToCheckIn ?? 0) + (s.value.dayPhase2 ?? 0), hint: `今天待報到 ${s.value.dayToCheckIn ?? 0}、待出院評估（PADSS）${s.value.dayPhase2 ?? 0}（手術室「日間手術」分頁）`, route: 'or', icon: Scissors, urgent: !!s.value.dayPhase2 },
+    { roles: ['nurse'], label: '日間手術電話追蹤', count: s.value.dayFollowUp ?? 0, hint: '日間手術回家後隔天打電話：有沒有聯絡上、有沒有問題', route: 'or', icon: Scissors, urgent: false },
     { roles: ['nurse'], label: '術後待接回', count: s.value.pacuToReceive ?? 0, hint: '恢復室已轉出，病房護理師在病人「手術」分頁按接回', route: 'nursing', icon: ShieldAlert, urgent: false },
     { roles: ['doctor'], label: '術後醫囑待開', count: s.value.postopDue ?? 0, hint: s.value.postopLate ? `其中 ${s.value.postopLate} 台完成超過 4 小時：在住院醫囑「手術」分頁按「術後醫囑」` : '我主刀、已完成的手術：套用術式的組套或沿用術前醫囑，術前禁食醫囑停或保留（住院醫囑「手術」分頁）', route: 'ipd', icon: Scissors, urgent: !!s.value.postopLate },
     { roles: ['doctor'], label: '病理報告待確認', count: s.value.pathAckDue ?? 0, hint: '我主刀的手術，病理報告是惡性或和術前診斷不符：在病人「手術」分頁確認看過', route: 'ipd', icon: Scissors, urgent: true },

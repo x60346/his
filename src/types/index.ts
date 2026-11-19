@@ -1344,6 +1344,26 @@ export interface HomeMed {
   decidedAt?: string
 }
 
+/** PADSS（日間手術出院評分）：生命徵象、活動、噁心嘔吐、疼痛、傷口出血，各 0–2 分 */
+export interface PadssScore {
+  id: string
+  at: string
+  vitals: 0 | 1 | 2
+  activity: 0 | 1 | 2
+  ponv: 0 | 1 | 2
+  pain: 0 | 1 | 2
+  bleeding: 0 | 1 | 2
+  by: string
+}
+/** 日間手術：當天報到、當天回家（PADSS ≥ 9、成人陪同、出院衛教）；不符合轉一般住院；隔天電話追蹤 */
+export interface DayCase {
+  surgeryId: string
+  padss?: PadssScore[]
+  out?: { at: string; by: string; padss: number; escort: string }
+  converted?: { at: string; by: string; reason: string }
+  followUp?: { at: string; by: string; reached: boolean; ok: boolean; note?: string }
+}
+
 export interface Admission {
   id: string
   /** 住院號 */
@@ -1368,6 +1388,8 @@ export interface Admission {
    * endAt＝急診醫師結束留觀；outcome admit＝同一筆轉成一般住院（科別、主治改掉，住院號與腕帶不變），帳單從 endAt 起算住院
    */
   obs?: { visitId: string; endAt?: string; outcome?: ErObsEnd['kind'] }
+  /** 日間手術（特別的住院：不排病房床、不收病房費；轉一般住院後照住院） */
+  day?: DayCase
   /** 死亡：宣告（醫師）→ 遺體護理檢核（護理師）→ 死亡證明書 → 送太平間（出院，床位釋放；帳單之後由家屬結） */
   death?: DeathRecord
   /** 預約希望床等 */

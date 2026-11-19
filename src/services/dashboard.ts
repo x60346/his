@@ -19,10 +19,10 @@ import { tdmAlerts } from './renal-work'
 import { pharmPending, pharmQueried } from './pharm-work'
 import { medRecState } from './medrec-rules'
 import { prophylaxisOverdue } from './prophylaxis-work'
-import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
+import { activeIpdChargeOf, dayToBill, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { dayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -256,6 +256,10 @@ export interface DashboardStats {
   pacuIn?: number
   pacuLong?: number
   pacuToReceive?: number
+  /** 日間手術：今天待報到、待出院評估（第二期）、回家後待電話追蹤 */
+  dayToCheckIn?: number
+  dayPhase2?: number
+  dayFollowUp?: number
   /** 麻醉：評估待做（急刀、今明兩天的）、急刀精簡版待補 */
   preAnesDue?: number
   preAnesBrief?: number
@@ -335,7 +339,7 @@ export function getDashboard(): Promise<DashboardStats> {
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
-      ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
+      ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !(a.day && !a.day.converted) && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
       ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); const tat = tatOpen(); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), tatLate: tat.filter((x) => x.status.state === 'late').length, tatWarn: tat.filter((x) => x.status.state === 'warn').length, deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday(), erLabToCollect: new Set(pendingLabWork().filter((w) => w.er && w.awaitingCollection).map((w) => w.patientId)).size } : {}))(sessionRole()),
       ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length, examNeedsReschedule: db.imagingExams.filter((e) => !e.cancelled && !e.arrivedAt && (downtimeClash(db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from), e) || outOfHours(e.start, e.minutes, examDayOf(db.examHours, db.examClosures, e.room, e.start.slice(0, 10))))).length } : {}))(sessionRole()),
       ...(sessionRole() === 'radtech' ? ((xs) => ({ examArrived: xs.filter((e) => e.arrivedAt).length, examWaiting: xs.filter((e) => !e.arrivedAt).length }))(db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled)) : {}),
@@ -346,7 +350,7 @@ export function getDashboard(): Promise<DashboardStats> {
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
       pendingRefunds: db.charges.filter((c) => !!pendingRefundOf(c)).length,
       dischargeRxToDispense: db.admissions.filter((a) => a.status === 'admitted' && a.dischargeSummary?.signedAt && dischargeRxPending(a)).length,
-      ipdToBill: db.admissions.filter((a) => (a.status === 'admitted' && !a.death && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)) || deathToBill(a)).length,
+      ipdToBill: db.admissions.filter((a) => (a.status === 'admitted' && !a.death && a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id)) || deathToBill(a) || dayToBill(a)).length,
       riskOverdue: db.admissions.filter((a) => a.status === 'admitted' && (sessionRole() !== 'nurse' || !myScope(sessionUser()?.id, now()) || myScope(sessionUser()?.id, now())!.has(a.id))).reduce((n, a) => {
         const rs = riskStateOf(a, now())
         return n + Number(rs.fall.due.status === 'overdue') + Number(rs.pressure.due.status === 'overdue')
@@ -456,6 +460,7 @@ export function getDashboard(): Promise<DashboardStats> {
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
+      ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),
       ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
       ...(() => {
         const me = sessionUser()

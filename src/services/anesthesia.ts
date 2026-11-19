@@ -6,7 +6,7 @@ import { db } from '@/mock/db'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser, type Actor } from './http'
 import { aldreteOf, checkPacuScore, PACU_LONG_MINUTES, PACU_SCORE_EVERY, pacuStage, pacuUnmet, anesEntryText, anesTotals, asaText, checkAnesEntry, checkPreAnes, difficultAirway, intraopAlerts, vitalGaps, type AnesEntryInput, type PreAnesInput } from './anesthesia-rules'
 import { ANESTHESIA_LABEL, SIDE_LABEL, teamNow } from './surgery-rules'
-import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
+import { dayCase, surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { find, nameOf } from './views'
 
 /** 存麻醉前評估（可以重存：精簡版事後補成完整版、病人狀況改變） */
@@ -201,6 +201,8 @@ export interface PacuItem {
   canDischarge: boolean
   canOverride: boolean
   canReceive: boolean
+  /** 日間手術：轉出後不回病房，接著在「日間手術」評 PADSS 回家 */
+  day: boolean
 }
 function pacuItem(s: Surgery, u: Actor, t: string): PacuItem {
   const p = s.pacu!
@@ -231,7 +233,8 @@ function pacuItem(s: Surgery, u: Actor, t: string): PacuItem {
     canScore: nurse && stage === 'in',
     canDischarge: (nurse || anes) && stage === 'in',
     canOverride: anes && stage === 'in',
-    canReceive: nurse && stage === 'out',
+    canReceive: nurse && stage === 'out' && !dayCase(a),
+    day: dayCase(a),
   }
 }
 
@@ -241,7 +244,7 @@ export function pacuBoard(): Promise<PacuItem[]> {
     const u = requireUser('nurse', 'doctor', 'admin')
     const t = now()
     const d = t.slice(0, 10)
-    return db.surgeries.filter((s) => s.pacu && (!s.pacu.received || s.pacu.received.at.slice(0, 10) === d))
+    return db.surgeries.filter((s) => s.pacu && (!s.pacu.received || s.pacu.received.at.slice(0, 10) === d) && !(dayCase(find.admission(s.admissionId)) && s.pacu.out && s.pacu.out.at.slice(0, 10) !== d))
       .map((s) => pacuItem(s, u, t)).sort((a, b) => ({ in: 0, out: 1, back: 2 })[a.stage] - ({ in: 0, out: 1, back: 2 })[b.stage] || a.inAt.localeCompare(b.inAt))
   })
 }

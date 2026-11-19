@@ -165,11 +165,12 @@ export function orBoard(date: string): Promise<OrBoard> {
   return query(() => {
     const u = requireUser('nurse', 'doctor', 'admin')
     const d = /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date : today()
-    const liveAdm = (s: Surgery) => find.admission(s.admissionId)?.status === 'admitted' || s.status === 'done'
+    // 日間手術還沒報到（住院預約中）也要排得到、看得到
+    const liveAdm = (s: Surgery) => ((a) => a?.status === 'admitted' || (!!a?.day && a.status === 'reserved'))(find.admission(s.admissionId)) || s.status === 'done'
     return {
       date: d, rooms: OR_ROOMS, canSchedule: permissionsOf(u).includes('surgery.schedule'), canAnesthesia: u.role === 'doctor' && permissionsOf(u).includes('anesthesia'),
       cases: db.surgeries.filter((s) => s.schedule?.start.startsWith(d) && s.status !== 'cancelled' && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
-      requested: db.surgeries.filter((s) => s.status === 'requested' && find.admission(s.admissionId)?.status === 'admitted')
+      requested: db.surgeries.filter((s) => s.status === 'requested' && liveAdm(s))
         .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
       emergencyStats: emergencyRate(db.surgeries.filter((s) => s.createdAt >= `${addDays(today(), -30)} 00:00`), now()),
       needsReschedule: db.surgeries.filter((s) => bumpedByEmergency(s)).length,
@@ -251,6 +252,7 @@ export function sendToOr(id: string): Promise<SurgeryView> {
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
     if (s.status !== 'scheduled') fail(s.status === 'requested' ? '手術室還沒排程' : '這台不是「已排程」，不能送', 'CONFLICT')
+    if (find.admission(s.admissionId)?.day && find.admission(s.admissionId)?.status !== 'admitted') fail('日間手術病人還沒報到（手術室「日間手術」分頁報到）', 'CONFLICT')
     const miss = prepMissing(s)
     if (miss.length) fail(`術前準備還沒完成：${miss.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label).join('、')}`, 'CONFLICT')
     const t = now()

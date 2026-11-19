@@ -10,6 +10,7 @@ import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-
 import { preIncisionOf } from './prophylaxis-work'
 import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
+import { dayFollowUpDue, dayStage } from './day-rules'
 import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
@@ -101,7 +102,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
     teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),
     teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
-    ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted'),
+    ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted' && !dayCase(a)),
     ...(s.postop ? { postopText: `${s.postop.at.slice(5)} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
     specimenRows: (s.specimens ?? []).map((x) => ({ id: x.id, text: specimenText(x), ...(x.frozen ? { frozen: ((st) => ({ text: x.frozen!.result ? `冰凍 ${st.minutes} 分回報：${x.frozen!.result.text}（接聽 ${nameOf.user(x.frozen!.result.receivedBy)}）` : `冰凍等待回報 ${st.minutes} 分${st.overdue ? `（超過 ${FROZEN_MINUTES} 分）` : ''}`, overdue: st.overdue && !st.done, done: st.done }))(frozenState(x.frozen, now(), mins)) } : {}) })),
     frozenWaiting: (s.specimens ?? []).filter((x) => x.frozen && !x.frozen.result).map((x) => ((st) => ({ label: x.label, minutes: st.minutes, overdue: st.overdue }))(frozenState(x.frozen!, now(), mins))),
@@ -148,14 +149,17 @@ export function surgeryFeeItems(admissionId: string): { proc: Procedure; qty: nu
 }
 
 /** 出院前：在手術室（已送、手術中）不能出院 */
-export const surgeryOpen = (a: Admission) => db.surgeries.some((s) => s.admissionId === a.id && (s.status === 'sent' || s.status === 'in-progress' || (s.pacu && !s.pacu.received)))
+// 日間手術（沒轉住院的）不用病房接回：恢復室轉出就算出來了（接著評 PADSS）
+export const surgeryOpen = (a: Admission) => db.surgeries.some((s) => s.admissionId === a.id && (s.status === 'sent' || s.status === 'in-progress' || (s.pacu && !s.pacu.received && !(dayCase(a) && s.pacu.out))))
+/** 日間手術、還沒轉住院 */
+export const dayCase = (a: Admission | undefined) => !!a?.day && !a.day.converted
 
 const live = () => db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')
 
 /** 首頁待辦：待排程（手術排程權限）；今天、明天要開但術前準備還沒完成（護理站）；主刀：手術紀錄待寫、計數不符 */
 /** 恢復室：在恢復室的、停留超過 2 小時的、已轉出待病房接回的 */
 export function pacuCounts(t: string): { in: number; long: number; out: number } {
-  const xs = live().filter((s) => s.pacu && !s.pacu.received)
+  const xs = live().filter((s) => s.pacu && !s.pacu.received && !(dayCase(find.admission(s.admissionId)) && s.pacu.out))
   const inn = xs.filter((s) => !s.pacu!.out)
   return { in: inn.length, long: inn.filter((s) => (parseDate(t).getTime() - parseDate(s.pacu!.inAt).getTime()) / 60000 > PACU_LONG_MINUTES).length, out: xs.length - inn.length }
 }
@@ -180,7 +184,8 @@ export function surgeryCounts(t: string, doctorId?: string): { toSchedule: numbe
 
 /** 主刀首頁：術後醫囑待開（手術完成、住院中、還沒開）；完成超過 4 小時還沒開 */
 export function postopCounts(t: string, doctorId: string): { due: number; late: number } {
-  const xs = live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId)
+  // 日間手術（沒轉住院）當天回家，不用術後醫囑
+  const xs = live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId && !dayCase(find.admission(s.admissionId)))
   return { due: xs.length, late: xs.filter((s) => s.endAt && (parseDate(t).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS).length }
 }
 
@@ -216,4 +221,16 @@ export function teamClash(s: Surgery, userId: string, t: string, from?: string):
 export function frozenCounts(t: string): { waiting: number; overdue: number } {
   const xs = db.surgeries.flatMap((s) => (s.specimens ?? []).filter((x) => x.frozen && !x.frozen.result).map((x) => frozenState(x.frozen!, t, mins)))
   return { waiting: xs.length, overdue: xs.filter((x) => x.overdue).length }
+}
+
+/** 首頁（護理師）：今天的日間手術待報到、待出院評估（第二期）、回家後待電話追蹤 */
+export function dayCounts(t: string): { toCheckIn: number; phase2: number; followUp: number } {
+  const d = t.slice(0, 10)
+  const all = db.admissions.filter((a) => a.day && surgeryOf(a.day.surgeryId))
+  const stageOf = (a: Admission) => dayStage(a, surgeryOf(a.day!.surgeryId))
+  return {
+    toCheckIn: all.filter((a) => stageOf(a) === 'reserved' && surgeryOf(a.day!.surgeryId)!.schedule?.start.slice(0, 10) === d).length,
+    phase2: all.filter((a) => stageOf(a) === 'phase2').length,
+    followUp: all.filter((a) => dayFollowUpDue(a, d) || (a.day!.followUp && !a.day!.followUp.reached)).length,
+  }
 }
