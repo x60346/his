@@ -1,7 +1,7 @@
 // 影像檢查排程（純函式）：檢查室、開放時段、排程檢查（不能排在過去、要在開放時段內）、同一間撞期、
 // 檢查走到哪一步、和給藥時間衝突。檢查室排程、護理站、判讀清單、測試都用這一份
-import type { ExamRoom, ImagingExam } from '@/types'
-import { addMinutes } from '@/utils/date'
+import type { ExamRoom, ImagingExam, RoomDowntime } from '@/types'
+import { addMinutes, parseDate, toDateTimeStr } from '@/utils/date'
 import { overlaps } from './surgery-rules'
 
 export const EXAM_ROOMS: { id: ExamRoom; name: string }[] = [
@@ -94,4 +94,65 @@ export function checkContrastDone(x: { contrastMl?: number; reaction?: { severit
     if (!x.reaction.action?.trim()) e.action = '請寫處置（例：觀察 30 分鐘緩解、給抗組織胺）'
   }
   return e
+}
+
+// ── 檢查室設備停機：故障或保養的時段排不進去、不能報到；已排的列「需改期」，可以一鍵排到下一個空檔 ──
+
+export type DowntimeReason = 'breakdown' | 'maintenance'
+export const DOWNTIME_REASON_LABEL: Record<DowntimeReason, string> = { breakdown: '故障', maintenance: '保養' }
+type DT = Pick<RoomDowntime, 'room' | 'from' | 'to' | 'endedAt'>
+/** 實際結束時間（提早結束的用結束時間） */
+export const downtimeEnd = (d: Pick<RoomDowntime, 'to' | 'endedAt'>) => (d.endedAt && d.endedAt < d.to ? d.endedAt : d.to)
+const dtMinutes = (d: DT) => Math.max(0, Math.round((parseDate(downtimeEnd(d)).getTime() - parseDate(d.from).getTime()) / 60000))
+/** 這個時段碰到哪一段停機（同一間） */
+export const downtimeClash = <T extends DT>(ds: T[], x: { room: ExamRoom; start: string; minutes: number }) =>
+  ds.find((d) => d.room === x.room && dtMinutes(d) > 0 && overlaps(d.from, dtMinutes(d), x.start, x.minutes))
+/** 現在停機中的 */
+export const downtimeNow = <T extends DT>(ds: T[], room: ExamRoom, now: string) => ds.find((d) => d.room === room && d.from <= now && now < downtimeEnd(d))
+export const downtimeText = (d: Pick<RoomDowntime, 'from' | 'to' | 'endedAt' | 'reason'>) =>
+  `${DOWNTIME_REASON_LABEL[d.reason]} ${d.from.slice(5)}–${downtimeEnd(d).slice(d.from.slice(0, 10) === downtimeEnd(d).slice(0, 10) ? 11 : 5)}`
+
+/** 登記欄位：檢查室、起訖（結束要在開始之後、不能整段在過去、最長 7 天）、原因 */
+export function checkDowntime(x: { room?: string; from?: string; to?: string; reason?: string }, now: string): Record<string, string> {
+  const e: Record<string, string> = {}
+  const re = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
+  if (!EXAM_ROOMS.some((r) => r.id === x.room)) e.room = '請選檢查室'
+  if (!x.from || !re.test(x.from)) e.from = '請選開始時間'
+  if (!x.to || !re.test(x.to)) e.to = '請選結束時間'
+  else if (x.from && x.to <= x.from) e.to = '結束要在開始之後'
+  else if (x.to <= now) e.to = '整段都在過去，不用登記'
+  else if (x.from && parseDate(x.to).getTime() - parseDate(x.from).getTime() > 7 * 24 * 3600000) e.to = '一次最長 7 天'
+  if (x.reason !== 'breakdown' && x.reason !== 'maintenance') e.reason = '請選原因（故障、保養）'
+  return e
+}
+
+/**
+ * 下一個空檔：after 之後（10 分鐘為一格、開放時段內），同一間沒撞期、沒停機的第一個時段；最多找 14 天
+ */
+export function nextFreeSlot(room: ExamRoom, minutes: number, after: string, exams: Pick<ImagingExam, 'id' | 'room' | 'start' | 'minutes'>[], downtimes: DT[], selfId?: string): string | undefined {
+  const t0 = parseDate(after)
+  t0.setSeconds(0, 0)
+  const m = t0.getMinutes()
+  if (m % 10) t0.setMinutes(m + (10 - (m % 10)))
+  let t = toDateTimeStr(t0)
+  for (let i = 0; i < 14 * 24 * 6; i++, t = addMinutes(t, 10)) {
+    const end = addMinutes(t, minutes)
+    if (t.slice(11) < EXAM_DAY.start || end.slice(11) > EXAM_DAY.end || end.slice(0, 10) !== t.slice(0, 10)) continue
+    if (examClash(exams, { id: selfId, room, start: t, minutes }) || downtimeClash(downtimes, { room, start: t, minutes })) continue
+    return t
+  }
+  return undefined
+}
+
+/** 停機時數（since 之後，各檢查室；分鐘→小時一位小數） */
+export function downtimeHours(ds: DT[], since: string, now: string): { room: ExamRoom; name: string; hours: number; count: number }[] {
+  return EXAM_ROOMS.map((r) => {
+    const xs = ds.filter((d) => d.room === r.id && downtimeEnd(d) > since && d.from < now)
+    const min = xs.reduce((a, d) => {
+      const s = d.from < since ? since : d.from
+      const e = downtimeEnd(d) > now ? now : downtimeEnd(d)
+      return a + Math.max(0, (parseDate(e).getTime() - parseDate(s).getTime()) / 60000)
+    }, 0)
+    return { room: r.id, name: r.name, hours: Math.round(min / 6) / 10, count: xs.length }
+  })
 }

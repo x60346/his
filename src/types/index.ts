@@ -886,6 +886,20 @@ export interface ImagingExam {
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
+/** 檢查室設備停機（放射師或放射科醫師登記）：故障或保養，這段時間排不進去、不能報到；已排的列「需改期」。可以提早結束（endedAt） */
+export interface RoomDowntime {
+  id: string
+  room: ExamRoom
+  from: string
+  to: string
+  reason: 'breakdown' | 'maintenance'
+  note?: string
+  by: string
+  at: string
+  endedAt?: string
+  endedBy?: string
+}
+
 /** 顯影劑過敏放行：醫師確認已開前置用藥（類固醇＋抗組織胺）、寫原因，這一筆影像（key）才能報到 */
 export interface ContrastClearance {
   id: string

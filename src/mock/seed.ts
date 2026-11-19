@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  SerumIndices, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, RoomDowntime, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -2984,6 +2984,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   //   - 今天 X 光室：腦梗塞胸部 X 光 2 小時前做完（待判讀）、肺炎胸部 X 光已報到、蜂窩性組織炎胸部 X 光 1 小時後；
   //     闌尾炎腹部超音波還沒排（待排程）
   const imagingExams: ImagingExam[] = []
+  const roomDowntimes: RoomDowntime[] = []
   {
     const room = (procId: string) => (procMap.get(procId)?.imaging?.room ?? 'XR') as ImagingExam['room']
     const mins = (procId: string) => procMap.get(procId)?.imaging?.minutes ?? 10
@@ -3069,6 +3070,13 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       Object.assign(opd.c, { lines, nhiPoints: sum.nhiPoints, patientTotal: sum.patientTotal, received, change: received - sum.patientTotal })
       const s5 = addMinutes(nowStr, -60)
       imagingExams.push({ id: 'EX-SEED-NS', key: `E:${opd.e.id}:P015`, patientId: opd.e.patientId, procId: 'P015', room: 'XR', start: s5, minutes: 10, scheduledBy: 'U101', scheduledAt: later(opd.c.paidAt, addMinutes(s5, -40)) })
+    }
+    // 檢查室停機（示範）：X 光機 2 小時後保養 2 小時（放射師上午登記）；骨折病人的膝關節 X 光剛好排在這段，列「需改期」
+    const fx = by('S52')
+    if (fx) {
+      const d0 = [addMinutes(nowStr, 120), `${T} 21:00`].sort()[0]
+      roomDowntimes.push({ id: 'DT-SEED-1', room: 'XR', from: d0, to: addMinutes(d0, 120), reason: 'maintenance', note: '球管年度保養', by: 'U801', at: [addMinutes(nowStr, -180), day0].sort().at(-1)! })
+      ex(order('IO-EX-0', fx, 'P014', addMinutes(nowStr, -100)), addMinutes(d0, 30))
     }
   }
 
@@ -3360,6 +3368,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     labCheckins,
     analyzerResults,
     contrastClearances: [],
+    roomDowntimes,
     dischargePlans,
     vitals,
     nursingNotes,

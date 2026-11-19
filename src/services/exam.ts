@@ -6,11 +6,11 @@
 // 顯影劑看 CrCl：< 30 擋、30–45 提醒水化（住院醫師可一鍵開水化醫囑，ipd.orderContrastHydration）、算不出提醒先確認；
 // 顯影劑過敏：開立醫師（住院另含主治、放射科）確認已開前置用藥並寫原因才放行報到；
 // 有在用 Metformin 且 CrCl < 45（或算不出）：排程、報到時提醒，住院做完後主治首頁「暫停 Metformin 48 小時」要按已處理。規則在 exam-rules
-import type { AdrReport, ContrastClearance, ImagingExam } from '@/types'
+import type { AdrReport, ContrastClearance, ImagingExam, RoomDowntime } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
-import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity } from './exam-rules'
+import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity, checkDowntime, downtimeClash, downtimeEnd, downtimeHours, downtimeNow, downtimeText, nextFreeSlot, DOWNTIME_REASON_LABEL, type DowntimeReason } from './exam-rules'
 import { ADR_SEVERITY_LABEL } from './adr-rules'
 import { latestWeight, renalOfPatient } from './renal-work'
 import { addDays } from '@/utils/date'
@@ -35,7 +35,11 @@ export interface ExamView extends ImagingExam {
   contrast?: ReturnType<typeof contrastCheck> & { renal: string }
   safety: ContrastSafety
   metforminAlertText?: string
+  /** 還沒報到、排在停機時段裡：要改期（停機的說明） */
+  downtimeClash?: string
 }
+/** 有效的停機（提早結束成零長度的不算） */
+const liveDowntimes = () => db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from)
 /** 這筆檢查的顯影劑腎功能判斷 */
 const contrastOf = (e: Pick<ImagingExam, 'procId' | 'patientId' | 'admissionId'>) => {
   if (!imagingOf(e.procId)?.contrast) return undefined
@@ -91,6 +95,7 @@ function view(e: ImagingExam): ExamView {
     prepItems: prepDefs(e.procId).map((d) => ({ ...d, ...(e.prep?.[d.id] ? { ok: e.prep[d.id].ok, ...(e.prep[d.id].note ? { note: e.prep[d.id].note } : {}) } : {}) })),
     ...(!e.doneAt && contrastOf(e) ? { contrast: contrastOf(e) } : {}),
     safety: e.doneAt ? {} : safetyOf(e),
+    ...(!e.arrivedAt && !e.cancelled ? ((d) => (d ? { downtimeClash: `${examRoomName(e.room)}${downtimeText(d)}，請改期` } : {}))(downtimeClash(liveDowntimes(), e)) : {}),
     ...(e.metforminAlert ? { metforminAlertText: `暫停 Metformin 到 ${e.metforminAlert.until.slice(5)}（${METFORMIN_HOLD_HOURS} 小時），複查腎功能再恢復${e.metforminAlert.ackAt ? `；${nameOf.user(e.metforminAlert.ackBy!)} 已處理` : ''}` } : {}),
   }
 }
@@ -123,8 +128,12 @@ export interface ExamBoard {
   canSchedule: boolean
   /** 報到、取消（櫃台、放射師、放射科醫師） */
   canArrive: boolean
-  /** 確認準備、完成（放射師、放射科醫師） */
+  /** 確認準備、完成（放射師、放射科醫師）；也能登記停機 */
   canPerform: boolean
+  /** 停機：各檢查室這天碰到的（含現在停機中）、近 30 天停機時數、需改期的筆數 */
+  downtimes: DowntimeView[]
+  downtimeStats: ReturnType<typeof downtimeHours>
+  needsReschedule: number
   /** 待排程：還沒做、也還沒排的影像（舊的在前） */
   toSchedule: (ImagingWorkItem & { room: string; roomName: string; minutes: number; prep: string[]; contrast?: ExamView['contrast']; safety: ContrastSafety; cancelledReason?: string })[]
   /** 放射科醫師可以放行顯影劑過敏 */
@@ -155,6 +164,9 @@ export function examBoard(date: string): Promise<ExamBoard> {
       canClear: sessionRole() === 'doctor' && isRadiologist(u?.doctorId),
       toSchedule,
       rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
+      downtimes: liveDowntimes().filter((d) => d.from.slice(0, 10) <= date && downtimeEnd(d).slice(0, 10) >= date).sort((a, b) => a.from.localeCompare(b.from)).map((d) => dtView(d)),
+      downtimeStats: downtimeHours(db.roomDowntimes, `${addDays(now().slice(0, 10), -30)} 00:00`, now()),
+      needsReschedule: needsReschedule().length,
     }
   })
 }
@@ -174,6 +186,8 @@ export function scheduleExam(key: string, start: string): Promise<ExamView> {
     if (old && old.arrivedAt) fail(`已經${old.doneAt ? '做完' : '報到'}，不能改時間`, 'CONFLICT')
     failFields(checkExamSlot(start, minutes, t))
     const clash = examClash(liveExams().filter((e) => !e.doneAt || e.start >= t.slice(0, 10)), { id: old?.id, room, start, minutes })
+    const dc = downtimeClash(liveDowntimes(), { room, start, minutes })
+    if (dc) fail(`${examRoomName(room)}這段時間停機（${downtimeText(dc)}）`, 'CONFLICT', 'start')
     if (clash) fail(`${examRoomName(room)}這個時段已排 ${nameOf.patient(clash.patientId)} ${clash.start.slice(11)}–${addMinutes(clash.start, clash.minutes).slice(11)}`, 'CONFLICT', 'start')
     const [kind, a] = key.split(':')
     const o = kind === 'O' ? db.ipdOrders.find((x) => x.id === a) : undefined
@@ -187,6 +201,70 @@ export function scheduleExam(key: string, start: string): Promise<ExamView> {
 
 const examById = (id: string) => must(db.imagingExams.find((x) => x.id === id), '影像檢查')
 
+export interface DowntimeView extends RoomDowntime {
+  roomName: string
+  text: string
+  /** 現在停機中 */
+  active: boolean
+  byName: string
+  /** 排在這段、還沒報到的檢查 */
+  clashes: number
+}
+function dtView(d: RoomDowntime, t: string = now()): DowntimeView {
+  return {
+    ...d, roomName: examRoomName(d.room), text: downtimeText(d), active: d.from <= t && t < downtimeEnd(d), byName: nameOf.user(d.by),
+    clashes: liveExams().filter((e) => !e.arrivedAt && downtimeClash([d], e)).length,
+  }
+}
+/** 排在停機時段、還沒報到的（需改期） */
+const needsReschedule = () => liveExams().filter((e) => !e.arrivedAt && !!downtimeClash(liveDowntimes(), e))
+
+/** 登記停機（放射師、放射科醫師）：檢查室、起訖、原因（故障、保養）；之後這段排不進去、不能報到，已排的列「需改期」 */
+export function addDowntime(input: { room: ImagingExam['room']; from: string; to: string; reason: DowntimeReason; note?: string }): Promise<DowntimeView> {
+  return mutate(() => {
+    const u = requireTech()
+    const t = now()
+    failFields(checkDowntime(input ?? {}, t))
+    const d: RoomDowntime = { id: newId('DT'), room: input.room, from: input.from, to: input.to, reason: input.reason, ...(input.note?.trim() ? { note: input.note.trim() } : {}), by: u.id, at: t }
+    db.roomDowntimes.push(d)
+    const v = dtView(d, t)
+    audit('檢查室停機', `${v.roomName} ${v.text}${d.note ? `（${d.note}）` : ''}${v.clashes ? `；${v.clashes} 筆檢查需改期` : ''}`)
+    return v
+  })
+}
+
+/** 提早結束停機（修好了）：還沒開始的＝取消 */
+export function endDowntime(id: string): Promise<DowntimeView> {
+  return mutate(() => {
+    const u = requireTech()
+    const d = must(db.roomDowntimes.find((x) => x.id === id), '停機紀錄')
+    const t = now()
+    if (downtimeEnd(d) <= t) fail('這段停機已經結束了', 'CONFLICT')
+    Object.assign(d, { endedAt: t < d.from ? d.from : t, endedBy: u.id })
+    audit('檢查室停機結束', `${examRoomName(d.room)} ${DOWNTIME_REASON_LABEL[d.reason]}${t < d.from ? '（取消）' : `（提早到 ${t.slice(11)} 結束）`}`)
+    return dtView(d, t)
+  })
+}
+
+/** 一鍵排到下一個空檔（櫃台、放射科醫師）：停機結束（或現在）之後，同一間沒撞期、沒停機的第一個時段 */
+export function rescheduleNext(id: string): Promise<ExamView> {
+  return mutate(() => {
+    requireScheduler()
+    const e = examById(id)
+    if (e.cancelled) fail('這筆檢查已取消', 'CONFLICT')
+    if (e.arrivedAt) fail('已經報到，不能改時間', 'CONFLICT')
+    const t = now()
+    const d = downtimeClash(liveDowntimes(), e)
+    const after = [t, d ? downtimeEnd(d) : t].sort().at(-1)!
+    const slot = nextFreeSlot(e.room, e.minutes, after, liveExams().filter((x) => !x.doneAt || x.start >= t.slice(0, 10)), liveDowntimes(), e.id)
+    if (!slot) fail('兩週內找不到空檔，請手動排', 'CONFLICT')
+    const old = e.start
+    Object.assign(e, { start: slot!, scheduledAt: t })
+    audit('影像檢查改時間', `${nameOf.patient(e.patientId)} ${find.procedure(e.procId)?.name}：${old} → ${slot}（${d ? `${examRoomName(e.room)}${DOWNTIME_REASON_LABEL[d.reason]}` : '排到下一個空檔'}）`)
+    return view(e)
+  })
+}
+
 /** 報到（病人到檢查室） */
 export function arriveExam(id: string): Promise<ExamView> {
   return mutate(() => {
@@ -194,6 +272,8 @@ export function arriveExam(id: string): Promise<ExamView> {
     const e = examById(id)
     if (e.cancelled) fail('這筆檢查已取消', 'CONFLICT')
     if (e.arrivedAt) fail('已經報到了', 'CONFLICT')
+    const down = downtimeNow(liveDowntimes(), e.room, now())
+    if (down) fail(`${examRoomName(e.room)}停機中（${downtimeText(down)}），請改期`, 'CONFLICT')
     const al = imagingOf(e.procId)?.contrast ? contrastAllergy(find.patient(e.patientId)?.allergies) : undefined
     if (al && !clearanceOf(e.key)) fail(`病人對顯影劑過敏（${al}）：要開立醫師（或主治、放射科）確認已開前置用藥並放行後才能報到`, 'CONFLICT')
     Object.assign(e, { arrivedAt: now(), arrivedBy: u.id })

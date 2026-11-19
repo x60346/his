@@ -48,6 +48,7 @@ import { isLabOrder } from './specimen-work'
 import { QC_ANALYTES, qcStatusToday } from './qc-rules'
 import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
 import { tatOpen } from './tat-work'
+import { downtimeClash, downtimeEnd } from './exam-rules'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -207,6 +208,8 @@ export interface DashboardStats {
   qcRejected?: number
   /** 櫃台、放射科醫師：影像待排程；今天已排還沒完成的 */
   examToSchedule?: number
+  /** 排在停機時段、還沒報到的影像檢查（需改期） */
+  examNeedsReschedule?: number
   /** 放射師：今天已報到、等著做的；今天還沒報到的 */
   examArrived?: number
   examWaiting?: number
@@ -301,7 +304,7 @@ export function getDashboard(): Promise<DashboardStats> {
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
       ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); const tat = tatOpen(); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), tatLate: tat.filter((x) => x.status.state === 'late').length, tatWarn: tat.filter((x) => x.status.state === 'warn').length, deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday(), erLabToCollect: new Set(pendingLabWork().filter((w) => w.er && w.awaitingCollection).map((w) => w.patientId)).size } : {}))(sessionRole()),
-      ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length } : {}))(sessionRole()),
+      ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length, examNeedsReschedule: db.imagingExams.filter((e) => !e.cancelled && !e.arrivedAt && downtimeClash(db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from), e)).length } : {}))(sessionRole()),
       ...(sessionRole() === 'radtech' ? ((xs) => ({ examArrived: xs.filter((e) => e.arrivedAt).length, examWaiting: xs.filter((e) => !e.arrivedAt).length }))(db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled)) : {}),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
       ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),

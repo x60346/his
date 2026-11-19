@@ -5,11 +5,11 @@
 // 過了排程 30 分鐘沒到標「未到」，可以改時間或取消（寫原因）。分工：排程＝櫃台；報到、取消＝櫃台或放射師；確認準備、完成＝放射師
 // （放射科醫師都能支援）；護理師、其他醫師只能看。含顯影劑的完成時記用量，有不良反應記嚴重度（中度以上自動通報藥師）。規則由服務層擋（exam.ts、exam-rules）
 import { computed, reactive, ref } from 'vue'
-import { CalendarClock, Check, X } from 'lucide-vue-next'
+import { CalendarClock, Check, Wrench, X } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import ContrastClearDialog from '@/components/ContrastClearDialog.vue'
-import { CONTRAST_REACTION_LABEL, EXAM_DAY, examApi, type ExamBoard, type ExamView } from '@/services'
+import { CONTRAST_REACTION_LABEL, DOWNTIME_REASON_LABEL, EXAM_DAY, EXAM_ROOMS, examApi, type ExamBoard, type ExamView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, now, today } from '@/utils/date'
 
@@ -51,6 +51,23 @@ async function confirmFinish() {
   const input = { contrastMl: fin.ml === '' ? undefined : Number(fin.ml), ...(fin.hasReaction ? { reaction: { severity: fin.severity, symptoms: fin.symptoms, action: fin.action } } : {}) }
   if (await done.run(finishing.value.id, input)) finishing.value = undefined
 }
+// 停機：登記（放射師、放射科醫師）、提早結束；排在停機時段的一鍵排到下一個空檔（櫃台）
+const dtOpen = ref(false)
+const dt = reactive({ room: 'XR', fromD: today(), fromT: '', toD: today(), toT: '', reason: 'maintenance' as 'maintenance' | 'breakdown', note: '' })
+function openDowntime() {
+  const t = now()
+  Object.assign(dt, { room: 'XR', fromD: t.slice(0, 10), fromT: t.slice(11), toD: t.slice(0, 10), toT: '', reason: 'breakdown', note: '' })
+  addDt.fieldErrors.value = {}
+  dtOpen.value = true
+}
+const addDt = useAction(examApi.addDowntime, { success: (d) => `已登記停機：${d.roomName} ${d.text}${d.clashes ? `，${d.clashes} 筆檢查需改期` : ''}` })
+async function saveDowntime() {
+  if (await addDt.run({ room: dt.room as ExamView['room'], from: `${dt.fromD} ${dt.fromT}`, to: `${dt.toD} ${dt.toT}`, reason: dt.reason, note: dt.note })) dtOpen.value = false
+}
+const endDt = useAction(examApi.endDowntime, { success: (d) => `${d.roomName}停機已結束` })
+const resched = useAction(examApi.rescheduleNext, { success: (e) => `已改到 ${e.start.slice(5)}（${e.patientName} ${e.procName}）` })
+const roomOptions = EXAM_ROOMS.map((r) => ({ value: r.id, label: r.name }))
+const reasonOptions = (Object.keys(DOWNTIME_REASON_LABEL) as (keyof typeof DOWNTIME_REASON_LABEL)[]).map((k) => ({ value: k, label: DOWNTIME_REASON_LABEL[k] }))
 const severityOptions = (Object.keys(CONTRAST_REACTION_LABEL) as (keyof typeof CONTRAST_REACTION_LABEL)[]).map((k) => ({ value: k, label: CONTRAST_REACTION_LABEL[k] }))
 const prep = useAction(examApi.confirmExamPrep, { success: (e) => `已記錄：${e.patientName} 檢查前準備` })
 // 取消、準備沒完成：寫原因
@@ -76,6 +93,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
 <template>
   <div class="space-y-4">
     <UPageHeader title="影像檢查室" :description="`排程（${EXAM_DAY.start}–${EXAM_DAY.end}，同一間不能撞期）、報到、確認檢查前準備、完成；完成後才進判讀清單`">
+      <UButton v-if="board?.canPerform" variant="secondary" :icon="Wrench" @click="openDowntime">登記停機</UButton>
       <input v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
     <UQueryState :loading="loading && !board" :ready="!!board">
@@ -105,6 +123,15 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
           </ul>
           <p v-if="!board.canSchedule" class="px-4 pb-2 text-xs text-slate-500">排程由櫃台處理（放射科醫師可支援）；報到後由放射師確認準備、完成檢查。</p>
         </UCard>
+        <div v-if="board.downtimes.length || board.downtimeStats.some((x) => x.count)" class="space-y-1 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
+          <div v-for="d in board.downtimes" :key="d.id" class="flex flex-wrap items-center gap-2">
+            <Wrench class="h-4 w-4 text-amber-700" /><b>{{ d.roomName }}</b><span>{{ d.text }}</span><UBadge v-if="d.active" tone="red">停機中</UBadge>
+            <span class="text-xs text-slate-600">{{ d.note }}・{{ d.byName }} 登記{{ d.endedAt ? `・已提早結束` : '' }}</span>
+            <span v-if="d.clashes" class="text-xs font-semibold text-red-700">{{ d.clashes }} 筆需改期</span>
+            <UButton v-if="board.canPerform && !d.endedAt" size="sm" variant="ghost" class="ml-auto" :loading="endDt.pending.value" @click="endDt.run(d.id)">{{ d.active ? '結束停機' : '取消停機' }}</UButton>
+          </div>
+          <p class="text-xs text-slate-500">近 30 天停機：{{ board.downtimeStats.filter((x) => x.count).map((x) => `${x.name} ${x.hours} 小時（${x.count} 次）`).join('、') || '沒有' }}</p>
+        </div>
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <UCard v-for="r in board.rooms" :key="r.room" :title="r.name" :padded="false">
             <p v-if="!r.exams.length" class="px-4 py-3 text-sm text-slate-400">這天沒有排檢查</p>
@@ -124,6 +151,8 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 </div>
                 <p v-if="e.stage === 'done' && (e.contrastMl || e.contrastReaction)" class="text-xs text-slate-600">{{ e.doneByName }} 完成{{ e.contrastMl ? `・顯影劑 ${e.contrastMl} mL` : '' }}
                   <span v-if="e.contrastReaction" :class="e.contrastReaction.severity === 'mild' ? 'text-amber-800' : 'font-semibold text-red-700'">・不良反應（{{ CONTRAST_REACTION_LABEL[e.contrastReaction.severity].split('（')[0] }}）：{{ e.contrastReaction.symptoms }}，{{ e.contrastReaction.action }}{{ e.contrastReaction.adrId ? '（已通報藥師評估）' : '' }}</span></p>
+                <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
+                  <UButton v-if="board.canSchedule" size="sm" :loading="resched.pending.value" @click="resched.run(e.id)">排到下一個空檔</UButton></p>
                 <p v-if="e.noShow" class="text-xs text-red-700">過了排程 30 分鐘還沒報到{{ e.where === '門診' ? '（開立醫師首頁看得到）' : '（請聯絡病房）' }}：改時間或取消</p>
                 <div v-if="moving === e.id" class="flex flex-wrap items-end gap-2">
                   <UInput v-model="slotOf(e.key).d" type="date" class="w-40" label="新日期" />
@@ -153,6 +182,24 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
         </div>
       </template>
     </UQueryState>
+    <UDialog v-model="dtOpen" title="登記檢查室停機" size="md">
+      <div class="space-y-3 text-sm">
+        <div class="grid grid-cols-2 gap-3">
+          <USelect v-model="dt.room" label="檢查室" :options="roomOptions" :error="addDt.fieldErrors.value.room" />
+          <USelect v-model="dt.reason" label="原因" :options="reasonOptions" :error="addDt.fieldErrors.value.reason" />
+          <UInput v-model="dt.fromD" type="date" label="開始日期" />
+          <UInput v-model="dt.fromT" type="time" label="開始時間" :error="addDt.fieldErrors.value.from" />
+          <UInput v-model="dt.toD" type="date" label="結束日期" />
+          <UInput v-model="dt.toT" type="time" label="結束時間" :error="addDt.fieldErrors.value.to" />
+        </div>
+        <UInput v-model="dt.note" label="說明（選填）" placeholder="例：球管故障，等廠商" />
+        <p class="text-xs text-slate-500">停機時段排不進去、不能報到；已排在這段的會列「需改期」，櫃台可以一鍵排到下一個空檔。</p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="dtOpen = false">取消</UButton>
+        <UButton :loading="addDt.pending.value" @click="saveDowntime">登記</UButton>
+      </template>
+    </UDialog>
     <UDialog v-model="finishOpen" title="完成檢查（含顯影劑）" size="md">
       <div v-if="finishing" class="space-y-3 text-sm">
         <p><b>{{ finishing.patientName }}</b> {{ finishing.where }}・{{ finishing.procName }}</p>

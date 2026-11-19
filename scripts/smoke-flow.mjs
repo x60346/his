@@ -1484,7 +1484,7 @@ try {
     if (!Array.isArray(rows)) continue
     for (const r of rows) for (const [k, v] of Object.entries(r)) {
       // 排程類：給藥排程、影像檢查排的時間
-      if (k === 'scheduledAt' || (table === 'imagingExams' && k === 'start') || typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) continue
+      if (k === 'scheduledAt' || (table === 'imagingExams' && k === 'start') || (table === 'roomDowntimes' && (k === 'from' || k === 'to')) || typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) continue
       if (v > nowS) futureHits.push(`${table}.${k}=${v}`)
     }
   }
@@ -12531,6 +12531,97 @@ try {
     ok(msg.includes('權限'), '護理師不能確認')
     msg = await errOf(() => R.erLabs(db().visits.find((v) => !v.er).id))
     ok(msg.includes('不是急診'), '不是急診就醫不能用')
+  }
+
+  // 檢查室設備停機：時段判斷、欄位、下一個空檔、停機時數；種子（X 光保養、一筆需改期、首頁）；排程與報到擋、一鍵改期、登記、提早結束與取消、權限
+  console.log('\n[檢查室設備停機]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const E = api.examApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const D0 = '2026-11-20'
+    const dt = { room: 'XR', from: `${D0} 10:00`, to: `${D0} 12:00` }
+    ok(!api.downtimeClash([dt], { room: 'XR', start: `${D0} 09:50`, minutes: 10 }) && api.downtimeClash([dt], { room: 'XR', start: `${D0} 09:55`, minutes: 10 }) && !api.downtimeClash([dt], { room: 'XR', start: `${D0} 12:00`, minutes: 10 }) && !api.downtimeClash([dt], { room: 'CT', start: `${D0} 11:00`, minutes: 10 }), '停機時段：碰到就算（剛好接在前後不算、別間不算）')
+    ok(api.downtimeEnd({ ...dt, endedAt: `${D0} 11:00` }) === `${D0} 11:00` && !api.downtimeClash([{ ...dt, endedAt: `${D0} 11:00` }], { room: 'XR', start: `${D0} 11:10`, minutes: 10 }) && !api.downtimeClash([{ ...dt, endedAt: dt.from }], { room: 'XR', start: `${D0} 10:30`, minutes: 10 }), '提早結束：之後就能排；結束在開始＝取消')
+    ok(api.downtimeNow([dt], 'XR', `${D0} 10:00`) && !api.downtimeNow([dt], 'XR', `${D0} 12:00`) && !api.downtimeNow([dt], 'CT', `${D0} 11:00`), '現在停機中')
+    const nowX = `${D0} 08:00`
+    ok(Object.keys(api.checkDowntime({}, nowX)).sort().join() === 'from,reason,room,to' && api.checkDowntime({ ...dt, reason: 'maintenance', to: dt.from }, nowX).to?.includes('之後') && api.checkDowntime({ ...dt, reason: 'maintenance' }, `${D0} 13:00`).to?.includes('過去') && api.checkDowntime({ ...dt, reason: 'maintenance', to: '2026-11-28 10:00' }, nowX).to?.includes('7 天') && !Object.keys(api.checkDowntime({ ...dt, reason: 'breakdown' }, nowX)).length, '登記欄位：檢查室、起訖、原因；整段在過去、超過 7 天擋')
+    const ex = [{ id: 'a', room: 'XR', start: `${D0} 10:10`, minutes: 10 }]
+    ok(api.nextFreeSlot('XR', 10, `${D0} 10:03`, [], []) === `${D0} 10:10` && api.nextFreeSlot('XR', 10, `${D0} 10:03`, ex, []) === `${D0} 10:20` && api.nextFreeSlot('XR', 10, `${D0} 10:03`, ex, [dt]) === `${D0} 12:00` && api.nextFreeSlot('XR', 10, `${D0} 16:55`, [], []) === '2026-11-21 08:00' && api.nextFreeSlot('XR', 10, `${D0} 10:03`, ex, [], 'a') === `${D0} 10:10`, '下一個空檔：10 分鐘一格、避開撞期與停機、關門後到隔天 08:00（自己那筆不算撞期）')
+    const hs = api.downtimeHours([{ ...dt, from: `${D0} 09:00`, to: `${D0} 12:00`, endedAt: `${D0} 10:30` }, { room: 'CT', from: `${D0} 11:00`, to: `${D0} 20:00` }], `${D0} 00:00`, `${D0} 13:00`)
+    ok(hs.find((x) => x.room === 'XR').hours === 1.5 && hs.find((x) => x.room === 'CT').hours === 2 && hs.find((x) => x.room === 'US').count === 0, '停機時數：提早結束算到結束、還沒到的部分不算')
+
+    // 種子：X 光保養 2 小時、骨折膝關節 X 光需改期
+    await as('clerk01')
+    let b = await E.examBoard(T)
+    const d1 = b.downtimes.find((d) => d.id === 'DT-SEED-1')
+    const kx = db().imagingExams.find((e) => e.orderId === 'IO-EX-0')
+    const kv = b.rooms.find((r) => r.room === 'XR').exams.find((e) => e.id === kx.id)
+    ok(d1?.roomName && d1.reason === 'maintenance' && d1.clashes === 1 && !d1.active && b.needsReschedule === 1 && kv?.downtimeClash?.includes('保養'), `種子：${d1?.roomName}${d1?.text}，膝關節 X 光需改期`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.examNeedsReschedule === 1, '櫃台首頁：檢查室停機需改期 1')
+    // 排程擋、一鍵改期
+    let f = await fieldsOf(() => E.scheduleExam('O:IO-EX-3', dateUtil.addMinutes(d1.from, 10)))
+    ok(f.start?.includes('停機'), `停機時段排不進去 → 「${f.start}」`)
+    await as('rt01')
+    let msg = await errOf(() => E.rescheduleNext(kx.id))
+    ok(msg.includes('權限'), '放射師不能改期（櫃台排）')
+    await as('clerk01')
+    const rs = await E.rescheduleNext(kx.id)
+    ok(rs.start >= api.downtimeEnd(d1) && !rs.downtimeClash && db().auditLogs[0].detail.includes('保養'), `一鍵排到下一個空檔：${rs.start}（停機結束之後）`)
+    b = await E.examBoard(T)
+    ok(b.needsReschedule === 0 && b.downtimes.find((d) => d.id === 'DT-SEED-1').clashes === 0, '改期後不再列需改期')
+
+    // 登記停機（故障，現在開始）→ 不能報到 → 提早結束 → 可以報到
+    msg = await errOf(() => E.addDowntime({ room: 'CT', from: dateUtil.now(), to: dateUtil.addMinutes(dateUtil.now(), 60), reason: 'breakdown' }))
+    ok(msg.includes('權限'), '櫃台不能登記停機')
+    await as('rt01')
+    f = await fieldsOf(() => E.addDowntime({ room: 'CT', from: dateUtil.now(), to: dateUtil.now(), reason: 'x' }))
+    ok(f.to && f.reason, '欄位不對 → 標出')
+    const t0 = dateUtil.addMinutes(dateUtil.now(), -5)
+    const d2 = await E.addDowntime({ room: 'CT', from: t0, to: dateUtil.addMinutes(t0, 60), reason: 'breakdown', note: '球管故障，等廠商' })
+    ok(d2.active && d2.note === '球管故障，等廠商' && db().auditLogs[0].action === '檢查室停機', '登記故障（停機中、稽核）')
+    const ct = db().imagingExams.find((e) => e.orderId === 'IO-EX-6')
+    await as('clerk01')
+    msg = await errOf(() => E.arriveExam(ct.id))
+    ok(msg.includes('停機中'), `停機中不能報到 → 「${msg}」`)
+    await as('rt01')
+    const e2 = await E.endDowntime(d2.id)
+    ok(!e2.active && e2.endedAt && db().auditLogs[0].detail.includes('提早'), '提早結束（稽核）')
+    msg = await errOf(() => E.endDowntime(d2.id))
+    ok(msg.includes('已經結束'), '結束過的不能再結束')
+    await as('clerk01')
+    ok((await E.arriveExam(ct.id)).stage === 'arrived', '結束後可以報到')
+    // 還沒開始的停機取消
+    await as('rt01')
+    const d3 = await E.addDowntime({ room: 'US', from: `${addDaysT(1)} 09:00`, to: `${addDaysT(1)} 11:00`, reason: 'maintenance' })
+    const c3 = await E.endDowntime(d3.id)
+    ok(c3.endedAt === d3.from && db().auditLogs[0].detail.includes('取消'), '還沒開始的停機：取消')
+    await as('clerk01')
+    const us = await E.scheduleExam('O:IO-EX-4', `${addDaysT(1)} 09:30`)
+    ok(us.start === `${addDaysT(1)} 09:30`, '取消後那段可以排')
+    b = await E.examBoard(T)
+    ok(b.downtimeStats.find((x) => x.room === 'CT').count === 1 && b.downtimeStats.find((x) => x.room === 'CT').hours <= 0.2, `近 30 天停機時數：電腦斷層 ${b.downtimeStats.find((x) => x.room === 'CT').hours} 小時`)
+    await as('nurse01')
+    msg = await errOf(() => E.addDowntime({ room: 'CT', from: dateUtil.now(), to: dateUtil.addMinutes(dateUtil.now(), 60), reason: 'breakdown' }))
+    ok(msg.includes('權限'), '護理師不能登記停機')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

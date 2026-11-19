@@ -288,7 +288,7 @@ export type { MedRecView, HomeMedView, HomeMedInput, DischargeRecon, DischargeMe
 export type { PharmCareView, PharmCarePatient } from './pharmcare'
 export type { SpecimenView, WardSpecimens } from './specimen'
 export type { QcOverview, QcRunView } from './qc'
-export type { ExamView, ExamBoard } from './exam'
+export type { ExamView, ExamBoard, DowntimeView } from './exam'
 export type { DeskPatient, DeskQueue, DeskSpecimen, QueueDisplay } from './lab-desk'
 export type { AddonOption } from './specimen'
 export type { AnalyzerBoard, AnalyzerHeldView, AnalyzerLoadable, AnalyzerRow } from './analyzer'
