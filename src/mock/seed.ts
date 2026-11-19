@@ -1,7 +1,7 @@
 // 產生展示資料：以「今天」為基準，讓任何時候開啟都有今日門診、住院中病人等情境。
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
-  SerumIndices, RoomDowntime, ScanMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
+  SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
   DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
@@ -3259,6 +3259,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 醫師建議回診（示範，不抽亂數）：今天看完診的三位——一位櫃台已依建議掛好（病人本來就有之後的掛號）、一位待預約（追蹤血壓）、
+  // 一位建議看別科（指定醫師）；另外兩、三週前看診的一位建議一週後回診，到現在還沒掛（過期）
+  const followUpAdvices: FollowUpAdvice[] = []
+  {
+    const done = visits.filter((v) => v.date === T && !v.er && ['charged', 'dispensed'].includes(v.status)).map((v) => ({ v, e: encounters.find((x) => x.visitId === v.id && x.status === 'completed') })).filter((x) => x.e)
+    const future = (pid: string, dept: string) => visits.find((x) => x.patientId === pid && x.deptId === dept && x.date > T && x.status === 'registered')
+    const booked = done.find((x) => future(x.v.patientId, x.v.deptId))
+    const rest = done.filter((x) => x !== booked)
+    const at = (v: Visit) => encounters.find((x) => x.visitId === v.id)?.completedAt ?? nowStr
+    const mk = (id: string, v: Visit, x: Partial<FollowUpAdvice> & { weeks: number; reason: string }): FollowUpAdvice => ({ id, visitId: v.id, patientId: v.patientId, doctorOf: v.doctorId, deptId: v.deptId, targetDate: addDays(v.date, x.weeks * 7), at: at(v), status: 'pending', ...x })
+    if (booked) {
+      const fv = future(booked.v.patientId, booked.v.deptId)!
+      followUpAdvices.push(mk('FA-SEED-1', booked.v, { weeks: 2, reason: '看檢驗報告', status: 'booked', bookedVisitId: fv.id, closedAt: at(booked.v), closedBy: 'U101' }))
+    }
+    if (rest[0]) followUpAdvices.push(mk('FA-SEED-2', rest[0].v, { weeks: 2, reason: '追蹤血壓' }))
+    const other = rest[1] && codes.departments.find((d) => d.id !== rest[1].v.deptId && d.code !== 'ER' && codes.doctors.some((x) => x.deptId === d.id))
+    if (rest[1] && other) followUpAdvices.push(mk('FA-SEED-3', rest[1].v, { weeks: 4, reason: '心臟功能評估', deptId: other.id, doctorId: codes.doctors.find((x) => x.deptId === other.id)!.id }))
+    const old = visits.filter((v) => v.date >= addDays(T, -20) && v.date <= addDays(T, -15)).sort((a, b) => b.date.localeCompare(a.date)).find((v) => !v.er && ['charged', 'dispensed'].includes(v.status) && !visits.some((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.date > v.date && x.status !== 'cancelled'))
+    if (old) followUpAdvices.push(mk('FA-SEED-4', old, { weeks: 1, reason: '藥物調整後複診' }))
+  }
+
   // 檢驗時效（示範）：骨折病人 85 分鐘前開的急件 CRP，護理師 70 分鐘前就採檢了，檢體一直沒送到檢驗科（急件 60 分已逾時，卡在送檢）
   {
     const fx = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
@@ -3392,6 +3413,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     roomDowntimes,
     // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],
+    followUpAdvices,
     examClosures: [{ id: 'XC-SEED-1', date: addDays(T, 10), reason: '院內消防演練', by: 'U001', at: nowStr }],
     dischargePlans,
     vitals,

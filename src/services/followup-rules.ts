@@ -2,7 +2,7 @@
 //   - 一般：1 週、2 週、4 週後
 //   - 慢性病連續處方箋：藥用完前 3 天回診（處方天數 × 可調劑次數 − 3）——早回來藥還沒吃完，晚回來會斷藥
 
-import type { NoShowResult, Visit } from '@/types'
+import type { FollowUpAdvice, NoShowResult, Visit } from '@/types'
 import { addDays } from '@/utils/date'
 
 export const FOLLOW_UP_PICKS = [
@@ -57,4 +57,27 @@ export const AFTER_DISCHARGE_COPAY_DAYS = 30
 export function afterDischargeCopayEligible(v: Pick<Visit, 'afterDischarge' | 'date'>, dischargedOn: string | undefined, earlierSeen: boolean): boolean {
   if (!v.afterDischarge || !dischargedOn || earlierSeen) return false
   return v.date >= dischargedOn && v.date <= addDays(dischargedOn, AFTER_DISCHARGE_COPAY_DAYS)
+}
+
+// ---------- 醫師建議回診（交給櫃台掛號） ----------
+
+/** 建議幾週後回診的選項 */
+export const ADVICE_WEEKS = [1, 2, 4, 8, 12]
+export const ADVICE_REASONS = ['看檢驗報告', '追蹤血壓', '追蹤血糖', '傷口換藥', '藥物調整後複診']
+/** 建議日前後幾天算「該掛了」；過了建議日幾天還沒處理算過期 */
+export const ADVICE_WINDOW_DAYS = 7
+export const ADVICE_STATUS_LABEL: Record<FollowUpAdvice['status'], string> = { pending: '待預約', booked: '已掛號', self: '病人自己掛', declined: '病人不回診' }
+export type AdviceState = 'upcoming' | 'due' | 'overdue' | 'closed'
+/** 待預約的：還早（建議日一週前）、該掛了、過期（建議日過了一週還沒處理）；處理過的＝closed */
+export function adviceState(a: Pick<FollowUpAdvice, 'status' | 'targetDate'>, today: string): AdviceState {
+  if (a.status !== 'pending') return 'closed'
+  if (today > addDays(a.targetDate, ADVICE_WINDOW_DAYS)) return 'overdue'
+  return today >= addDays(a.targetDate, -ADVICE_WINDOW_DAYS) ? 'due' : 'upcoming'
+}
+/** 建議的欄位：週數、原因 */
+export function checkAdvice(x: { weeks?: number; reason?: string }): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!ADVICE_WEEKS.includes(Number(x.weeks))) e.weeks = `請選幾週後（${ADVICE_WEEKS.join('、')} 週）`
+  if (!x.reason?.trim()) e.reason = '請寫回診原因（例：看檢驗報告）'
+  return e
 }

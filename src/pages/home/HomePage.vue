@@ -132,6 +132,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['clerk'], label: '住院待結帳', count: s.value.ipdToBill, hint: '醫師已簽准出院：結清住院費用後才能辦出院', route: 'charge', query: { tab: 'ipd' }, icon: Receipt, urgent: true },
+    { roles: ['clerk'], label: '醫師建議回診待預約', count: s.value.adviceToBook ?? 0, hint: s.value.adviceOverdue ? `其中 ${s.value.adviceOverdue} 位過了建議日一週還沒掛` : '醫師寫了「幾週後回診」交給櫃台：電話聯絡病人掛號，或標病人自己掛、不回診', route: 'booking', query: { tab: 'advice' }, icon: PhoneCall, urgent: !!s.value.adviceOverdue },
     { roles: ['clerk'], label: '預約未到待追蹤', count: s.value.noShowsToFollow, hint: '出院後回診、醫師約的回診、慢性病的預約沒來：電話聯絡、改約', route: 'booking', query: { tab: 'noshow' }, icon: PhoneCall, urgent: true },
     { roles: ['clerk'], label: '建議期中繳款', count: s.value.ipdInterim, hint: '住很久、累計費用很多的住院病人：可以先收一部分，出院結帳時扣抵', route: 'charge', query: { tab: 'ipd' }, icon: Receipt },
     { roles: ['clerk'], label: '待退費', count: s.value.pendingRefunds, hint: '部分退藥、檢驗處置未執行後，退還病人差額（可能是前幾天看的診）', route: 'charge', icon: Receipt, urgent: true },

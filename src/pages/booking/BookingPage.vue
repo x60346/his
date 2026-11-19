@@ -2,7 +2,7 @@
 // 掛號作業：找病人 → 選診次 → 確認身分 → 掛號；下方為當日掛號清單（可退掛）。
 import { useCan } from '@/composables/useCan'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X, CalendarX } from 'lucide-vue-next'
+import { CreditCard, List as ListIcon, PhoneCall, Printer, Ticket, UserPlus, X, CalendarX, CalendarPlus } from 'lucide-vue-next'
 import {
   UBadge, UButton, UCard, UCheckbox, UDialog, UEmpty, UInput, USearchSelect, USelect, UStatusBadge, UTable, UTabs, type Column,
 } from '@/components/ui'
@@ -13,6 +13,7 @@ import ReferralInForm from '@/components/ReferralInForm.vue'
 import ReferralInDialog from '@/components/ReferralInDialog.vue'
 import SuspendNotices from '@/components/SuspendNotices.vue'
 import NoShowList from '@/components/NoShowList.vue'
+import AdviceList from '@/components/AdviceList.vue'
 import { useRoute } from 'vue-router'
 import DailyAdjust from '@/components/DailyAdjust.vue'
 import { admissionApi, bookingApi, chargeApi, masterApi, patientApi, preventApi, scheduleApi, type ReferralInInput, type VisitView } from '@/services'
@@ -40,6 +41,10 @@ const noticesOpen = ref(false)
 const { data: noShows } = useQuery(async () => (canNotify.value ? bookingApi.listNoShows() : []), [canNotify])
 const noShowsToFollow = computed(() => (noShows.value ?? []).filter((x) => x.important))
 const noShowOpen = ref(canNotify.value && useRoute().query.tab === 'noshow')
+// 醫師建議回診（交給櫃台掛號）：該掛了、過期的才出現橫幅；首頁待辦帶 ?tab=advice 直接打開
+const { data: advices } = useQuery(async () => (canNotify.value ? bookingApi.listAdvices() : []), [canNotify])
+const advicesDue = computed(() => (advices.value ?? []).filter((a) => a.state === 'due' || a.state === 'overdue'))
+const adviceOpen = ref(canNotify.value && useRoute().query.tab === 'advice')
 // 停診、代診（權限 schedule.suspend：預設管理員，可指定給櫃台組長）：和系統管理 → 排班共用同一個元件
 const adjustOpen = ref(false)
 /** 哪幾診停診（同一診只列一次）：例「11/14 下午診 黃柏翰」 */
@@ -334,6 +339,15 @@ function openIdentity(v: VisitView) {
       <UButton size="sm" variant="ghost" :icon="PhoneCall" @click="noShowOpen = true">預約未到（{{ noShows.length }}）</UButton>
     </div>
     <UDialog v-model="noShowOpen" title="預約未到追蹤" size="xl"><NoShowList /></UDialog>
+    <div v-if="advicesDue.length" class="flex items-center gap-3 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2.5 text-sm text-indigo-900">
+      <CalendarPlus class="h-4 w-4 shrink-0" />
+      <span class="min-w-0 flex-1">醫師建議回診待預約 <b class="tabular">{{ advicesDue.length }}</b> 位<span v-if="advicesDue.some((a) => a.state === 'overdue')" class="text-xs font-semibold text-red-700">（{{ advicesDue.filter((a) => a.state === 'overdue').length }} 位過期）</span></span>
+      <UButton size="sm" variant="secondary" @click="adviceOpen = true">開啟名單</UButton>
+    </div>
+    <div v-else-if="canNotify && advices?.length" class="flex justify-end">
+      <UButton size="sm" variant="ghost" :icon="CalendarPlus" @click="adviceOpen = true">建議回診（{{ advices.length }}）</UButton>
+    </div>
+    <UDialog v-model="adviceOpen" title="醫師建議回診：待預約" size="xl"><AdviceList /></UDialog>
     <div v-if="can('schedule.suspend')" class="flex justify-end">
       <UButton size="sm" variant="secondary" :icon="CalendarX" @click="adjustOpen = true">停診／代診</UButton>
     </div>

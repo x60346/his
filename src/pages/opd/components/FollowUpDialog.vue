@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { CalendarPlus } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import RegistrationSlip from '@/components/RegistrationSlip.vue'
+import FollowUpAdviceForm from './FollowUpAdviceForm.vue'
 import { bookingApi, type VisitView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, periodLabel, today, weekdayLabel } from '@/utils/date'
@@ -79,6 +80,7 @@ async function onBook(sessionId: string) {
           </UQueryState>
         </section>
         <p class="text-xs text-slate-500">預約就是正式掛號（身分、案件類別沿用這次）；當天報到、看診、批價照常。改期或取消請到櫃台。</p>
+        <FollowUpAdviceForm v-if="visitId" :visit-id="visitId" :dept-id="opts.deptId" :shown="open" />
       </div>
     </UQueryState>
     <template #footer><UButton variant="secondary" @click="open = false">關閉</UButton></template>

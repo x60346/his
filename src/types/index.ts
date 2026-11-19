@@ -237,6 +237,31 @@ export type VisitStatus =
   | 'dispensed' // 已領藥
   | 'cancelled' // 退掛
 
+/**
+ * 醫師建議回診（不直接約、交給櫃台）：大約幾週後、哪一科、指定醫師或不指定、原因。
+ * 櫃台在「待預約回診」掛號（booked）、或標病人自己掛（self）／不回診（declined）；建議日過了一週還沒處理＝過期
+ */
+export interface FollowUpAdvice {
+  id: string
+  /** 寫建議的那次看診 */
+  visitId: string
+  patientId: string
+  /** 寫建議的醫師 */
+  doctorOf: string
+  /** 建議看的科別（可以是別科）、指定醫師（沒有＝不指定） */
+  deptId: string
+  doctorId?: string
+  weeks: number
+  targetDate: string
+  reason: string
+  at: string
+  status: 'pending' | 'booked' | 'self' | 'declined'
+  bookedVisitId?: string
+  closedAt?: string
+  closedBy?: string
+  note?: string
+}
+
 /** 掛號紀錄（一次門診就醫） */
 export type NoShowResult = 'rebooked' | 'declined' | 'unreachable'
 export interface NoShowContact {

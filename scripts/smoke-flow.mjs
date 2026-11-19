@@ -13065,6 +13065,119 @@ try {
     ok(c3.stage === 'collected' && !c3.scan, '掃描設定關閉：不用掃（檢體沒有掃描紀錄）')
   }
 
+  // 醫師建議回診：狀態（還早、該掛、過期）、欄位；種子（已掛、待預約、別科指定醫師、過期）與首頁；醫師寫建議（自己今天的病人、別科、指定醫師、
+  // 不重複、撤回）；櫃台掛號（科別、指定醫師、算醫師約的回診）、自己掛、不回診要原因、權限
+  console.log('\n[醫師建議回診]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const B = api.bookingApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    const st = (target, t) => api.adviceState({ status: 'pending', targetDate: target }, t)
+    ok(st('2026-12-01', '2026-11-23') === 'upcoming' && st('2026-12-01', '2026-11-24') === 'due' && st('2026-12-01', '2026-12-08') === 'due' && st('2026-12-01', '2026-12-09') === 'overdue' && api.adviceState({ status: 'self', targetDate: '2026-01-01' }, '2026-12-01') === 'closed', '狀態：建議日前一週起該掛了、過一週還沒處理過期；處理過的結案')
+    ok(Object.keys(api.checkAdvice({ weeks: 3, reason: ' ' })).sort().join() === 'reason,weeks' && !Object.keys(api.checkAdvice({ weeks: 2, reason: '看報告' })).length, '欄位：週數只能選、要寫原因')
+
+    // 種子
+    await as('clerk01')
+    let list = await B.listAdvices()
+    const fa = (id) => db().followUpAdvices.find((a) => a.id === id)
+    ok(fa('FA-SEED-1')?.status === 'booked' && db().visits.find((v) => v.id === fa('FA-SEED-1').bookedVisitId)?.date > T, '種子：一位已依建議掛好')
+    ok(fa('FA-SEED-2')?.status === 'pending' && fa('FA-SEED-3')?.doctorId && fa('FA-SEED-3').deptId !== db().visits.find((v) => v.id === fa('FA-SEED-3').visitId).deptId, '種子：一位待預約、一位建議看別科（指定醫師）')
+    ok(list[0]?.id === 'FA-SEED-4' && list[0].state === 'overdue' && !list.some((a) => a.id === 'FA-SEED-1'), '櫃台清單：過期的排最前、已處理的不列')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.adviceOverdue === 1 && dash.adviceToBook >= 1, `櫃台首頁：建議回診待預約 ${dash.adviceToBook}（過期 ${dash.adviceOverdue}）`)
+    ok((await B.listAdvices({ includeClosed: true })).some((a) => a.id === 'FA-SEED-1' && a.bookedText), '連處理過的一起看：已掛的顯示掛在哪一診')
+
+    // 醫師寫建議：今天自己看的病人
+    const v = db().visits.find((x) => x.date === T && !x.er && ['charged', 'dispensed'].includes(x.status) && !db().followUpAdvices.some((a) => a.visitId === x.id))
+    const doc = userOf(v.doctorId)
+    const otherDoc = db().users.find((u) => u.doctorId && u.doctorId !== v.doctorId && u.roles.includes('doctor')).username
+    await as(otherDoc)
+    let msg = await errOf(() => B.adviseFollowUp(v.id, { weeks: 2, reason: 'x' }))
+    ok(msg.includes('自己今天看的病人'), '只能替自己今天看的病人寫')
+    await as(doc)
+    let f = await fieldsOf(() => B.adviseFollowUp(v.id, { weeks: 3, reason: '' }))
+    ok(f.weeks && f.reason, '週數、原因 → 標出')
+    const erDept = db().departments.find((d) => d.code === 'ER')
+    f = await fieldsOf(() => B.adviseFollowUp(v.id, { weeks: 2, deptId: erDept.id, reason: 'x' }))
+    ok(f.deptId, '不能建議急診')
+    const otherDept = db().departments.find((d) => d.id !== v.deptId && d.code !== 'ER' && db().doctors.some((x) => x.deptId === d.id))
+    const wrongDoc = db().doctors.find((d) => d.deptId === v.deptId)
+    f = await fieldsOf(() => B.adviseFollowUp(v.id, { weeks: 2, deptId: otherDept.id, doctorId: wrongDoc.id, reason: 'x' }))
+    ok(f.doctorId, '指定的醫師要在那一科')
+    const a1 = await B.adviseFollowUp(v.id, { weeks: 2, reason: '看檢驗報告' })
+    ok(a1.status === 'pending' && a1.targetDate === dateUtil.addDays(v.date, 14) && a1.deptId === v.deptId && db().auditLogs[0].action === '建議回診', `寫建議：2 週後（${a1.targetDate}）同一科、交給櫃台（稽核）`)
+    msg = await errOf(() => B.adviseFollowUp(v.id, { weeks: 4, reason: '再一次' }))
+    ok(msg.includes('已經建議過'), '同一次看診同一科不重複')
+    const a2 = await B.adviseFollowUp(v.id, { weeks: 4, deptId: otherDept.id, reason: '會診評估' })
+    let op = await B.adviceOptions(v.id)
+    const rad = db().departments.find((d) => d.code === 'RAD')
+    ok(op.mine.length === 2 && op.depts.every((d) => d.id !== erDept.id && d.id !== rad.id) && op.doctors.length, '看診頁：這次寫的兩筆（同科、別科）、可選科別沒有急診與沒開門診的放射科')
+    f = await fieldsOf(() => B.adviseFollowUp(v.id, { weeks: 2, deptId: rad.id, reason: 'x' }))
+    ok(f.deptId, '不能建議沒開門診的科')
+    await as(otherDoc)
+    msg = await errOf(() => B.cancelAdvice(a2.id))
+    ok(msg.includes('自己寫的'), '別的醫師不能撤回')
+    await as(doc)
+    await B.cancelAdvice(a2.id)
+    ok(!db().followUpAdvices.some((a) => a.id === a2.id), '撤回還沒處理的建議')
+
+    // 櫃台掛號
+    await as('clerk01')
+    msg = await errOf(() => B.adviceSessions(a1.id, T))
+    ok(msg.includes('明天以後'), '要選明天以後')
+    let sess
+    for (let k = 1; k <= 14 && !sess; k++) sess = (await B.adviceSessions(a1.id, addDaysT(k))).find((s) => !s.blocked)
+    ok(sess && db().sessions.find((s) => s.id === sess.id).deptId === v.deptId, `找到這一科的診：${sess?.date} ${sess?.doctorName}`)
+    const anotherDeptSess = db().sessions.find((s) => s.date > T && s.deptId !== v.deptId && s.deptId !== erDept.id)
+    msg = await errOf(() => B.bookAdvice(a1.id, anotherDeptSess.id))
+    ok(msg.includes(db().departments.find((d) => d.id === v.deptId).name), '不能掛別科')
+    const b1 = await B.bookAdvice(a1.id, sess.id)
+    const nv = db().visits.find((x) => x.id === b1.bookedVisitId)
+    ok(b1.status === 'booked' && nv.sessionId === sess.id && nv.followUpOf?.visitId === v.id && nv.followUpOf.doctorId === v.doctorId && db().auditLogs[0].action === '建議回診掛號', `掛號：${b1.bookedText}（算醫師約的回診，沒來會進預約未到）`)
+    ok(api.noShowKind(nv) === 'followUp', '未到追蹤的類別＝醫師約的回診')
+    msg = await errOf(() => B.bookAdvice(a1.id, sess.id))
+    ok(msg.includes('處理過'), '不能重複處理')
+    // 指定醫師的要掛那位：找一個有兩位以上醫師、之後有別位醫師門診的科
+    for (let k = 1; k <= 21; k++) await B.adviceSessions(a1.id, addDaysT(k))
+    const multi = db().departments.find((d) => d.code !== 'ER' && db().doctors.filter((x) => x.deptId === d.id && x.active).length >= 2 && db().sessions.some((s) => s.deptId === d.id && s.date > T))
+    const [docA, docB] = db().doctors.filter((x) => x.deptId === multi.id && x.active)
+    const sB = db().sessions.find((s) => s.deptId === multi.id && s.date > T && s.doctorId === docB.id)
+    await as(doc)
+    const a4 = await B.adviseFollowUp(v.id, { weeks: 4, deptId: multi.id, doctorId: docA.id, reason: '指定醫師' })
+    await as('clerk01')
+    msg = await errOf(() => B.bookAdvice(a4.id, sB.id))
+    ok(msg.includes(`指定看 ${docA.name}`), `醫師指定 ${docA.name}：不能掛 ${docB.name} 的診`)
+    // 自己掛、不回診
+    f = await fieldsOf(() => B.closeAdvice('FA-SEED-4', { result: 'declined', note: ' ' }))
+    ok(f.note, '不回診要寫原因')
+    const c4 = await B.closeAdvice('FA-SEED-4', { result: 'declined', note: '改到別家醫院' })
+    const c2 = await B.closeAdvice('FA-SEED-2', { result: 'self' })
+    ok(c4.status === 'declined' && c2.status === 'self' && c2.closedBy, '標病人不回診（原因）、病人自己掛')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.adviceOverdue === 0, '處理完：首頁過期歸零')
+    await as(doc)
+    msg = await errOf(() => B.listAdvices())
+    ok(msg.includes('權限'), '醫師不能用櫃台的待預約清單')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

@@ -1,12 +1,12 @@
 // 掛號：建立 Visit（狀態機的起點）、退掛、候診清單。
-import type { Admission, ChargeLine, ClinicSession, Encounter, NoShowContact, NoShowResult, Visit, VisitStatus, PayMethod } from '@/types'
+import type { Admission, ChargeLine, ClinicSession, Encounter, FollowUpAdvice, NoShowContact, NoShowResult, Visit, VisitStatus, PayMethod } from '@/types'
 import { prepayAvailable, refundPrepay, takePrepay } from './money'
 import { commitIfPossible, db, nextCounter, newId } from '@/mock/db'
 import { addDays, now, periodLabel, today } from '@/utils/date'
 import { clonePlain } from '@/utils/clone'
-import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission, sessionUser } from './http'
+import { audit, fail, failField, failFields, fieldErrors, must, mutate, query, requireUser, requirePermission, sessionUser } from './http'
 import { ensureSessions, isSessionClosed, periodCloseTime } from './schedule'
-import { FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, isImportantNoShow, isNoShow, NO_SHOW_KIND_LABEL, NO_SHOW_RESULT_LABEL, NO_SHOW_TRACK_DAYS, noShowClosed, noShowKind, refillFollowUpDays, type NoShowKind } from './followup-rules'
+import { ADVICE_STATUS_LABEL, adviceState, checkAdvice, type AdviceState, FOLLOW_UP_PICKS, FOLLOW_UP_SEARCH_DAYS, isImportantNoShow, isNoShow, NO_SHOW_KIND_LABEL, NO_SHOW_RESULT_LABEL, NO_SHOW_TRACK_DAYS, noShowClosed, noShowKind, refillFollowUpDays, type NoShowKind } from './followup-rules'
 import { requireCare } from './care-team'
 import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
 import { checkEligibility } from './prevent-rules'
@@ -665,5 +665,140 @@ export function cancelAfterDischarge(visitId: string): Promise<VisitView> {
     v.cancelReason = '醫師取消出院後回診'
     audit('取消出院後回診', `${a.admitNo} ${nameOf.patient(v.patientId)} ${v.date} ${nameOf.doctor(v.doctorId)} #${v.seqNo}`)
     return visitView(v)
+  })
+}
+
+// ---------- 醫師建議回診（不直接約，交給櫃台掛號） ----------
+
+export interface AdviceView extends FollowUpAdvice {
+  patientName: string
+  chartNo: string
+  phone: string
+  deptName: string
+  doctorName?: string
+  adviserName: string
+  statusLabel: string
+  state: AdviceState
+  bookedText?: string
+  /** 病人在這一科、建議日前後已經有掛號（可能自己掛了）：櫃台處理前先看 */
+  laterVisit?: { visitId: string; date: string; doctorName: string; status: VisitStatus }
+}
+function adviceView(a: FollowUpAdvice, t: string = today()): AdviceView {
+  const p = find.patient(a.patientId)
+  const bv = a.bookedVisitId ? find.visit(a.bookedVisitId) : undefined
+  const later = a.status === 'pending' ? db.visits.filter((x) => x.patientId === a.patientId && x.deptId === a.deptId && x.date > find.visit(a.visitId)!.date && x.status !== 'cancelled').sort((x, y) => x.date.localeCompare(y.date))[0] : undefined
+  return {
+    ...a, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', phone: p?.phone ?? '', deptName: nameOf.dept(a.deptId), ...(a.doctorId ? { doctorName: nameOf.doctor(a.doctorId) } : {}),
+    adviserName: nameOf.doctor(a.doctorOf), statusLabel: ADVICE_STATUS_LABEL[a.status], state: adviceState(a, t),
+    ...(bv ? { bookedText: `${bv.date.slice(5).replace('-', '/')} ${periodLabel[find.session(bv.sessionId)?.period ?? 'AM']} ${nameOf.doctor(bv.doctorId)} 第 ${bv.seqNo} 號` } : {}),
+    ...(later ? { laterVisit: { visitId: later.id, date: later.date, doctorName: nameOf.doctor(later.doctorId), status: later.status } } : {}),
+  }
+}
+
+/** 看診頁：寫建議回診可以選的科別、醫師，以及這次已寫的建議 */
+export function adviceOptions(visitId: string): Promise<{ depts: { id: string; name: string }[]; doctors: { id: string; name: string; deptId: string }[]; mine: AdviceView[] }> {
+  return query(() => {
+    const { v } = followUpSource(visitId)
+    const erDept = db.departments.find((d) => d.code === 'ER')?.id
+    // 有開門診的科（放射科、感染科這類沒有門診診次的不列）
+    const depts = db.departments.filter((d) => d.active && d.id !== erDept && db.doctors.some((x) => x.deptId === d.id && x.active) && db.sessions.some((s) => s.deptId === d.id && s.period !== 'ER')).map((d) => ({ id: d.id, name: d.name }))
+    return {
+      depts, doctors: db.doctors.filter((d) => d.active && depts.some((x) => x.id === d.deptId)).map((d) => ({ id: d.id, name: d.name, deptId: d.deptId })),
+      mine: db.followUpAdvices.filter((a) => a.visitId === v.id).map((a) => adviceView(a)),
+    }
+  })
+}
+
+/** 醫師寫建議回診（今天自己看的病人）：幾週後、哪一科（預設這一科）、指定醫師（可不指定）、原因。同一次看診同一科只能一筆待預約的 */
+export function adviseFollowUp(visitId: string, input: { weeks: number; deptId?: string; doctorId?: string; reason: string }): Promise<AdviceView> {
+  return mutate(() => {
+    const { u, v } = followUpSource(visitId)
+    failFields(checkAdvice(input ?? {}))
+    const deptId = input.deptId || v.deptId
+    const dept = db.departments.find((d) => d.id === deptId && d.active)
+    if (!dept || dept.code === 'ER' || !db.sessions.some((s) => s.deptId === deptId && s.period !== 'ER')) failField('deptId', '請選有開門診的科別')
+    if (input.doctorId && !db.doctors.some((d) => d.id === input.doctorId && d.deptId === deptId && d.active)) failField('doctorId', '指定的醫師不在這一科')
+    if (db.followUpAdvices.some((a) => a.visitId === v.id && a.deptId === deptId && a.status === 'pending')) fail(`這次看診已經建議過${dept!.name}回診了`, 'CONFLICT')
+    const a: FollowUpAdvice = {
+      id: newId('FA'), visitId: v.id, patientId: v.patientId, doctorOf: u.doctorId!, deptId, ...(input.doctorId ? { doctorId: input.doctorId } : {}),
+      weeks: Number(input.weeks), targetDate: addDays(v.date, Number(input.weeks) * 7), reason: input.reason.trim(), at: now(), status: 'pending',
+    }
+    db.followUpAdvices.push(a)
+    audit('建議回診', `${nameOf.patient(v.patientId)}：${a.weeks} 週後（${a.targetDate}）${dept!.name}${a.doctorId ? ` ${nameOf.doctor(a.doctorId)}` : ''}，${a.reason}（交給櫃台掛號）`)
+    return adviceView(a)
+  })
+}
+
+/** 醫師撤回還沒處理的建議（寫錯了） */
+export function cancelAdvice(id: string): Promise<{ ok: true }> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const a = must(db.followUpAdvices.find((x) => x.id === id), '建議回診')
+    if (a.doctorOf !== u.doctorId) fail('只能撤回自己寫的建議', 'FORBIDDEN')
+    if (a.status !== 'pending') fail('櫃台已經處理了，不能撤回', 'CONFLICT')
+    db.followUpAdvices = db.followUpAdvices.filter((x) => x.id !== id)
+    audit('建議回診撤回', `${nameOf.patient(a.patientId)} ${nameOf.dept(a.deptId)}（${a.reason}）`)
+    return { ok: true as const }
+  })
+}
+
+/** 櫃台「待預約回診」：待預約的（過期、該掛、還早；建議日早的在前）；includeClosed 連處理過的（最近 30 天） */
+export function listAdvices(q: { includeClosed?: boolean } = {}): Promise<AdviceView[]> {
+  return query(() => {
+    requirePermission('visit.register')
+    const t = today()
+    const ORDER: Record<AdviceState, number> = { overdue: 0, due: 1, upcoming: 2, closed: 3 }
+    return db.followUpAdvices
+      .filter((a) => a.status === 'pending' || (q.includeClosed && (a.closedAt ?? '') >= addDays(t, -30)))
+      .map((a) => adviceView(a, t))
+      .sort((x, y) => ORDER[x.state] - ORDER[y.state] || x.targetDate.localeCompare(y.targetDate))
+  })
+}
+
+/** 建議回診可以掛的診次（某天這一科；指定的醫師在前） */
+export function adviceSessions(id: string, date: string): Promise<FollowUpSession[]> {
+  return query(() => {
+    requirePermission('visit.register')
+    const a = must(db.followUpAdvices.find((x) => x.id === id), '建議回診')
+    if (date <= today()) fail('請選明天以後')
+    if (ensureSessions(date)) commitIfPossible()
+    return db.sessions.filter((s) => s.date === date && s.deptId === a.deptId).map((s) => followUpSession(s, a.doctorId ?? ''))
+      .sort((x, y) => Number(y.mine) - Number(x.mine) || PERIOD_ORDER[x.period] - PERIOD_ORDER[y.period])
+  })
+}
+
+/** 櫃台依建議掛號：掛進這一科的診次（指定醫師的要掛那位）；算「醫師約的回診」（沒來會進預約未到追蹤） */
+export function bookAdvice(id: string, sessionId: string): Promise<AdviceView> {
+  return mutate(() => {
+    const u = requirePermission('visit.register')
+    const a = must(db.followUpAdvices.find((x) => x.id === id), '建議回診')
+    if (a.status !== 'pending') fail('這筆已經處理過了', 'CONFLICT')
+    const date = (sessionId ?? '').slice(1, 9).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+    if (date <= today()) fail('請約明天以後')
+    ensureSessions(date)
+    const s = must(find.session(sessionId), '診次')
+    if (s.deptId !== a.deptId) fail(`建議的是${nameOf.dept(a.deptId)}`, 'CONFLICT')
+    if (a.doctorId && s.doctorId !== a.doctorId) fail(`醫師指定看 ${nameOf.doctor(a.doctorId)}：請選他的診（病人要換醫師請先問過）`, 'CONFLICT')
+    const src = must(find.visit(a.visitId), '掛號紀錄')
+    const caseType = src.caseType === 'A3' || src.caseType === '08' ? '01' : src.caseType
+    const nv = createVisit({ patientId: a.patientId, sessionId: s.id, identityCode: src.identityCode, caseType })
+    nv.followUpOf = { visitId: a.visitId, doctorId: a.doctorOf, at: now() }
+    Object.assign(a, { status: 'booked', bookedVisitId: nv.id, closedAt: now(), closedBy: u.id })
+    audit('建議回診掛號', `${nameOf.patient(a.patientId)} → ${s.date} ${periodLabel[s.period]} ${nameOf.doctor(s.doctorId)} #${nv.seqNo}（${nameOf.doctor(a.doctorOf)} 建議：${a.reason}）`)
+    return adviceView(a)
+  })
+}
+
+/** 櫃台結案：病人說會自己掛（self）或不回診（declined），寫說明 */
+export function closeAdvice(id: string, input: { result: 'self' | 'declined'; note?: string }): Promise<AdviceView> {
+  return mutate(() => {
+    const u = requirePermission('visit.register')
+    const a = must(db.followUpAdvices.find((x) => x.id === id), '建議回診')
+    if (a.status !== 'pending') fail('這筆已經處理過了', 'CONFLICT')
+    if (input?.result !== 'self' && input?.result !== 'declined') failField('result', '請選病人自己掛或不回診')
+    if (input.result === 'declined' && !input.note?.trim()) failField('note', '病人不回診要寫原因（例：改到別家醫院）')
+    Object.assign(a, { status: input.result, closedAt: now(), closedBy: u.id, ...(input.note?.trim() ? { note: input.note.trim() } : {}) })
+    audit('建議回診結案', `${nameOf.patient(a.patientId)} ${nameOf.dept(a.deptId)}：${ADVICE_STATUS_LABEL[a.status]}${a.note ? `（${a.note}）` : ''}`)
+    return adviceView(a)
   })
 }

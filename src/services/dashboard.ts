@@ -1,7 +1,7 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { commitIfPossible, db } from '@/mock/db'
 import { riskStateOf } from './risk-work'
-import { isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
+import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today, addMinutes } from '@/utils/date'
 import { permissionsOf, query, sessionRole, sessionUser } from './http'
 import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
@@ -232,6 +232,9 @@ export interface DashboardStats {
   ipdInterim: number
   /** 預約未到、臨床上要追（出院後回診、醫師約的回診、慢性病）、最近 14 天、還沒結案的（櫃台待辦；和未到追蹤清單同一個判斷） */
   noShowsToFollow: number
+  /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
+  adviceToBook: number
+  adviceOverdue: number
   /** 准出院、出院帶藥還沒調劑（住院藥局待辦） */
   dischargeRxToDispense: number
   wardCountDue: number
@@ -318,6 +321,7 @@ export function getDashboard(): Promise<DashboardStats> {
         const rs = riskStateOf(a, now())
         return n + Number(rs.fall.due.status === 'overdue') + Number(rs.pressure.due.status === 'overdue')
       }, 0),
+      ...((xs) => ({ adviceToBook: xs.filter((s) => s === 'due' || s === 'overdue').length, adviceOverdue: xs.filter((s) => s === 'overdue').length }))(db.followUpAdvices.map((a) => adviceState(a, today()))),
       noShowsToFollow: db.visits.filter((v) => isNoShow(v, today()) && v.date >= addDays(today(), -NO_SHOW_TRACK_DAYS) && isImportantNoShow(v) && !noShowClosed(v)).length,
       ipdInterim: db.admissions.filter((a) => a.status === 'admitted' && !a.dischargeSummary?.signedAt && !activeIpdChargeOf(a.id) && !!interimSuggestion(a, ipdBillOf(a))).length,
       wardRefillDue: db.wardStockItems.filter((x) => { const l = stockLoc.ward(x.ward); return l && usableQty(stockLoc.lots(x.drugId, l.id), now()) < x.par }).length,
