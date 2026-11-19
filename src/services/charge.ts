@@ -32,7 +32,7 @@ export function listChargeQueue(date: string): Promise<ChargeListItem[]> {
       .filter((v) => (v.date === date || v.er?.obsEnd?.at.slice(0, 10) === date) && ['consulted', 'charged', 'dispensed'].includes(v.status) && erBillMode(v.er) === 'opd')
       .map((v) => ({
         ...visitView(v),
-        charge: db.charges.find((c) => c.visitId === v.id && !c.voided),
+        charge: db.charges.find((c) => c.visitId === v.id && !c.voided && !c.supplementOf),
         estimate: v.status === 'consulted' ? buildPreview(v.id).patientTotal : undefined,
       }))
       .map((x) => {
@@ -505,6 +505,7 @@ export function markProcedureNotDone(chargeId: string, idx: number, reason: stri
     const x = e.procedures[idx]
     if (!x) fail('找不到這項檢驗或處置，請重新整理')
     if (x.notDone) fail('這一項已經標未執行了', 'CONFLICT')
+    if (x.addon) fail('門診加做不在這張收據裡（自費的補收收據另外作廢退費）', 'CONFLICT')
     // 檢驗已經發報告：做過了，不能說沒做（要退費得先請檢驗科處理）
     if (db.labReports.some((r) => r.encounterId === e.id && r.procId === x.procId) || db.imagingReports.some((r) => r.encounterId === e.id && r.procId === x.procId)) fail(`「${find.procedure(x.procId)?.name}」已經發出報告，不能標未執行`, 'CONFLICT')
     const why = reason?.trim()
@@ -598,7 +599,7 @@ export interface ChargeDetail {
 export function getChargeDetail(visitId: string, discountCode?: string): Promise<ChargeDetail> {
   return query(() => {
     const v = must(find.visit(visitId), '掛號紀錄')
-    const charge = db.charges.find((c) => c.visitId === visitId && !c.voided)
+    const charge = db.charges.find((c) => c.visitId === visitId && !c.voided && !c.supplementOf)
     let preview: ChargePreview | undefined
     let discountError: string | undefined
     if (v.status === 'consulted') {

@@ -3110,7 +3110,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         ...(i ? { calls: [clamp(addMinutes(at, 1))], servedAt: clamp(addMinutes(at, i === 1 ? 3 : 2)) } : { priority: priorityOf(ageOf(pt.birthDate, T), 'mobility') }),
       })
       const keys = plan[i].map((p) => `E:${x.e.id}:${p}`)
-      if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601' })
+      if (i === 1) specimens.push({ id: 'SP-OPD-2', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'red', orderIds: [], opdKeys: keys, createdAt: addMinutes(at, 3), printedAt: addMinutes(at, 3), printedBy: 'U601', collectedAt: addMinutes(at, 5), collectedBy: 'U601', receivedAt: clamp(addMinutes(at, 15)), receivedBy: 'U601' })
+      // 門診加做（示範）：第 2 位的紅頭收件後，醫師補開 GPT（自費），用同一支檢體、不用再抽——待批價補繳（收據不動）
+      if (i === 1) {
+        const doc = users.find((u) => u.doctorId === x.e.doctorId)
+        const p009 = procMap.get('P009')!
+        x.e.procedures.push({ procId: 'P009', qty: 1, selfPay: true, addon: { specimenId: 'SP-OPD-2', at: clamp(addMinutes(at, 25)), by: doc?.id ?? 'U001', selfPay: true, amount: p009.selfPrice } })
+        specimens.find((s) => s.id === 'SP-OPD-2')!.opdKeys!.push(`E:${x.e.id}:P009`)
+      }
       if (i === 2) specimens.push({ id: 'SP-OPD-3', barcode: `S${day}8${String(++n).padStart(3, '0')}`, patientId: x.v.patientId, tube: 'urine', orderIds: [], opdKeys: keys, selfCollect: true, createdAt: addMinutes(at, 2), printedAt: addMinutes(at, 2), printedBy: 'U601' })
     })
     // 今天已批價、本來就有開檢驗的門診病人（隨日期不同，有時有、有時沒有）：批價後就來報到，已抽血、檢驗科已收件（留在待檢驗）。

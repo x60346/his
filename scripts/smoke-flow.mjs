@@ -11294,7 +11294,7 @@ try {
     ok(p1 && p2 && p3 && d.checkedIn.map((p) => p.checkin.no).join() === [...Array(n0).keys()].map((i) => i + 1).join() && !d.notCheckedIn.length, `種子：今天 ${n0} 位報到（號碼依報到時間 1–${n0} 號），沒有待報到的`)
     ok(others.every((p) => !p.toPrint.length && p.specimens.length && p.specimens.every((s) => s.stage !== 'printed')), `種子：本來就有開檢驗的 ${others.length} 位已抽完血（不會留在待報到、待採檢）`)
     ok(p1.toPrint.length === 1 && p1.toPrint[0].tube === 'purple' && !p1.specimens.length, '1 號：CBC 待印條碼（紫頭）')
-    ok(!p2.toPrint.length && p2.specimens.length === 1 && p2.specimens[0].tube === 'red' && p2.specimens[0].tests.length === 2 && p2.specimens[0].stage === 'collected', '2 號：飯前血糖＋肌酸酐同一支紅頭、已採檢待收件')
+    ok(!p2.toPrint.length && p2.specimens.length === 1 && p2.specimens[0].tube === 'red' && p2.specimens[0].tests.length === 3 && p2.specimens[0].stage === 'received', '2 號：飯前血糖＋肌酸酐同一支紅頭、已收件（醫師又補開 GPT 加做在同一支）')
     ok(p3.specimens[0].selfCollect && p3.specimens[0].stageLabel === '容器已發、待交回', '3 號：尿液容器已發、待交回')
     let dash = await api.dashboardApi.getDashboard()
     ok(dash.deskToCollect === 2 && dash.specimenToReceive >= 1, `首頁：抽血櫃台待採檢 ${dash.deskToCollect} 位（2 號已採檢不算）、檢體待收件 ${dash.specimenToReceive}`)
@@ -11358,7 +11358,7 @@ try {
     await api.specimenApi.rejectSpecimen(p2.specimens[0].barcode, '溶血')
     d = await D.labDesk()
     const r2 = d.checkedIn.find((x) => x.patientId === p2.patientId)
-    ok(r2.recollect && r2.toPrint.length === 1 && r2.toPrint[0].tests.length === 2, '退件：兩項回到待印條碼（仍合併一支）、提示重新採檢')
+    ok(r2.recollect && r2.toPrint.length === 1 && r2.toPrint[0].tests.length === 3, '退件：三項（含加做的 GPT）回到待印條碼（仍合併一支）、提示重新採檢')
     dash = await api.dashboardApi.getDashboard()
     ok(dash.deskToCollect === 1, `首頁待採檢：${dash.deskToCollect} 位（退件的 2 號）`)
   }
@@ -12622,6 +12622,114 @@ try {
     await as('nurse01')
     msg = await errOf(() => E.addDowntime({ room: 'CT', from: dateUtil.now(), to: dateUtil.addMinutes(dateUtil.now(), 60), reason: 'breakdown' }))
     ok(msg.includes('權限'), '護理師不能登記停機')
+  }
+
+  // 門診加做（補收費）：種子（自費 GPT 待補繳）、檢驗科擋與上機只跑已繳的、補收收據（不是主收據、日結照算）、繳完可發；
+  // 醫師補開（健保免繳、已開過、管別、時限、非檢驗、急診、沒批價、別的醫師）、不能標未執行
+  console.log('\n[門診加做與補收]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const O = api.opdAddonApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const sp = db().specimens.find((s) => s.id === 'SP-OPD-2')
+    const key = sp.opdKeys.find((k) => k.endsWith(':P009'))
+    const encId = key.split(':')[1]
+    const enc = () => db().encounters.find((e) => e.id === encId)
+    const price = db().procedures.find((p) => p.id === 'P009').selfPrice
+
+    // 種子：自費 GPT 待補繳
+    await as('clerk01')
+    let due = await O.listAddonDue()
+    ok(due.length === 1 && due[0].procId === 'P009' && due[0].amount === price && due[0].encounterId === encId, `種子：門診加做 GPT 自費 ${price} 元待補收`)
+    await as('lab01')
+    const w = (await api.labApi.listLabWork()).find((x) => x.key === key)
+    ok(w?.addon === sp.barcode && w.awaitingPayment && !w.awaitingCollection && w.awaitingReceipt === undefined, '檢驗科清單：加做（條碼）、待補繳；不用再採檢')
+    let msg = await errOf(() => labRaw.reportLab({ key, values: { GPT: '30' } }))
+    ok(msg.includes('補繳'), `還沒補繳不能發 → 「${msg}」`)
+    const ld = await api.analyzerApi.loadAnalyzer(sp.barcode)
+    ok(ld.results.length && !ld.results.some((x) => x.procId === 'P009'), '上機：只跑已經可以做的（待補繳的 GPT 不跑）')
+
+    // 補收：金額不對擋 → 補收收據（不是主收據）→ 日結照算 → 可以發
+    await as('clerk01')
+    const before = await api.chargeApi.dailyReport(T)
+    let f = await fieldsOf(() => O.payAddon(encId, 'P009', { payMethod: 'cash', received: price - 1 }))
+    ok(f.received, '現金不夠 → 擋')
+    const main = db().charges.find((c) => c.visitId === enc().visitId && !c.voided && !c.supplementOf)
+    const c = await O.payAddon(encId, 'P009', { payMethod: 'cash', received: price })
+    ok(c.supplementOf === main.id && c.patientTotal === price && c.receiptNo !== main.receiptNo && c.lines[0].name.includes('加做') && enc().procedures.find((p) => p.procId === 'P009').addon.chargeId === c.id && db().auditLogs[0].action === '門診加做補收', `補收收據 ${c.receiptNo}（補 ${main.receiptNo}）`)
+    msg = await errOf(() => O.payAddon(encId, 'P009', { payMethod: 'card' }))
+    ok(msg.includes('已經補繳'), '不能重複補收')
+    const q = (await api.chargeApi.listChargeQueue(T)).find((x) => x.id === enc().visitId)
+    ok(q?.charge?.id === main.id, '批價清單的收據還是主收據')
+    const after = await api.chargeApi.dailyReport(T)
+    ok(after.byPayMethod.cash - before.byPayMethod.cash === price, `日結：現金多 ${price} 元（補收收據照算）`)
+    ok(!(await O.listAddonDue()).length, '待補收清空')
+    msg = await errOf(() => api.chargeApi.markProcedureNotDone(main.id, enc().procedures.findIndex((p) => p.procId === 'P009'), '沒做'))
+    ok(msg.includes('加做'), '加做不能在主收據標未執行')
+    await as('lab01')
+    const rep = await labRaw.reportLab({ key, values: { GPT: '30' } })
+    ok(rep.encounterId === encId && rep.procId === 'P009', '補繳後可以發報告（不用再抽）')
+
+    // 醫師補開：健保免繳
+    const doc = userOf(enc().doctorId)
+    await as(doc)
+    let o = await O.opdAddonOption(encId, 'P006')
+    ok(o.ok && o.specimen.barcode === sp.barcode && o.specimen.tests.length === 3 && !o.selfPayVisit, `可以加做：總膽固醇用 ${o.specimen?.barcode}，可加做到 ${o.specimen?.until.slice(5)}`)
+    const add = await O.addOpdLab(encId, 'P006')
+    ok(add.due === 0 && db().specimens.find((s) => s.id === 'SP-OPD-2').opdKeys.includes(`E:${encId}:P006`) && enc().procedures.find((p) => p.procId === 'P006').addon && db().auditLogs[0].detail.includes('健保'), '補開（健保）：掛到同一支、不用補繳')
+    await as('lab01')
+    const w6 = (await api.labApi.listLabWork()).find((x) => x.key === `E:${encId}:P006`)
+    ok(w6?.addon && !w6.awaitingPayment, '檢驗科可以直接做')
+    await as('clerk01')
+    ok(!(await O.listAddonDue()).length, '健保的不會出現在待補收')
+    // 不能加做的
+    await as(doc)
+    o = await O.opdAddonOption(encId, 'P004')
+    ok(!o.ok && o.reason.includes('開過'), '已經開過的不能再開')
+    o = await O.opdAddonOption(encId, 'P003')
+    ok(!o.ok && o.reason, `沒有紫頭檢體 → 「${o.reason}」`)
+    msg = await errOf(() => O.addOpdLab(encId, 'P003'))
+    ok(msg.includes('重新採檢'), '補開也擋')
+    msg = await errOf(() => O.opdAddonOption(encId, 'P013'))
+    ok(msg.includes('只有檢驗'), '影像不能加做')
+    const old = db().specimens.find((s) => s.id === 'SP-OPD-2')
+    const keep = old.collectedAt
+    old.collectedAt = dateUtil.addMinutes(dateUtil.now(), -25 * 60)
+    o = await O.opdAddonOption(encId, 'P007')
+    ok(!o.ok, `超過 24 小時 → 「${o.reason}」`)
+    db().specimens.find((s) => s.id === 'SP-OPD-2').collectedAt = keep
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== enc().doctorId && u.roles.includes('doctor')).username
+    await as(other)
+    msg = await errOf(() => O.addOpdLab(encId, 'P007'))
+    ok(msg.includes('看診的醫師'), '別的醫師不能補開')
+    const erEnc = db().encounters.find((e) => e.visitId === 'V-ER-LAB-1')
+    await as(userOf(erEnc.doctorId))
+    msg = await errOf(() => O.opdAddonOption(erEnc.id, 'P007'))
+    ok(msg.includes('急診'), '急診的直接在看診中開')
+    const unpaid = db().encounters.find((e) => e.status === 'completed' && db().visits.find((v) => v.id === e.visitId)?.status === 'consulted' && !db().visits.find((v) => v.id === e.visitId)?.er)
+    await as(userOf(unpaid.doctorId))
+    msg = await errOf(() => O.opdAddonOption(unpaid.id, 'P007'))
+    ok(msg.includes('批價後'), '還沒批價的直接加在醫令裡')
+    await as('nurse01')
+    msg = await errOf(() => O.addOpdLab(encId, 'P007'))
+    ok(msg.includes('權限'), '護理師不能補開')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計

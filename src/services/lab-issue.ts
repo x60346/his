@@ -34,6 +34,7 @@ export function labTarget(key: string): Pick<LabReport, 'patientId' | 'procId' |
         if (!x!.orderedAt && e.status !== 'completed') fail('醫師還沒送出這項檢驗', 'CONFLICT')
       } else if (v?.status !== 'charged' && v?.status !== 'dispensed') fail('病人還沒批價，請先到批價櫃台', 'CONFLICT')
       if (reportedOpd(e.id, b)) fail('這項已經發過報告了；要改請用「更正」', 'CONFLICT')
+      if (x!.addon?.selfPay && !x!.addon.chargeId) fail('門診加做（自費）還沒到批價補繳，繳完才能發報告', 'CONFLICT')
       const sp = opdSpecimenOf(key)
       if (!sp?.collectedAt) fail(v?.er ? '急診護理師還沒床邊採檢，不能發報告' : '病人還沒在抽血櫃台採檢（或還沒交回檢體），不能發報告', 'CONFLICT')
       if (!sp!.receivedAt) fail(`檢體還沒收件（條碼 ${sp!.barcode}），請先在「待收件」掃條碼收件`, 'CONFLICT')

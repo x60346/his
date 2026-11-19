@@ -22,6 +22,7 @@ import LabReportList from '@/components/LabReportList.vue'
 import FollowUpDialog from './components/FollowUpDialog.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import ReferralPanel from '@/components/ReferralPanel.vue'
+import OpdAddonPanel from '@/components/OpdAddonPanel.vue'
 import ReferralReplyDialog from '@/components/ReferralReplyDialog.vue'
 import RxAlertList from '@/components/RxAlertList.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
@@ -707,6 +708,7 @@ const lastOpen = ref(true)
             <section>
               <h3 class="mb-2 text-sm font-semibold text-slate-700">處置・檢驗・影像</h3>
               <ProcedureEditor v-model="draft.procedures" :procs="procs" :readonly="!editable" />
+              <OpdAddonPanel v-if="encounter && encounter.status === 'completed' && !visit.er && ['charged', 'dispensed'].includes(visit.status) && encounter.date === todayStr" class="mt-2" :encounter="encounter" :procs="procList ?? []" />
             </section>
             <section class="flex flex-wrap items-end gap-6 border-t border-slate-100 pt-4">
               <div v-if="['04', '08'].includes(visit.caseType)" class="w-48">

@@ -97,7 +97,7 @@ export type EncounterDraft = Pick<
 const cleanDraft = (d: EncounterDraft): EncounterDraft => {
   const c = structuredClone(d)
   // 急診檢驗的送出時間由服務層蓋（stampErLabs），畫面送來的不收
-  if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, orderedAt: _o, ...p }) => p)
+  if (c.procedures) c.procedures = c.procedures.map(({ notDone: _, orderedAt: _o, addon: _a, ...p }) => p)
   // 用藥提醒的確認只在完成看診時由服務層算好存，畫面送來的不收
   delete (c as Partial<Encounter>).rxAlerts
   return c

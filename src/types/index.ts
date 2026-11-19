@@ -482,6 +482,11 @@ export interface ProcedureOrder {
   notDone?: { reason: string; by: string; at: string; settledAt?: string }
   /** 急診檢驗：醫師存病歷時送出的時間（服務層蓋，畫面送來的不收）；送出後檢驗科、急診護理師就看得到，不用等完成看診與批價 */
   orderedAt?: string
+  /**
+   * 門診加做（看診、批價之後補開的檢驗）：掛在今天已收件的同管別檢體上，不用再抽。
+   * 自費的要先到批價補繳（chargeId＝補收收據），繳完檢驗科才能發報告；健保的不用補繳
+   */
+  addon?: { specimenId: string; at: string; by: string; selfPay: boolean; amount: number; chargeId?: string }
 }
 
 export type EncounterStatus = 'draft' | 'completed'
@@ -577,6 +582,8 @@ export interface Charge {
   visitId: string
   /** 住院結帳：哪一次住院（門診收據沒有） */
   admissionId?: string
+  /** 門診加做的補收收據：補的是哪一張收據（同一次就醫；不是這次就醫的主收據） */
+  supplementOf?: string
   /** 病歷影本申請的收據（沒有掛號、沒有住院；visitId 為空字串） */
   copyRequestId?: string
   /** 住院結帳的計費期間與部分負擔分段（收據、帳單顯示用；結帳時就存下，之後設定改了也不變） */

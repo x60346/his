@@ -14,7 +14,7 @@ import ReceiptCard from './components/ReceiptCard.vue'
 import DailyReport from './components/DailyReport.vue'
 import IpdBillingPanel from './components/IpdBillingPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
-import { chargeApi, checkCash, checkRepay, discountSummary } from '@/services'
+import { chargeApi, checkCash, checkRepay, discountSummary, opdAddonApi } from '@/services'
 import type { DebtItem, ReceiptProcedure } from '@/services/charge'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
@@ -210,6 +210,9 @@ async function onRefund() {
 
 // ---------- 部分退費：藥局部分退藥後，退差額（金額由服務層重算；可能是前幾天看的診，所以另外列一張清單） ----------
 const { data: pendingRefunds } = useQuery(() => chargeApi.listPendingRefunds())
+// 門診加做（自費）待補收：收完開補收收據，檢驗科才能發報告
+const { data: addonDue } = useQuery(() => opdAddonApi.listAddonDue())
+const payAddon = useAction(opdAddonApi.payAddon, { success: (c) => `已補收 ${c.patientTotal} 元（${c.receiptNo}），檢驗科可以發報告` })
 const partialOpen = ref(false)
 const partialAction = useAction(chargeApi.refundReturnedDrugs, {
   success: (c) => {
@@ -253,6 +256,14 @@ const identityOpen = ref(false)
             <span class="min-w-0 flex-1 truncate">{{ r.patientName }} <span class="tabular text-xs text-slate-500">{{ r.date.slice(5).replace('-', '/') }} {{ r.deptName }}</span></span>
             <span class="tabular text-xs font-semibold text-red-800">{{ r.pending.amount ? `退 $${r.pending.amount}` : '改點數' }}</span>
           </button>
+        </div>
+        <div v-if="addonDue?.length" class="border-b border-amber-100 bg-amber-50/60 px-3 py-2">
+          <div class="mb-1 text-xs font-semibold text-amber-900">門診加做待補收（自費）{{ addonDue.length }} 筆</div>
+          <div v-for="a in addonDue" :key="`${a.encounterId}:${a.procId}`" class="flex flex-wrap items-center gap-2 py-1 text-sm">
+            <span class="min-w-0 flex-1 truncate">{{ a.patientName }} <span class="text-xs text-slate-500">{{ a.procName }}・{{ a.doctorName }} {{ a.at.slice(11) }}</span></span>
+            <UButton size="sm" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'cash', received: a.amount })">現金 ${{ a.amount }}</UButton>
+            <UButton size="sm" variant="secondary" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'card' })">刷卡</UButton>
+          </div>
         </div>
         <UQueryState :loading="listLoading" :ready="!!shown.length" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的病人` : '沒有看診完成的病人'">
         <ul class="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">

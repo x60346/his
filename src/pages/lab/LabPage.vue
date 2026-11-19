@@ -29,7 +29,7 @@ const mode = ref<'lab' | 'qc' | 'desk' | 'analyzer'>((['qc', 'desk', 'analyzer']
 watch(mode, (m) => router.replace({ query: m === 'lab' ? {} : { tab: m } }))
 const modes = [{ key: 'lab', label: '檢驗' }, { key: 'desk', label: '抽血櫃台' }, { key: 'analyzer', label: '儀器' }, { key: 'qc', label: '品管' }]
 // 住院檢驗：還沒採檢、或已採檢但檢驗科還沒收件（條碼）的，列在清單上但不能登打
-const blocked = (w: { awaitingCollection?: boolean; awaitingReceipt?: string; analyzerHeld?: boolean }) => !!w.awaitingCollection || w.awaitingReceipt !== undefined || !!w.analyzerHeld
+const blocked = (w: { awaitingCollection?: boolean; awaitingReceipt?: string; analyzerHeld?: boolean; awaitingPayment?: boolean }) => !!w.awaitingCollection || w.awaitingReceipt !== undefined || !!w.analyzerHeld || !!w.awaitingPayment
 const date = ref(today())
 const todayStr = followToday(date)
 const { data: work, loading } = useQuery(() => labApi.listLabWork())
@@ -136,6 +136,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
               <UBadge v-if="w.awaitingCollection" tone="gray">待採檢</UBadge>
               <UBadge v-else-if="w.awaitingReceipt !== undefined" tone="yellow">待收件</UBadge>
               <UBadge v-else-if="w.analyzerHeld" tone="red">儀器待審核</UBadge>
+              <UBadge v-else-if="w.awaitingPayment" tone="yellow" :title="`加做：條碼 ${w.addon}`">加做・待補繳</UBadge>
               <UBadge v-else-if="w.addon" tone="green" :title="`加做：條碼 ${w.addon}`">加做</UBadge>
               <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
@@ -175,6 +176,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
       </template>
       <div v-if="item?.awaitingCollection" class="mx-4 mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600" role="status">{{ item.source === 'opd' ? '病人還沒在抽血櫃台採檢（或還沒交回檢體）' : '護理師還沒採檢（臨時醫囑還沒執行）' }}，採檢、收件後才能登打。</div>
       <div v-else-if="item && item.awaitingReceipt !== undefined" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">檢體已採檢（條碼 {{ item.awaitingReceipt }}），請先在「檢體待收件」收件後才能登打。</div>
+      <div v-else-if="item?.awaitingPayment" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">門診加做（自費，條碼 {{ item.addon }}）：病人還沒到批價補繳，繳完才能發報告。</div>
       <div v-else-if="item?.analyzerHeld" class="mx-4 mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" role="status">儀器結果沒通過自動審核，請到上方「儀器」分頁確認發出或重測。</div>
       <div v-if="report?.needsAck" class="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">醫師還沒確認（{{ report.hasCritical ? '危急值' : '更正過' }}）：已出現在醫師首頁。</div>
       <div v-else-if="report?.ackAt" class="mx-4 mt-3 text-xs text-slate-500">醫師 {{ report.ackByName }} 已於 {{ whenText(report.ackAt) }} 確認</div>

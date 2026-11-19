@@ -34,6 +34,8 @@ export interface LabWorkItem {
   addon?: string
   /** 急診的檢驗（床邊採檢、不經抽血櫃台） */
   er?: boolean
+  /** 門診加做：自費還沒到批價補繳（繳完才能發報告） */
+  awaitingPayment?: boolean
   /** 檢驗值的定義（畫面用同一個 judgeLab 即時標示偏高偏低）＋這位病人的參考範圍文字 */
   items: (LabItemDef & { ref: string })[]
 }
@@ -68,7 +70,8 @@ export function pendingLabWork(): LabWorkItem[] {
       if (!paid && !x.orderedAt) continue
       // 門診：抽血櫃台採檢（或病人交回容器）；急診：急診護理師床邊採檢。檢驗科收件後才能登打
       const sp = opdSpecimenOf(`E:${e.id}:${x.procId}`)
-      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: v.er ? '急診' : `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: x.orderedAt ?? e.completedAt ?? e.date, ...(v.er ? { er: true } : {}), ...(!sp?.collectedAt ? { awaitingCollection: true } : !sp.receivedAt ? { awaitingReceipt: sp.barcode } : {}) }))
+      list.push(workItem({ key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, patientId: e.patientId, where: v.er ? '急診' : `${nameOf.dept(e.deptId)}門診`, doctorName: nameOf.doctor(e.doctorId), orderedAt: x.addon?.at ?? x.orderedAt ?? e.completedAt ?? e.date, ...(v.er ? { er: true } : {}),
+        ...(x.addon ? { addon: db.specimens.find((s) => s.id === x.addon!.specimenId)?.barcode ?? '', ...(x.addon.selfPay && !x.addon.chargeId ? { awaitingPayment: true } : {}) } : {}), ...(!sp?.collectedAt ? { awaitingCollection: true } : !sp.receivedAt ? { awaitingReceipt: sp.barcode } : {}) }))
     }
   }
   for (const o of db.ipdOrders) {
@@ -93,7 +96,7 @@ export function canAckLab(r: LabReport, doctorId?: string): boolean {
 }
 
 /** 首頁：可以登打的待檢驗（住院還沒採檢、還沒收件的不算）；某醫師待確認的報告份數 */
-export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined && !w.analyzerHeld).length
+export const labWorkCount = () => pendingLabWork().filter((w) => !w.awaitingCollection && w.awaitingReceipt === undefined && !w.analyzerHeld && !w.awaitingPayment).length
 /** 檢驗儀器：待審核的儀器結果 */
 export const analyzerHeldCount = () => db.analyzerResults.filter((x) => x.status === 'held').length
 export const labAckCount = (doctorId: string) => db.labReports.filter((r) => labNeedsAck(r) && canAckLab(r, doctorId)).length

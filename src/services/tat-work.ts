@@ -23,7 +23,7 @@ export function tatTimesOf(key: string): (TatTimes & { priority: TatPriority }) 
     const e = db.encounters.find((x) => x.id === a)
     const v = e && find.visit(e.visitId)
     if (!e || !v) return undefined
-    const paid = db.charges.find((c) => c.visitId === v.id && !c.voided)?.paidAt
+    const paid = db.charges.find((c) => c.visitId === v.id && !c.voided && !c.supplementOf)?.paidAt
     // 急診從醫師送出算（舊資料沒有送出時間的用看完診）
     const start = v.er ? e.procedures.find((p) => p.procId === procId)?.orderedAt ?? e.completedAt : paid
     if (!start) return undefined

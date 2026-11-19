@@ -15,7 +15,7 @@ export const nextReceiptNo = (date: string) => `R${date.replace(/-/g, '')}${Stri
 export const nextRefundNo = (date: string) => `RF${date.replace(/-/g, '')}${String(nextCounter(`refund:${date}`)).padStart(4, '0')}`
 
 /** 這次就醫目前有效的收據（沒作廢、沒退費） */
-export const activeChargeOf = (visitId: string): Charge | undefined => db.charges.find((c) => c.visitId === visitId && !c.voided)
+export const activeChargeOf = (visitId: string): Charge | undefined => db.charges.find((c) => c.visitId === visitId && !c.voided && !c.supplementOf)
 
 /** 預收款還在醫院手上的（收了 − 已退還） */
 export const prepayHeld = (v: Pick<Visit, 'prepay'>): number => (v.prepay ? v.prepay.amount - v.prepay.refunds.reduce((n, r) => n + r.amount, 0) : 0)

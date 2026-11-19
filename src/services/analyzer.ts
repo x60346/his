@@ -31,7 +31,7 @@ const flat = (p: Record<string, { value: string }>) => Object.fromEntries(Object
 const qcFailed = (codes: string[]) => qcFailedCodes(db.qcRuns, codes, now().slice(0, 10))
 const active = (key: string) => db.analyzerResults.find((x) => x.key === key && (x.status === 'held' || x.status === 'auto'))
 /** 可以上機：收件了、還沒發報告、上儀器的項目、還沒上過機 */
-const loadable = (w: LabWorkItem) => !w.awaitingCollection && w.awaitingReceipt === undefined && isAnalyzerProc(w.procId) && !active(w.key)
+const loadable = (w: LabWorkItem) => !w.awaitingCollection && w.awaitingReceipt === undefined && !w.awaitingPayment && isAnalyzerProc(w.procId) && !active(w.key)
 
 export interface AnalyzerRow {
   code: string
