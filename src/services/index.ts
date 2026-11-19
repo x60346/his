@@ -72,6 +72,7 @@ import * as wardStock from './ward-stock'
 import * as witness from './witness'
 import * as controlled from './controlled'
 import * as lab from './lab'
+import * as tat from './tat'
 import * as imaging from './imaging'
 import * as ipdCharge from './ipd-charge'
 import * as dischargeRx from './discharge-rx'
@@ -149,6 +150,7 @@ export const wardStockApi = overNetwork(wardStock)
 export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
 export const labApi = overNetwork(lab)
+export const tatApi = overNetwork(tat)
 export const imagingApi = overNetwork(imaging)
 export const ipdChargeApi = overNetwork(ipdCharge)
 export const dischargeRxApi = overNetwork(dischargeRx)
@@ -161,6 +163,7 @@ export type { IpdBillingItem, IpdBillView, IpdInterimView, IpdStatement } from '
 export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'
+export type { TatBoard, TatOpenView } from './tat'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'
 export type { PhraseView, PhraseShareTarget, PhraseHospitalTarget } from './phrase'
 export type { OrderSetView, ExpandedOrderSet, ExpandedOrders } from './orderset'
@@ -207,6 +210,7 @@ export * from './medrec-rules'
 export * from './pharmcare-rules'
 export * from './specimen-rules'
 export * from './lab-queue-rules'
+export * from './tat-rules'
 export * from './lab-schedule-rules'
 export * from './qc-rules'
 export * from './analyzer-rules'

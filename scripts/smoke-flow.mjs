@@ -12290,6 +12290,62 @@ try {
     ok(rv && pend.some((x) => x.id === sv3.id && x.dueAt), '嚴重型：24 小時評估期限')
   }
 
+  // 檢驗時效（TAT）：分段、狀態邊界（八成快逾時、超過逾時）、達成率、最常卡哪；種子（急件 CRP 卡在送檢）、急件與一般、門診從批價起算、收件發報告後、首頁、權限
+  console.log('\n[檢驗時效]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const T0 = '2026-11-19'
+    const at = (hm) => `${T0} ${hm}`
+    // 純函式
+    const full = { start: at('10:00'), collectedAt: at('10:20'), receivedAt: at('10:30'), reportedAt: at('10:50') }
+    const sg = api.tatSegments(full, 'x')
+    ok(sg.collect === 20 && sg.transport === 10 && sg.lab === 20 && JSON.stringify(api.tatSegments({ start: at('10:00') }, at('10:15'))) === '{"collect":15}' && api.tatSegments({ start: at('10:00'), collectedAt: at('10:20') }, at('10:45')).transport === 25, '分段：等採檢、送檢、檢驗科內（進行中的算到現在）')
+    ok(api.tatCurrent({ start: 'a' }) === 'collect' && api.tatCurrent({ start: 'a', collectedAt: 'b' }) === 'transport' && api.tatCurrent({ start: 'a', collectedAt: 'b', receivedAt: 'c' }) === 'lab', '現在卡在哪一段')
+    const st = (now) => api.tatStatus({ start: at('10:00') }, 'stat', now).state
+    ok(st(at('10:47')) === 'ok' && st(at('10:48')) === 'warn' && st(at('11:00')) === 'warn' && st(at('11:01')) === 'late', '急件 60 分：用掉八成（48 分）快逾時、超過 60 分逾時')
+    ok(api.tatStatus({ start: at('10:00'), reportedAt: at('10:55') }, 'stat', 'x').state === 'ok' && api.tatStatus({ start: at('10:00'), reportedAt: at('11:10') }, 'stat', 'x').state === 'late' && api.tatStatus({ start: at('10:00') }, 'routine', at('13:00')).state === 'ok' && api.tatStatus({ start: at('10:00') }, 'routine', at('14:01')).state === 'late', '發出的看發出時有沒有超過；一般 240 分')
+    const rt = api.tatRate([{ start: at('10:00'), reportedAt: at('10:50'), priority: 'stat' }, { start: at('10:00'), reportedAt: at('11:10'), priority: 'stat' }, { start: at('10:00'), reportedAt: at('13:00'), priority: 'routine' }, { start: at('10:00'), priority: 'stat' }])
+    ok(api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', at('11:30')).state === 'ok' && api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', '2026-11-20 10:01').state === 'late' && api.TAT_PROC_MINUTES.P057 === 1440, '抗酸菌塗片：時限另訂 24 小時（不照急件 60 分）')
+    ok(rt.stat.total === 2 && rt.stat.pct === 50 && rt.routine.pct === 100 && api.tatRate([]).stat.pct === 100, '達成率：急件、一般分開；沒發的不算')
+    const bn = api.tatBottleneck([{ start: at('10:00'), collectedAt: at('10:10'), receivedAt: at('11:00'), reportedAt: at('11:10'), priority: 'stat' }, { ...full, priority: 'stat' }, { start: at('10:00'), reportedAt: at('12:00'), priority: 'stat' }])
+    ok(bn.length === 1 && bn[0].segment === 'transport' && bn[0].count === 1, '最常卡在哪：逾時的才算、三段都有時間的才算')
+
+    // 種子：骨折病人急件 CRP 採檢後沒送到
+    await as('lab01')
+    let b = await api.tatApi.tatBoard()
+    const crp = b.open.find((x) => x.key === 'O:IO-TAT-1')
+    ok(crp?.state === 'late' && crp.priority === 'stat' && crp.segment === 'transport' && crp.barcode && crp.segments.collect === 15 && crp.segments.transport >= 70 && crp.elapsed >= 85, `種子：急件 CRP ${crp?.elapsed}/60 分逾時、卡在送檢（條碼 ${crp?.barcode} 還沒收件）`)
+    ok(b.open.every((x, i) => !i || b.open[i - 1].limit - b.open[i - 1].elapsed <= x.limit - x.elapsed), '清單：最緊的在前')
+    ok(b.rate.stat.total > 0 && b.rate.routine.total > 0, `近 30 天：急件 ${b.rate.stat.ontime}/${b.rate.stat.total}、一般 ${b.rate.routine.ontime}/${b.rate.routine.total}`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.tatLate >= 1, `檢驗科首頁：逾時未發 ${dash.tatLate}（快逾時 ${dash.tatWarn}）`)
+    // 長期檢驗那一次：一般、從排定時間起算
+    const draw = db().ipdOrders.find((o) => o.parentOrderId && o.status === 'active')
+    const dv = b.open.find((x) => x.key === `O:${draw.id}`)
+    ok(dv?.priority === 'routine' && dv.start === draw.startAt && dv.segment === 'collect', `長期檢驗今天 ${draw.startAt.slice(11)} 那一次：一般 240 分、從排定時間起算、卡在等採檢`)
+    // 門診：從批價起算（測試：把批價時間往前推 200 分鐘＝快逾時）
+    const ow = (await api.labApi.listLabWork()).find((w) => w.source === 'opd' && w.awaitingCollection)
+    const ch = db().charges.find((c) => c.visitId === db().encounters.find((e) => e.id === ow.key.split(':')[1]).visitId && !c.voided)
+    ch.paidAt = dateUtil.addMinutes(dateUtil.now(), -200)
+    b = await api.tatApi.tatBoard()
+    const ov = b.open.find((x) => x.key === ow.key)
+    ok(ov?.priority === 'routine' && ov.state === 'warn' && ov.start === ch.paidAt && ov.segment === 'collect', '門診：從批價起算，200 分鐘＝快逾時（一般 240 分）')
+
+    // 收件 → 卡在檢驗科內；發報告後離開清單、算進達成率與瓶頸
+    const before = b.rate.stat
+    await api.specimenApi.receiveSpecimen(crp.barcode)
+    b = await api.tatApi.tatBoard()
+    ok(b.open.find((x) => x.key === 'O:IO-TAT-1')?.segment === 'lab', '收件後：卡在檢驗科內')
+    await api.labApi.reportLab({ key: 'O:IO-TAT-1', values: { CRP: '1.2' } })
+    b = await api.tatApi.tatBoard()
+    ok(!b.open.some((x) => x.key === 'O:IO-TAT-1') && b.rate.stat.total === before.total + 1 && b.rate.stat.ontime === before.ontime && b.bottleneck.some((x) => x.segment === 'transport'), '發出後離開清單；算進急件達成率（逾時）、瓶頸是送檢')
+    await as('nurse01')
+    let msg = ''
+    try { await api.tatApi.tatBoard() } catch (e) { msg = e.message }
+    ok(msg.includes('權限'), '護理師不能看檢驗時效')
+  }
+
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
   console.log('\n[給藥條碼核對]')
   {

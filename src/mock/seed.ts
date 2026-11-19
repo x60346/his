@@ -3204,6 +3204,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 檢驗時效（示範）：骨折病人 85 分鐘前開的急件 CRP，護理師 70 分鐘前就採檢了，檢體一直沒送到檢驗科（急件 60 分已逾時，卡在送檢）
+  {
+    const fx = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52'))
+    if (fx) {
+      const day0 = `${T} 00:00`
+      const t0 = [addMinutes(nowStr, -85), day0].sort().at(-1)!
+      const col = [addMinutes(nowStr, -70), t0].sort().at(-1)!
+      ipdOrders.push({ id: 'IO-TAT-1', admissionId: fx.id, type: 'stat', category: 'procedure', procId: 'P011', content: procMap.get('P011')!.name, startAt: t0, status: 'done', stopAt: col, doctorId: fx.doctorId, createdAt: t0, ackAt: t0, ackBy: 'U201' })
+      specimens.push({ id: 'SP-TAT-1', barcode: `S${T.replace(/-/g, '')}5001`, admissionId: fx.id, patientId: fx.patientId, tube: 'red', orderIds: ['IO-TAT-1'], createdAt: t0, printedAt: t0, printedBy: 'U201', collectedAt: col, collectedBy: 'U201' })
+    }
+  }
+
   // 危急值通報（示範，不抽亂數）：過去的危急值報告都通報過（住院給護理師、門診給開立醫師；一筆門診 45 分鐘才通報＝逾時）；
   // 今天糖尿病病人臨時血糖 32（低血糖危急值）50 分鐘前發出，還沒通報（逾時，檢驗科首頁紅色）；8 分鐘後打給病房護理師沒人接（沒聯絡上一次）
   {

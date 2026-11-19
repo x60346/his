@@ -47,6 +47,7 @@ import { ensureLabDraws } from './ipd'
 import { isLabOrder } from './specimen-work'
 import { QC_ANALYTES, qcStatusToday } from './qc-rules'
 import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
+import { tatOpen } from './tat-work'
 import { isObsBed, obsOpen } from './bed-work'
 
 export interface DashboardStats {
@@ -193,6 +194,9 @@ export interface DashboardStats {
   analyzerHeld?: number
   /** 檢驗科：危急值還沒通報（其中逾時 30 分鐘） */
   calloutPending?: number
+  /** 檢驗時效：還沒發、已逾時／快逾時的 */
+  tatLate?: number
+  tatWarn?: number
   calloutLate?: number
   /** 護理師：今天待採檢的住院檢驗（含長期檢驗今天到期的） */
   labToCollect?: number
@@ -294,7 +298,7 @@ export function getDashboard(): Promise<DashboardStats> {
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
       lowStockDrugs: db.drugs.filter((d) => d.active && usableQty(stockLoc.lots(d.id, stockLoc.opd()), today()) <= stockLoc.safety(d, stockLoc.opd())).length,
       ...((r) => (r === 'nurse' || r === 'pharmacist' ? (() => { const xs = db.admissions.filter((a) => a.status === 'admitted' && !a.obs && !a.medRec); return { medRecToBuild: xs.length, medRecToBuildLate: xs.filter((a) => medRecState(undefined, a.admittedAt ?? now(), now()).overdue).length } })() : {}))(sessionRole()),
-      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
+      ...((r) => (r === 'lab' ? (() => { const xs = db.specimens.filter((x) => specimenStage(x) === 'collected'); const qs = QC_ANALYTES.map((a) => qcStatusToday(db.qcRuns, a.code, today())); const tat = tatOpen(); return { ...(({ pending, late }) => ({ calloutPending: pending, calloutLate: late }))(calloutCounts()), tatLate: tat.filter((x) => x.status.state === 'late').length, tatWarn: tat.filter((x) => x.status.state === 'warn').length, deskToCollect: deskToCollectCount(), analyzerHeld: analyzerHeldCount(), specimenToReceive: xs.length, specimenLate: xs.filter((x) => specimenLate(x, now())).length, qcPending: qs.filter((x) => x === 'missing' || x === 'reject').length, qcRejected: qs.filter((x) => x === 'reject').length } })() : r === 'nurse' ? { specimenRecollect: toRecollect().length, labToCollect: labToCollectToday() } : {}))(sessionRole()),
       ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length } : {}))(sessionRole()),
       ...(sessionRole() === 'radtech' ? ((xs) => ({ examArrived: xs.filter((e) => e.arrivedAt).length, examWaiting: xs.filter((e) => !e.arrivedAt).length }))(db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled)) : {}),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
