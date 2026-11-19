@@ -6,7 +6,7 @@
 import { computed, reactive, ref } from 'vue'
 import { PhoneCall, PhoneMissed } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UCheckbox, UDialog, UInput, USelect, UTextarea } from '@/components/ui'
-import { CALLOUT_FAIL_REASONS, CALLOUT_MINUTES, CALLOUT_ROLE_LABEL, labApi, type LabReportView } from '@/services'
+import { CALLOUT_FAIL_REASONS, CALLOUT_ROLE_LABEL, labApi, type LabReportView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data } = useQuery(() => labApi.calloutBoard())
@@ -44,7 +44,7 @@ const crit = (r: LabReportView) => r.values.filter((v) => v.critical).map((v) =>
     <template #title>
       <span class="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-800">
         <PhoneCall class="h-4 w-4" />危急值待通報 <UBadge v-if="data.pending.length" tone="red">{{ data.pending.length }}</UBadge>
-        <span class="text-xs font-normal text-slate-500">近 30 天 {{ CALLOUT_MINUTES }} 分鐘內通報 {{ data.rate.ontime }}/{{ data.rate.total }}（{{ data.rate.pct }}%）</span>
+        <span class="text-xs font-normal text-slate-500">近 30 天時限內通報 {{ data.rate.ontime }}/{{ data.rate.total }}（{{ data.rate.pct }}%）</span>
       </span>
     </template>
     <div class="space-y-2 p-3 text-sm">
@@ -54,7 +54,7 @@ const crit = (r: LabReportView) => r.values.filter((v) => v.critical).map((v) =>
           <b>{{ r.patientName }}</b><span class="text-xs text-slate-500">{{ r.where }}・{{ r.procName }}</span>
           <span class="min-w-0 flex-1 text-xs font-semibold text-red-700">{{ crit(r) }}</span>
           <UBadge v-if="r.calloutTries" :tone="r.calloutEscalated ? 'red' : 'yellow'">沒聯絡上 {{ r.calloutTries }} 次{{ r.calloutEscalated ? '・要升級' : '' }}</UBadge>
-          <span :class="['tabular text-xs', r.calloutState === 'late' ? 'font-semibold text-red-700' : 'text-slate-500']">{{ r.calloutState === 'late' ? '已逾時' : '期限' }} {{ r.calloutDue?.slice(5) }}</span>
+          <span :class="['tabular text-xs', r.calloutState === 'late' ? 'font-semibold text-red-700' : 'text-slate-500']">{{ r.calloutState === 'late' ? '已逾時' : '期限' }} {{ r.calloutDue?.slice(5) }}（{{ r.calloutMinutes }} 分）</span>
           <UButton size="sm" variant="secondary" :icon="PhoneMissed" @click="start(r, 'fail')">沒聯絡上</UButton>
           <UButton size="sm" :icon="PhoneCall" @click="start(r, 'ok')">通報</UButton>
         </li>

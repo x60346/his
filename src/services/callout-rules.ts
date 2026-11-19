@@ -1,6 +1,6 @@
 // 危急值通報（純函式）：報告有危急值，醫檢師要在發出後 30 分鐘內打電話通報（住院：病房護理師或主治；門診：開立醫師），
 // 記下受話者姓名、職稱、對方已複誦。逾時標紅；指標「通報時效達成率」。檢驗頁、首頁、種子、測試共用
-import type { LabReport } from '@/types'
+import type { LabLimits, LabReport } from '@/types'
 import { addMinutes } from '@/utils/date'
 
 /** 發出後幾分鐘內要通報 */
@@ -46,17 +46,20 @@ export function criticalSince(r: R): string | undefined {
 }
 
 /** 通報狀態：none 沒有危急值；done 已通報（ontime 是否在時限內）；late 逾時還沒通報；pending 時限內還沒通報 */
-export function calloutStatus(r: R, now: string): { status: 'none' | 'done' | 'late' | 'pending'; due?: string; ontime?: boolean } {
+/** 這個檢驗醫令的通報時限：主檔有設（檢驗時限設定）就用主檔，沒有用預設 30 分鐘 */
+export const calloutLimitOf = (lim: LabLimits | undefined) => lim?.callout ?? CALLOUT_MINUTES
+
+export function calloutStatus(r: R, now: string, minutes: number = CALLOUT_MINUTES): { status: 'none' | 'done' | 'late' | 'pending'; due?: string; ontime?: boolean } {
   const since = criticalSince(r)
   if (!since) return { status: 'none' }
-  const due = addMinutes(since, CALLOUT_MINUTES)
+  const due = addMinutes(since, minutes)
   if (r.callout) return { status: 'done', due, ontime: r.callout.at <= due }
   return { status: now > due ? 'late' : 'pending', due }
 }
 
 /** 通報時效達成率：已到期（或已通報）的危急值報告裡，在時限內通報的比例 */
-export function calloutRate(rs: R[], now: string): { total: number; ontime: number; pct: number } {
-  const xs = rs.map((r) => calloutStatus(r, now)).filter((x) => x.status === 'done' || x.status === 'late')
+export function calloutRate<T extends R>(rs: T[], now: string, minutesOf: (r: T) => number = () => CALLOUT_MINUTES): { total: number; ontime: number; pct: number } {
+  const xs = rs.map((r) => calloutStatus(r, now, minutesOf(r))).filter((x) => x.status === 'done' || x.status === 'late')
   const ontime = xs.filter((x) => x.ontime).length
   return { total: xs.length, ontime, pct: xs.length ? Math.round((ontime / xs.length) * 100) : 100 }
 }

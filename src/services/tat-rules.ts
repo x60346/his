@@ -1,6 +1,7 @@
 // 檢驗時效（TAT, turnaround time；純函式，畫面、服務層、種子、測試共用）：每份檢驗從「開始」到發報告的時間——
 // 住院從開立（長期檢驗那一次從排定時間）、門診從批價、急診從看完診；時限急件 60 分鐘（住院臨時、急診）、一般 240 分鐘（門診、長期檢驗）。
 // 分段看卡在哪：等採檢（開始→採檢）、送檢（採檢→檢驗科收件）、檢驗科內（收件→發報告）
+import type { LabLimits } from '@/types'
 import { parseDate } from '@/utils/date'
 
 export type TatPriority = 'stat' | 'routine'
@@ -10,10 +11,24 @@ export const TAT_PRIORITY_LABEL: Record<TatPriority, string> = { stat: '急件',
 export const TAT_WARN = 0.8
 export type TatSegment = 'collect' | 'transport' | 'lab'
 export const TAT_SEGMENT_LABEL: Record<TatSegment, string> = { collect: '等採檢', transport: '送檢', lab: '檢驗科內' }
-/** 不算時效的（細菌培養要好幾天） */
-export const TAT_EXCLUDE = ['P059']
-/** 本來就比較久的項目，時限另訂（抗酸菌塗片 24 小時，不分急件一般） */
-export const TAT_PROC_MINUTES: Record<string, number> = { P057: 24 * 60 }
+/** 這個檢驗醫令某優先度的時限：主檔有設就用主檔（檢驗時限設定），沒有用預設 */
+export const tatLimitOf = (lim: LabLimits | undefined, p: TatPriority) => lim?.[p] ?? TAT_MINUTES[p]
+/** 主檔勾了「不計時效」（細菌培養這類要好幾天的） */
+export const tatExcluded = (lim: LabLimits | undefined) => !!lim?.noTat
+/** 時限設定的範圍（分鐘）：5 分鐘到 7 天 */
+export const LAB_LIMIT_RANGE = { min: 5, max: 7 * 24 * 60 }
+/** 檢驗時限設定的欄位：都可以空白（＝預設）；有填的要是整數、在範圍內；要寫修改原因 */
+export function checkLabLimits(x: { stat?: unknown; routine?: unknown; callout?: unknown; reason?: string }): Record<string, string> {
+  const e: Record<string, string> = {}
+  for (const k of ['stat', 'routine', 'callout'] as const) {
+    const v = x[k]
+    if (v === undefined || v === null || v === '') continue
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < LAB_LIMIT_RANGE.min || n > LAB_LIMIT_RANGE.max) e[k] = `請填 ${LAB_LIMIT_RANGE.min}–${LAB_LIMIT_RANGE.max} 分鐘的整數（空白＝預設）`
+  }
+  if (!x.reason?.trim()) e.reason = '請寫修改原因（例：檢驗科品質會議決議）'
+  return e
+}
 
 export interface TatTimes {
   start: string

@@ -16,6 +16,7 @@ import CultureView from '@/components/CultureView.vue'
 import SpecimenReceiveCard from './components/SpecimenReceiveCard.vue'
 import CalloutCard from './components/CalloutCard.vue'
 import TatCard from './components/TatCard.vue'
+import LabLimitsPanel from './components/LabLimitsPanel.vue'
 import QcPanel from './components/QcPanel.vue'
 import LabDeskPanel from './components/LabDeskPanel.vue'
 import AnalyzerPanel from './components/AnalyzerPanel.vue'
@@ -25,9 +26,9 @@ const tab = ref<'work' | 'done'>('work')
 // 上方切換「檢驗」與「品管」（首頁帶 ?tab=qc）
 const route = useRoute()
 const router = useRouter()
-const mode = ref<'lab' | 'qc' | 'desk' | 'analyzer'>((['qc', 'desk', 'analyzer'] as const).find((m) => m === route.query.tab) ?? 'lab')
+const mode = ref<'lab' | 'qc' | 'desk' | 'analyzer' | 'limits'>((['qc', 'desk', 'analyzer', 'limits'] as const).find((m) => m === route.query.tab) ?? 'lab')
 watch(mode, (m) => router.replace({ query: m === 'lab' ? {} : { tab: m } }))
-const modes = [{ key: 'lab', label: '檢驗' }, { key: 'desk', label: '抽血櫃台' }, { key: 'analyzer', label: '儀器' }, { key: 'qc', label: '品管' }]
+const modes = [{ key: 'lab', label: '檢驗' }, { key: 'desk', label: '抽血櫃台' }, { key: 'analyzer', label: '儀器' }, { key: 'qc', label: '品管' }, { key: 'limits', label: '時限' }]
 // 住院檢驗：還沒採檢、或已採檢但檢驗科還沒收件（條碼）的，列在清單上但不能登打
 const blocked = (w: { awaitingCollection?: boolean; awaitingReceipt?: string; analyzerHeld?: boolean; awaitingPayment?: boolean }) => !!w.awaitingCollection || w.awaitingReceipt !== undefined || !!w.analyzerHeld || !!w.awaitingPayment
 const date = ref(today())
@@ -112,6 +113,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
   <div class="space-y-4">
   <UTabs v-model="mode" :tabs="modes" />
   <QcPanel v-if="mode === 'qc'" />
+  <LabLimitsPanel v-else-if="mode === 'limits'" />
   <LabDeskPanel v-else-if="mode === 'desk'" />
   <AnalyzerPanel v-else-if="mode === 'analyzer'" />
   <template v-else>

@@ -15,7 +15,7 @@ import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
 import { calloutEscalated, calloutRate, calloutStatus, calloutTarget, checkCallout, checkCalloutAttempt, CALLOUT_ROLE_LABEL } from './callout-rules'
 import { addDays } from '@/utils/date'
-import { canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
+import { calloutMinutesOf, canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
 
@@ -44,6 +44,8 @@ export interface LabReportView extends LabReport {
   calloutState: 'none' | 'done' | 'late' | 'pending'
   calloutDue?: string
   calloutOnTime?: boolean
+  /** 這份的通報時限（分鐘；主檔設定或預設） */
+  calloutMinutes: number
   calloutByName?: string
   /** 沒聯絡上的次數、要不要升級、這次要通報誰（提示文字） */
   calloutTries: number
@@ -91,8 +93,9 @@ function reportView(r: LabReport): LabReportView {
     hasCritical: r.values.some((v) => v.critical),
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', gender: p?.gender ?? 'M',
     ...(r.ackBy ? { ackByName: nameOf.user(r.ackBy) } : {}),
-    ...((c) => ({ calloutState: c.status, ...(c.due ? { calloutDue: c.due } : {}), ...(c.ontime !== undefined ? { calloutOnTime: c.ontime } : {}) }))(calloutStatus(r, now())),
+    ...((c) => ({ calloutState: c.status, ...(c.due ? { calloutDue: c.due } : {}), ...(c.ontime !== undefined ? { calloutOnTime: c.ontime } : {}) }))(calloutStatus(r, now(), calloutMinutesOf(r.procId))),
     ...(r.callout ? { calloutByName: nameOf.user(r.callout.by) } : {}),
+    calloutMinutes: calloutMinutesOf(r.procId),
     calloutTries: r.calloutAttempts?.length ?? 0,
     calloutEscalated: calloutEscalated(r),
     calloutTarget: calloutTarget(r.orderId ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}) }),
@@ -201,7 +204,7 @@ export function calloutLab(id: string, input: { to: string; toRole: 'nurse' | 'd
     const escalated = calloutEscalated(r)
     failFields(checkCallout(input ?? {}, r.admissionId ? 'ipd' : 'opd', { escalated, orderingDoctor: nameOf.doctor(r.doctorId) }))
     const t = now()
-    const late = calloutStatus(r, t).status === 'late'
+    const late = calloutStatus(r, t, calloutMinutesOf(r.procId)).status === 'late'
     r.callout = { at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, readBack: true, ...(input.note?.trim() ? { note: input.note.trim() } : {}), ...(escalated ? { escalated: true as const } : {}) }
     audit(late ? '危急值通報（逾時）' : '危急值通報', `${r.no} ${nameOf.patient(r.patientId)}：${r.values.filter((v) => v.critical).map((v) => `${v.name} ${v.value}`).join('、')} → ${CALLOUT_ROLE_LABEL[input.toRole]} ${r.callout.to}（已複誦${escalated ? `；前 ${r.calloutAttempts!.length} 次沒聯絡上，升級通報` : r.calloutAttempts?.length ? `；之前 ${r.calloutAttempts.length} 次沒聯絡上` : ''}）`)
     return reportView(r)
@@ -234,7 +237,7 @@ export function calloutBoard(): Promise<{ pending: LabReportView[]; doneToday: L
     return {
       pending: views.filter((v) => v.calloutState === 'pending' || v.calloutState === 'late').sort((a, b) => (a.calloutDue ?? '').localeCompare(b.calloutDue ?? '')),
       doneToday: views.filter((v) => v.callout?.at.startsWith(t.slice(0, 10))).sort((a, b) => b.callout!.at.localeCompare(a.callout!.at)),
-      rate: calloutRate(db.labReports.filter((r) => r.reportedAt.slice(0, 10) >= since), t),
+      rate: calloutRate(db.labReports.filter((r) => r.reportedAt.slice(0, 10) >= since), t, (r) => calloutMinutesOf(r.procId)),
     }
   })
 }

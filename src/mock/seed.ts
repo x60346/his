@@ -260,7 +260,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 長期沒登入的櫃台（示範「密碼過期太久鎖帳號」：130 天前設定的密碼，90 天到期、過期 40 天 > 寬限 30 天）
     { id: 'U403', username: 'clerk03', password: '1234', name: '呂佳蓉', roles: ['clerk'], active: true },
     // 醫檢師：登打檢驗結果、發報告
-    { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true },
+    { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true, grants: ['lab.limits'] },
     { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
     { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true },
   ]

@@ -75,6 +75,7 @@ import * as witness from './witness'
 import * as controlled from './controlled'
 import * as lab from './lab'
 import * as tat from './tat'
+import * as labLimits from './lab-limits'
 import * as imaging from './imaging'
 import * as ipdCharge from './ipd-charge'
 import * as dischargeRx from './discharge-rx'
@@ -155,6 +156,7 @@ export const witnessApi = overNetwork(witness)
 export const controlledApi = overNetwork(controlled)
 export const labApi = overNetwork(lab)
 export const tatApi = overNetwork(tat)
+export const labLimitApi = overNetwork(labLimits)
 export const imagingApi = overNetwork(imaging)
 export const ipdChargeApi = overNetwork(ipdCharge)
 export const dischargeRxApi = overNetwork(dischargeRx)
@@ -168,6 +170,7 @@ export type { IpdBill } from './ipd-bill'
 export type { ImagingWorkItem, ImagingReportView } from './imaging'
 export type { LabWorkItem, LabReportView, LabTrend } from './lab'
 export type { TatBoard, TatOpenView } from './tat'
+export type { LabLimitRow } from './lab-limits'
 export type { ErLabs, ErSpecimenView } from './er-lab'
 export type { OpdAddonOption, AddonDue } from './opd-addon'
 export type { ControlledLedger, ControlledLedgerRow, ControlledLedgerOptions, ControlledReport, ControlledReportRow, SpecialRxSheet } from './controlled'

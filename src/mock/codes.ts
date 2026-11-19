@@ -1,7 +1,7 @@
 // 參考代碼表（科別、身分、ICD-10、藥品、醫令、頻率、預防保健項目）。
 // 皆為展示用資料：藥品代碼、醫令點數為近似值，不代表現行健保給付標準。
 import type {
-  TubeKind,
+  LabLimits, TubeKind,
   ExamRoom,
   BillingSettings,
   DiscountRule,
@@ -539,7 +539,12 @@ const CONSENT = { id: 'consent', label: '顯影劑同意書已簽' }
 const RENAL = { id: 'renal', label: '腎功能（CrCl）已確認' }
 /** 影像在哪個檢查室做、大約幾分鐘（排程用）、檢查前準備、是否打顯影劑 */
 const examOf: Record<string, { room: ExamRoom; minutes: number; prep?: { id: string; label: string }[]; contrast?: boolean }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20, prep: [NPO6] }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 }, P061: { room: 'CT', minutes: 20, prep: [NPO6, CONSENT, RENAL], contrast: true } }
-export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red' } : {}), ...(imagingOf[p.id] ? { imaging: { ...imagingOf[p.id], ...examOf[p.id] } } : {}) }))
+/**
+ * 檢驗時限（檢驗頁「時限」可改；沒列的用預設：急件 60、一般 240、危急值通報 30 分鐘）：
+ * 血液氣體急件 30 分；糖化血色素一般 1 天；抗酸菌塗片 1 天；細菌培養不計時效；血糖危急值 15 分鐘內通報
+ */
+const labLimitsOf: Record<string, LabLimits> = { P052: { stat: 30 }, P005: { routine: 1440 }, P057: { stat: 1440, routine: 1440 }, P059: { noTat: true }, P004: { callout: 15 } }
+export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red', ...(labLimitsOf[p.id] ? { labLimits: labLimitsOf[p.id] } : {}) } : {}), ...(imagingOf[p.id] ? { imaging: { ...imagingOf[p.id], ...examOf[p.id] } } : {}) }))
 
 export const preventItems: PreventItem[] = [
   { code: 'ADULT', name: '成人預防保健', caseCode: '3D', ruleText: '40–64 歲每 3 年 1 次；65 歲以上每年 1 次', intervalYears: 3, fields: ['血壓', '空腹血糖', '總膽固醇', '身高', '體重'], needsReport: false },

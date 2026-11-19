@@ -6,7 +6,7 @@ import { db } from '@/mock/db'
 import { find, nameOf } from './views'
 import { labOrderStage, opdSpecimenOf, specimenOfOrder } from './specimen-work'
 import { labNeedsAck, labRefText } from './lab-rules'
-import { calloutStatus } from './callout-rules'
+import { calloutLimitOf, calloutStatus } from './callout-rules'
 import { now } from '@/utils/date'
 
 export interface LabWorkItem {
@@ -106,6 +106,9 @@ export const deskToCollectCount = () => new Set(pendingLabWork().filter((w) => w
 
 /** 危急值還沒通報的（其中已逾時的） */
 export function calloutCounts(t: string = now()): { pending: number; late: number } {
-  const xs = db.labReports.map((r) => calloutStatus(r, t).status).filter((s) => s === 'pending' || s === 'late')
+  const xs = db.labReports.map((r) => calloutStatus(r, t, calloutMinutesOf(r.procId)).status).filter((s) => s === 'pending' || s === 'late')
   return { pending: xs.length, late: xs.filter((s) => s === 'late').length }
 }
+
+/** 這份報告的危急值通報時限（分鐘）：主檔「檢驗時限設定」有設就用，沒有用預設 */
+export const calloutMinutesOf = (procId: string) => calloutLimitOf(find.procedure(procId)?.labLimits)

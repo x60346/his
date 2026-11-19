@@ -981,6 +981,14 @@ export interface LabCheckin {
   priority?: 'elderly' | 'disabled' | 'mobility'
 }
 
+/** 檢驗時限設定（分鐘；沒有＝預設） */
+export interface LabLimits {
+  stat?: number
+  routine?: number
+  callout?: number
+  noTat?: boolean
+}
+
 export interface Procedure {
   id: string
   code: string
@@ -996,6 +1004,12 @@ export interface Procedure {
   labItems?: LabItemDef[]
   /** 檢體容器（試管別）：同一位病人同管別的檢驗合併成一支條碼 */
   tube?: TubeKind
+  /**
+   * 檢驗時限（主檔可編，空白＝預設）：急件、一般時效（分鐘）、危急值通報時限（分鐘）、不計時效（培養這類要好幾天的）。
+   * 修改要寫原因，留在 labLimitHistory
+   */
+  labLimits?: LabLimits
+  labLimitHistory?: { at: string; by: string; reason: string; before: LabLimits; after: LabLimits }[]
   /** 住院每日計費的項目（病房費、護理費、住院診察費）：出院結帳依住院天數自動帶入，門診與醫囑都不能開 */
   dailyFee?: boolean
   /** 每日計費依病床：generalBed 一般病床的病房費、護理費（住加護病房的那幾天不收）；icu 加護病床的（只收住加護病房的那幾天）。都沒標的（住院診察費）每天都收 */

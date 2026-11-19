@@ -11689,7 +11689,7 @@ try {
     // 更正後才變危急值：從更正時間起算
     const cbcRep = db().labReports.find((r) => r.procId === 'P004' && !r.values.some((v) => v.critical) && !r.callout)
     const fixed = await L.correctLab(cbcRep.id, { values: { 'GLU-AC': '450' }, reason: '登打錯誤' })
-    ok(fixed.calloutState === 'pending' && fixed.calloutDue === dateUtil.addMinutes(fixed.corrections.at(-1).at, 30), '更正後才變危急值：從更正時間起算 30 分鐘')
+    ok(fixed.calloutState === 'pending' && fixed.calloutMinutes === 15 && fixed.calloutDue === dateUtil.addMinutes(fixed.corrections.at(-1).at, 15), '更正後才變危急值：從更正時間起算（血糖主檔設 15 分鐘）')
     dash = await api.dashboardApi.getDashboard()
     ok(dash.calloutPending >= 1, '首頁待通報跟著增加')
   }
@@ -12309,7 +12309,7 @@ try {
     ok(st(at('10:47')) === 'ok' && st(at('10:48')) === 'warn' && st(at('11:00')) === 'warn' && st(at('11:01')) === 'late', '急件 60 分：用掉八成（48 分）快逾時、超過 60 分逾時')
     ok(api.tatStatus({ start: at('10:00'), reportedAt: at('10:55') }, 'stat', 'x').state === 'ok' && api.tatStatus({ start: at('10:00'), reportedAt: at('11:10') }, 'stat', 'x').state === 'late' && api.tatStatus({ start: at('10:00') }, 'routine', at('13:00')).state === 'ok' && api.tatStatus({ start: at('10:00') }, 'routine', at('14:01')).state === 'late', '發出的看發出時有沒有超過；一般 240 分')
     const rt = api.tatRate([{ start: at('10:00'), reportedAt: at('10:50'), priority: 'stat' }, { start: at('10:00'), reportedAt: at('11:10'), priority: 'stat' }, { start: at('10:00'), reportedAt: at('13:00'), priority: 'routine' }, { start: at('10:00'), priority: 'stat' }])
-    ok(api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', at('11:30')).state === 'ok' && api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', '2026-11-20 10:01').state === 'late' && api.TAT_PROC_MINUTES.P057 === 1440, '抗酸菌塗片：時限另訂 24 小時（不照急件 60 分）')
+    ok(api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', at('11:30')).state === 'ok' && api.tatStatus({ start: at('10:00'), limit: 1440 }, 'stat', '2026-11-20 10:01').state === 'late' && api.tatLimitOf(db().procedures.find((p) => p.id === 'P057').labLimits, 'stat') === 1440, '抗酸菌塗片：主檔另訂 24 小時（不照急件 60 分）')
     ok(rt.stat.total === 2 && rt.stat.pct === 50 && rt.routine.pct === 100 && api.tatRate([]).stat.pct === 100, '達成率：急件、一般分開；沒發的不算')
     const bn = api.tatBottleneck([{ start: at('10:00'), collectedAt: at('10:10'), receivedAt: at('11:00'), reportedAt: at('11:10'), priority: 'stat' }, { ...full, priority: 'stat' }, { start: at('10:00'), reportedAt: at('12:00'), priority: 'stat' }])
     ok(bn.length === 1 && bn[0].segment === 'transport' && bn[0].count === 1, '最常卡在哪：逾時的才算、三段都有時間的才算')
@@ -12730,6 +12730,79 @@ try {
     await as('nurse01')
     msg = await errOf(() => O.addOpdLab(encId, 'P007'))
     ok(msg.includes('權限'), '護理師不能補開')
+  }
+
+  // 檢驗時限設定：主檔優先、預設、不計時效、欄位；種子（血液氣體 30、糖化血色素 1 天、培養不計、血糖通報 15）；修改與紀錄、
+  // 時效與危急值馬上照新的、回到預設、權限（管理員預設、指定給檢驗科主管）
+  console.log('\n[檢驗時限設定]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const L = api.labLimitApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 純函式
+    ok(api.tatLimitOf({ stat: 30 }, 'stat') === 30 && api.tatLimitOf({ stat: 30 }, 'routine') === 240 && api.tatLimitOf(undefined, 'stat') === 60 && api.tatExcluded({ noTat: true }) && !api.tatExcluded(undefined), '時效：主檔有設用主檔、沒設用預設；不計時效')
+    ok(api.calloutLimitOf({ callout: 15 }) === 15 && api.calloutLimitOf({}) === 30 && api.calloutStatus({ reportedAt: '2026-11-19 10:00', values: [{ critical: true }] }, '2026-11-19 10:16', 15).status === 'late', '危急值通報：主檔時限（15 分鐘就逾時）')
+    ok(Object.keys(api.checkLabLimits({ stat: 4, routine: 10081, callout: 1.5 })).sort().join() === 'callout,reason,routine,stat' && !Object.keys(api.checkLabLimits({ stat: '', routine: null, callout: 5, reason: '品質會議' })).length, '欄位：5 分鐘到 7 天的整數、空白＝預設、要寫原因')
+
+    // 種子
+    await as('lab01')
+    let d = await L.labLimitList()
+    const row = (id) => d.rows.find((r) => r.procId === id)
+    ok(d.canEdit && row('P052').effective.stat === 30 && row('P005').effective.routine === 1440 && row('P059').effective.noTat && row('P004').effective.callout === 15 && row('P003').effective.stat === 60 && !Object.keys(row('P003').limits).length, '種子：血液氣體急件 30、糖化血色素一般 1 天、培養不計時效、血糖通報 15；其他用預設')
+    ok(d.defaults.stat === 60 && d.defaults.routine === 240 && d.defaults.callout === 30, '預設：急件 60、一般 240、通報 30')
+    await as('lab01')
+    let cb = await api.labApi.calloutBoard()
+    ok(cb.pending.find((r) => r.id === 'LR-CR-1')?.calloutMinutes === 15, '危急值卡片：血糖照主檔 15 分鐘')
+
+    // 修改：電解質急件改 45 → 時效馬上照新的
+    let tb = await api.tatApi.tatBoard()
+    const lyte = db().ipdOrders.find((o) => o.procId === 'P055' && o.id.startsWith('IO-AN-'))
+    const before = tb.open.find((x) => x.key === `O:${lyte.id}`)
+    let f = await fieldsOf(() => L.setLabLimits('P055', { stat: 45, reason: ' ' }))
+    ok(f.reason, '沒寫原因 → 擋')
+    f = await fieldsOf(() => L.setLabLimits('P055', { stat: 3, reason: 'x' }))
+    ok(f.stat, '超出範圍 → 擋')
+    const r1 = await L.setLabLimits('P055', { stat: 45, reason: '檢驗科品質會議決議' })
+    ok(r1.effective.stat === 45 && r1.history[0].text.includes('急件 45') && r1.history[0].reason === '檢驗科品質會議決議' && db().auditLogs[0].action === '檢驗時限設定', '改電解質急件 45 分：留紀錄（誰、從什麼改成什麼、原因）、稽核')
+    tb = await api.tatApi.tatBoard()
+    ok(before && tb.open.find((x) => x.key === `O:${lyte.id}`)?.limit === 45, `檢驗時效馬上照新的（${before?.limit} → 45 分）`)
+    f = await fieldsOf(() => L.setLabLimits('P055', { stat: 45, reason: '再存一次' }))
+    ok(f.stat?.includes('沒有改變'), '沒改變不存')
+    // 回到預設、不計時效
+    await L.setLabLimits('P004', { reason: '回到預設' })
+    cb = await api.labApi.calloutBoard()
+    ok(cb.pending.find((r) => r.id === 'LR-CR-1')?.calloutMinutes === 30 && !db().procedures.find((p) => p.id === 'P004').labLimits, '血糖通報清空 → 回到預設 30 分')
+    await L.setLabLimits('P003', { noTat: true, reason: '測試：CBC 不計時效' })
+    tb = await api.tatApi.tatBoard()
+    ok(!tb.open.some((x) => x.procName.includes('CBC')), 'CBC 勾不計時效 → 時效清單不列')
+    // 權限：管理員預設可以；檢驗科沒被指定的只能看；護理師不能
+    await as('admin')
+    d = await L.labLimitList()
+    ok(d.canEdit && (await L.setLabLimits('P006', { routine: 480, reason: '管理員調整' })).effective.routine === 480, '管理員可以改（預設權限）')
+    db().users.find((u) => u.username === 'lab01').grants = []
+    await as('lab01')
+    d = await L.labLimitList()
+    let msg = await errOf(() => L.setLabLimits('P006', { routine: 300, reason: 'x' }))
+    ok(!d.canEdit && msg.includes('檢驗時限設定'), '沒被指定的醫檢師只能看')
+    await as('nurse01')
+    msg = await errOf(() => L.labLimitList())
+    ok(msg.includes('權限'), '護理師不能看')
   }
 
   // 病人辨識腕帶與給藥條碼核對：腕帶（住院號）、逐步掃描與不符紀錄、給藥前服務層再核對、略過原因、設定、統計
