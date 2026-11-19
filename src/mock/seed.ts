@@ -2146,12 +2146,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     {
       const s3 = surgeries.find((x) => x.id === 'SG-SEED-3')
       if (s3?.startAt && s3.endAt) {
-        s3.specimens = [{ id: 'SP-SEED-3A', label: 'A', site: '薦骨壞死組織', container: 'jar', fixative: 'formalin', by: 'U205', at: addMinutes(s3.startAt, 30) }]
+        // 術中送冰凍：18 分鐘回報「未見惡性」；永久切片深部是鱗狀細胞癌（和冰凍不一致）
+        const fzAt = addMinutes(s3.startAt, 10)
+        s3.specimens = [{ id: 'SP-SEED-3A', label: 'A', site: '薦骨壞死組織', container: 'jar', fixative: 'none', by: 'U205', at: fzAt, frozen: { sentAt: fzAt, sentBy: 'U205', result: { text: '表層壞死組織與急性發炎，未見惡性細胞', at: addMinutes(fzAt, 18), by: 'U110', receivedBy: users.find((u) => u.doctorId === s3.doctorId)!.id, readBack: true } } }]
         s3.path = {
           sentAt: s3.endAt, sentBy: 'U205', received: { at: addMinutes(s3.endAt, 50), by: 'U601' },
-          report: { diagnosis: '鱗狀細胞癌，高分化（慢性壓傷潰瘍惡性變化）；切緣可見腫瘤', malignant: true, consistent: false, note: '建議擴大切除、轉腫瘤科評估', by: 'U110', at: `${addDays(T, -1)} 15:20` },
+          report: { diagnosis: '鱗狀細胞癌，高分化（慢性壓傷潰瘍惡性變化）；切緣可見腫瘤', malignant: true, consistent: false, note: '建議擴大切除、轉腫瘤科評估', by: 'U110', at: `${addDays(T, -1)} 15:20`, frozenConcordant: false, frozenNote: '冰凍取樣為表層壞死組織；永久切片深部見鱗狀細胞癌' },
         }
-        if (s3.record) s3.record.specimen = 'A 薦骨壞死組織（檢體罐・福馬林）'
+        if (s3.record) s3.record.specimen = 'A 薦骨壞死組織（檢體罐・不加（新鮮））'
       }
       const s4 = surgeries.find((x) => x.id === 'SG-SEED-4')
       if (s4) s4.noSpecimen = true

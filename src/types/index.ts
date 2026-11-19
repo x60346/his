@@ -2327,13 +2327,15 @@ export interface SurgicalSpecimen {
   note?: string
   by: string
   at: string
+  /** 術中冰凍切片：登記就送出；病理口頭回報到手術室（誰接聽、已複誦） */
+  frozen?: { sentAt: string; sentBy: string; result?: { text: string; at: string; by: string; receivedBy: string; readBack: true } }
 }
 /** 病理：送出（手術完成時）→ 收件（少了的要原因）→ 報告 → 主刀確認（惡性、不符必須） */
 export interface PathologyRecord {
   sentAt: string
   sentBy: string
   received?: { at: string; by: string; missing?: string[]; note?: string }
-  report?: { diagnosis: string; malignant: boolean; consistent: boolean; note?: string; by: string; at: string }
+  report?: { diagnosis: string; malignant: boolean; consistent: boolean; note?: string; by: string; at: string; frozenConcordant?: boolean; frozenNote?: string }
   ack?: { by: string; at: string; note?: string }
 }
 /** 手術團隊的角色（主刀＝Surgery.doctorId，不在這裡） */

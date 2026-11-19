@@ -16045,6 +16045,104 @@ try {
     const panel = readFileSync('src/components/surgery/OrMetricsPanel.vue', 'utf8')
     ok(!/db\.|firstCaseStats|turnoverStats|signIn/.test(panel), '效率由服務層算，頁面只畫')
   }
+  // 術中冰凍切片：規則（等待與逾時、回報欄位、要不要比對、指標）；種子（清創冰凍未見惡性、永久是癌：不一致）；
+  // 手術中送冰凍（不能加福馬林、送了不能刪、手術室標示）；病理回報（醫師、接聽要是團隊、要複誦、稽核、不能重複）；逾時；永久報告要回答一致與否
+  console.log('\n[冰凍切片]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const PA = api.pathologyApi
+    const tomorrow = addDaysT(1)
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const mb = (a, b) => Math.round((new Date(b.replace(' ', 'T')) - new Date(a.replace(' ', 'T'))) / 60000)
+    // 規則
+    let st = api.frozenState({ sentAt: '2026-03-02 10:00' }, '2026-03-02 10:21', mb)
+    ok(st.minutes === 21 && st.overdue && !st.done && !api.frozenState({ sentAt: '2026-03-02 10:00', result: { at: '2026-03-02 10:20' } }, '2026-03-02 11:00', mb).overdue, '冰凍：超過 20 分鐘逾時；回報了就以回報時間算（20 分不算逾時）')
+    const fe = api.checkFrozenReport({ text: ' ', readBack: false })
+    ok(fe.text && fe.receivedBy && fe.readBack, '回報欄位：結果、接聽的人、複誦')
+    const fs1 = api.frozenStats([{ specimens: [{ frozen: { sentAt: '2026-03-02 10:00', result: { at: '2026-03-02 10:15' } } }, { frozen: { sentAt: '2026-03-02 11:00', result: { at: '2026-03-02 11:30' } } }], path: { report: { frozenConcordant: true } } }, { specimens: [], path: { report: { frozenConcordant: false } } }], mb)
+    ok(fs1.total === 2 && fs1.ontime === 1 && fs1.ontimePct === 50 && fs1.compared === 2 && fs1.concordantPct === 50, '指標：時限內回報 1/2、一致 1/2')
+    // 種子
+    const s3 = db().surgeries.find((s) => s.id === 'SG-SEED-3')
+    ok(s3.specimens[0].frozen.result.text.includes('未見惡性') && s3.path.report.malignant && s3.path.report.frozenConcordant === false, '種子：清創術中冰凍未見惡性，永久是鱗狀細胞癌（不一致）')
+    await as('dr10')
+    let board = await PA.pathBoard()
+    ok(!board.frozen.length && board.frozenStats.total === 1 && board.frozenStats.ontime === 1 && board.frozenStats.concordant === 0 && board.frozenStats.compared === 1, '病理頁：沒有等待中的；近 90 天時限內 1/1、一致 0/1')
+    const it3 = await PA.pathOf(s3.id)
+    ok(it3.hasFrozen && it3.specimens[0].frozenText.includes('18 分回報') && it3.report.frozenNote.includes('深部'), `手術分頁：${it3.specimens[0].frozenText}`)
+    // 手術中送冰凍
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && a.doctorId !== 'DR10' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const surgeon = db().users.find((u) => u.doctorId === adm.doctorId)
+    await as(surgeon.username)
+    const sg = await S.requestSurgery({ admissionId: adm.id, procId: 'P038', side: 'na', anesthesia: 'general', requestedDate: tomorrow, estMinutes: 90, diagnosis: '闌尾腫塊' })
+    await as('nurse01')
+    await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} 13:00` })
+    for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(sg.id, k)
+    await S.markPrep(sg.id, 'blood', { notNeeded: '出血少' })
+    await S.markPrep(sg.id, 'abx', { notNeeded: '測試' })
+    await S.sendToOr(sg.id)
+    await S.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sg.id)
+    let f = await fieldsOf(() => PA.addSpecimen(sg.id, { site: '闌尾腫塊', container: 'jar', fixative: 'formalin', frozen: true }))
+    ok(f.fixative?.includes('福馬林'), '冰凍不能加福馬林')
+    let xs = await PA.addSpecimen(sg.id, { site: '闌尾腫塊', container: 'jar', fixative: 'none', frozen: true })
+    const A1 = xs[0]
+    ok(A1.frozen?.sentAt && db().auditLogs[0].action === '送冰凍切片', '送冰凍：登記就送出（稽核）')
+    await expectError(() => PA.removeSpecimen(sg.id, A1.id), '冰凍送出後不能刪')
+    let v = (await S.orBoard(tomorrow)).cases.find((x) => x.id === sg.id)
+    ok(v.frozenWaiting.length === 1 && v.frozenWaiting[0].label === 'A' && v.specimenRows[0].frozen.text.includes('等待回報'), '手術室卡片標「冰凍等待」')
+    await as('dr10')
+    ok((await api.dashboardApi.getDashboard()).frozenWaiting === 1, '病理醫師首頁：冰凍切片待回報 1')
+    board = await PA.pathBoard()
+    const fi = board.frozen[0]
+    ok(fi.surgeryId === sg.id && fi.canReport && fi.receivers.some((r) => r.id === surgeon.id) && fi.receivers.some((r) => r.id === 'U205'), '病理頁：等待中的冰凍、接聽的人＝主刀與團隊')
+    await as('lab01')
+    ok(!(await PA.pathBoard()).frozen[0].canReport, '醫檢師不能回報冰凍')
+    await expectError(() => PA.reportFrozen(sg.id, A1.id, { text: 'x', receivedBy: surgeon.id, readBack: true }), '醫檢師回報被擋')
+    await as('dr10')
+    f = await fieldsOf(() => PA.reportFrozen(sg.id, A1.id, { text: '', receivedBy: 'U216', readBack: false }))
+    ok(f.text && f.readBack && f.receivedBy?.includes('團隊'), '回報：要寫結果、要複誦、接聽要是這台的人')
+    await PA.reportFrozen(sg.id, A1.id, { text: '黏液性腫瘤，交界性，切緣陰性', receivedBy: surgeon.id, readBack: true })
+    ok(db().auditLogs[0].action === '冰凍切片回報' && db().auditLogs[0].detail.includes('已複誦'), '回報（稽核）')
+    await expectError(() => PA.reportFrozen(sg.id, A1.id, { text: 'x', receivedBy: surgeon.id, readBack: true }), '不能重複回報')
+    await as('nurse01')
+    v = (await S.orBoard(tomorrow)).cases.find((x) => x.id === sg.id)
+    ok(!v.frozenWaiting.length && v.specimenRows[0].frozen.done && v.specimenRows[0].frozen.text.includes('黏液性'), `手術室看到結果：${v.specimenRows[0].frozen.text}`)
+    // 逾時（測試輔助：送出時間往前推）
+    xs = await PA.addSpecimen(sg.id, { site: '腸繫膜淋巴結', container: 'jar', fixative: 'none', frozen: true })
+    db().surgeries.find((s) => s.id === sg.id).specimens.find((x) => x.label === 'B').frozen.sentAt = dateUtil.addMinutes(nowStr(), -25).slice(0, 16)
+    v = (await S.orBoard(tomorrow)).cases.find((x) => x.id === sg.id)
+    ok(v.frozenWaiting[0].overdue && v.frozenWaiting[0].minutes >= 25, '超過 20 分鐘：手術室標紅')
+    await as('dr10')
+    ok((await api.dashboardApi.getDashboard()).frozenOverdue === 1 && (await PA.pathBoard()).frozen[0].overdue, '病理首頁與頁面標逾時')
+    await PA.reportFrozen(sg.id, db().surgeries.find((s) => s.id === sg.id).specimens.find((x) => x.label === 'B').id, { text: '反應性淋巴結', receivedBy: 'U205', readBack: true })
+    // 完成、收件、永久報告要回答和冰凍一不一致
+    await as('nurse01')
+    await S.finishSurgery(sg.id, { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 })
+    await as('lab01')
+    await PA.receivePath(sg.id, { received: db().surgeries.find((s) => s.id === sg.id).specimens.map((x) => x.id) })
+    await as('dr10')
+    f = await fieldsOf(() => PA.reportPath(sg.id, { diagnosis: '闌尾低度黏液性腫瘤', malignant: false, consistent: false }))
+    ok(f.frozenConcordant, '有冰凍的永久報告要回答一致與否')
+    f = await fieldsOf(() => PA.reportPath(sg.id, { diagnosis: '闌尾低度黏液性腫瘤', malignant: false, consistent: false, frozenConcordant: false }))
+    ok(f.frozenNote, '不一致要寫說明')
+    const it = await PA.reportPath(sg.id, { diagnosis: '闌尾低度黏液性腫瘤（LAMN）', malignant: false, consistent: false, frozenConcordant: true })
+    ok(it.report.frozenConcordant === true && db().auditLogs[0].detail.includes('和冰凍一致'), '一致（稽核）')
+    board = await PA.pathBoard()
+    ok(board.frozenStats.total === 3 && board.frozenStats.ontime === 2 && board.frozenStats.compared === 2 && board.frozenStats.concordant === 1, `指標：時限內 ${board.frozenStats.ontime}/${board.frozenStats.total}、一致 ${board.frozenStats.concordant}/${board.frozenStats.compared}`)
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/pathology/PathologyPage.vue', 'utf8') + readFileSync('src/components/surgery/SpecimenPanel.vue', 'utf8')
+    ok(!/db\.|FROZEN_MINUTES|> 20|frozenState/.test(page), '逾時與一致率由服務層算')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

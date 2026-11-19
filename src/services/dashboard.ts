@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -180,6 +180,9 @@ export interface DashboardStats {
   pathToReceive?: number
   pathOverdue?: number
   pathToReport?: number
+  /** 病理醫師：冰凍切片等待回報（其中超過 20 分鐘） */
+  frozenWaiting?: number
+  frozenOverdue?: number
   /** 住院藥局：今天還沒調劑的劑量（補調劑）、已送回待點收的項數、待核對的藥盒數；護理站：待送回藥局的項數（全院） */
   udExtra: number
   /** 藥師：住院醫囑待審核（其中臨時醫囑） */
@@ -374,7 +377,7 @@ export function getDashboard(): Promise<DashboardStats> {
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
-          ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport } : {}),
+          ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport, ...((c) => ({ frozenWaiting: c.waiting, frozenOverdue: c.overdue }))(frozenCounts(now())) } : {}),
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('anesthesia') ? ((c) => ({ preAnesDue: c.due, preAnesBrief: c.brief }))(preAnesCounts(now())) : {}),
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),

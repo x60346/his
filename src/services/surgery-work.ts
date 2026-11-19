@@ -10,7 +10,7 @@ import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-
 import { preIncisionOf } from './prophylaxis-work'
 import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
-import { pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
+import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
 
@@ -62,7 +62,9 @@ export interface SurgeryView extends Surgery {
   postopLate: boolean
   postopText?: string
   /** 檢體：逐件登記（新手術）；病理階段、要主刀確認（惡性或不符、還沒確認） */
-  specimenRows: { id: string; text: string }[]
+  specimenRows: { id: string; text: string; frozen?: { text: string; overdue: boolean; done: boolean } }[]
+  /** 冰凍切片等待回報（手術室卡片標示；超過 20 分鐘標紅） */
+  frozenWaiting: { label: string; minutes: number; overdue: boolean }[]
   /** 新手術（逐件登記）：手術紀錄的檢體不用另打 */
   specimenStructured: boolean
   pathStageLabel?: string
@@ -75,6 +77,8 @@ export function bumpedByEmergency(s: Surgery): Surgery | undefined {
   if (s.urgency || s.status !== 'scheduled' || !s.schedule) return undefined
   return db.surgeries.find((x) => x.id !== s.id && x.urgency && x.schedule?.room === s.schedule!.room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, s.schedule!.start, s.estMinutes))
 }
+
+const mins = (a: string, b: string) => Math.round((parseDate(b).getTime() - parseDate(a).getTime()) / 60000)
 
 export function surgeryView(s: Surgery): SurgeryView {
   const a = find.admission(s.admissionId)
@@ -99,7 +103,8 @@ export function surgeryView(s: Surgery): SurgeryView {
     teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
     ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted'),
     ...(s.postop ? { postopText: `${s.postop.at.slice(5)} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
-    specimenRows: (s.specimens ?? []).map((x) => ({ id: x.id, text: specimenText(x) })),
+    specimenRows: (s.specimens ?? []).map((x) => ({ id: x.id, text: specimenText(x), ...(x.frozen ? { frozen: ((st) => ({ text: x.frozen!.result ? `冰凍 ${st.minutes} 分回報：${x.frozen!.result.text}（接聽 ${nameOf.user(x.frozen!.result.receivedBy)}）` : `冰凍等待回報 ${st.minutes} 分${st.overdue ? `（超過 ${FROZEN_MINUTES} 分）` : ''}`, overdue: st.overdue && !st.done, done: st.done }))(frozenState(x.frozen, now(), mins)) } : {}) })),
+    frozenWaiting: (s.specimens ?? []).filter((x) => x.frozen && !x.frozen.result).map((x) => ((st) => ({ label: x.label, minutes: st.minutes, overdue: st.overdue }))(frozenState(x.frozen!, now(), mins))),
     specimenStructured: !!(s.specimens || s.noSpecimen || s.status === 'in-progress'),
     ...((st) => (st ? { pathStageLabel: PATH_STAGE_LABEL[st] } : {}))(pathStage(s.path)),
     pathAckDue: pathCritical(s.path?.report) && !s.path?.ack,
@@ -205,4 +210,10 @@ export function teamClash(s: Surgery, userId: string, t: string, from?: string):
   }
   const [a, am] = win(s, from)
   return db.surgeries.find((x) => x.id !== s.id && x.schedule && ['scheduled', 'sent', 'in-progress'].includes(x.status) && TEAM_ORDER.some((r) => teamNow(x, r) === userId) && ((w) => overlaps(a, am, w[0], w[1]))(win(x)))
+}
+
+/** 冰凍切片等待回報（全院）；其中超過 20 分鐘的 */
+export function frozenCounts(t: string): { waiting: number; overdue: number } {
+  const xs = db.surgeries.flatMap((s) => (s.specimens ?? []).filter((x) => x.frozen && !x.frozen.result).map((x) => frozenState(x.frozen!, t, mins)))
+  return { waiting: xs.length, overdue: xs.filter((x) => x.overdue).length }
 }

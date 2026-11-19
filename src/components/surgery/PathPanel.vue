@@ -22,10 +22,12 @@ const TONE = { sent: 'yellow', received: 'blue', reported: 'purple', acked: 'gre
         <span class="tabular text-xs" :class="p.overdue ? 'font-semibold text-red-700' : 'text-slate-500'">{{ p.sentAt.slice(5) }} 送出{{ p.overdue ? '・超過 4 小時還沒收件' : '' }}</span>
       </div>
       <p class="text-xs text-slate-600">{{ p.specimens.map((x) => x.text).join('；') }}</p>
+      <p v-for="x in p.specimens.filter((y) => y.frozenText)" :key="x.id" class="text-xs text-slate-600">{{ x.label }} 冰凍：{{ x.frozenText }}</p>
       <p v-if="p.receivedText" class="text-xs" :class="p.missing.length ? 'font-semibold text-red-700' : 'text-slate-600'">{{ p.receivedText }}</p>
       <div v-if="p.report" class="rounded bg-white px-2 py-1">
         <div :class="p.critical ? 'font-semibold text-red-700' : 'text-slate-800'">{{ p.report.diagnosis }}</div>
         <div class="text-xs text-slate-600">{{ p.report.malignant ? '惡性' : '良性' }}・{{ p.report.consistent ? '和術前診斷相符' : '和術前診斷不符' }}<template v-if="p.report.note">・{{ p.report.note }}</template>・{{ p.report.byName }} {{ p.report.at.slice(5) }}</div>
+        <div v-if="p.report.frozenConcordant !== undefined" class="text-xs" :class="p.report.frozenConcordant ? 'text-slate-600' : 'font-medium text-amber-800'">{{ p.report.frozenConcordant ? '和冰凍切片結果一致' : `和冰凍切片結果不一致：${p.report.frozenNote}` }}</div>
       </div>
       <p v-if="p.ackText" class="text-xs text-emerald-700">{{ p.ackText }}</p>
       <div v-if="p.canAck" class="flex flex-wrap items-end gap-2">

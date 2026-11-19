@@ -317,7 +317,7 @@ export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-wor
 export type { ManagementReport, MonthMetrics } from './management'
 export type { PatientSurgeries, SurgeryInput, OpRecordInput, OrBoard } from './surgery'
 export type { AnesChart, PacuItem } from './anesthesia'
-export type { PathItem, PathBoard } from './pathology'
+export type { PathItem, PathBoard, FrozenItem } from './pathology'
 export type { PostopPlan, PostopPreviewItem, PostopSetView } from './postop'
 export type { SurgeryView } from './surgery-work'
 export type { OrMetrics } from './surgery'

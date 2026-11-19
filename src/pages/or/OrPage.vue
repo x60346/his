@@ -158,6 +158,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
                 <UBadge v-if="s.bumpedBy" tone="red">需改期</UBadge>
                 <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
                 <UBadge v-if="s.teamMissing.length" tone="yellow">團隊未齊</UBadge>
+                <UBadge v-for="z in s.frozenWaiting" :key="z.label" :tone="z.overdue ? 'red' : 'yellow'">冰凍 {{ z.label }} 等 {{ z.minutes }} 分</UBadge>
                 <AlertTriangle v-if="s.countMismatch" class="h-3.5 w-3.5 text-red-600" />
               </div>
               <div class="font-medium text-slate-800">{{ s.patientName }}<span class="ml-1 text-xs font-normal text-slate-500">{{ s.bedNo }}</span></div>
