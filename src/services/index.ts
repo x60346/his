@@ -310,7 +310,7 @@ export type { PatientBlood, BloodOrderInput, BloodWork, BloodReceiveInput, Blood
 export type { BloodRequestView, BloodUnitView, BloodIssueRow } from './blood-work'
 export type { ManagementReport, MonthMetrics } from './management'
 export type { PatientSurgeries, SurgeryInput, OpRecordInput, OrBoard } from './surgery'
-export type { AnesChart } from './anesthesia'
+export type { AnesChart, PacuItem } from './anesthesia'
 export type { SurgeryView } from './surgery-work'
 export type { LineView, LineInput, WardLineStats } from './line'
 export type { TubeFeedingView, FeedInput } from './tube'

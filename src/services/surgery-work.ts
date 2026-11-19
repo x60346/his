@@ -2,13 +2,13 @@
 // 規則在 surgery-rules（純函式）；API 在 surgery.ts
 import type { Admission, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
-import { addMinutes, ageOf, now } from '@/utils/date'
+import { addMinutes, ageOf, now, parseDate } from '@/utils/date'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, CHECK_ORDER, emergencyState, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, SURGERY_STATUS_LABEL, URGENCY_LABEL } from './surgery-rules'
 import { flagsOf, type PatientFlags } from './flag-work'
 import { find, nameOf } from './views'
 import { BLOOD_PRODUCT_LABEL, requestStatus, BLOOD_STATUS_LABEL } from './blood-rules'
 import { preIncisionOf } from './prophylaxis-work'
-import { preAnesSummary } from './anesthesia-rules'
+import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
@@ -114,11 +114,17 @@ export function surgeryFeeItems(admissionId: string): { proc: Procedure; qty: nu
 }
 
 /** 出院前：在手術室（已送、手術中）不能出院 */
-export const surgeryOpen = (a: Admission) => db.surgeries.some((s) => s.admissionId === a.id && (s.status === 'sent' || s.status === 'in-progress'))
+export const surgeryOpen = (a: Admission) => db.surgeries.some((s) => s.admissionId === a.id && (s.status === 'sent' || s.status === 'in-progress' || (s.pacu && !s.pacu.received)))
 
 const live = () => db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')
 
 /** 首頁待辦：待排程（手術排程權限）；今天、明天要開但術前準備還沒完成（護理站）；主刀：手術紀錄待寫、計數不符 */
+/** 恢復室：在恢復室的、停留超過 2 小時的、已轉出待病房接回的 */
+export function pacuCounts(t: string): { in: number; long: number; out: number } {
+  const xs = live().filter((s) => s.pacu && !s.pacu.received)
+  const inn = xs.filter((s) => !s.pacu!.out)
+  return { in: inn.length, long: inn.filter((s) => (parseDate(t).getTime() - parseDate(s.pacu!.inAt).getTime()) / 60000 > PACU_LONG_MINUTES).length, out: xs.length - inn.length }
+}
 /** 麻醉前評估待做：還沒評估、要開了的（急刀，或今天明天排的／預計的）；精簡版待補（急刀先做了精簡版） */
 export function preAnesCounts(t: string): { due: number; brief: number } {
   const tomorrow = addMinutes(`${t.slice(0, 10)} 00:00`, 24 * 60).slice(0, 10)

@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { preAnesCounts, surgeryCounts } from './surgery-work'
+import { pacuCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -239,6 +239,10 @@ export interface DashboardStats {
   rcaOverdue?: number
   /** 手術排程：急刀還沒入刀房的、已超過時限的 */
   emergencyWaiting?: number
+  /** 恢復室：在恢復室的、停留超過 2 小時的、已轉出待病房接回的 */
+  pacuIn?: number
+  pacuLong?: number
+  pacuToReceive?: number
   /** 麻醉：評估待做（急刀、今明兩天的）、急刀精簡版待補 */
   preAnesDue?: number
   preAnesBrief?: number
@@ -432,6 +436,7 @@ export function getDashboard(): Promise<DashboardStats> {
         }
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
+      ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
       ...(() => {
         const me = sessionUser()

@@ -15453,6 +15453,135 @@ try {
     const panel = readFileSync('src/components/surgery/AnesRecordPanel.vue', 'utf8')
     ok(!/db\.|< 90 \?|ANES_VITAL_GAP|anesTotals|intraopAlerts/.test(panel.replace("v.spo2! < 90 ? 'fill-red-600'", '')), '空窗、低血壓低血氧、合計由服務層算，頁面只畫圖')
   }
+  // 恢復室：Aldrete 與轉出條件、欄位、階段；種子（今天一位 Aldrete 8、昨天已接回）、看板與首頁；護理師評分、達標轉出、待接回、不能辦出院、接回；
+  // 完成手術自動進恢復室（局部麻醉不用）；還沒評分、評分太久、條件未達護理師不能轉、麻醉醫師要寫原因放行；停留超過 2 小時
+  console.log('\n[恢復室]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const A = api.anesthesiaApi
+    const S = api.surgeryApi
+    const tomorrow = addDaysT(1)
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const full = { activity: 2, respiration: 2, circulation: 2, consciousness: 2, spo2: 2 }
+    // 規則
+    ok(api.aldreteOf(full) === 10 && api.pacuUnmet({ ...full, pain: 4, ponv: false }).length === 0, 'Aldrete 10、疼痛 4、沒噁吐：可以轉出')
+    const un = api.pacuUnmet({ ...full, consciousness: 0, pain: 5, ponv: true })
+    ok(un.length === 3 && un[0].includes('Aldrete 8') && un[1].includes('疼痛 5') && un[2] === '噁心嘔吐' && api.pacuUnmet(undefined)[0] === '還沒評分', `條件未達一次列出：${un.join('、')}`)
+    const ce = api.checkPacuScore({ activity: 3, pain: 11 })
+    ok(ce.activity && ce.respiration && ce.pain && ce.ponv, '評分欄位一次標出（0–2、疼痛 0–10、噁吐要選）')
+    ok(api.pacuStage(undefined) === undefined && api.pacuStage({ inAt: 'x', scores: [] }) === 'in' && api.pacuStage({ inAt: 'x', scores: [], out: {} }) === 'out' && api.pacuStage({ inAt: 'x', scores: [], out: {}, received: {} }) === 'back', '階段：恢復室中、待接回、已接回')
+
+    // 種子
+    const s5 = db().surgeries.find((s) => s.id === 'SG-SEED-5')
+    await as('nurse01')
+    let board = await A.pacuBoard()
+    const b5 = board.find((x) => x.surgeryId === s5.id)
+    ok(b5.stage === 'in' && b5.latest.aldrete === 8 && b5.unmet.length === 2 && Math.abs(b5.minutes - 40) <= 2 && !b5.scoreDue && b5.canScore && !b5.canOverride, `種子：今天一位在恢復室 ${b5.minutes} 分、Aldrete 8、疼痛 5，還不能轉出`)
+    ok(b5.handover.some((h) => h.includes('ASA 2')) && b5.handover.some((h) => h.includes('失血 20 mL')), `交班帶出麻醉與輸入輸出：${b5.handover.join('／')}`)
+    const s4 = db().surgeries.find((s) => s.id === 'SG-SEED-4')
+    ok(s4.pacu.received && !board.some((x) => x.surgeryId === s4.id), '種子：昨天那台已接回（看板只列今天接回的）')
+    const s4p = await A.pacuOf(s4.id)
+    ok(s4p.stage === 'back' && s4p.handover.some((h) => h.includes('低血壓')), '昨天那台交班帶出術中低血壓')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.pacuIn === 1 && dash.pacuLong === 0 && dash.pacuToReceive === 0, '首頁：恢復室 1、沒有超過 2 小時、沒有待接回')
+    ok(db().surgeries.filter((s) => s.preAnes?.npo.lastIntake).every((s) => s.preAnes.npo.lastIntake <= s.preAnes.at), '種子：麻醉前評估的最後進食時間都不晚於評估時間')
+
+    // 條件未達：護理師不能轉
+    let msg = await errOf(() => A.dischargePacu(s5.id))
+    ok(msg.includes('麻醉醫師') && msg.includes('Aldrete 8'), `條件未達護理師不能轉：「${msg}」`)
+    await as(userOf(s5.doctorId))
+    msg = await errOf(() => A.recordPacuScore(s5.id, { ...full, pain: 2, ponv: false }))
+    ok(msg !== '', '醫師不能評分（護理師評）')
+    msg = await errOf(() => A.dischargePacu(s5.id))
+    ok(msg.includes('麻醉'), '主刀（沒被指定麻醉）不能放行')
+    await as('nurse01')
+    let f = await fieldsOf(() => A.recordPacuScore(s5.id, { ...full, pain: '' }))
+    ok(f.pain && f.ponv, '評分要填疼痛、噁吐')
+    let v = await A.recordPacuScore(s5.id, { ...full, consciousness: 1, pain: 3, ponv: false })
+    ok(v.latest.aldrete === 9 && !v.unmet.length && v.canDischarge, '再評分：Aldrete 9、疼痛 3，可以轉出')
+    v = await A.dischargePacu(s5.id)
+    ok(v.stage === 'out' && !v.outText.includes('放行') && db().auditLogs[0].action === '轉出恢復室', '護理師轉回病房、稽核')
+    await expectError(() => A.dischargePacu(s5.id), '重複轉出')
+    await expectError(() => A.recordPacuScore(s5.id, { ...full, pain: 1, ponv: false }), '轉出後不能再評分')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.pacuIn === 0 && dash.pacuToReceive === 1, '首頁：術後待接回 1')
+    // 待接回不能辦出院
+    const adm5 = db().admissions.find((a) => a.id === s5.admissionId)
+    adm5.dischargeSummary = { ...(adm5.dischargeSummary ?? {}), signedAt: nowStr(), dischargeType: '改善出院' }
+    msg = await errOf(() => api.admissionApi.discharge(adm5.id))
+    ok(msg.includes('恢復室'), `還沒接回不能出院：「${msg}」`)
+    delete db().admissions.find((a) => a.id === adm5.id).dischargeSummary.signedAt
+    v = await A.receivePacu(s5.id)
+    ok(v.stage === 'back' && v.receivedText.includes('病房接回') && db().auditLogs[0].action === '病房接回術後病人', '病房接回、稽核')
+    await expectError(() => A.receivePacu(s5.id), '重複接回')
+    ok((await api.dashboardApi.getDashboard()).pacuToReceive === 0, '接回後待接回 0')
+
+    // 完成手術自動進恢復室；條件未達麻醉醫師放行
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    const flow = async (admissionId, anesthesia) => {
+      await as(userOf(db().admissions.find((a) => a.id === admissionId).doctorId))
+      const sg = await S.requestSurgery({ admissionId, procId: 'P039', side: 'left', anesthesia, requestedDate: tomorrow, estMinutes: 60, diagnosis: '左側腹股溝疝氣' })
+      await as('nurse01')
+      await S.scheduleSurgery(sg.id, { room: 'OR3', start: `${tomorrow} ${anesthesia === 'local' ? '12' : '09'}:00` })
+      for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(sg.id, k)
+      await S.markPrep(sg.id, 'blood', { notNeeded: '出血少' })
+      await S.markPrep(sg.id, 'abx', { notNeeded: '乾淨手術' })
+      await S.sendToOr(sg.id)
+      await S.recordCheck(sg.id, 'signIn', api.CHECK_ITEMS.signIn.items)
+      await S.recordCheck(sg.id, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+      await S.startSurgery(sg.id)
+      return S.finishSurgery(sg.id, { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 })
+    }
+    v = await flow(adm.id, 'general')
+    ok(v.pacu && !v.pacu.scores.length && db().auditLogs[0].detail.includes('進恢復室'), '完成手術（全身麻醉）自動進恢復室')
+    const sid = v.id
+    msg = await errOf(() => A.dischargePacu(sid))
+    ok(msg.includes('還沒評分'), '還沒評分不能轉出')
+    await A.recordPacuScore(sid, { ...full, consciousness: 0, respiration: 1, pain: 6, ponv: true })
+    await as('dr03')
+    let item = (await A.pacuBoard()).find((x) => x.surgeryId === sid)
+    ok(item.canOverride && item.unmet.length === 3, '麻醉醫師看得到可以放行')
+    f = await fieldsOf(() => A.dischargePacu(sid, {}))
+    ok(f.override?.includes('放行原因'), '條件未達，麻醉醫師要寫原因')
+    // 最後一次評分超過 15 分鐘（測試輔助：把評分時間往前推）
+    db().surgeries.find((s) => s.id === sid).pacu.scores[0].at = dateUtil.addMinutes(nowStr(), -20).slice(0, 16)
+    msg = await errOf(() => A.dischargePacu(sid, { override: '病人要求回病房' }))
+    ok(msg.includes('重新評分'), `評分太久不能轉出：「${msg}」`)
+    await as('nurse01')
+    ok((await A.pacuOf(sid)).scoreDue, '超過 15 分鐘沒評分：標「該評分了」')
+    await A.recordPacuScore(sid, { ...full, consciousness: 1, respiration: 1, pain: 6, ponv: false })
+    await as('dr03')
+    v = await A.dischargePacu(sid, { override: '疼痛已給藥、意識穩定，病房有 PCA 可接手' })
+    ok(v.stage === 'out' && v.outText.includes('放行原因') && db().auditLogs[0].detail.includes('條件未達放行'), '麻醉醫師寫原因放行（稽核記條件未達）')
+    // 停留超過 2 小時（測試輔助：把進入時間往前推）
+    const adm2 = db().admissions.find((a) => a.status === 'admitted' && !a.obs && a.doctorId !== 'DR03' && a.id !== adm.id && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
+    v = await flow(adm2.id, 'local')
+    ok(!v.pacu, '局部麻醉不進恢復室')
+    db().surgeries.find((s) => s.id === sid).pacu = { inAt: dateUtil.addMinutes(nowStr(), -130).slice(0, 16), scores: [] }
+    await as('nurse01')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.pacuLong === 1 && (await A.pacuOf(sid)).long, '停留超過 2 小時：首頁與看板標示')
+    const { readFileSync } = await import('node:fs')
+    const panel = readFileSync('src/components/surgery/PacuPanel.vue', 'utf8')
+    ok(!/db\.|aldreteOf|pacuUnmet|>= 9|<= 4/.test(panel), '轉出條件由服務層判斷，頁面只顯示')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

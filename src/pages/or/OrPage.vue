@@ -7,9 +7,11 @@ import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, CalendarClock, Stethoscope } from 'lucide-vue-next'
 import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
 import AnesRecordPanel from '@/components/surgery/AnesRecordPanel.vue'
+import PacuPanel from '@/components/surgery/PacuPanel.vue'
+
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
-import { CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
+import { anesthesiaApi, CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
 import type { SurgeryCheckStage } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -67,6 +69,12 @@ async function finish() {
   if (!current.value) return
   await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason })
 }
+// ---------- 恢復室 ----------
+const { data: pacu, reload: reloadPacu } = useQuery(() => anesthesiaApi.pacuBoard(), [])
+const pacuId = ref<string>()
+const pacuOpen = computed({ get: () => !!pacuId.value, set: (x) => !x && (pacuId.value = undefined) })
+const PACU_STAGE = { in: '恢復室中', out: '待病房接回', back: '已接回' } as const
+
 // ---------- 麻醉前評估 ----------
 const preFor = ref<SurgeryView>()
 const preOpen = computed({ get: () => !!preFor.value, set: (x) => !x && (preFor.value = undefined) })
@@ -105,6 +113,21 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <p v-if="!board.canSchedule" class="mt-1 text-xs text-slate-500">排程由有「手術排程」權限的人處理。</p>
         </section>
 
+        <section v-if="pacu?.length" class="rounded-md border border-violet-200 bg-violet-50/40 p-3 text-sm">
+          <h3 class="mb-1 font-semibold text-violet-900">恢復室 {{ pacu.filter((x) => x.stage === 'in').length }} 位<span class="ml-2 text-xs font-normal text-slate-500">每 15 分鐘評分；Aldrete ≥ 9、疼痛 ≤ 4、沒有噁心嘔吐才轉回病房</span></h3>
+          <ul class="divide-y divide-violet-100">
+            <li v-for="x in pacu" :key="x.surgeryId">
+              <button type="button" class="flex w-full flex-wrap items-center gap-2 py-1.5 text-left hover:bg-violet-50" @click="pacuId = x.surgeryId">
+                <UBadge :tone="x.stage === 'in' ? 'purple' : x.stage === 'out' ? 'yellow' : 'green'">{{ PACU_STAGE[x.stage] }}</UBadge>
+                <b>{{ x.bedNo }} {{ x.patientName }}</b><span class="text-xs text-slate-600">{{ x.procName }}</span>
+                <span class="tabular text-xs" :class="x.long ? 'font-semibold text-red-700' : 'text-slate-600'">{{ x.inAt.slice(11) }} 進入・{{ x.minutes }} 分</span>
+                <span v-if="x.latest" class="tabular text-xs" :class="x.unmet.length ? 'text-amber-800' : 'text-emerald-700'">Aldrete {{ x.latest.aldrete }}・疼痛 {{ x.latest.pain }}{{ x.latest.ponv ? '・噁吐' : '' }}</span>
+                <span v-if="x.scoreDue" class="text-xs font-medium text-amber-700">該評分了</span>
+                <span v-if="x.stage === 'in' && !x.unmet.length" class="text-xs font-medium text-emerald-700">可轉出</span>
+              </button>
+            </li>
+          </ul>
+        </section>
         <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
           <span>急刀時效達成（30 天、已入刀房）：<b class="tabular" :class="board.emergencyStats.pct < 90 ? 'text-red-700' : 'text-emerald-700'">{{ board.emergencyStats.total ? `${board.emergencyStats.ontime}/${board.emergencyStats.total}（${board.emergencyStats.pct}%）` : '—' }}</b></span>
           <span v-if="board.needsReschedule" class="font-semibold text-red-700">{{ board.needsReschedule }} 台擇期手術被急刀佔用，需改期（不會自動移）</span>
@@ -134,6 +157,9 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
     </UQueryState>
 
     <PreAnesDialog v-model="preOpen" :surgery="preFor" />
+    <UDialog v-model="pacuOpen" :title="`恢復室：${(pacu ?? []).find((x) => x.surgeryId === pacuId)?.patientName ?? ''}`" size="lg">
+      <PacuPanel v-if="pacuId" :surgery-id="pacuId" @changed="reloadPacu" />
+    </UDialog>
     <UDialog v-model="schedOpen" :title="`排程：${scheduling?.patientName ?? ''}`" size="sm" @submit="submitSched">
       <div v-if="scheduling" class="space-y-3 text-sm">
         <p class="text-slate-600">{{ scheduling.procName }}（{{ scheduling.sideText }}）・預估 {{ scheduling.estMinutes }} 分・<template v-if="scheduling.emergency">{{ scheduling.emergency.due.slice(11) }} 前要入刀房</template><template v-else>預計 {{ scheduling.requestedDate }}</template></p>
@@ -172,6 +198,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
         </div>
         <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
         <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
+        <PacuPanel v-if="current.pacu" :surgery-id="current.id" @changed="reloadPacu" />
         <div v-if="current.status === 'scheduled'" class="flex flex-wrap items-center gap-2">
           <p class="text-amber-800">病房還沒送來（術前準備完成後由護理站「送手術室」）。</p>
           <UButton v-if="board?.canSchedule" size="sm" variant="secondary" class="ml-auto" :icon="CalendarClock" @click="reschedule(current)">改期</UButton>

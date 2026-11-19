@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -2049,6 +2049,39 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           E(addMinutes(end, -5), { type: 'output', output: 'urine', ml: 150 }), E(addMinutes(end, -2), { type: 'event', event: 'extubation' }),
         )
         s4.anes = { startAt: a0, endAt: end, entries }
+        // 恢復室：進來 Aldrete 7（疼痛 3）→ 15 分鐘後 9 → 轉出 → 病房接回
+        const sc = (i: number, at: string, v: [number, number, number, number, number], pain: number): PacuScore => ({ id: `PS-SEED-4-${i}`, at, activity: v[0] as 0 | 1 | 2, respiration: v[1] as 0 | 1 | 2, circulation: v[2] as 0 | 1 | 2, consciousness: v[3] as 0 | 1 | 2, spo2: v[4] as 0 | 1 | 2, pain, ponv: false, by: 'U205' })
+        s4.pacu = { inAt: end, scores: [sc(1, end, [1, 2, 2, 1, 1], 3), sc(2, addMinutes(end, 15), [2, 2, 2, 1, 2], 3)], out: { at: addMinutes(end, 20), by: 'U205', aldrete: 9, pain: 3 , ponv: false }, received: { at: addMinutes(end, 35), by: 'U201' } }
+      }
+      // 五：今天一台擇期疝氣修補，40 分鐘前離開手術室進恢復室：Aldrete 7 → 8 → 8（意識、活動還沒完全恢復，疼痛 5），還不能轉出
+      const h5 = admissions.find((a) => a.status === 'admitted' && a.admittedAt && a.admittedAt < addMinutes(nowStr, -24 * 60) && !a.obs && a.doctorId !== 'DR03' && !used.has(a.id) && a.id !== hx?.id && !surgeries.some((s) => s.admissionId === a.id))
+      if (h5) {
+        const end = addMinutes(nowStr, -40).slice(0, 16)
+        const start = addMinutes(end, -60)
+        const sent = addMinutes(start, -25)
+        const created = addMinutes(sent, -20 * 60)
+        const a0 = addMinutes(sent, 10)
+        const d = start.slice(0, 10)
+        const surgeon = users.find((u) => u.doctorId === h5.doctorId)!.id
+        let n = 0
+        const E = (at: string, x: Partial<AnesEntry> & Pick<AnesEntry, 'type'>): AnesEntry => ({ id: `AE-SEED5-${++n}`, at, by: an, ...x })
+        const entries: AnesEntry[] = [E(a0, { type: 'event', event: 'induction' }), E(a0, { type: 'drug', drug: 'propofol', dose: 120 }), E(a0, { type: 'drug', drug: 'fentanyl', dose: 100 }), E(addMinutes(a0, 2), { type: 'drug', drug: 'rocuronium', dose: 40 }), E(addMinutes(a0, 3), { type: 'event', event: 'intubation' }), E(addMinutes(a0, 5), { type: 'fluid', fluid: 'crystalloid', ml: 600 }), E(addMinutes(end, -5), { type: 'output', output: 'blood', ml: 20 }), E(addMinutes(end, -3), { type: 'event', event: 'extubation' })]
+        for (let m = 0; addMinutes(a0, m) <= end; m += 5) entries.push(E(addMinutes(a0, m), { type: 'vital', sbp: 124 + (m % 10), dbp: 74, hr: 78, spo2: 99, ...(m >= 5 ? { etco2: 36 } : {}) }))
+        const sc = (i: number, at: string, v: [number, number, number, number, number], pain: number): PacuScore => ({ id: `PS-SEED-5-${i}`, at, activity: v[0] as 0 | 1 | 2, respiration: v[1] as 0 | 1 | 2, circulation: v[2] as 0 | 1 | 2, consciousness: v[3] as 0 | 1 | 2, spo2: v[4] as 0 | 1 | 2, pain, ponv: false, by: 'U205' })
+        surgeries.push({
+          id: 'SG-SEED-5', no: `OR${d.replace(/-/g, '')}${String(surgeries.filter((x) => x.no.startsWith(`OR${d.replace(/-/g, '')}`)).length + 1).padStart(3, '0')}`,
+          admissionId: h5.id, patientId: h5.patientId, doctorId: h5.doctorId, procId: 'P039', side: 'left', anesthesia: 'general',
+          diagnosis: 'K40.90 左側腹股溝疝氣', requestedDate: d, estMinutes: 60, status: 'done', createdAt: created,
+          schedule: { room: 'OR3', start, by: 'U202', at: addMinutes(created, 60) },
+          prep: { consent: mark('U201', addMinutes(created, 120)), npo: mark('U201', addMinutes(sent, -60)), siteMark: mark('U201', addMinutes(sent, -60)), blood: mark('U201', addMinutes(created, 120), { notNeeded: '疝氣修補出血少' }), abx: mark('U201', addMinutes(created, 120), { notNeeded: '乾淨手術不需預防性抗生素' }) },
+          preAnes: { asa: 2, emergency: false, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, difficult: false, npo: { status: 'ok', lastIntake: addMinutes(sent, -10 * 60) }, history: { items: ['cardiac'], note: '高血壓' }, plan: 'general', by: an, at: addMinutes(sent, -60) },
+          sentAt: sent, sentBy: 'U201',
+          checks: { signIn: { by: 'U205', at: addMinutes(sent, 5) }, timeOut: { by: 'U205', at: addMinutes(start, -2) }, signOut: { by: 'U205', at: end } },
+          startAt: start, endAt: end, counts: { spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20 },
+          anes: { startAt: a0, endAt: end, entries },
+          pacu: { inAt: end, scores: [sc(1, end, [1, 2, 2, 1, 1], 6), sc(2, addMinutes(end, 15), [1, 2, 2, 1, 2], 5), sc(3, addMinutes(end, 30), [1, 2, 2, 1, 2], 5)] },
+          record: { performed: '左側腹股溝疝氣修補術（網膜）', findings: '間接型疝氣，疝囊約 4 cm，無嵌頓', bloodLoss: 20, complications: '無', specimen: '無', by: surgeon, at: addMinutes(end, 10) },
+        })
       }
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）

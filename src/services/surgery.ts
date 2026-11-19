@@ -313,7 +313,9 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     s.checks.signOut = { by: u.id, at: t }
     s.counts = { ...c, ...(mismatch.length ? { mismatchReason: `${mismatch.join('；')}：${reason}` } : {}) }
     Object.assign(s, { status: 'done', endAt: t })
-    audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}`)
+    // 局部麻醉以外：離開手術室就進恢復室（轉出、病房接回在 anesthesia.ts）
+    if (s.anesthesia !== 'local') s.pacu = { inAt: t.slice(0, 16), scores: [] }
+    audit('手術完成', `${audText(s)}${mismatch.length ? `；計數不符：${mismatch.join('；')}，${reason}` : ''}${s.pacu ? '，進恢復室' : ''}`)
     return surgeryView(s)
   })
 }

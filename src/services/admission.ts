@@ -255,7 +255,7 @@ export function discharge(admissionId: string, input: { confirmUnfinished?: bool
     const ds = a.dischargeSummary
     if (!ds?.signedAt) fail('醫師尚未准予出院：出院病摘需由醫師簽署後才能辦理', 'CONFLICT')
     if (openDeptTransfer(a)) fail('轉科申請中，不能辦理出院（請醫師先撤回轉科申請）', 'CONFLICT')
-    if (surgeryOpen(a)) fail('病人在手術室（已送或手術中），手術完成後才能辦理出院', 'CONFLICT')
+    if (surgeryOpen(a)) fail('病人在手術室或恢復室（還沒接回病房），接回後才能辦理出院', 'CONFLICT')
     if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完（或請血庫退回）才能辦理出院', 'CONFLICT')
     if (openPca(a.id)) fail('PCA 還沒結束：請護理師結束 PCA 並雙人銷毀剩餘量（還沒架設的請醫師取消）後再辦理出院', 'CONFLICT')
     const t = now()

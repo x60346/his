@@ -2342,6 +2342,29 @@ export interface AnesRecord {
   endAt?: string
   entries: AnesEntry[]
 }
+/** 恢復室評分：Aldrete（活動、呼吸、循環、意識、血氧，各 0–2）＋疼痛 0–10＋噁心嘔吐 */
+export interface PacuScore {
+  id: string
+  at: string
+  activity: 0 | 1 | 2
+  respiration: 0 | 1 | 2
+  circulation: 0 | 1 | 2
+  consciousness: 0 | 1 | 2
+  spo2: 0 | 1 | 2
+  pain: number
+  ponv: boolean
+  by: string
+}
+/**
+ * 恢復室（PACU）：完成手術（局部麻醉以外）就進恢復室；護理師每 15 分鐘評分；Aldrete ≥ 9、疼痛 ≤ 4、沒有噁心嘔吐才能轉回病房，
+ * 不符合要麻醉醫師寫原因放行；病房護理師接回才算回到病房。手術狀態維持「已完成」
+ */
+export interface PacuRecord {
+  inAt: string
+  scores: PacuScore[]
+  out?: { at: string; by: string; aldrete: number; pain: number; ponv: boolean; override?: string }
+  received?: { at: string; by: string }
+}
 export interface PreAnesthesia {
   asa: AsaClass
   emergency: boolean
@@ -2379,6 +2402,8 @@ export interface Surgery {
   preAnes?: PreAnesthesia
   /** 術中麻醉紀錄 */
   anes?: AnesRecord
+  /** 恢復室 */
+  pacu?: PacuRecord
   note?: string
   status: SurgeryStatus
   createdAt: string

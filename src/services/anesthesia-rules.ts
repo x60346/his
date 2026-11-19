@@ -1,5 +1,5 @@
 // 麻醉（純函式）：麻醉前評估的分級、呼吸道判斷、欄位檢查。服務層（anesthesia.ts）、手術室畫面、首頁都用這一份
-import type { AnesDrugKey, AnesEntry, AnesEventKind, AnesFluidKind, AnesHistoryKey, AnesOutputKind, AnesRecord, AnesthesiaType, AsaClass, NpoStatus, PreAnesthesia } from '@/types'
+import type { AnesDrugKey, AnesEntry, AnesEventKind, AnesFluidKind, AnesHistoryKey, AnesOutputKind, AnesRecord, AnesthesiaType, AsaClass, NpoStatus, PacuRecord, PacuScore, PreAnesthesia } from '@/types'
 import { parseDate } from '@/utils/date'
 
 export const ASA_LABEL: Record<AsaClass, string> = { 1: '健康', 2: '輕度全身疾病', 3: '重度全身疾病', 4: '持續威脅生命的重度疾病', 5: '不手術難以存活' }
@@ -186,3 +186,44 @@ export function anesEntryText(x: AnesEntry): string {
   if (x.type === 'output') return `${OUTPUT_LABEL[x.output!]} ${x.ml} mL`
   return `${ANES_EVENT_LABEL[x.event!]}${x.note ? `：${x.note}` : ''}`
 }
+
+// ---------- 恢復室（PACU） ----------
+export const ALDRETE_ITEMS: { key: 'activity' | 'respiration' | 'circulation' | 'consciousness' | 'spo2'; label: string; options: [string, string, string] }[] = [
+  { key: 'activity', label: '活動', options: ['不能動', '能動兩肢', '能動四肢'] },
+  { key: 'respiration', label: '呼吸', options: ['沒有自發呼吸', '呼吸困難或淺', '能深呼吸、咳嗽'] },
+  { key: 'circulation', label: '循環', options: ['血壓和術前差 50% 以上', '差 20–49%', '差 20% 以內'] },
+  { key: 'consciousness', label: '意識', options: ['叫不醒', '叫得醒', '完全清醒'] },
+  { key: 'spo2', label: '血氧', options: ['給氧仍 < 90%', '要給氧才 > 90%', '室內空氣 > 92%'] },
+]
+/** 轉出條件 */
+export const PACU_ALDRETE_MIN = 9
+export const PACU_PAIN_MAX = 4
+/** 評分間隔（分鐘）、停留提醒（分鐘） */
+export const PACU_SCORE_EVERY = 15
+export const PACU_LONG_MINUTES = 120
+
+export const aldreteOf = (s: Pick<PacuScore, 'activity' | 'respiration' | 'circulation' | 'consciousness' | 'spo2'>) => s.activity + s.respiration + s.circulation + s.consciousness + s.spo2
+
+/** 轉出條件沒達到的項目（空＝可以轉出）；還沒評分＝不能 */
+export function pacuUnmet(latest: PacuScore | undefined): string[] {
+  if (!latest) return ['還沒評分']
+  const out: string[] = []
+  const a = aldreteOf(latest)
+  if (a < PACU_ALDRETE_MIN) out.push(`Aldrete ${a} 分（要 ≥ ${PACU_ALDRETE_MIN}）`)
+  if (latest.pain > PACU_PAIN_MAX) out.push(`疼痛 ${latest.pain} 分（要 ≤ ${PACU_PAIN_MAX}）`)
+  if (latest.ponv) out.push('噁心嘔吐')
+  return out
+}
+
+/** 評分欄位檢查 */
+export function checkPacuScore(x: Partial<Record<string, unknown>>): Record<string, string> {
+  const e: Record<string, string> = {}
+  for (const it of ALDRETE_ITEMS) if (![0, 1, 2].includes(Number(x[it.key])) || x[it.key] === '' || x[it.key] === undefined) e[it.key] = `請評${it.label}`
+  const p = x.pain
+  if (p === undefined || p === '' || !Number.isInteger(Number(p)) || Number(p) < 0 || Number(p) > 10) e.pain = '疼痛 0–10'
+  if (typeof x.ponv !== 'boolean') e.ponv = '請選有無噁心嘔吐'
+  return e
+}
+
+/** 恢復室狀態：in（恢復室中）、out（已轉出、病房待接回）、back（已接回） */
+export const pacuStage = (p: PacuRecord | undefined): 'in' | 'out' | 'back' | undefined => (!p ? undefined : p.received ? 'back' : p.out ? 'out' : 'in')

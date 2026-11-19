@@ -245,7 +245,7 @@ export function endObservation(admissionId: string, input: ObsEndInput): Promise
     if (!obsOpen(a)) fail('留觀已經結束了', 'CONFLICT')
     if (a.status !== 'admitted') fail('還沒排留觀床（病人還沒開始留觀）', 'CONFLICT')
     const v = must(find.visit(a.obs!.visitId), '急診就醫')
-    if (surgeryOpen(a)) fail('病人在手術室，手術完成後才能結束留觀', 'CONFLICT')
+    if (surgeryOpen(a)) fail('病人在手術室或恢復室（還沒接回），接回後才能結束留觀', 'CONFLICT')
     if (transfusionOpen(a)) fail('有血袋已發出或輸血中：輸完才能結束留觀', 'CONFLICT')
     if (input.kind !== 'admit' && openPca(a.id)) fail('PCA 還沒結束：請先結束 PCA 並雙人銷毀剩餘量', 'CONFLICT')
     if (!['home', 'admit', 'transfer'].includes(input.kind)) fail('請選擇去向')
