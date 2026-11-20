@@ -170,6 +170,11 @@ try {
         if (!l) d.implantLots.push((l = { id: `IL-TEST-${want}`, procId: want, lot: `TEST-${want}`, expiresOn: dateUtil.addDays(nowStr().slice(0, 10), 365), qty: 999, receivedAt: nowStr().slice(0, 16), receivedBy: 'U214' }))
         sg.implants = [{ id: `IU-TEST-${id}`, lotId: l.id, qty: 1, site: '測試', at: nowStr().slice(0, 16), by: 'U205' }]
       }
+      // 有器械包要逐件清點：沒填的照清單填（全部相符）
+      if (input && input.instrumentItems === undefined) {
+        const exp = api.expectedInstruments(d.instrumentPacks.filter((p) => p.used?.surgeryId === id).map((p) => p.set))
+        if (exp.length) input = { ...input, instrumentItems: Object.fromEntries(exp.map((x) => [x.name, x.qty])) }
+      }
       return packRaw.finishSurgery(id, input)
     },
   }
@@ -16529,7 +16534,7 @@ try {
     ok(f.packs?.includes('器械包'), '沒掃器械包不能完成手術')
     await X.scanPack(sg, r.packNos[0])
     await X.scanPack(sg, r.packNos[1])
-    v = await packRaw.finishSurgery(sg, fin)
+    v = await packRaw.finishSurgery(sg, { ...fin, instrumentItems: Object.fromEntries(api.expectedInstruments(db().instrumentPacks.filter((p) => p.used?.surgeryId === sg).map((p) => p.set)).map((x) => [x.name, x.qty])) })
     ok(v.status === 'done' && v.packRows.length === 2, '掃了兩包：可以完成')
     f = await errOf(() => X.unscanPack(sg, v.packRows[0].id))
     ok(f.includes('已完成'), '完成後不能拿掉')
@@ -16742,6 +16747,54 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/components/surgery/ImplantPanel.vue', 'utf8') + readFileSync('src/components/surgery/ImplantStockPanel.vue', 'utf8')
     ok(!/implantUseProblem|lotState|IMPLANT_FOR|db\./.test(page), '能不能用由服務層判斷')
+  }
+  // 器械逐件清點：包的內容清單、合併、每件都要填、不符列哪一件；種子（做完的都有逐件紀錄）；
+  // 掃了包的手術：清單帶出、沒填擋、哪件不符要原因（總數不用填）、紀錄
+  console.log('\n[器械逐件清點]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const X = api.sterileApi
+    const S = api.surgeryApi
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(api.packTotal('basic') === 15 && api.packTotal('minor') === 6, '包的內容：基本手術包 15 件、小手術包 6 件')
+    const ex = api.expectedInstruments(['basic', 'minor'])
+    ok(ex.find((x) => x.name === '持針器').qty === 3 && ex.find((x) => x.name === '止血鉗').qty === 8 && ex.length === 6, '兩包合起來：同名的加總（持針器 3、止血鉗 8）')
+    const full = Object.fromEntries(ex.map((x) => [x.name, x.qty]))
+    let p = api.instrumentItemsProblem(ex, { ...full, 刀柄: undefined })
+    ok(p.field?.includes('刀柄'), '每一件都要填')
+    p = api.instrumentItemsProblem(ex, { ...full, 持針器: 2 })
+    ok(p.mismatch.length === 1 && p.mismatch[0] === '持針器 術前 3、術後 2' && p.rows.length === 6, '不符列哪一件')
+    ok(db().surgeries.filter((s) => s.status === 'done' && db().instrumentPacks.some((x) => x.used?.surgeryId === s.id) && s.counts).every((s) => s.counts.items?.length && s.counts.instrumentBefore === s.counts.items.reduce((n, x) => n + x.before, 0)), '種子：做完的手術都有逐件清點紀錄，總數照清單')
+
+    await as('nurse01')
+    const sid = 'SG-SEED-6'
+    const ok1 = (set) => db().instrumentPacks.find((x) => x.set === set && !x.used && !x.withdrawn && x.expiresOn >= T && db().sterileBatches.find((b) => b.id === x.batchId).bi?.result === 'negative')
+    await X.scanPack(sid, ok1('basic').no)
+    let v = await X.scanPack(sid, ok1('minor').no)
+    ok(v.instrumentExpected.length === 6 && v.instrumentExpected.find((x) => x.name === '持針器').qty === 3, '掃了兩包：手術視窗帶出合併的清單')
+    await S.recordCheck(sid, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(sid, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sid, { abxReason: 'x' })
+    const s6 = db().surgeries.find((s) => s.id === sid)
+    s6.anes = { startAt: s6.startAt.slice(0, 16), endAt: nowStr().slice(0, 16), entries: [] }
+    const fin = { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 999, instrumentAfter: 1, noSpecimen: true }
+    let f = await fieldsOf(() => packRaw.finishSurgery(sid, fin))
+    ok(f.instrumentItems?.includes('持針器') && !f.instrumentBefore && !f.mismatchReason, '沒逐件填擋下（總數不用填、不看）')
+    f = await fieldsOf(() => packRaw.finishSurgery(sid, { ...fin, instrumentItems: { ...full, 持針器: 2 } }))
+    ok(f.mismatchReason?.includes('持針器 術前 3、術後 2') && !f.instrumentItems, `哪件不符要寫原因：「${f.mismatchReason}」`)
+    v = await packRaw.finishSurgery(sid, { ...fin, instrumentItems: { ...full, 持針器: 2 }, mismatchReason: '持針器一支斷裂取出，已照 X 光確認無遺留，告知主刀' })
+    const c = db().surgeries.find((s) => s.id === sid).counts
+    ok(v.status === 'done' && v.countMismatch && c.instrumentBefore === 21 && c.instrumentAfter === 20 && c.items.length === 6 && c.mismatchReason.startsWith('持針器 術前 3、術後 2'), '完成：逐件紀錄、總數照清單算（21 → 20）、不符留紀錄')
+    const { readFileSync } = await import('node:fs')
+    ok(!/instrumentItemsProblem|expectedInstruments/.test(readFileSync('src/pages/or/OrPage.vue', 'utf8')), '哪件不符由服務層判斷')
   }
 } catch (e) {
   failed++

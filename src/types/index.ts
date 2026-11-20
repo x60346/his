@@ -2529,7 +2529,7 @@ export interface Surgery {
   endAt?: string
   /** 開始手術時的預防性抗生素時機（有連抗生素醫囑才有）：劃刀前多久給；不符要寫原因 */
   abxTiming?: { ok: boolean; givenAt?: string; minutes?: number; reason?: string }
-  counts?: { spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string }
+  counts?: { spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string; /** 逐件清點（有掃器械包的手術）：術前＝包的清單，術後護理師逐件填 */ items?: { name: string; before: number; after: number }[] }
   /** 手術紀錄（主刀或本科醫師） */
   record?: { performed: string; findings: string; bloodLoss: number; complications: string; specimen: string; by: string; at: string }
   cancelled?: { by: string; at: string; reason: string }

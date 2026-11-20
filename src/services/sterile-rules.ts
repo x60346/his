@@ -83,3 +83,34 @@ export function checkBatchInput(input: { sterilizer?: string; ciPass?: boolean; 
   if (!total && !Object.keys(e).some((k) => k in PACK_SET_LABEL)) e.packs = '至少要有一包'
   return e
 }
+
+/** 每種包的內容清單（逐件清點用） */
+export const PACK_CONTENTS: Record<PackSet, { name: string; qty: number }[]> = {
+  basic: [{ name: '持針器', qty: 2 }, { name: '止血鉗', qty: 6 }, { name: '組織鑷', qty: 2 }, { name: '組織剪', qty: 2 }, { name: '刀柄', qty: 1 }, { name: '拉鉤', qty: 2 }],
+  lap: [{ name: '腹腔鏡抓鉗', qty: 2 }, { name: '腹腔鏡剪刀', qty: 1 }, { name: '穿刺套管', qty: 3 }, { name: '電燒鉤', qty: 1 }, { name: '持針器', qty: 1 }],
+  ortho: [{ name: '骨撬', qty: 2 }, { name: '骨鉗', qty: 2 }, { name: '鑽頭', qty: 2 }, { name: '螺絲起子', qty: 1 }, { name: '深度尺', qty: 1 }, { name: '持針器', qty: 1 }],
+  minor: [{ name: '持針器', qty: 1 }, { name: '止血鉗', qty: 2 }, { name: '組織鑷', qty: 1 }, { name: '組織剪', qty: 1 }, { name: '刀柄', qty: 1 }],
+}
+export const packTotal = (set: PackSet): number => PACK_CONTENTS[set].reduce((n, x) => n + x.qty, 0)
+
+/** 這台掃過的包合起來的器械清單（同名的加總，照第一次出現的順序） */
+export function expectedInstruments(sets: PackSet[]): { name: string; qty: number }[] {
+  const out: { name: string; qty: number }[] = []
+  for (const set of sets) for (const x of PACK_CONTENTS[set]) {
+    const cur = out.find((y) => y.name === x.name)
+    if (cur) cur.qty += x.qty
+    else out.push({ ...x })
+  }
+  return out
+}
+
+/** 逐件清點：每一件都要填（0–999 整數）；術後和清單不同的列出來（「持針器 術前 3、術後 2」） */
+export function instrumentItemsProblem(expected: { name: string; qty: number }[], after: Record<string, unknown> | undefined): { field?: string; mismatch: string[]; rows: { name: string; before: number; after: number }[] } {
+  const bad = expected.filter((x) => {
+    const v = after?.[x.name]
+    return v === undefined || v === null || v === '' || !Number.isInteger(Number(v)) || Number(v) < 0 || Number(v) > 999
+  })
+  if (bad.length) return { field: `請逐件清點（術後數量）：${bad.map((x) => x.name).join('、')} 還沒填`, mismatch: [], rows: [] }
+  const rows = expected.map((x) => ({ name: x.name, before: x.qty, after: Number(after![x.name]) }))
+  return { mismatch: rows.filter((r) => r.before !== r.after).map((r) => `${r.name} 術前 ${r.before}、術後 ${r.after}`), rows }
+}

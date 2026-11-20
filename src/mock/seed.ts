@@ -66,7 +66,7 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
-import { biDueAt, expiresOnOf, PACK_SETS } from '@/services/sterile-rules'
+import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
 import { autoVerify, qcFailedCodes } from '@/services/analyzer-rules'
@@ -3756,7 +3756,15 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         return !implant || (b.bi?.result === 'negative' && b.bi.at <= at)
       }
       const pick = (sg.id === 'SG-SEED-3' && positive ? instrumentPacks.filter((p) => p.batchId === positive!.id) : instrumentPacks).filter(ok).sort((a, b) => bOf(a.batchId).at.localeCompare(bOf(b.batchId).at))[0]
-      if (pick) pick.used = { surgeryId: sg.id, at, by: sg.team?.circulating?.[0]?.userId ?? 'U205' }
+      if (pick) {
+        pick.used = { surgeryId: sg.id, at, by: sg.team?.circulating?.[0]?.userId ?? 'U205' }
+        // 逐件清點：照包的清單，全部相符
+        if (sg.counts) {
+          const items = PACK_CONTENTS[pick.set].map((x) => ({ name: x.name, before: x.qty, after: x.qty }))
+          const n = items.reduce((a, x) => a + x.before, 0)
+          sg.counts = { ...sg.counts, instrumentBefore: n, instrumentAfter: n, items }
+        }
+      }
     }
   }
 

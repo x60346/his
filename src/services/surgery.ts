@@ -16,6 +16,7 @@ import { preIncisionOf } from './prophylaxis-work'
 import { find, nameOf } from './views'
 import { requestStatus } from './blood-rules'
 import { specimenText } from './pathology-rules'
+import { expectedInstruments, instrumentItemsProblem } from './sterile-rules'
 
 const audText = (s: Surgery) => `${s.no} ${nameOf.patient(s.patientId)} ${find.procedure(s.procId)?.name ?? ''}（${SIDE_LABEL[s.side]}）`
 
@@ -357,7 +358,7 @@ export function startSurgery(id: string, input: { abxReason?: string } = {}): Pr
 }
 
 /** 完成：離開前查核（項目全勾）＋紗布器械計數；不符要寫原因（主刀的待辦會看到） */
-export function finishSurgery(id: string, input: { items: string[]; spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string; noSpecimen?: boolean }): Promise<SurgeryView> {
+export function finishSurgery(id: string, input: { items: string[]; spongeBefore: number; spongeAfter: number; instrumentBefore: number; instrumentAfter: number; mismatchReason?: string; noSpecimen?: boolean; instrumentItems?: Record<string, number> }): Promise<SurgeryView> {
   return mutate(() => {
     const u = requireUser('nurse')
     const s = must(surgeryOf(id), '手術')
@@ -365,8 +366,17 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     // 麻醉紀錄（局部麻醉不用）：要有麻醉開始與結束
     if (s.anesthesia !== 'local' && (!s.anes?.startAt || !s.anes.endAt)) fail(`麻醉紀錄還沒有麻醉${s.anes?.startAt ? '結束' : '開始與結束'}時間（由麻醉醫師在麻醉紀錄記），不能完成手術`, 'CONFLICT')
     const miss = CHECK_ITEMS.signOut.items.filter((x) => !(input.items ?? []).includes(x))
-    const c = { spongeBefore: Number(input.spongeBefore), spongeAfter: Number(input.spongeAfter), instrumentBefore: Number(input.instrumentBefore), instrumentAfter: Number(input.instrumentAfter) }
-    const { fields, mismatch } = countsProblem(c)
+    // 有掃器械包：器械逐件清點（術前＝包的清單，術後逐件填），不用填總數；以前的手術照舊填總數
+    const expected = expectedInstruments(db.instrumentPacks.filter((p) => p.used?.surgeryId === s.id).map((p) => p.set))
+    const ip = expected.length ? instrumentItemsProblem(expected, input.instrumentItems) : undefined
+    const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0)
+    const c = ip
+      ? { spongeBefore: Number(input.spongeBefore), spongeAfter: Number(input.spongeAfter), instrumentBefore: sum(expected.map((x) => x.qty)), instrumentAfter: ip.rows.length ? sum(ip.rows.map((r) => r.after)) : sum(expected.map((x) => x.qty)) }
+      : { spongeBefore: Number(input.spongeBefore), spongeAfter: Number(input.spongeAfter), instrumentBefore: Number(input.instrumentBefore), instrumentAfter: Number(input.instrumentAfter) }
+    const { fields, mismatch: m0 } = countsProblem(c)
+    // 逐件時：總數不符改列哪一件不符
+    const mismatch = ip ? [...m0.filter((x) => !x.startsWith('器械')), ...ip.mismatch] : m0
+    if (ip?.field) fields.instrumentItems = ip.field
     if (miss.length) fields.items = `還有 ${miss.length} 項沒確認：${miss.join('、')}`
     const reason = input.mismatchReason?.trim()
     // 檢體：有登記的手術完成時一起送病理；沒有要確認「本台無檢體」
@@ -381,7 +391,7 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     failFields(fields)
     const t = now()
     s.checks.signOut = { by: u.id, at: t }
-    s.counts = { ...c, ...(mismatch.length ? { mismatchReason: `${mismatch.join('；')}：${reason}` } : {}) }
+    s.counts = { ...c, ...(ip ? { items: ip.rows } : {}), ...(mismatch.length ? { mismatchReason: `${mismatch.join('；')}：${reason}` } : {}) }
     Object.assign(s, { status: 'done', endAt: t })
     if (specs.length) s.path = { sentAt: t.slice(0, 16), sentBy: u.id }
     else s.noSpecimen = true

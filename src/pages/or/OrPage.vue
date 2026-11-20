@@ -70,7 +70,11 @@ const ticked = reactive<Record<SurgeryCheckStage, string[]>>({ signIn: [], timeO
 // 預防性抗生素時機不符（劃刀前超過 60 分鐘、Vancomycin 120）：開始手術要寫原因
 const abxReason = ref('')
 const counts = reactive({ spongeBefore: undefined as number | undefined, spongeAfter: undefined as number | undefined, instrumentBefore: undefined as number | undefined, instrumentAfter: undefined as number | undefined, mismatchReason: '', noSpecimen: false })
+// 器械逐件清點（有掃器械包的手術）：術後每一件的數量；「全部相符」照清單帶入
+const instr = ref<Record<string, number | undefined>>({})
+const fillInstr = () => (instr.value = Object.fromEntries((current.value?.instrumentExpected ?? []).map((x) => [x.name, x.qty])))
 watch(caseId, () => {
+  instr.value = {}
   Object.assign(ticked, { signIn: [], timeOut: [], signOut: [] })
   abxReason.value = ''
   Object.assign(counts, { spongeBefore: undefined, spongeAfter: undefined, instrumentBefore: undefined, instrumentAfter: undefined, mismatchReason: '', noSpecimen: false })
@@ -85,7 +89,7 @@ const stageOpen = (s: SurgeryView, st: SurgeryCheckStage) =>
   isNurse.value && !s.checks[st] && (st === 'signIn' ? s.status === 'sent' : st === 'timeOut' ? s.status === 'sent' && !!s.checks.signIn : s.status === 'in-progress')
 async function finish() {
   if (!current.value) return
-  await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason, noSpecimen: counts.noSpecimen })
+  await finishAct.run(current.value.id, { items: ticked.signOut, spongeBefore: Number(counts.spongeBefore), spongeAfter: Number(counts.spongeAfter), instrumentBefore: Number(counts.instrumentBefore), instrumentAfter: Number(counts.instrumentAfter), mismatchReason: counts.mismatchReason, noSpecimen: counts.noSpecimen, ...(current.value.instrumentExpected.length ? { instrumentItems: Object.fromEntries(Object.entries(instr.value).filter(([, n]) => n !== undefined && String(n) !== '').map(([k, n]) => [k, Number(n)])) } : {}) })
 }
 // ---------- 恢復室 ----------
 const { data: pacu, reload: reloadPacu } = useQuery(() => anesthesiaApi.pacuBoard(), [])
@@ -271,8 +275,23 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
             <div v-if="c.stage === 'signOut'" class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <UInput v-model="counts.spongeBefore" type="number" label="紗布（術前）" :error="finishAct.fieldErrors.value.spongeBefore" />
               <UInput v-model="counts.spongeAfter" type="number" label="紗布（術後）" :error="finishAct.fieldErrors.value.spongeAfter" />
-              <UInput v-model="counts.instrumentBefore" type="number" label="器械（術前）" :error="finishAct.fieldErrors.value.instrumentBefore" />
-              <UInput v-model="counts.instrumentAfter" type="number" label="器械（術後）" :error="finishAct.fieldErrors.value.instrumentAfter" />
+              <template v-if="!current.instrumentExpected.length">
+                <UInput v-model="counts.instrumentBefore" type="number" label="器械（術前）" :error="finishAct.fieldErrors.value.instrumentBefore" />
+                <UInput v-model="counts.instrumentAfter" type="number" label="器械（術後）" :error="finishAct.fieldErrors.value.instrumentAfter" />
+              </template>
+              <div v-else class="col-span-2 rounded border border-slate-200 p-2 sm:col-span-4">
+                <div class="mb-1 flex items-center gap-2 text-xs text-slate-600">
+                  <b class="text-slate-700">器械逐件清點</b><span>術前＝掃過的器械包清單；填術後數量</span>
+                  <button type="button" class="ml-auto text-brand-700 underline" @click="fillInstr">全部相符</button>
+                </div>
+                <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <label v-for="x in current.instrumentExpected" :key="x.name" class="text-xs text-slate-600">
+                    {{ x.name }}（術前 {{ x.qty }}）
+                    <input v-model.number="instr[x.name]" type="number" min="0" class="form-control mt-0.5 w-full" :aria-label="`${x.name} 術後數量`" />
+                  </label>
+                </div>
+                <p v-if="finishAct.fieldErrors.value.instrumentItems" class="mt-1 text-xs text-red-600">{{ finishAct.fieldErrors.value.instrumentItems }}</p>
+              </div>
               <div v-if="!current.specimenRows.length" class="col-span-2 sm:col-span-4"><UCheckbox v-model="counts.noSpecimen" label="本台無檢體（有檢體請先在上面「檢體」逐件登記）" /><p v-if="finishAct.fieldErrors.value.noSpecimen" class="text-xs text-red-600">{{ finishAct.fieldErrors.value.noSpecimen }}</p></div>
               <p v-else class="col-span-2 text-xs text-slate-600 sm:col-span-4">檢體 {{ current.specimenRows.length }} 件，手術完成時一起送病理。</p>
               <p v-if="finishAct.fieldErrors.value.implants" class="col-span-2 text-xs text-red-600 sm:col-span-4">{{ finishAct.fieldErrors.value.implants }}</p>

@@ -4,7 +4,7 @@
 import { reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect } from '@/components/ui'
-import { PACK_SET_LABEL, PACK_SETS, STERILIZERS, sterileApi } from '@/services'
+import { PACK_CONTENTS, PACK_SET_LABEL, PACK_SETS, STERILIZERS, sterileApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: v, loading } = useQuery(() => sterileApi.sterileBoard(), [])
@@ -86,6 +86,7 @@ const wdAct = useAction(sterileApi.withdrawPack, { success: (r) => `${r.no} 已�
               <span v-if="s.expiring" class="ml-1 text-amber-700">{{ s.expiring }} 包 3 天內到期</span>
               <span v-if="s.expired" class="ml-1 text-red-700">過期 {{ s.expired }}</span>
             </div>
+            <div class="mt-1 text-[11px] text-slate-400">內容：{{ PACK_CONTENTS[s.set].map((x) => `${x.name} ${x.qty}`).join('、') }}</div>
           </div>
         </div>
       </section>

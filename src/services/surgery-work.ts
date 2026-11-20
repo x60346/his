@@ -11,7 +11,7 @@ import { preIncisionOf } from './prophylaxis-work'
 import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
 import { dayFollowUpDue, dayStage } from './day-rules'
-import { biText, PACK_SET_LABEL } from './sterile-rules'
+import { biText, expectedInstruments, PACK_SET_LABEL } from './sterile-rules'
 import { implantFeeItems, implantRows, isSelfPayImplant } from './implant-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { delayOverflow, delayTotal, NPO_DELAY_ALERT } from './or-shift-rules'
@@ -88,6 +88,8 @@ export interface SurgeryView extends Surgery {
   /** 器械包：這台掃了哪幾包（哪一鍋、生物指示劑）；有用到召回那鍋的；會放植入物（要生物指示劑陰性） */
   packRows: { id: string; no: string; setLabel: string; batchNo: string; biText: string; recalled: boolean }[]
   packRecalled: boolean
+  /** 逐件清點的清單（掃過的包合起來）；沒掃包＝空（照舊填總數） */
+  instrumentExpected: { name: string; qty: number }[]
   implant: boolean
   /** 植入物：登記了哪些（自費、召回標出來）；會放植入物還沒登記；這個術式有自費品項、病人同意了沒 */
   implantRows: ReturnType<typeof implantRows>
@@ -137,6 +139,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     pathAckDue: pathCritical(s.path?.report) && !s.path?.ack,
     ...(s.path?.received?.missing?.length ? { pathMissing: `病理收件少了 ${s.path.received.missing.join('、')}：${s.path.received.note ?? ''}` } : {}),
     ...((rows) => ({ packRows: rows, packRecalled: rows.some((r) => r.recalled) }))(db.instrumentPacks.filter((p) => p.used?.surgeryId === s.id).map((p) => ((b) => ({ id: p.id, no: p.no, setLabel: PACK_SET_LABEL[p.set], batchNo: b?.no ?? '', biText: b ? biText(b, now()) : '', recalled: b?.bi?.result === 'positive' }))(db.sterileBatches.find((b) => b.id === p.batchId)))),
+    instrumentExpected: expectedInstruments(db.instrumentPacks.filter((p) => p.used?.surgeryId === s.id).map((p) => p.set)),
     implant: !!find.procedure(s.procId)?.surgery?.implant,
     ...((rows) => ({ implantRows: rows, implantRecalled: rows.some((r) => r.recalled), implantMissing: !!find.procedure(s.procId)?.surgery?.implant && !rows.length && ['sent', 'in-progress'].includes(s.status) }))(implantRows(s)),
     selfPayOption: (IMPLANT_FOR[s.procId] ?? []).some((id) => isSelfPayImplant(find.procedure(id))),
