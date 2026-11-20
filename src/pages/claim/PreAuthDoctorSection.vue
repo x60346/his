@@ -41,6 +41,7 @@ const errs = computed(() => (mode.value === 'fill' ? fillAct : mode.value === 's
             <b>{{ p.itemName }}</b><span class="text-xs text-slate-500">{{ p.no }}・{{ p.patientName }}（{{ p.admitNo || '門診' }}）</span>
             <UBadge v-if="p.validUntil" tone="green">門診效期到 {{ p.validUntil }}</UBadge>
             <UBadge v-if="p.allows && p.status !== 'approved'" tone="purple">可以先用</UBadge>
+            <UBadge v-if="p.expiring" tone="yellow">快到期：{{ p.expiring }}（看診時可續約申請）</UBadge>
           </div>
           <div v-if="p.summary" class="mt-1 text-xs text-slate-700">病情：{{ p.summary }}<br />理由：{{ p.reason }}</div>
           <div v-if="p.resultText" class="text-xs" :class="p.status === 'rejected' ? 'text-red-700' : p.status === 'more' ? 'font-medium text-amber-800' : 'text-emerald-700'">審查結果：{{ p.resultText }}</div>

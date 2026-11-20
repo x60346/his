@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4635 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4653 項） |
 
 ### 展示帳號
 
@@ -105,6 +105,9 @@ npm run dev          # 開發伺服器 http://localhost:5180
    - **申報指標近 12 個月趨勢**：經營月報多兩張圖「近 12 個月：健保淨核減率」「近 12 個月：健保退件率」（沒送的月份長條是 0、提示寫沒有資料），Excel「近12個月」工作表多兩欄。
    - **核定通知匯入核減**：核減分頁多「**匯入核定通知**」：選送出的申報 → 貼上每行「病歷號,日期,核減項目,點數,理由代碼,審查意見」→ **預覽**（找不到、退件的不能核減、點數或代碼錯、**同一筆多行累計不超過還能核減的**）→ 只建沒問題的核減（主治首頁待回覆），略過的列出；一行都不能建就擋；留稽核。
    - **事前審查每月上限**：門診核准可再記「**每月上限**」（藥品單位）。看**實際調劑那天的月份**累計（看診開的、慢箋每次領藥各算在自己那個月；自費不算），看診完成與**慢箋領藥登記**都檢查；同時超過總核准量時先報總核准量。示範資料：門診那位每月最多 2 支。
+   - **申報送件期限**：已結束還沒送的月份，申報頁顯示「**送件期限 下個月 20 日**（還有 N 天／今天截止／已逾期 N 天）」，5 天內標黃、逾期標紅；申報組首頁「**健保申報待送出**」列出上個月門診、住院哪些還沒送與最早期限（5 天內變緊急）。
+   - **核減回覆期限**：核減輸入後 **14 天內**主治要回覆（院內期限，讓申報組趕得上健保署的申復期限）；核減頁與醫師「健保審查回覆」頁顯示期限，逾期標紅、醫師清單排最前；主治首頁「**核減回覆逾期**」（緊急）。
+   - **事前審查快到期與續約**：門診核准**效期 30 天內到期**、或**核准量／次數只剩 1（或用完）**時算快到期：主治首頁「事前審查快到期」、健保審查回覆頁標示、處方提示條寫原因。看診時可按「**續約申請**」先送新的送審單（舊的核准用到期為止）；有續約的就不再提醒，也不能重複續約；還沒快到期的不能另外申請。
    - **病歷影本申請**：`clerk01`「病患資料」選病人 →「病歷影本」分頁 →「新申請」：本人（姓名、身分證號要和病人資料一樣）或代理人（身分證號、和病人的關係、勾「已核對委託書」；不能填病人自己的證號）、用途；勾要影印的紀錄（完成的門診病歷、醫師已簽的出院病摘、檢驗與影像報告，可依種類篩選、全選），即時算出應收（基本費＋每頁，單價在主檔「病歷影本基本費」「病歷影本（每頁）」，可排生效日）→「收費並列印」：開收據（自費、不申報健保）、日結列在「病歷影本」，直接跳出影本（每項一頁，頁首申請單號與第幾頁、斜向浮水印「影本」，頁尾申請人與用途）。申請紀錄可補印（記第幾次、寫稽核）、當天作廢（收據一起作廢；隔天以後不行）。權限「病歷影本申請」預設櫃台，可只指定給病歷組的人。
    - **輸血備血**：醫師在住院醫囑「輸血」分頁「開備血單」（紅血球、新鮮冷凍血漿、血小板；單位數、適應症、急件）；最近的 Hb 高於 8、PLT 高於 50，或 72 小時內沒有這項檢驗，要寫輸血理由（只提醒不擋）。`lab01`「血庫」：首頁「備血待處理」→ 每張單重新驗血型（和本院上次驗的不同會擋下：可能抽錯人的血，請重抽；和病人自述的不同只提醒）→「交叉試驗配血」只列相容、沒過期的血袋（同型、先到期的在前）→「發血」；發血後 30 分鐘內還沒開始輸可以「退回血庫」，超過只能報廢。護理站選病人「輸血」分頁：已發血的那袋「開始輸血」→ 掃腕帶、掃血袋（不符當場大紅字，示範有模擬掃描）、輸血前生命徵象 → 另一位護理師或醫師輸入自己的帳密核對 → 開始；15 分鐘後量生命徵象（逾時標紅、首頁「輸血待處理」）、「結束輸血」寫輸入量；「輸血反應」勾症狀立刻停止（護理站病房清單標「已發血」「輸血中」，15 分鐘該量時標紅，本班待辦也列出、點了直接到「輸血」分頁），主治首頁與住院醫囑頁紅條「輸血反應待確認」，寫處置後解除。帳單：交叉試驗每袋、血品發出才計（退回的不算）。有血袋已發出還沒輸完不能辦出院；出院時還在血庫的配血自動釋出。示範資料：何麗華（Hb 6.8）紅血球 2 單位，一袋昨天輸完、一袋配好待發血；董雅惠（敗血症）新鮮冷凍血漿 2 單位待驗血型（入院太晚的日子沒有）。
    - **管制性抗生素審核**：醫師在住院醫囑開 Vancomycin、Meropenem、Piperacillin/Tazobactam（主檔勾「管制性抗生素」）時，對話框多一區要填使用理由（經驗性治療／依培養結果要寫菌種／手術預防）與感染部位；開立後照常給藥（先用後審）。`dr11`（感染科）首頁「管制性抗生素待審核」→「抗生素審核」頁：待審核（超過 48 小時標逾時、排前面）與最近審核；右邊看病人（診斷、過敏、隔離與 DNR、生命徵象、檢驗、目前所有的抗生素與第幾天）和送審紀錄，核准到療程第幾天（預設 7）或不核准（要寫建議）。不核准時主治的住院醫囑頁出紅條（申覆或停止）、首頁待辦；核准天數最後兩天提醒申請續用。醫囑列、護理站給藥列顯示「使用第 N 天」，修改劑量沿用療程與審核；不核准只標示、不擋給藥。感染科醫師自己開的直接核准。示範資料：董雅惠（敗血症）Meropenem 待審核（住得夠久時已逾時）；何麗華（肺炎）Piperacillin/Tazobactam 不核准；朱信宏（MRSA）的 Vancomycin 已核准 7 天、今天第 8 天（核准天數已超過）。
@@ -300,6 +303,8 @@ scripts/smoke-flow.mjs   流程測試
 | 申報指標趨勢 | `ManagementReport.trend[].cutRate`／`rejectRate`；`ManagementPage.vue` 兩張圖；`report-xlsx` 近12個月兩欄 |
 | 核定通知匯入 | `claim-rules.parseCutFile`；`claim-cut.ts`（`resolveCutFile`、`previewCutFile`、`importCutFile`、`CutFilePreview`）；`ClaimCutPanel.vue` 匯入對話框 |
 | 事前審查每月上限 | `PreAuth.result.monthlyQty`；`preauth-work`（`opdMonthQty`、`requireOpdDrugPreAuth` 最後檢查、`requireRefillPreAuth`）；`PreAuthView.monthlyQty`；`PreAuthPanel.vue`、`OpdPreAuthBar.vue` |
+| 申報與核減期限 | `claim-rules`（`CLAIM_SUBMIT_DAY`、`claimDeadlineOf`、`daysUntil`、`deadlineText`、`CUT_REPLY_DAYS`、`cutReplyDue`）；`ClaimBoard.deadline`；`CutItem.replyDue`／`replyOverdue`（`myCuts` 逾期在前）；首頁 `claimToSubmit`／`claimSubmitText`／`claimSubmitUrgent`（`dashboard.claimSubmitDue`）、`claimCutsReplyOverdue`；`ClaimPage.vue`、`ClaimCutPanel.vue`、`ClaimReplyPage.vue` |
+| 事前審查快到期與續約 | `preauth-rules`（`PREAUTH_EXPIRE_DAYS`、`opdExpiringText`）；`preauth-work`（`opdExpiringOf`：有續約不算、`preAuthExpiringCount`）；`PreAuthView.expiring`；`requestOpdDrugPreAuth` 續約；首頁 `preAuthExpiring`；`OpdPreAuthBar.vue` 續約申請、`PreAuthDoctorSection.vue` |
 | 核減與申復 | `ClaimCut`（`db.claimCuts`：哪一筆、項目、點數、代碼、主治回覆、申復結果）；`claim-rules`（`CUT_REASONS`、`cutStatus`、`CUT_STATUS_LABEL`、`checkCut`、`cutRate`）；`claim-cut.ts`（`cutBoard` 每月統計與可輸入的申報、`addCut`、`myCuts`、`replyCut` 主治、`recordCutResult`）；首頁 `claimCutsToReply`／`claimCutsAppealed`；`pages/claim/ClaimCutPanel.vue`、`ClaimReplyPage.vue`（路由 `claim-cuts`） |
 | 健保申報（住院） | `ClaimItem.categories`／`days`（`ClaimCategory`）；`claim-rules`（`CLAIM_CATEGORY_LABEL`、`lineCategory`、`ipdCategories`、`ipdClaimProblems`）；`claim-work`（`ipdItemOf`、`ipdRowOf`）；`claimBoard('ipd')` 等同一組 API；`ClaimPage` 住院分頁 |
 | 健保申報（門診） | `ClaimItem`、`ClaimSubmission`（`db.claimSubmissions`：送出的那份與排除）、`ClaimExclusion`（`db.claimExclusions`：送出前的排除）；`claim-rules`（`monthOf`、`nextMonth`、`canSubmitMonth`、`claimOf`、`linePoints`、`supplementDelta`、`supplementMonth`、`opdClaimProblems`、`claimCsv`）；`claim-work`（`opdItemOf`、`opdRowOf`、`openMonthRows` 含補報、`claimMonthsOf`）；`claim.ts`（`claimBoard`、`excludeClaim`、`unexcludeClaim`、`submitClaim`、`claimCsvOf`）；權限「健保申報」（`nhi.claim`）；`pages/claim/ClaimPage.vue`（路由 `claims`） |
@@ -727,6 +732,8 @@ scripts/smoke-flow.mjs   流程測試
 - 申報指標趨勢：最後一個月和當月指標一致；沒送的月份 null；Excel 多兩欄
 - 核定通知匯入：解析（點數、代碼、欄位、意見逗號）；預覽不存（累計上限、退件、找不到、代碼）；匯入建核減（代碼、意見、稽核）、略過回報；主治待回覆；全錯、空的擋
 - 事前審查每月上限：種子；一次超過每月擋；超過總核准量先報總量；當月已調劑；慢箋同月再領擋、下個月可以；申報組看得到
+- 申報與核減期限：期限日與文字；回覆 14 天；上個月門診期限；這個月與已送出沒有期限；首頁待送出與緊急；送出後不提醒；核減逾期（申報組、主治首頁、排最前）；回覆後不算逾期
+- 事前審查快到期與續約：規則（30 天、量或次數、已過期不算）；種子不提醒；首頁與原因；看診仍可健保開；續約申請（稽核）、送審中仍用舊的、續約後不提醒、不能重複；還沒快到期不能另外申請
 - 病例組合指數：平均權重與顯示增減、經營月報指標、和住院申報同一個數、近 12 個月、DRG 表權重與平均住院日、Excel DRG 工作表
 - DRG：診斷代碼、分組表、主診斷依 65 歲或合併症分組、同類不算合併症、手術優先與其他內外科、不適用五種、給付三段、提示；住院中預估（依主診斷、排了的手術也算）、日間手術與死亡不適用、權限；申報（申請點數＝給付 − 部分負擔、合計盈虧、日間手術照實、CSV 欄、經營月報同一份）；超過上限提示（給付規則、首頁）、只提示不擋醫囑；頁面不自己算
 - 事前審查：能不能用、逾時、填寫欄位、帳單改自費、申報檢核；種子（IVIG 待送審、骨板已核准）與申報組首頁；核准前護理站不能給；開 IVIG 自動建單與首頁、不重建；別的醫師不能填、欄位、還沒填不能送審、填好與稽核、送審、補件要寫、補件後再送、核准（期限）；核准後不再擋；不核准要理由、醫囑自動停；重開新單、自費（要寫、稽核、不重複）、緊急先用；逾時排前與首頁；骨板重複申請、不需要的不用申請、核准前不能登記、改自費後可以；頁面不自己判斷

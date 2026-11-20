@@ -36,13 +36,14 @@ async function submit() {
   <div v-if="data?.length" class="space-y-1">
     <div v-for="s in data" :key="s.drugId" :class="['flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-xs', s.valid ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-900']">
       <b>{{ s.drugName }}</b>
-      <template v-if="s.valid">健保事前審查核准（{{ s.preAuth!.no }}，效期到 {{ s.preAuth!.validUntil }}<template v-if="s.preAuth!.qty">，核准 {{ s.preAuth!.qty.approved }} {{ s.preAuth!.qty.unit }}、已開 {{ s.preAuth!.qty.used }}、<b>還剩 {{ s.preAuth!.qty.left }}</b></template><template v-if="s.preAuth!.times">，核准 {{ s.preAuth!.times.approved }} 次、<b>還剩 {{ s.preAuth!.times.left }} 次</b></template>）：可以健保開<span v-if="s.preAuth!.monthlyQty">，每月最多 {{ s.preAuth!.monthlyQty }}</span><span v-if="s.preAuth!.interval">，每次間隔 {{ s.preAuth!.interval }} 天<template v-if="s.lastNhi">（上次 {{ s.lastNhi }}）</template></span><span v-if="s.wait" class="font-semibold text-red-700">・還要 {{ s.wait }} 天才能健保開</span><span v-if="(s.preAuth!.qty && !s.preAuth!.qty.left) || (s.preAuth!.times && !s.preAuth!.times.left)" class="font-semibold text-red-700">・核准量或次數已用完，請重新申請或自費</span></template>
+      <template v-if="s.valid">健保事前審查核准（{{ s.preAuth!.no }}，效期到 {{ s.preAuth!.validUntil }}<template v-if="s.preAuth!.qty">，核准 {{ s.preAuth!.qty.approved }} {{ s.preAuth!.qty.unit }}、已開 {{ s.preAuth!.qty.used }}、<b>還剩 {{ s.preAuth!.qty.left }}</b></template><template v-if="s.preAuth!.times">，核准 {{ s.preAuth!.times.approved }} 次、<b>還剩 {{ s.preAuth!.times.left }} 次</b></template>）：可以健保開<span v-if="s.preAuth!.monthlyQty">，每月最多 {{ s.preAuth!.monthlyQty }}</span><span v-if="s.preAuth!.interval">，每次間隔 {{ s.preAuth!.interval }} 天<template v-if="s.lastNhi">（上次 {{ s.lastNhi }}）</template></span><span v-if="s.preAuth?.expiring" class="font-medium text-amber-800">・快到期：{{ s.preAuth.expiring }}</span><span v-if="s.wait" class="font-semibold text-red-700">・還要 {{ s.wait }} 天才能健保開</span><span v-if="(s.preAuth!.qty && !s.preAuth!.qty.left) || (s.preAuth!.times && !s.preAuth!.times.left)" class="font-semibold text-red-700">・核准量或次數已用完，請重新申請或自費</span></template>
       <template v-else>
         需健保事前審查：{{ s.preAuth ? `${s.preAuth.no} ${s.preAuth.statusLabel}` : '還沒申請' }}<template v-if="s.preAuth?.status === 'more'">（{{ s.preAuth.resultText }}）</template>
         <span :class="selfPayOf(s.drugId) ? 'text-slate-600' : 'font-semibold text-red-700'">{{ selfPayOf(s.drugId) ? '・這次自費開' : '・核准前只能自費開（勾「自費」）' }}</span>
       </template>
       <span v-if="editable" class="ml-auto flex gap-1">
         <UButton v-if="!s.preAuth" size="sm" variant="secondary" :loading="reqAct.pending.value" @click="request(s.drugId)">申請事前審查</UButton>
+        <UButton v-else-if="s.valid && s.preAuth.expiring" size="sm" variant="secondary" :loading="reqAct.pending.value" @click="request(s.drugId)">續約申請</UButton>
         <UButton v-else-if="['draft', 'more', 'ready'].includes(s.preAuth.status)" size="sm" variant="secondary" @click="openFill(s.preAuth)">{{ s.preAuth.status === 'more' ? '補件' : s.preAuth.status === 'ready' ? '修改送審資料' : '填寫送審資料' }}</UButton>
       </span>
     </div>

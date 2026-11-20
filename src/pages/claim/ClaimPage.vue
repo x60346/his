@@ -103,6 +103,7 @@ async function submitEx() {
             <UButton size="sm" variant="secondary" :icon="Download" :title="b.submitted ? '' : '還沒送出：檔案標為草稿'" @click="exportXml">匯出 XML{{ b.submitted ? '' : '（草稿）' }}</UButton>
             <UButton v-if="!b.submitted" size="sm" :icon="Send" :disabled="!b.canSubmit" :title="b.whyNot" :loading="submitAct.pending.value" @click="submit">送出</UButton>
           </div>
+          <p v-if="b.deadline" :class="['w-full text-xs', b.deadline.overdue ? 'font-semibold text-red-700' : b.deadline.soon ? 'font-medium text-amber-800' : 'text-slate-500']">送件期限 {{ b.deadline.due }}（{{ b.deadline.text }}）</p>
           <p v-if="!b.submitted && b.whyNot" class="w-full text-xs text-amber-800">{{ b.whyNot }}</p>
         </section>
 

@@ -6,7 +6,7 @@ import { db } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
 import { checkPreAuthFill, opdIntervalWait, opdPreAuthLeft, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, preAuthAllows, preAuthDays, preAuthOverdue, PREAUTH_STATUS_LABEL } from './preauth-rules'
-import { createImplantPreAuth, createOpdDrugPreAuth, implantPreAuthOf, lastOpdNhiDate, opdDrugPreAuthOf, opdPreAuthUsed, opdPreAuthUsedTimes } from './preauth-work'
+import { createImplantPreAuth, createOpdDrugPreAuth, implantPreAuthOf, lastOpdNhiDate, opdDrugPreAuthOf, opdExpiringOf, opdPreAuthUsed, opdPreAuthUsedTimes } from './preauth-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { stopOrderRecord } from './order-ops'
 import { surgeryOf } from './surgery-work'
@@ -39,6 +39,8 @@ export interface PreAuthView extends PreAuth {
   interval?: number
   /** 門診每月上限 */
   monthlyQty?: number
+  /** 門診核准快到期或快用完（還沒續約）：需要繼續用請續約申請 */
+  expiring?: string
 }
 
 function view(p: PreAuth): PreAuthView {
@@ -49,7 +51,8 @@ function view(p: PreAuth): PreAuthView {
     ...(!p.admissionId && p.status === 'approved' && p.result?.qty !== undefined ? ((used) => ({ qty: { approved: p.result!.qty!, used, left: opdPreAuthLeft(p, used)!, unit: find.drug(p.itemId)?.unit ?? '' } }))(opdPreAuthUsed(p)) : {}),
     ...(!p.admissionId && p.status === 'approved' && p.result?.times !== undefined ? ((used) => ({ times: { approved: p.result!.times!, used, left: opdPreAuthTimesLeft(p, used)! } }))(opdPreAuthUsedTimes(p)) : {}),
     ...(!p.admissionId && p.result?.interval !== undefined ? { interval: p.result.interval } : {}),
-    ...(!p.admissionId && p.result?.monthlyQty !== undefined ? { monthlyQty: p.result.monthlyQty } : {}), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
+    ...(!p.admissionId && p.result?.monthlyQty !== undefined ? { monthlyQty: p.result.monthlyQty } : {}),
+    ...((x) => (x ? { expiring: x } : {}))(opdExpiringOf(p, now().slice(0, 10))), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
     ...((d) => (d !== undefined ? { days: d } : {}))(preAuthDays(p, t)), overdue: preAuthOverdue(p, t), allows: preAuthAllows(p),
     notesText: p.notes.map((n) => `${n.at.slice(5)} ${nameOf.user(n.by)}：${n.text}`),
     ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5)}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.qty !== undefined ? `・核准量 ${p.result.qty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.times !== undefined ? `・核准 ${p.result.times} 次` : ''}${p.result.interval !== undefined ? `・間隔 ${p.result.interval} 天` : ''}${p.result.monthlyQty !== undefined ? `・每月最多 ${p.result.monthlyQty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
@@ -234,9 +237,11 @@ export function requestOpdDrugPreAuth(encounterId: string, drugId: string): Prom
     const d = find.drug(drugId)
     if (!d?.preAuth) fail('這個藥不用事前審查', 'CONFLICT')
     const old = opdDrugPreAuthOf(e.patientId, d!.id, e.date)
-    if (old) fail(`已經有送審單 ${old.no}（${PREAUTH_STATUS_LABEL[old.status]}${old.status === 'approved' ? `，期限 ${opdPreAuthUntil(old)}` : ''}）`, 'CONFLICT')
+    // 續約：有效的核准快到期或快用完，可以先送新的（舊的用到期為止）
+    const renew = !!old && old.status === 'approved' && !!opdExpiringOf(old, e.date)
+    if (old && !renew) fail(`已經有送審單 ${old.no}（${PREAUTH_STATUS_LABEL[old.status]}${old.status === 'approved' ? `，期限 ${opdPreAuthUntil(old)}` : ''}）`, 'CONFLICT')
     const p = createOpdDrugPreAuth({ drugId: d!.id, itemName: d!.name, patientId: e.patientId, encounterId: e.id, doctorId: e.doctorId, createdAt: now() })
-    audit('事前審查申請（門診）', `${p.no} ${p.itemName}（${nameOf.patient(p.patientId)}）`)
+    audit('事前審查申請（門診）', `${p.no} ${p.itemName}（${nameOf.patient(p.patientId)}）${renew ? `：續約（原 ${old!.no}，${opdExpiringOf(old!, e.date) ?? ''}）` : ''}`)
     return view(p)
   })
 }

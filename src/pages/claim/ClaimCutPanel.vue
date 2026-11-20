@@ -114,6 +114,7 @@ async function submitDr() {
           </div>
           <div class="text-xs text-slate-700">{{ c.item }}・{{ c.codeLabel }}<template v-if="c.reason">：{{ c.reason }}</template></div>
           <div v-if="c.replyText" class="text-xs text-slate-600">主治回覆：{{ c.replyText }}</div>
+          <div v-else-if="c.status === 'reply'" :class="['text-xs', c.replyOverdue ? 'font-semibold text-red-700' : 'text-slate-500']">主治回覆期限 {{ c.replyDue }}{{ c.replyOverdue ? '（已逾期）' : '' }}</div>
           <div v-if="c.resultText" class="text-xs" :class="c.status === 'paid' ? 'text-emerald-700' : 'text-red-700'">申復結果：{{ c.resultText }}</div>
           <div v-if="c.disputeText" class="text-xs text-purple-800">爭議審議：{{ c.disputeText }}</div>
           <div v-if="c.disputeResultText" class="text-xs" :class="c.status === 'disputePaid' ? 'text-emerald-700' : 'text-red-700'">爭議審議結果：{{ c.disputeResultText }}</div>

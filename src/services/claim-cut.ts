@@ -4,7 +4,7 @@ import type { ClaimCut, ClaimKind, ClaimSubmission } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
-import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, parseCutFile, CUT_STATUS_LABEL, cutRate, cutStatus, disputeCheck, disputeLeft, type CutStatus } from './claim-rules'
+import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, cutReplyDue, parseCutFile, CUT_STATUS_LABEL, cutRate, cutStatus, disputeCheck, disputeLeft, type CutStatus } from './claim-rules'
 import { today } from '@/utils/date'
 import { find, nameOf } from './views'
 
@@ -27,6 +27,9 @@ export interface CutItem extends ClaimCut {
   disputeLeft: number
   disputeText?: string
   disputeResultText?: string
+  /** 主治回覆期限（核減後 14 天）、還沒回覆而且過了 */
+  replyDue: string
+  replyOverdue: boolean
 }
 export interface CutMonth {
   kind: ClaimKind
@@ -60,6 +63,7 @@ function cutItem(c: ClaimCut): CutItem {
     ...(c.result ? { resultText: `${c.result.outcome === 'paid' ? `補付 ${c.result.points} 點` : '維持核減'}・${nameOf.user(c.result.by)} ${c.result.at.slice(5)}` } : {}),
     ...((d) => ({ canDispute: d.ok, ...(d.why ? { disputeWhy: d.why } : {}), ...(d.deadline ? { disputeDeadline: d.deadline } : {}) }))(disputeCheck(c, today())),
     disputeLeft: disputeLeft(c),
+    replyDue: cutReplyDue(c), replyOverdue: !c.reply && today() > cutReplyDue(c),
     ...(c.dispute ? { disputeText: `申請 ${c.dispute.points} 點・${nameOf.user(c.dispute.by)} ${c.dispute.at.slice(5)}：${c.dispute.reason}` } : {}),
     ...(c.dispute?.result ? { disputeResultText: `${c.dispute.result.outcome === 'paid' ? `補付 ${c.dispute.result.points} 點` : '駁回'}・${nameOf.user(c.dispute.result.by)} ${c.dispute.result.at.slice(5)}${c.dispute.result.note ? `：${c.dispute.result.note}` : ''}` } : {}),
   }
@@ -118,7 +122,8 @@ export function addCut(input: { submissionId: string; refId: string; item: strin
 export function myCuts(): Promise<CutItem[]> {
   return query(() => {
     const u = requireUser('doctor')
-    return db.claimCuts.filter((c) => c.doctorId === u.doctorId).map(cutItem).sort((a, b) => Number(a.status !== 'reply') - Number(b.status !== 'reply') || b.at.localeCompare(a.at))
+    // 待回覆在前（逾期的最前），再依時間
+    return db.claimCuts.filter((c) => c.doctorId === u.doctorId).map(cutItem).sort((a, b) => Number(a.status !== 'reply') - Number(b.status !== 'reply') || Number(b.replyOverdue) - Number(a.replyOverdue) || b.at.localeCompare(a.at))
   })
 }
 

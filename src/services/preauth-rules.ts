@@ -35,6 +35,20 @@ export const opdRxTimes = (refillTimes: number) => (refillTimes >= 2 ? refillTim
 /** 這次要開的量：慢箋算整張（每次調劑同量 × 可調劑次數） */
 export const opdRxQty = (qty: number, refillTimes: number) => qty * (refillTimes >= 2 ? refillTimes : 1)
 
+/** 門診核准到期前幾天開始提醒（需要繼續用要先續約申請） */
+export const PREAUTH_EXPIRE_DAYS = 30
+/** 快到期或快用完的原因（沒有＝undefined）：效期 30 天內到期、核准量或次數只剩 1（或用完） */
+export function opdExpiringText(p: Pick<PreAuth, 'status' | 'result'>, left: { qty?: number; times?: number }, today: string): string | undefined {
+  const until = opdPreAuthUntil(p)
+  if (!until || today > until) return undefined
+  const why: string[] = []
+  const d = Math.round((new Date(`${until}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
+  if (d <= PREAUTH_EXPIRE_DAYS) why.push(`效期 ${until} 到期（剩 ${d} 天）`)
+  if (left.qty !== undefined && left.qty <= 1) why.push(left.qty ? '核准量只剩 1' : '核准量用完')
+  if (left.times !== undefined && left.times <= 1) why.push(left.times ? '核准次數只剩 1 次' : '核准次數用完')
+  return why.length ? why.join('、') : undefined
+}
+
 /** 門診擋下時的說明 */
 export function opdPreAuthBlockText(drugName: string, p: Pick<PreAuth, 'no' | 'status' | 'result'> | undefined, date: string): string {
   const why = !p ? '還沒申請' : p.status === 'approved' && !opdPreAuthValid(p, date) ? `${p.no} 核准已過期（${opdPreAuthUntil(p)}）：請重新申請` : `${p.no} ${PREAUTH_STATUS_LABEL[p.status]}`

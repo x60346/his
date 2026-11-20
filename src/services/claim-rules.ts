@@ -287,3 +287,18 @@ export function parseCutFile(text: string): CutFileLine[] {
   })
   return out
 }
+
+// ---------- 期限：申報送件、醫師回覆核減 ----------
+
+/** 每月幾日前要送上個月的申報（示範：20 日） */
+export const CLAIM_SUBMIT_DAY = 20
+/** 這個月份的送件期限（下個月 20 日） */
+export const claimDeadlineOf = (month: string) => `${nextMonth(month)}-${String(CLAIM_SUBMIT_DAY).padStart(2, '0')}`
+/** 距期限幾天（負數＝逾期幾天） */
+export const daysUntil = (due: string, today: string) => Math.round((new Date(`${due}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
+/** 期限文字：還有 N 天、今天截止、已逾期 N 天 */
+export const deadlineText = (due: string, today: string) => ((d) => (d > 0 ? `還有 ${d} 天` : d === 0 ? '今天截止' : `已逾期 ${-d} 天`))(daysUntil(due, today))
+
+/** 核減後主治幾天內要回覆（院內期限：申報組要在健保署規定的申復期限前整理送出） */
+export const CUT_REPLY_DAYS = 14
+export const cutReplyDue = (c: { at: string }) => addDays(c.at.slice(0, 10), CUT_REPLY_DAYS)

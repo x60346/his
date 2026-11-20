@@ -25,8 +25,8 @@ import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-wo
 import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
-import { preAuthCounts } from './preauth-work'
-import { disputeCheck } from './claim-rules'
+import { preAuthCounts, preAuthExpiringCount } from './preauth-work'
+import { claimDeadlineOf, cutReplyDue, daysUntil, deadlineText, disputeCheck, monthOf, nextMonth } from './claim-rules'
 import { codingCounts } from './coding-work'
 import { drgAlertCounts } from './drg-work'
 import { dayCounts, delayCounts, surgeryOf, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
@@ -289,6 +289,14 @@ export interface DashboardStats {
   implantRecallOpen?: number
   /** 健保核減：主治待回覆（醫師）；申復中待記結果（健保申報） */
   claimCutsToReply?: number
+  /** 主治：核減回覆逾期（核減後 14 天） */
+  claimCutsReplyOverdue?: number
+  /** 申報組：還沒送的已結束月份（門診、住院各算一筆）、最近的期限 */
+  claimToSubmit?: number
+  claimSubmitText?: string
+  claimSubmitUrgent?: boolean
+  /** 主治：門診事前審查快到期或快用完 */
+  preAuthExpiring?: number
   claimCutsAppealed?: number
   /** 爭議審議：可以申請（期限內）＋審議中待記結果（健保申報） */
   claimDisputes?: number
@@ -418,6 +426,8 @@ export function getDashboard(): Promise<DashboardStats> {
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           delaySurgeonUnread: delayCounts(me.doctorId).unread,
           claimCutsToReply: db.claimCuts.filter((c) => c.doctorId === me.doctorId && !c.reply).length,
+          claimCutsReplyOverdue: db.claimCuts.filter((c) => c.doctorId === me.doctorId && !c.reply && today() > cutReplyDue(c)).length,
+          preAuthExpiring: preAuthExpiringCount(today(), me.doctorId),
           preAuthToFill: preAuthCounts(now(), me.doctorId).toFill,
           codingChanged: codingCounts(now(), me.doctorId).changed,
           ...((c) => ({ drgNear: c.near, drgOver: c.over }))(drgAlertCounts(me.doctorId)),
@@ -504,7 +514,7 @@ export function getDashboard(): Promise<DashboardStats> {
       delayWardUnread: delayCounts().unread,
       implantCardDue: implantCardDueCount(today()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('coding') ? ((c) => ({ codingDue: c.due, codingOverdue: c.overdue }))(codingCounts(now())) : {}))(sessionUser(), sessionRole()),
-      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, claimDisputes: db.claimCuts.filter((c) => (c.dispute && !c.dispute.result) || disputeCheck(c, today()).ok).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())) } : {}))(sessionUser(), sessionRole()),
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...claimSubmitDue(today()), claimDisputes: db.claimCuts.filter((c) => (c.dispute && !c.dispute.result) || disputeCheck(c, today()).ok).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())) } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),
@@ -529,4 +539,20 @@ export function getDashboard(): Promise<DashboardStats> {
       }),
     }
   })
+}
+
+/** 申報組首頁：已結束、還沒送的月份（門診、住院各算一筆；有就醫或出院的月份才算），最早的期限 */
+function claimSubmitDue(t: string): { claimToSubmit?: number; claimSubmitText?: string; claimSubmitUrgent?: boolean } {
+  const cur = monthOf(t)
+  const pend: { kind: string; month: string; due: string }[] = []
+  for (const kind of ['opd', 'ipd'] as const) {
+    const months = new Set(kind === 'opd' ? db.visits.map((v) => monthOf(v.date)) : db.admissions.filter((a) => a.dischargedAt).map((a) => monthOf(a.dischargedAt!)))
+    const sent = new Set(db.claimSubmissions.filter((s) => s.kind === kind).map((s) => s.month))
+    // 只看最近一個結束的月份（更早還沒送的通常是示範資料的過去，不提醒）
+    const last = [...months].filter((m) => m < cur).sort().at(-1)
+    if (last && !sent.has(last) && nextMonth(last) === cur) pend.push({ kind, month: last, due: claimDeadlineOf(last) })
+  }
+  if (!pend.length) return {}
+  const due = pend.map((p) => p.due).sort()[0]
+  return { claimToSubmit: pend.length, claimSubmitText: `${pend.map((p) => `${p.month} ${p.kind === 'opd' ? '門診' : '住院'}`).join('、')}：期限 ${due}（${deadlineText(due, t)}）`, claimSubmitUrgent: daysUntil(due, t) <= 5 }
 }

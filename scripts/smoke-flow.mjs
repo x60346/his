@@ -18328,6 +18328,73 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('clerk02')
     ok((await P.preAuthBoard()).find((x) => x.id === seedPa.id).resultText.includes('每月最多 2'), '申報組看得到每月上限')
   }
+  // 期限：申報送件（下個月 20 日）、核減回覆（14 天）；首頁提醒
+  console.log('\n[申報與核減期限]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    ok(api.claimDeadlineOf('2026-10') === '2026-11-20' && api.claimDeadlineOf('2026-12') === '2027-01-20' && api.deadlineText('2026-11-20', '2026-11-15') === '還有 5 天' && api.deadlineText('2026-11-20', '2026-11-20') === '今天截止' && api.deadlineText('2026-11-20', '2026-11-23') === '已逾期 3 天', '送件期限：下個月 20 日；還有幾天、今天、逾期')
+    ok(api.cutReplyDue({ at: '2026-11-01 10:00' }) === '2026-11-15', '核減回覆期限：14 天')
+    await as('clerk02')
+    const cur = T.slice(0, 7)
+    const prev = dateUtil.addDays(`${cur}-01`, -1).slice(0, 7)
+    const b = await api.claimApi.claimBoard('opd', prev)
+    const due = api.claimDeadlineOf(prev)
+    ok(!b.submitted && b.deadline?.due === due && b.deadline.text === api.deadlineText(due, T) && b.deadline.overdue === (T > due), `${prev} 門診：送件期限 ${due}（${b.deadline?.text}）`)
+    ok(!(await api.claimApi.claimBoard('opd', cur)).deadline && !(await api.claimApi.claimBoard('opd', db().claimSubmissions.find((s) => s.kind === 'opd').month)).deadline, '這個月（還沒結束）、已送出的：沒有期限')
+    const d = await api.dashboardApi.getDashboard()
+    ok(d.claimToSubmit >= 1 && d.claimSubmitText.includes(`${prev} 門診`) && d.claimSubmitText.includes(due) && d.claimSubmitUrgent === (api.daysUntil(due, T) <= 5), `首頁：申報待送出 ${d.claimToSubmit}（${d.claimSubmitText}）`)
+    // 送出後首頁就不提醒門診
+    const bp = await api.claimApi.claimBoard('opd', prev)
+    for (const r of bp.rows.filter((x) => x.problems.length && !x.excluded)) await api.claimApi.excludeClaim('opd', prev, r.refId, '測試')
+    await api.claimApi.submitClaim('opd', prev)
+    ok(!((await api.dashboardApi.getDashboard()).claimSubmitText ?? '').includes('門診'), '送出後：首頁不再提醒門診')
+    // 核減回覆期限
+    const c = db().claimCuts.find((x) => !x.reply)
+    c.at = `${addDaysT(-20)} 10:00`
+    const cb = await api.claimCutApi.cutBoard()
+    const ci = cb.cuts.find((x) => x.id === c.id)
+    ok(ci.replyDue === addDaysT(-6) && ci.replyOverdue, `申報組看得到：回覆期限 ${ci.replyDue}、已逾期`)
+    const doc = db().users.find((u) => u.doctorId === c.doctorId).username
+    await as(doc)
+    const dd = await api.dashboardApi.getDashboard()
+    const mine = await api.claimCutApi.myCuts()
+    ok(dd.claimCutsReplyOverdue >= 1 && mine[0].id === c.id && mine[0].replyOverdue, '主治首頁：核減回覆逾期（緊急）；清單逾期的排最前')
+    await api.claimCutApi.replyCut(c.id, { action: 'accept' })
+    ok(!(await api.claimCutApi.myCuts()).find((x) => x.id === c.id).replyOverdue, '回覆了就不算逾期')
+  }
+  // 事前審查快到期：效期 30 天內、核准量或次數只剩 1；主治首頁提醒；看診時續約申請（舊的仍有效），續約後不再提醒
+  console.log('\n[事前審查快到期與續約]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const ap = (until, qty, times) => ({ status: 'approved', result: { at: '2026-01-01 10:00', until, ...(qty !== undefined ? { qty } : {}), ...(times !== undefined ? { times } : {}) } })
+    ok(api.opdExpiringText(ap('2026-12-15'), {}, '2026-11-20').includes('剩 25 天') && api.opdExpiringText(ap('2027-03-01'), {}, '2026-11-20') === undefined && api.opdExpiringText(ap('2027-03-01'), { qty: 1 }, '2026-11-20') === '核准量只剩 1' && api.opdExpiringText(ap('2027-03-01'), { times: 0 }, '2026-11-20') === '核准次數用完' && api.opdExpiringText(ap('2026-11-01'), {}, '2026-11-20') === undefined, '規則：30 天內到期、量或次數只剩 1／用完；已過期的不算（另外擋）')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    const docName = db().users.find((u) => u.doctorId === seedPa.doctorId).username
+    await as(docName)
+    ok(!(await api.dashboardApi.getDashboard()).preAuthExpiring, '種子：效期還長、量還多，不提醒')
+    seedPa.result.until = addDaysT(20)
+    const d = await api.dashboardApi.getDashboard()
+    const mine = (await P.myPreAuths()).find((x) => x.id === seedPa.id)
+    ok(d.preAuthExpiring === 1 && mine.expiring.includes('剩 20 天'), `首頁：事前審查快到期（${mine.expiring}）`)
+    const v1 = db().visits.find((x) => x.date === T && x.patientId === seedPa.patientId && x.status === 'registered')
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    const st = (await P.opdPreAuthStates(e1.id, ['M052']))[0]
+    ok(st.valid && st.preAuth.expiring, '看診時：還能健保開、標快到期')
+    const nw = await P.requestOpdDrugPreAuth(e1.id, 'M052')
+    ok(nw.status === 'draft' && nw.id !== seedPa.id && db().auditLogs[0].detail.includes('續約'), `續約申請：新送審單 ${nw.no}（稽核寫續約）`)
+    ok((await P.opdPreAuthStates(e1.id, ['M052']))[0].preAuth.id === seedPa.id && (await P.opdPreAuthStates(e1.id, ['M052']))[0].valid, '續約送審中：還是用舊的核准（到期為止）')
+    ok(!(await api.dashboardApi.getDashboard()).preAuthExpiring && !(await P.myPreAuths()).find((x) => x.id === seedPa.id).expiring, '續約後不再提醒')
+    ok((await errOf(() => P.requestOpdDrugPreAuth(e1.id, 'M052'))).includes('已經有送審單'), '不能重複續約')
+    // 效期還長的不能續約
+    // 前面有預期失敗的呼叫（db 物件被換掉）：重新找
+    db().preAuths.find((p) => p.id === 'PA-SEED-3').result.until = addDaysT(150)
+    db().preAuths = db().preAuths.filter((p) => p.id !== nw.id)
+    ok((await errOf(() => P.requestOpdDrugPreAuth(e1.id, 'M052'))).includes('已經有送審單'), '還沒快到期：不能另外申請')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

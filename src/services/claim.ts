@@ -5,7 +5,7 @@ import type { ClaimItem, ClaimKind, ClaimSubmission } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, mutate, query, requirePermission } from './http'
-import { canSubmitMonth, claimCsv, claimXml, CLAIM_KIND_LABEL, CLAIM_REJECT_CODES, monthOf, parseRejectFile, rejectLabel } from './claim-rules'
+import { canSubmitMonth, claimCsv, claimDeadlineOf, claimXml, daysUntil, deadlineText, CLAIM_KIND_LABEL, CLAIM_REJECT_CODES, monthOf, parseRejectFile, rejectLabel } from './claim-rules'
 import { claimMonthsOf, openMonthRows, submissionOf, type ClaimRow } from './claim-work'
 import { caseTypes } from '@/mock/codes'
 import { DRG_TABLE } from './drg-rules'
@@ -36,6 +36,8 @@ export interface ClaimBoard {
   canSubmit: boolean
   /** 不能送的原因（月份還沒結束、已送、有問題沒處理） */
   whyNot?: string
+  /** 送件期限（月份結束、還沒送的才有）：下個月 20 日 */
+  deadline?: { due: string; text: string; overdue: boolean; soon: boolean }
   rows: ClaimBoardRow[]
   totals: { count: number; points: number; copay: number; claim: number; problems: number; excluded: number; supplement: number; /** 住院期中申報幾筆 */ interim: number; /** 送出後被退件幾筆、幾點 */ rejected: number; rejectedClaim: number; byCase: { caseType: string; label: string; count: number; claim: number }[]; /** 住院 DRG：適用幾筆、盈虧合計（給付 − 實際）、不適用幾筆、病例組合指數 */ drg?: { count: number; diff: number; exempt: number; cmi: number | null } }
 }
@@ -71,6 +73,7 @@ function boardOf(kind: ClaimKind, month: string): ClaimBoard {
     months: claimMonthsOf(kind, cur).map((m) => ({ month: m, submitted: !!submissionOf(kind, m) })),
     ...(sub ? { submitted: { at: sub.submittedAt, byName: nameOf.user(sub.submittedBy) } } : {}),
     canSubmit: !whyNot, ...(whyNot ? { whyNot } : {}),
+    ...(!sub && canSubmitMonth(month, t) ? ((due) => ({ deadline: { due, text: deadlineText(due, t), overdue: daysUntil(due, t) < 0, soon: daysUntil(due, t) <= 5 } }))(claimDeadlineOf(month)) : {}),
     rows,
     totals: {
       count: live.length, points: r2(live.reduce((n, r) => n + r.points, 0)), copay: r2(live.reduce((n, r) => n + r.copay, 0)), claim: live.reduce((n, r) => n + r.claim, 0),

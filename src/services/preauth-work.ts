@@ -2,7 +2,7 @@
 import type { Encounter, IpdOrder, PreAuth } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { fail } from './http'
-import { opdPreAuthBlockText, opdPreAuthLeft, opdIntervalWait, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, opdRxTimes, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
+import { opdExpiringText, opdPreAuthBlockText, opdPreAuthLeft, opdIntervalWait, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, opdRxTimes, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
 import { find } from './views'
 
 const live = (p: PreAuth) => p.status !== 'rejected'
@@ -151,6 +151,16 @@ export function preAuthUnapproved(admissionId: string): string[] {
   }
   return out
 }
+
+/** 門診核准快到期或快用完的原因（還沒有續約申請的才算） */
+export function opdExpiringOf(p: PreAuth, today: string): string | undefined {
+  if (p.admissionId || p.status !== 'approved') return undefined
+  // 已經有續約的送審單（同病人同藥、比較新、還沒結果或已核准）就不提醒
+  if (db.preAuths.some((x) => x !== p && x.kind === 'drug' && !x.admissionId && x.patientId === p.patientId && x.itemId === p.itemId && x.createdAt > p.createdAt && x.status !== 'rejected')) return undefined
+  return opdExpiringText(p, { qty: opdPreAuthLeft(p, opdPreAuthUsed(p)), times: opdPreAuthTimesLeft(p, opdPreAuthUsedTimes(p)) }, today)
+}
+/** 首頁（主治）：我的病人門診核准快到期或快用完 */
+export const preAuthExpiringCount = (t: string, doctorId: string) => db.preAuths.filter((p) => p.doctorId === doctorId && opdExpiringOf(p, t)).length
 
 /** 首頁：主治待填寫（含補件）；申報組待送審、審查中逾時 */
 export function preAuthCounts(t: string, doctorId?: string) {
