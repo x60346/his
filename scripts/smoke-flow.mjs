@@ -77,6 +77,13 @@ try {
     if (e && item === 'consent' && ok && !api.examConsentOk(dbm.db.consents, e.id)) tconsent('procedure', e.patientId, { examId: e.id, ...(e.admissionId ? { admissionId: e.admissionId } : {}) })
     return examRaw.confirmExamPrep(id, item, ok, note)
   }
+  // 中心靜脈導管、胃造口：登錄放置前沒有同意書（也沒選原因）的自動補一張（測試輔助）；要測把關的用 lineRaw
+  const lineRaw = { addLine: api.lineApi.addLine }
+  api.lineApi.addLine = async (input) => {
+    const a = dbm.db.admissions.find((x) => x.id === input?.admissionId)
+    if (a && api.CONSENT_LINE_KINDS.includes(input.kind) && !input.consentWaiver && !api.unusedLineConsent(dbm.db.consents, dbm.db.lines, a.id, input.kind)) tconsent('procedure', a.patientId, { admissionId: a.id, lineKind: input.kind })
+    return lineRaw.addLine(input)
+  }
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
     api.labApi[k] = async (input) => {
@@ -18792,6 +18799,112 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
   {
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/pages/patients/PatientsPage.vue', 'utf8').includes('lg:grid-cols-[18rem_minmax(0,1fr)]'), '兩欄用 minmax(0,1fr)、1024–1280 左欄 18rem')
+  }
+  // 侵入性處置同意書：中心靜脈導管、胃造口登錄放置前要有這次住院、這種管路還沒用掉的同意書（放一次用一張）；緊急、外院放的選原因
+  console.log('\n[侵入性處置同意書]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.consentApi
+    const L = api.lineApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const cvcs = db().lines.filter((l) => l.kind === 'cvc')
+    ok(cvcs.length > 0 && cvcs.every((l) => db().consents.some((c) => c.id === l.consentId && c.lineKind === 'cvc' && !c.revoked && c.signedAt <= l.insertedAt)), `種子：CVC ${cvcs.length} 條都有放置前簽的同意書`)
+    ok(api.unusedLineConsent(db().consents, db().lines, cvcs[0].admissionId, 'cvc') === undefined, '種子的同意書已經用掉了')
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && x.admittedAt && !db().lines.some((l) => l.admissionId === x.id && !l.removedAt && (l.kind === 'cvc' || l.kind === 'peg')))
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    const at = dateUtil.addMinutes(dateUtil.now(), -30)
+    const inp = (k, extra = {}) => ({ admissionId: a.id, kind: k, site: k === 'cvc' ? '右內頸靜脈' : '左上腹', size: k === 'cvc' ? '7Fr 三腔' : '20Fr', insertedAt: at, placedBy: '主治醫師', ...extra })
+    await as('nurse01')
+    ok((await errOf(() => lineRaw.addLine(inp('cvc')))).includes('侵入性處置同意書'), '沒有同意書：登錄 CVC 擋')
+    ok((await errOf(() => lineRaw.addLine(inp('peg')))).includes('侵入性處置同意書'), '胃造口也擋')
+    ok((await fieldsOf(() => lineRaw.addLine(inp('cvc', { consentWaiver: '隨便' })))).consentWaiver, '原因要從清單選')
+    const w = await lineRaw.addLine(inp('peg', { consentWaiver: api.LINE_CONSENT_WAIVERS[1] }))
+    ok(w.consentWaiver === api.LINE_CONSENT_WAIVERS[1] && !w.consentId, '外院已放置：選原因可以登錄（記原因）')
+    ok((await lineRaw.addLine(inp('foley', { site: '尿道', size: '16Fr' }))).consentId === undefined, '導尿管不用同意書')
+    let tg = await C.consentTargets(a.patientId)
+    ok(tg.admission?.lines.map((x) => `${x.kind}:${x.has}`).join() === 'cvc:false,peg:false', '可以記錄的對象：CVC、胃造口都沒有待用的')
+    ok((await L.listLines(a.id)).consentReady.length === 0, '管路清單：沒有待用的同意書')
+    await as(doc)
+    ok((await fieldsOf(() => C.recordConsent({ patientId: a.patientId, kind: 'procedure', lineKind: 'pivc', title: 'x', explanation: 'x', signerName: 'x', relation: '本人' }))).lineKind, '留置針不用同意書')
+    const out = db().patients.find((p) => !db().admissions.some((x) => x.patientId === p.id && x.status === 'admitted'))
+    ok((await fieldsOf(() => C.recordConsent({ patientId: out.id, kind: 'procedure', lineKind: 'cvc', title: 'x', explanation: 'x', signerName: 'x', relation: '本人' }))).lineKind, '沒住院的病人不能記')
+    const c1 = await C.recordConsent({ patientId: a.patientId, kind: 'procedure', lineKind: 'cvc', title: '中心靜脈導管放置', explanation: '氣胸、出血、感染', signerName: 'x', relation: '配偶', reason: '病人意識不清' })
+    ok(c1.admissionId === a.id && c1.lineKind === 'cvc' && !c1.examId, `記錄：${c1.no} 綁這次住院、CVC`)
+    ok((await errOf(() => C.recordConsent({ patientId: a.patientId, kind: 'procedure', lineKind: 'cvc', title: 'x', explanation: 'x', signerName: 'x', relation: '本人' }))).includes('還沒用'), '同一種還沒用的只能一張')
+    tg = await C.consentTargets(a.patientId)
+    ok(tg.admission.lines.find((x) => x.kind === 'cvc').has && (await L.listLines(a.id)).consentReady.join() === 'cvc', '對象與管路清單：CVC 有待用的')
+    await as('nurse01')
+    const l1 = await lineRaw.addLine(inp('cvc'))
+    ok(l1.consentId === c1.id && l1.consentNo === c1.no, `有同意書：登錄 CVC（用掉 ${l1.consentNo}）`)
+    ok((await L.listLines(a.id)).consentReady.length === 0 && api.unusedLineConsent(db().consents, db().lines, a.id, 'cvc') === undefined, '用掉了：沒有待用的')
+    ok((await errOf(() => C.revokeConsent(c1.id, '家屬反悔'))).includes('已經依這張'), '放置後不能撤回')
+    ok((await C.listConsents(a.patientId)).find((x) => x.id === c1.id).lineUsed === true, '同意書清單標「已放置」')
+    await L.removeLine(l1.id, '到期更換')
+    ok((await errOf(() => lineRaw.addLine(inp('cvc')))).includes('侵入性處置同意書'), '換新的 CVC：舊同意書不能再用，要重簽')
+    const e = await lineRaw.addLine(inp('cvc', { consentWaiver: api.LINE_CONSENT_WAIVERS[0] }))
+    ok(e.consentWaiver.startsWith('緊急'), '緊急：選原因可以登錄')
+    ok(db().auditLogs.some((x) => x.action === '管路放置' && x.detail.includes(`同意書 ${c1.no}`)) && db().auditLogs.some((x) => x.action === '管路放置' && x.detail.includes('無同意書：緊急')), '稽核記錄同意書或原因')
+    // 撤回還沒用的：之後登錄就擋
+    await as(doc)
+    await L.removeLine(e.id, '到期更換').catch(() => {})
+    const c2 = await C.recordConsent({ patientId: a.patientId, kind: 'procedure', lineKind: 'cvc', title: 'CVC', explanation: 'x', signerName: 'x', relation: '本人' })
+    await C.revokeConsent(c2.id, '病人決定不放')
+    await as('nurse01')
+    ok((await errOf(() => lineRaw.addLine(inp('cvc')))).includes('侵入性處置同意書'), '撤回了（還沒用）：登錄擋')
+  }
+  // 出院病歷的病程紀錄：住院期間（入院隔天到出院前一天）每天一筆；缺的算病歷未完成，主治補寫（標補寫、完成時間算到補寫那時）
+  console.log('\n[出院病歷病程紀錄]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const R = api.recordAuditApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.stayProgressGaps('2026-11-01 14:00', '2026-11-05 11:00', ['2026-11-02 08:30', '2026-11-04']).join() === '2026-11-03' && !api.stayProgressGaps('2026-11-01 14:00', '2026-11-02 10:00', []).length, '規則：入院隔天到出院前一天（入院、出院當天不要求）')
+    ok(api.noteDateOf({ at: '2026-11-10 09:00', lateFor: '2026-11-03' }) === '2026-11-03' && api.progressGapText(['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']) === '病程紀錄缺 6 天：11-01、11-02、11-03、11-04、11-05…', '補寫算補的那天；缺的日期最多列 5 天')
+    const base = { day: false, dischargedAt: '2026-11-05 10:00', summary: { signedAt: '2026-11-05 09:00' }, surgeries: [], consults: [] }
+    ok(api.recordGaps({ ...base, progress: { gaps: ['2026-11-03'] } })[0] === '病程紀錄缺 1 天：11-03' && api.recordCompletedAt({ ...base, progress: { gaps: [], lastLateAt: '2026-11-08 10:00' } }) === '2026-11-08 10:00', '缺的算未完成；完成時間算到最後一次補寫')
+    // 種子：只有 9 天前出院的肺炎病人缺一天
+    const W = await load('/src/services/record-audit-work.ts')
+    const withGaps = W.discharged().filter((a) => W.stayGapsOf(a).length)
+    const forgot = withGaps[0]
+    ok(withGaps.length === 1 && forgot.dischargedAt.startsWith(addDaysT(-9)) && W.stayGapsOf(forgot).join() === addDaysT(-11), `種子：只有 ${forgot?.admitNo} 缺 ${W.stayGapsOf(forgot ?? {}).join()}（其他出院的每天都有）`)
+    const doc = db().users.find((u) => u.doctorId === forgot.doctorId).username
+    await as(doc)
+    let mine = await R.myIncompleteRecords()
+    let it = mine.find((x) => x.admissionId === forgot.id)
+    ok(it && !it.overdue && it.progressGaps.join() === addDaysT(-11) && it.gaps.some((g) => g.startsWith('病程紀錄缺 1 天')), `主治：病歷待完成（${it?.gaps.join('；')}，期限 ${it?.due} 還沒到）`)
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== forgot.doctorId).username
+    const soap = { subjective: '咳嗽減少', objective: '體溫 37.0', assessment: '肺炎改善中', plan: '續抗生素' }
+    await as(other)
+    ok((await errOf(() => R.addLateProgressNote({ admissionId: forgot.id, forDate: addDaysT(-11), ...soap }))).includes('主治'), '出院病歷：只有主治能補寫')
+    await as(doc)
+    ok((await fieldsOf(() => R.addLateProgressNote({ admissionId: forgot.id, forDate: addDaysT(-12), ...soap }))).forDate, '只能補缺的那天')
+    ok((await errOf(() => R.addLateProgressNote({ admissionId: forgot.id, forDate: addDaysT(-11), subjective: ' ', objective: '', assessment: '', plan: '' }))).includes('空白'), '不可空白')
+    const n = await R.addLateProgressNote({ admissionId: forgot.id, forDate: addDaysT(-11), ...soap })
+    ok(n.lateFor === addDaysT(-11) && n.at === dateUtil.now() && db().auditLogs[0].action === '病程紀錄補寫', '補寫：記補的那天、實際時間、稽核')
+    mine = await R.myIncompleteRecords()
+    ok(!mine.some((x) => x.admissionId === forgot.id), '補寫後：不在待完成清單')
+    await as('clerk01')
+    const au = await R.recordAudit()
+    ok(!au.incomplete.some((x) => x.admissionId === forgot.id), '病歷室清單也沒有了')
+    ok(api.recordCompletedAt(W.recordInputOf(db().admissions.find((a) => a.id === forgot.id))) === n.at, '完成時間＝補寫的時間')
+    const notes = await api.ipdApi.listProgressNotes(forgot.id)
+    ok(notes.some((x) => x.lateFor === addDaysT(-11)), '病程紀錄清單看得到補寫')
+    // 住院中：最近 7 天缺的也能補（照護團隊），補了就不再算缺
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.admittedAt < `${addDaysT(-3)} 00:00`)
+    const y = addDaysT(-1)
+    dbm.db.progressNotes = db().progressNotes.filter((x) => !(x.admissionId === adm.id && !x.kind && x.at.startsWith(y)))
+    const adoc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(adoc)
+    let miss = await R.myMissingProgressNotes()
+    ok(miss.find((x) => x.admissionId === adm.id)?.dates.includes(y), `住院中：${adm.admitNo} 缺 ${y}`)
+    ok((await fieldsOf(() => R.addLateProgressNote({ admissionId: adm.id, forDate: T, ...soap }))).forDate, '住院中：今天的不用補寫（在住院醫囑頁寫）')
+    await R.addLateProgressNote({ admissionId: adm.id, forDate: y, ...soap })
+    miss = await R.myMissingProgressNotes()
+    ok(!miss.find((x) => x.admissionId === adm.id)?.dates.includes(y), '補寫後：不再算缺')
   }
 } catch (e) {
   failed++

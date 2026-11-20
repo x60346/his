@@ -556,7 +556,7 @@ function openIdentity(v: VisitView) {
 
     <!-- 當日掛號清單 -->
     <div ref="listEl" class="scroll-mt-4">
-    <UCard :title="`${listDate === listToday ? '今日' : listDate} 掛號清單`" :padded="false">
+    <UCard :title="`${listDate === listToday ? '今日' : listDate} 掛號清單`" :padded="false" wrap-actions>
       <template #actions>
         <div class="w-40"><UInput v-model="listDate" type="date" aria-label="掛號清單日期" /></div>
         <div class="w-64"><USelect v-model="listSession" :options="listSessionOptions" placeholder="全部診次" /></div>

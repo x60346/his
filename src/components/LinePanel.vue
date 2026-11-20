@@ -5,7 +5,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { lineApi, LINE_KINDS, LINE_REMOVE_REASONS, lineKind, type LineView } from '@/services'
+import { CONSENT_LINE_KINDS, LINE_CONSENT_WAIVERS, lineApi, LINE_KINDS, LINE_REMOVE_REASONS, lineKind, type LineView } from '@/services'
 import type { LineKind } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -19,16 +19,20 @@ const ageText = (l: LineView) => (l.state.hours < 72 ? `${l.state.hours} 小時`
 
 // ---------- 登錄放置 ----------
 const addOpen = ref(false)
-const form = reactive({ kind: 'pivc' as LineKind, site: '', size: '', insertedAt: '', placedBy: '' })
+const form = reactive({ kind: 'pivc' as LineKind, site: '', size: '', insertedAt: '', placedBy: '', consentWaiver: '' })
 const meta = computed(() => lineKind(form.kind))
+// 中心靜脈導管、胃造口：要有還沒用掉的侵入性處置同意書；沒有的話只能選「緊急」或「外院已放置」
+const needConsent = computed(() => CONSENT_LINE_KINDS.includes(form.kind))
+const consentReady = computed(() => !!lines.value?.consentReady.includes(form.kind))
 function openAdd() {
-  Object.assign(form, { kind: 'pivc', site: '', size: '', insertedAt: now().slice(0, 16).replace(' ', 'T'), placedBy: auth.user?.name ?? '' })
+  Object.assign(form, { kind: 'pivc', site: '', size: '', insertedAt: now().slice(0, 16).replace(' ', 'T'), placedBy: auth.user?.name ?? '', consentWaiver: '' })
   add.fieldErrors.value = {}
   addOpen.value = true
 }
 const add = useAction(lineApi.addLine, { success: (l) => `已登錄${l.label}（${l.site}）` })
 async function submitAdd() {
-  if (await add.run({ admissionId: props.admissionId, ...form, insertedAt: form.insertedAt.replace('T', ' ') })) addOpen.value = false
+  const { consentWaiver, ...rest } = form
+  if (await add.run({ admissionId: props.admissionId, ...rest, insertedAt: form.insertedAt.replace('T', ' '), ...(needConsent.value && !consentReady.value && consentWaiver ? { consentWaiver } : {}) })) addOpen.value = false
 }
 
 // ---------- 每天評估 ----------
@@ -70,6 +74,8 @@ async function submitRm() {
               <b class="text-slate-800">{{ l.label }}</b>
               <span class="text-slate-600">{{ l.site }}・{{ l.size }}</span>
               <span class="tabular text-xs text-slate-500">{{ l.insertedAt.slice(5) }} 放置（{{ l.placedBy }}）・已放 {{ ageText(l) }}</span>
+              <span v-if="l.consentNo" class="text-xs text-slate-500">同意書 {{ l.consentNo }}</span>
+              <UBadge v-else-if="l.consentWaiver" tone="gray" :title="l.consentWaiver">無同意書：{{ l.consentWaiver.startsWith('緊急') ? '緊急' : '外院放置' }}</UBadge>
               <UBadge v-if="l.state.attendingAlert" tone="red">滿 7 天：請主治評估</UBadge>
               <UBadge v-if="l.state.replaceDue" tone="red">滿 96 小時：請更換</UBadge>
               <UBadge v-if="l.state.removable" tone="yellow">評估可移除</UBadge>
@@ -99,8 +105,15 @@ async function submitRm() {
       <div class="space-y-3 text-sm">
         <div class="flex flex-wrap gap-2">
           <label v-for="k in LINE_KINDS" :key="k.kind" :class="['cursor-pointer rounded-md border-2 px-3 py-1', form.kind === k.kind ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
-            <input v-model="form.kind" type="radio" :value="k.kind" class="sr-only" @change="(form.site = ''), (form.size = '')" />{{ k.label }}
+            <input v-model="form.kind" type="radio" :value="k.kind" class="sr-only" @change="(form.site = ''), (form.size = ''), (form.consentWaiver = '')" />{{ k.label }}
           </label>
+        </div>
+        <div v-if="needConsent" :class="['rounded-md border px-3 py-2', consentReady ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50']">
+          <p v-if="consentReady" class="text-green-800">侵入性處置同意書已簽，登錄後這張同意書就算用掉了。</p>
+          <template v-else>
+            <p class="text-amber-800">{{ meta.label }}要先有侵入性處置同意書（醫師在病患資料「同意書」分頁記錄）。緊急或外院已放置的，選原因才能登錄：</p>
+            <USelect v-model="form.consentWaiver" class="mt-1" label="沒有同意書的原因" :options="[{ label: '（請選）', value: '' }, ...LINE_CONSENT_WAIVERS.map((w) => ({ label: w, value: w }))]" :error="add.fieldErrors.value.consentWaiver" />
+          </template>
         </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>

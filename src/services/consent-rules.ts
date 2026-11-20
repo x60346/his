@@ -1,5 +1,5 @@
 // 知情同意書（純函式）：種類、簽署人關係、欄位檢查、手術需要哪幾張。服務層（consent.ts、surgery 術前準備）、畫面、種子、測試共用
-import type { Consent } from '@/types'
+import type { Consent, LineDevice, LineKind } from '@/types'
 
 export const CONSENT_KIND_LABEL: Record<Consent['kind'], string> = { surgery: '手術同意書', anesthesia: '麻醉同意書', transfusion: '輸血同意書', procedure: '侵入性檢查／處置同意書' }
 /** 簽署人和病人的關係（不是本人要寫原因：病人意識不清、未成年…） */
@@ -21,6 +21,14 @@ export const consentValid = (c: Pick<Consent, 'revoked'>) => !c.revoked
 
 /** 這筆檢查有沒有有效的檢查同意書 */
 export const examConsentOk = (cs: Pick<Consent, 'kind' | 'examId' | 'revoked'>[], examId: string) => cs.some((c) => c.kind === 'procedure' && c.examId === examId && consentValid(c))
+
+/** 放置前要侵入性處置同意書的管路（中心靜脈導管、胃造口）；導尿管、留置針、鼻胃管是一般護理處置，氣管內管多半是急救 */
+export const CONSENT_LINE_KINDS: LineKind[] = ['cvc', 'peg']
+/** 沒有同意書也能登錄的原因 */
+export const LINE_CONSENT_WAIVERS = ['緊急狀況，來不及事先取得同意（醫療法第 63 條但書，事後補說明）', '外院已放置（補登）']
+/** 這次住院、這種管路還沒用掉的有效同意書（一張同意書放一次；放過的就算用掉了） */
+export const unusedLineConsent = <C extends Pick<Consent, 'id' | 'kind' | 'admissionId' | 'lineKind' | 'revoked'>>(cs: C[], lines: Pick<LineDevice, 'consentId'>[], admissionId: string, kind: LineKind) =>
+  cs.find((c) => c.kind === 'procedure' && c.admissionId === admissionId && c.lineKind === kind && consentValid(c) && !lines.some((l) => l.consentId === c.id))
 
 /** 這次住院有沒有有效的輸血同意書（一次住院簽一次即可） */
 export const transfusionConsentOk = (cs: Pick<Consent, 'kind' | 'admissionId' | 'revoked'>[], admissionId: string) => cs.some((c) => c.kind === 'transfusion' && c.admissionId === admissionId && consentValid(c))

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 病人的知情同意書總覽：手術、麻醉、輸血、侵入性檢查。醫師說明後在這裡記錄輸血同意書（住院中一次）、
-// 檢查同意書（要同意書的影像檢查排程）；手術、麻醉同意書在「手術」分頁記錄。撤回寫原因。
+// 檢查同意書（要同意書的影像檢查排程）、侵入性處置同意書（中心靜脈導管、胃造口，放一次用一張）；手術、麻醉同意書在「手術」分頁記錄。撤回寫原因。
 // 能不能記、綁哪個對象由服務層判斷（consent.ts）
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import { consentApi, CONSENT_RELATIONS } from '@/services'
+import type { LineKind } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 
@@ -15,7 +16,7 @@ const isDoctor = computed(() => auth.user?.role === 'doctor')
 const { data, loading } = useQuery(() => consentApi.listConsents(props.patientId), [() => props.patientId])
 const { data: tg } = useQuery(() => consentApi.consentTargets(props.patientId), [() => props.patientId])
 
-const target = ref<{ kind: 'transfusion' | 'procedure'; admissionId?: string; examId?: string; label: string }>()
+const target = ref<{ kind: 'transfusion' | 'procedure'; admissionId?: string; examId?: string; lineKind?: LineKind; label: string }>()
 const open = computed({ get: () => !!target.value, set: (x) => !x && (target.value = undefined) })
 const f = reactive({ title: '', explanation: '', signerName: '', relation: '本人' as string | number | undefined, reason: '' })
 function openRecord(t: NonNullable<typeof target.value>, title: string) {
@@ -26,7 +27,7 @@ function openRecord(t: NonNullable<typeof target.value>, title: string) {
 const act = useAction(consentApi.recordConsent, { success: (c) => `已記錄 ${c.kindLabel}（${c.no}）` })
 async function submit() {
   const t = target.value
-  if (t && (await act.run({ patientId: props.patientId, kind: t.kind, ...(t.admissionId ? { admissionId: t.admissionId } : {}), ...(t.examId ? { examId: t.examId } : {}), title: f.title, explanation: f.explanation, signerName: f.signerName, relation: String(f.relation ?? ''), reason: f.reason }))) target.value = undefined
+  if (t && (await act.run({ patientId: props.patientId, kind: t.kind, ...(t.admissionId ? { admissionId: t.admissionId } : {}), ...(t.examId ? { examId: t.examId } : {}), ...(t.lineKind ? { lineKind: t.lineKind } : {}), title: f.title, explanation: f.explanation, signerName: f.signerName, relation: String(f.relation ?? ''), reason: f.reason }))) target.value = undefined
 }
 const revokeId = ref<string>()
 const revokeOpen = computed({ get: () => !!revokeId.value, set: (x) => !x && (revokeId.value = undefined) })
@@ -44,6 +45,11 @@ async function onRevoke(reason: string) {
         <UBadge :tone="tg.admission.transfusion ? 'green' : 'yellow'">{{ tg.admission.transfusion ? '已簽' : '還沒有（開始輸血前要有）' }}</UBadge>
         <UButton v-if="isDoctor && !tg.admission.transfusion" size="sm" variant="secondary" @click="openRecord({ kind: 'transfusion', admissionId: tg.admission.id, label: '輸血同意書' }, '輸血（紅血球、血小板、血漿）')">記錄簽署</UButton>
       </div>
+      <div v-for="l in tg.admission?.lines ?? []" :key="l.kind" class="flex flex-wrap items-center gap-2">
+        <span>{{ l.label }}放置・侵入性處置同意書：</span>
+        <UBadge :tone="l.has ? 'green' : 'gray'">{{ l.has ? '已簽（還沒放）' : '沒有待用的' }}</UBadge>
+        <UButton v-if="isDoctor && !l.has" size="sm" variant="secondary" @click="openRecord({ kind: 'procedure', lineKind: l.kind, label: `${l.label}同意書` }, `${l.label}放置`)">記錄簽署</UButton>
+      </div>
       <div v-for="e in tg.exams" :key="e.id" class="flex flex-wrap items-center gap-2">
         <span>{{ e.name }}（{{ e.start.slice(5, 16) }}）・檢查同意書：</span>
         <UBadge :tone="e.has ? 'green' : 'yellow'">{{ e.has ? '已簽' : '還沒有（報到確認前要有）' }}</UBadge>
@@ -57,7 +63,8 @@ async function onRevoke(reason: string) {
           <div class="flex flex-wrap items-center gap-2">
             <UBadge :tone="c.revoked ? 'gray' : 'green'">{{ c.revoked ? '已撤回' : '有效' }}</UBadge>
             <b>{{ c.kindLabel }}</b><span class="text-xs text-slate-500">{{ c.no }}・{{ c.title }}{{ c.surgeryNo ? `・${c.surgeryNo}` : '' }}</span>
-            <button v-if="!c.revoked" type="button" class="ml-auto text-xs text-red-600 underline" @click="revokeId = c.id">撤回</button>
+            <span v-if="c.lineUsed" class="ml-auto text-xs text-slate-500">已放置（不能撤回）</span>
+            <button v-else-if="!c.revoked" type="button" class="ml-auto text-xs text-red-600 underline" @click="revokeId = c.id">撤回</button>
           </div>
           <div class="text-xs text-slate-600">簽署 {{ c.signer.name }}（{{ c.signer.relation }}{{ c.signer.reason ? `：${c.signer.reason}` : '' }}）・說明 {{ c.explainedByName }} {{ c.signedAt.slice(5) }}・{{ c.explanation }}</div>
           <div v-if="c.revoked" class="text-xs text-slate-500">撤回 {{ c.revoked.at.slice(5) }}：{{ c.revoked.reason }}</div>

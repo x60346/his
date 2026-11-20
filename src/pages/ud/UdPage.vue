@@ -160,7 +160,7 @@ function openSheet(id: string) {
               <UBadge v-if="g.allergies.length" tone="red">過敏：{{ g.allergies.join('、') }}</UBadge>
               <UButton size="sm" variant="secondary" class="ml-auto" :icon="PillBottle" :loading="run.pending.value" @click="dispense(sec.kind, [g])">調劑</UButton>
             </div>
-            <table class="tabular w-full text-sm">
+            <div class="overflow-x-auto"><table class="tabular w-full text-sm">
               <tbody>
                 <tr v-for="l in g.lines" :key="l.orderId" class="border-t border-slate-100 align-top">
                   <td class="px-4 py-2">
@@ -194,7 +194,7 @@ function openSheet(id: string) {
                   </td>
                 </tr>
               </tbody>
-            </table>
+            </table></div>
           </div>
         </UCard>
 
@@ -269,7 +269,7 @@ function openSheet(id: string) {
         <UCard :padded="false">
           <template #title><span class="text-sm font-semibold text-slate-800">最近的調劑</span></template>
           <UEmpty v-if="!w.recent.length" title="還沒有調劑紀錄" class="py-6" />
-          <table v-else class="tabular w-full text-sm">
+          <div v-else class="overflow-x-auto"><table class="tabular w-full text-sm">
             <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
               <tr>
                 <th class="px-4 py-2 text-left">單號</th>
@@ -293,7 +293,7 @@ function openSheet(id: string) {
                 <td class="px-3 py-2 text-right"><UButton v-if="u.verified" size="sm" variant="ghost" :icon="Printer" class="whitespace-nowrap" @click="openSheet(u.id)">簽收單</UButton></td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
         </UCard>
       </template>
     </UQueryState>

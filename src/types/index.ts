@@ -2274,6 +2274,10 @@ export interface LineDevice {
   placedBy: string
   recordedBy: string
   recordedAt: string
+  /** 中心靜脈導管、胃造口：放置時用掉的侵入性處置同意書（一張同意書只能放一次） */
+  consentId?: string
+  /** 沒有同意書的原因（緊急狀況、外院已放置的補登） */
+  consentWaiver?: string
   /** 每天的「還需要嗎」評估（導尿管、CVC） */
   needChecks?: { date: string; at: string; by: string; needed: boolean; note?: string }[]
   removedAt?: string
@@ -2773,6 +2777,8 @@ export interface Consent {
   surgeryId?: string
   /** 侵入性檢查（含顯影劑的影像檢查）：綁那一筆排程 */
   examId?: string
+  /** 侵入性處置（中心靜脈導管、胃造口）：綁住院中的那次住院和管路種類；放置時用掉（LineDevice.consentId） */
+  lineKind?: LineKind
   /** 手術同意書：簽的時候手術的側別（手術側別之後被更正，這張就不算，要重簽） */
   side?: SurgerySide
   /** 同意的項目（術式名稱等） */
@@ -3031,6 +3037,8 @@ export interface ProgressNote {
    */
   kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply' | 'icuOut'
   items?: { label: string; text: string }[]
+  /** 補寫（事後補記某一天的病程）：補的是哪一天（YYYY-MM-DD）；at 是實際寫的時間 */
+  lateFor?: string
   subjective: string
   objective: string
   assessment: string

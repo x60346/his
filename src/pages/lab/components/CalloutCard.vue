@@ -52,7 +52,7 @@ const crit = (r: LabReportView) => r.values.filter((v) => v.critical).map((v) =>
       <ul v-else class="divide-y divide-slate-100 rounded border border-red-200">
         <li v-for="r in data.pending" :key="r.id" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
           <b>{{ r.patientName }}</b><span class="text-xs text-slate-500">{{ r.where }}・{{ r.procName }}</span>
-          <span class="min-w-0 flex-1 text-xs font-semibold text-red-700">{{ crit(r) }}</span>
+          <span class="min-w-0 flex-[1_1_10rem] text-xs font-semibold text-red-700">{{ crit(r) }}</span>
           <UBadge v-if="r.calloutTries" :tone="r.calloutEscalated ? 'red' : 'yellow'">沒聯絡上 {{ r.calloutTries }} 次{{ r.calloutEscalated ? '・要升級' : '' }}</UBadge>
           <span :class="['tabular text-xs', r.calloutState === 'late' ? 'font-semibold text-red-700' : 'text-slate-500']">{{ r.calloutState === 'late' ? '已逾時' : '期限' }} {{ r.calloutDue?.slice(5) }}（{{ r.calloutMinutes }} 分）</span>
           <UButton size="sm" variant="secondary" :icon="PhoneMissed" @click="start(r, 'fail')">沒聯絡上</UButton>

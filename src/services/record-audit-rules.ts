@@ -1,4 +1,5 @@
-// 住院病歷完整性（純函式）：出院後病歷要在 14 天內完成——出院病摘簽署、手術紀錄、死亡證明書（自然死）、會診回覆。
+// 住院病歷完整性（純函式）：出院後病歷要在 14 天內完成——出院病摘簽署、手術紀錄、死亡證明書（自然死）、會診回覆、
+// 住院期間每天的病程紀錄（入院隔天到出院前一天，缺的主治可以補寫）。
 // 缺什麼、哪天才算完成、逾期與否、每月準時完成率。服務層（record-audit.ts）、首頁、畫面、測試共用
 import { addDays } from '@/utils/date'
 
@@ -12,7 +13,22 @@ export interface RecordInput {
   surgeries: { no: string; recordAt?: string }[]
   death?: { manner: string; certAt?: string }
   consults: { dept: string; answeredAt?: string; cancelled?: boolean }[]
+  /** 住院期間缺病程紀錄的日期、最後一次補寫的時間 */
+  progress?: { gaps: string[]; lastLateAt?: string }
 }
+
+/** 病程紀錄算哪一天：補寫的算補的那天 */
+export const noteDateOf = (n: { at: string; lateFor?: string }) => n.lateFor ?? n.at.slice(0, 10)
+
+/** 整段住院缺病程紀錄的日期（入院隔天到出院前一天；入院、出院當天不要求） */
+export function stayProgressGaps(admittedAt: string, dischargedAt: string, noteDates: string[]): string[] {
+  const has = new Set(noteDates.map((d) => d.slice(0, 10)))
+  const out: string[] = []
+  for (let d = addDays(admittedAt.slice(0, 10), 1); d < dischargedAt.slice(0, 10); d = addDays(d, 1)) if (!has.has(d)) out.push(d)
+  return out
+}
+/** 缺的日期寫成一句（最多列 5 天） */
+export const progressGapText = (gaps: string[]) => `病程紀錄缺 ${gaps.length} 天：${gaps.slice(0, 5).map((d) => d.slice(5)).join('、')}${gaps.length > 5 ? '…' : ''}`
 
 /** 還缺什麼（空＝完整） */
 export function recordGaps(x: RecordInput): string[] {
@@ -24,13 +40,14 @@ export function recordGaps(x: RecordInput): string[] {
   if (x.death && x.death.manner === 'natural' && !x.death.certAt) out.push('死亡證明書未開立')
   const cs = x.consults.filter((c) => !c.cancelled && !c.answeredAt)
   if (cs.length) out.push(`會診未回覆：${cs.map((c) => c.dept).join('、')}`)
+  if (x.progress?.gaps.length) out.push(progressGapText(x.progress.gaps))
   return out
 }
 
 /** 完成時間：完整的話＝最後補齊的那一項（出院那時就齊了＝出院時間）；不完整＝undefined */
 export function recordCompletedAt(x: RecordInput): string | undefined {
   if (recordGaps(x).length) return undefined
-  const ts = [x.dischargedAt, x.summary?.signedAt, ...x.surgeries.map((s) => s.recordAt), x.death?.manner === 'natural' ? x.death.certAt : undefined, ...x.consults.filter((c) => !c.cancelled).map((c) => c.answeredAt)].filter((t): t is string => !!t)
+  const ts = [x.dischargedAt, x.summary?.signedAt, ...x.surgeries.map((s) => s.recordAt), x.death?.manner === 'natural' ? x.death.certAt : undefined, ...x.consults.filter((c) => !c.cancelled).map((c) => c.answeredAt), x.progress?.lastLateAt].filter((t): t is string => !!t)
   return ts.sort().at(-1)
 }
 

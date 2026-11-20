@@ -1,11 +1,13 @@
 // 住院病歷完整性稽核：出院後病歷要在 14 天內完成（出院病摘簽署、手術紀錄、死亡證明書、會診回覆）。
-// 主治看「我的病歷待完成」（逾期在前）；病歷室（權限「疾病分類」）看全院清單與每月準時完成率。規則在 record-audit-rules
-import type { Admission } from '@/types'
-import { db } from '@/mock/db'
+// 主治看「我的病歷待完成」（逾期在前）；病歷室（權限「疾病分類」）看全院清單與每月準時完成率。
+// 缺的病程紀錄可以補寫（標「補寫」、記實際寫的時間）。規則在 record-audit-rules
+import type { Admission, ProgressNote } from '@/types'
+import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
-import { query, requirePermission, requireUser } from './http'
+import { audit, fail, failField, must, mutate, query, requirePermission, requireUser } from './http'
+import { requireCare } from './care-team'
 import { recordCompletedAt, recordDue, recordGaps, recordOnTimeRate, recordOverdue } from './record-audit-rules'
-import { discharged, nursingGapsOf, progressGapsOf, recordInputOf } from './record-audit-work'
+import { discharged, nursingGapsOf, progressGapsOf, recordInputOf, stayGapsOf } from './record-audit-work'
 import { shiftMonth } from './management-rules'
 import { find, nameOf } from './views'
 
@@ -20,6 +22,8 @@ export interface RecordItem {
   dischargeType: string
   due: string
   gaps: string[]
+  /** 缺病程紀錄的日期（可以補寫） */
+  progressGaps: string[]
   overdue: boolean
   completedAt?: string
 }
@@ -27,7 +31,7 @@ function item(a: Admission, t: string): RecordItem {
   const x = recordInputOf(a)
   return {
     admissionId: a.id, admitNo: a.admitNo, patientName: nameOf.patient(a.patientId), chartNo: find.patient(a.patientId)?.chartNo ?? '', doctorName: nameOf.doctor(a.doctorId), deptName: nameOf.dept(a.deptId),
-    dischargedAt: a.dischargedAt ?? '', dischargeType: a.dischargeType ?? a.dischargeSummary?.dischargeType ?? '', due: recordDue(x.dischargedAt), gaps: recordGaps(x), overdue: recordOverdue(x, t),
+    dischargedAt: a.dischargedAt ?? '', dischargeType: a.dischargeType ?? a.dischargeSummary?.dischargeType ?? '', due: recordDue(x.dischargedAt), gaps: recordGaps(x), progressGaps: x.progress?.gaps ?? [], overdue: recordOverdue(x, t),
     ...((c) => (c ? { completedAt: c } : {}))(recordCompletedAt(x)),
   }
 }
@@ -61,6 +65,32 @@ export function missingNursingNotes(): Promise<{ admissionId: string; patientNam
     return db.admissions.map((a) => ({ a, shifts: nursingGapsOf(a, t) })).filter((x) => x.shifts.length)
       .map(({ a, shifts }) => ((b) => ({ admissionId: a.id, patientName: nameOf.patient(a.patientId), ward: b?.ward ?? '', bedNo: b?.bedNo ?? '', shifts }))(a.bedId ? find.bed(a.bedId) : undefined))
       .sort((x, y) => x.ward.localeCompare(y.ward) || x.bedNo.localeCompare(y.bedNo))
+  })
+}
+
+/**
+ * 補寫病程紀錄（某一天沒寫的）：出院的由主治補（整段住院缺的日期）；住院中由照護團隊補（最近 7 天缺的日期）。
+ * 記補的是哪天（lateFor）、實際寫的時間（at）；病歷完成時間算到最後一次補寫
+ */
+export function addLateProgressNote(input: { admissionId: string; forDate: string; subjective: string; objective: string; assessment: string; plan: string }): Promise<ProgressNote> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const a = must(db.admissions.find((x) => x.id === input.admissionId), '住院紀錄')
+    let gaps: string[]
+    if (a.status === 'discharged') {
+      if (!discharged().includes(a)) fail('這次住院不用寫病程紀錄', 'CONFLICT')
+      if (u.doctorId !== a.doctorId) fail('出院病歷由主治醫師補寫', 'FORBIDDEN')
+      gaps = stayGapsOf(a)
+    } else if (a.status === 'admitted') {
+      requireCare(u.doctorId, a, '補寫病程紀錄', { consult: false })
+      gaps = progressGapsOf(a, today())
+    } else fail('這次住院還沒入院', 'CONFLICT')
+    if (!gaps!.includes(input.forDate)) failField('forDate', gaps!.length ? '請選缺病程紀錄的那一天' : '沒有缺病程紀錄的日期')
+    if (![input.subjective, input.objective, input.assessment, input.plan].some((x) => x?.trim())) fail('病程紀錄不可空白')
+    const n: ProgressNote = { id: newId('PN'), admissionId: a.id, at: now(), doctorId: u.doctorId ?? a.doctorId, lateFor: input.forDate, subjective: input.subjective.trim(), objective: input.objective.trim(), assessment: input.assessment.trim(), plan: input.plan.trim() }
+    db.progressNotes.push(n)
+    audit('病程紀錄補寫', `${a.admitNo} ${nameOf.patient(a.patientId)}：補 ${input.forDate}`)
+    return n
   })
 }
 

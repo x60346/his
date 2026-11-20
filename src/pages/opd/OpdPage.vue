@@ -572,8 +572,8 @@ const lastOpen = ref(true)
       <!-- 預約回診：已約的下次門診；按鈕開預約對話框 -->
       <div v-if="canFollowUp" class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <span class="text-xs font-semibold text-slate-600">回診</span>
-        <span v-if="follow?.existing.length" class="min-w-0 flex-1 text-slate-700">已預約 {{ follow.existing.map((x) => `${x.date.slice(5).replace('-', '/')} ${x.period === 'AM' ? '上午' : x.period === 'PM' ? '下午' : '夜診'} ${x.doctorName} #${x.seqNo}`).join('、') }}</span>
-        <span v-else class="min-w-0 flex-1 text-xs text-slate-500">還沒預約下次門診</span>
+        <span v-if="follow?.existing.length" class="min-w-0 flex-[1_1_10rem] text-slate-700">已預約 {{ follow.existing.map((x) => `${x.date.slice(5).replace('-', '/')} ${x.period === 'AM' ? '上午' : x.period === 'PM' ? '下午' : '夜診'} ${x.doctorName} #${x.seqNo}`).join('、') }}</span>
+        <span v-else class="min-w-0 flex-[1_1_10rem] text-xs text-slate-500">還沒預約下次門診</span>
         <UButton size="sm" variant="secondary" :icon="CalendarPlus" @click="followOpen = true">預約回診</UButton>
       </div>
       <!-- 診斷證明書：叫號後可開，費用跟著這次批價；批價後才能印 -->

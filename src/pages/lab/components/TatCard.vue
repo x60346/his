@@ -26,7 +26,7 @@ const SEGS: TatSegment[] = ['collect', 'transport', 'lab']
         <li v-for="x in data.open" :key="x.key" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
           <UBadge :tone="x.state === 'late' ? 'red' : 'yellow'">{{ x.priorityLabel }} {{ x.elapsed }}/{{ x.limit }} 分</UBadge>
           <b>{{ x.patientName }}</b><span class="text-xs text-slate-500">{{ x.where }}・{{ x.procName }}</span>
-          <span class="min-w-0 flex-1 text-xs font-semibold" :class="x.state === 'late' ? 'text-red-700' : 'text-amber-800'">卡在{{ x.segmentLabel }}{{ x.barcode ? `（條碼 ${x.barcode} 還沒收件）` : '' }}</span>
+          <span class="min-w-0 flex-[1_1_10rem] text-xs font-semibold" :class="x.state === 'late' ? 'text-red-700' : 'text-amber-800'">卡在{{ x.segmentLabel }}{{ x.barcode ? `（條碼 ${x.barcode} 還沒收件）` : '' }}</span>
           <span class="tabular text-xs text-slate-500">{{ SEGS.filter((s) => x.segments[s] !== undefined).map((s) => `${TAT_SEGMENT_LABEL[s]} ${x.segments[s]} 分`).join('・') }}</span>
         </li>
       </ul>

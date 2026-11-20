@@ -10,6 +10,7 @@ import { checkLineInput, LINE_KINDS, LINE_REMOVE_REASONS, lineDays, lineKind, li
 import { intubationDnrProblem } from './vent-rules'
 import { activeDnr } from './flag-work'
 import { activeVent } from './vent-work'
+import { CONSENT_LINE_KINDS, LINE_CONSENT_WAIVERS, unusedLineConsent } from './consent-rules'
 
 export interface LineView extends LineDevice {
   label: string
@@ -17,12 +18,15 @@ export interface LineView extends LineDevice {
   recordedByName: string
   removedByName?: string
   needChecks: (NonNullable<LineDevice['needChecks']>[number] & { byName: string })[]
+  /** 放置用的同意書編號 */
+  consentNo?: string
 }
 
 const lineView = (l: LineDevice, t: string): LineView => ({
   ...l, label: lineKind(l.kind).label, state: lineState(l, t), recordedByName: nameOf.user(l.recordedBy),
   ...(l.removedBy ? { removedByName: nameOf.user(l.removedBy) } : {}),
   needChecks: (l.needChecks ?? []).map((c) => ({ ...c, byName: nameOf.user(c.by) })),
+  ...((c) => (c ? { consentNo: c.no } : {}))(l.consentId ? db.consents.find((x) => x.id === l.consentId) : undefined),
 })
 
 const admittedOf = (admissionId: string) => {
@@ -32,7 +36,7 @@ const admittedOf = (admissionId: string) => {
 }
 
 /** 這位病人的管路：在身上的（放最久的在前）、已移除的（最近的在前） */
-export function listLines(admissionId: string): Promise<{ active: LineView[]; removed: LineView[] }> {
+export function listLines(admissionId: string): Promise<{ active: LineView[]; removed: LineView[]; consentReady: LineKind[] }> {
   return query(() => {
     requireUser('nurse', 'doctor')
     const t = now()
@@ -40,6 +44,8 @@ export function listLines(admissionId: string): Promise<{ active: LineView[]; re
     return {
       active: mine.filter((l) => !l.removedAt).sort((a, b) => a.insertedAt.localeCompare(b.insertedAt)).map((l) => lineView(l, t)),
       removed: mine.filter((l) => l.removedAt).sort((a, b) => b.removedAt!.localeCompare(a.removedAt!)).map((l) => lineView(l, t)),
+      // 要同意書的管路裡，已經有還沒用掉的同意書的種類
+      consentReady: CONSENT_LINE_KINDS.filter((k) => unusedLineConsent(db.consents, db.lines, admissionId, k)),
     }
   })
 }
@@ -52,9 +58,14 @@ export interface LineInput {
   /** YYYY-MM-DD HH:mm（外院或稍早放的可以補登） */
   insertedAt: string
   placedBy: string
+  /** 中心靜脈導管、胃造口沒有同意書時的原因（LINE_CONSENT_WAIVERS） */
+  consentWaiver?: string
 }
 
-/** 登錄放置：同一種管路同時只能一條（周邊留置針可以多條） */
+/**
+ * 登錄放置：同一種管路同時只能一條（周邊留置針可以多條）。
+ * 中心靜脈導管、胃造口要有這次住院、這種管路還沒用掉的侵入性處置同意書（用掉記 consentId）；緊急、外院放的選原因
+ */
 export function addLine(input: LineInput): Promise<LineView> {
   return mutate(() => {
     const u = requireUser('nurse', 'doctor')
@@ -66,9 +77,20 @@ export function addLine(input: LineInput): Promise<LineView> {
     const dnr = input.kind === 'ett' ? intubationDnrProblem(activeDnr(a.patientId)?.withhold) : undefined
     if (dnr) fail(dnr, 'CONFLICT')
     if (input.kind !== 'pivc' && db.lines.some((l) => l.admissionId === a.id && l.kind === input.kind && !l.removedAt)) fail(`已經有一條${lineKind(input.kind).label}，要換新的請先移除舊的（原因「到期更換」）`, 'CONFLICT')
-    const l: LineDevice = { id: newId('LN'), admissionId: a.id, kind: input.kind, site: input.site.trim(), size: input.size.trim(), insertedAt: input.insertedAt, placedBy: input.placedBy.trim(), recordedBy: u.id, recordedAt: t }
+    let consent: { consentId: string } | { consentWaiver: string } | Record<string, never> = {}
+    if (CONSENT_LINE_KINDS.includes(input.kind)) {
+      if (input.consentWaiver) {
+        if (!LINE_CONSENT_WAIVERS.includes(input.consentWaiver)) failField('consentWaiver', '請選沒有同意書的原因')
+        consent = { consentWaiver: input.consentWaiver }
+      } else {
+        const c = unusedLineConsent(db.consents, db.lines, a.id, input.kind)
+        if (!c) fail(`放置${lineKind(input.kind).label}要先有侵入性處置同意書（醫師在病患資料「同意書」記錄）；緊急或外院放置的請選原因`, 'CONFLICT')
+        consent = { consentId: c!.id }
+      }
+    }
+    const l: LineDevice = { id: newId('LN'), admissionId: a.id, kind: input.kind, site: input.site.trim(), size: input.size.trim(), insertedAt: input.insertedAt, placedBy: input.placedBy.trim(), recordedBy: u.id, recordedAt: t, ...consent }
     db.lines.push(l)
-    audit('管路放置', `${a.admitNo} ${nameOf.patient(a.patientId)}：${lineKind(l.kind).label} ${l.site} ${l.size}（${l.insertedAt}，${l.placedBy}）`)
+    audit('管路放置', `${a.admitNo} ${nameOf.patient(a.patientId)}：${lineKind(l.kind).label} ${l.site} ${l.size}（${l.insertedAt}，${l.placedBy}）${l.consentId ? `；同意書 ${db.consents.find((c) => c.id === l.consentId)?.no}` : l.consentWaiver ? `；無同意書：${l.consentWaiver}` : ''}`)
     return lineView(l, t)
   })
 }

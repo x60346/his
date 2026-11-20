@@ -648,7 +648,7 @@ async function submitNote() {
             <div class="mt-2 text-right"><UButton size="sm" :loading="addNote.pending.value" @click="submitNote">儲存病程紀錄</UButton></div>
           </div>
           <article v-for="n in notes" :key="n.id" class="rounded-md border border-slate-200 p-3 text-sm">
-            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at }}<UBadge v-if="n.kind" tone="blue" class="ml-2">{{ noteKind[n.kind] }}</UBadge></span><span>{{ n.doctorName }}</span></header>
+            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at }}<UBadge v-if="n.kind" tone="blue" class="ml-2">{{ noteKind[n.kind] }}</UBadge><UBadge v-if="n.lateFor" tone="yellow" class="ml-2">補寫 {{ n.lateFor.slice(5) }} 的病程</UBadge></span><span>{{ n.doctorName }}</span></header>
             <!-- 轉科、會診的紀錄：系統依動作寫入，逐項列出 -->
             <dl v-if="n.kind" class="grid gap-1">
               <div v-for="it in n.items ?? []" :key="it.label" class="flex gap-2">

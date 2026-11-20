@@ -57,7 +57,7 @@ const ixHigh = (k: 'H' | 'I' | 'L', v: number) => v >= (k === 'H' ? HIL_LIMITS.H
           <ul v-else class="divide-y divide-slate-100 rounded border border-slate-200">
             <li v-for="s in data.toLoad" :key="s.barcode" class="flex flex-wrap items-center gap-2 px-2 py-1.5">
               <span class="tabular text-xs">{{ s.barcode }}</span><b>{{ s.patientName }}</b><span class="text-xs text-slate-500">{{ s.where }}</span>
-              <span class="min-w-0 flex-1 text-xs text-slate-700">{{ s.tests.join('、') }}</span>
+              <span class="min-w-0 flex-[1_1_10rem] text-xs text-slate-700">{{ s.tests.join('、') }}</span>
               <UButton size="sm" variant="secondary" :loading="load.pending.value" @click="load.run(s.barcode)">上機</UButton>
             </li>
           </ul>

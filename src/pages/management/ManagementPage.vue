@@ -32,9 +32,9 @@ function exportXlsx() {
       <template v-if="r">
         <p v-if="r.partial" class="text-sm text-amber-800">本月還沒過完：算到 {{ r.to }}（比較的月份是整個月）。</p>
         <p v-if="!r.current.hasData" class="text-sm text-slate-500">這個月沒有資料（示範資料只有最近幾個月）。</p>
-        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))]">
+        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
           <UCard v-for="g in groups" :key="g" :title="g" :padded="false">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto"><table class="w-full text-sm">
               <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">
                 <tr><th class="px-3 py-1.5 text-left">指標</th><th class="px-3 py-1.5 text-right">{{ shortMonth(r.month) }}</th><th class="px-3 py-1.5 text-right">比上月</th><th class="px-3 py-1.5 text-right">比去年同月</th></tr>
               </thead>
@@ -46,11 +46,11 @@ function exportXlsx() {
                   <td :class="['tabular whitespace-nowrap px-3 py-1.5 text-right text-xs', changeTone(mgmtChangeText(r.current[k.key], r.lastYear[k.key], k.unit))]" :title="`去年同月 ${mgmtValueText(r.lastYear[k.key], k.unit)}`">{{ mgmtChangeText(r.current[k.key], r.lastYear[k.key], k.unit) }}</td>
                 </tr>
               </tbody>
-            </table>
+            </table></div>
           </UCard>
         </div>
 
-        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))]">
+        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
           <UCard title="近 12 個月：門診人次"><UBarChart :data="trend('opdVisits')" unit="人次" value-labels="nonzero" /></UCard>
           <UCard title="近 12 個月：實收（元）"><UBarChart :data="trend('collected')" unit="元" value-labels="nonzero" /></UCard>
           <UCard title="近 12 個月：佔床率（%）"><UBarChart :data="trend('occupancy')" unit="%" value-labels="nonzero" /></UCard>
@@ -60,42 +60,42 @@ function exportXlsx() {
         </div>
         <p class="text-xs text-slate-500">沒有資料的月份長條是 0（滑鼠移上去會寫「沒有資料」）。佔床率以目前 {{ r.beds }} 床計算。</p>
 
-        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))]">
+        <div class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
           <UCard title="門診科別" :padded="false">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto"><table class="w-full text-sm">
               <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">科別</th><th class="px-3 py-1.5 text-right">人次</th><th class="px-3 py-1.5 text-right">初診</th><th class="px-3 py-1.5 text-right">占比</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="d in r.opdByDept" :key="d.deptName"><td class="px-3 py-1.5">{{ d.deptName }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.visits }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.first }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.share.toFixed(1) }}%</td></tr>
                 <tr v-if="!r.opdByDept.length"><td colspan="4" class="px-3 py-4 text-center text-slate-400">—</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </UCard>
           <UCard title="門診醫師" :padded="false">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto"><table class="w-full text-sm">
               <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">醫師</th><th class="px-3 py-1.5 text-left">科別</th><th class="px-3 py-1.5 text-right">人次</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="d in r.opdByDoctor" :key="d.doctorName + d.deptName"><td class="px-3 py-1.5">{{ d.doctorName }}</td><td class="px-3 py-1.5 text-slate-600">{{ d.deptName }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.visits }}</td></tr>
                 <tr v-if="!r.opdByDoctor.length"><td colspan="3" class="px-3 py-4 text-center text-slate-400">—</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </UCard>
           <UCard title="住院科別" :padded="false">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto"><table class="w-full text-sm">
               <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">科別</th><th class="px-3 py-1.5 text-right">入院</th><th class="px-3 py-1.5 text-right">出院</th><th class="px-3 py-1.5 text-right">住院人日</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="d in r.ipdByDept" :key="d.deptName"><td class="px-3 py-1.5">{{ d.deptName }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.admissions }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.discharges }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.patientDays }}</td></tr>
                 <tr v-if="!r.ipdByDept.length"><td colspan="4" class="px-3 py-4 text-center text-slate-400">—</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </UCard>
           <UCard :title="`DRG 盈虧（本月出院${r.drg.exempt ? `；不適用 DRG ${r.drg.exempt} 筆` : ''}）`" :padded="false">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto"><table class="w-full text-sm">
               <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">DRG</th><th class="px-3 py-1.5 text-right">權重</th><th class="px-3 py-1.5 text-right">筆數</th><th class="px-3 py-1.5 text-right">平均住院日</th><th class="px-3 py-1.5 text-right">實際點數</th><th class="px-3 py-1.5 text-right">給付點數</th><th class="px-3 py-1.5 text-right">盈虧</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
                 <tr v-for="d in r.drg.rows" :key="d.code"><td class="px-3 py-1.5"><b class="tabular">{{ d.code }}</b> <span class="text-xs text-slate-600">{{ d.name }}</span></td><td class="tabular px-3 py-1.5 text-right">{{ d.weight.toFixed(2) }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.count }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.alos }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.actual.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.pay.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right" :class="d.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ d.diff >= 0 ? '+' : '' }}{{ d.diff.toLocaleString('zh-TW') }}</td></tr>
                 <tr v-if="!r.drg.rows.length"><td colspan="7" class="px-3 py-4 text-center text-slate-400">—</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </UCard>
         </div>
       </template>

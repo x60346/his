@@ -62,7 +62,7 @@ import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { laneOf, priorityOf } from '@/services/lab-queue-rules'
-import { consentsForSurgery } from '@/services/consent-rules'
+import { CONSENT_LINE_KINDS, consentsForSurgery } from '@/services/consent-rules'
 import { recentShifts } from '@/services/nursing-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
@@ -3951,6 +3951,20 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 中心靜脈導管、胃造口：放置前主治說明、簽侵入性處置同意書（放置時用掉，LineDevice.consentId）
+  for (const l of lines.filter((x) => CONSENT_LINE_KINDS.includes(x.kind) && !x.consentId)) {
+    const adm = admissions.find((a) => a.id === l.admissionId)
+    const doc = users.find((u) => u.doctorId === adm?.doctorId)
+    if (!adm || !doc) continue
+    const at = addMinutes(l.insertedAt, -30)
+    const d = at.slice(0, 10).replace(/-/g, '')
+    const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
+    const label = l.kind === 'cvc' ? '中心靜脈導管放置' : '經皮內視鏡胃造口'
+    const c: Consent = { id: `CN-SEED-L${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind: 'procedure', patientId: adm.patientId, admissionId: adm.id, lineKind: l.kind, title: label, explainedBy: doc.id, explanation: '說明放置目的、氣胸與出血、導管感染等風險與替代方案', signer: { name: patients.find((p) => p.id === adm.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc.id }
+    consents.push(c)
+    l.consentId = c.id
+  }
+
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
   // 明天骨折那台的鎖定骨板：主刀申請、已核准
@@ -4021,6 +4035,20 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const open = notFuture(`${T} 07:30`, 30)
     labWindows.push({ id: 'LW-SEED-1', date: T, window: 1, userId: 'U601', openedAt: open }, { id: 'LW-SEED-2', date: T, window: 2, userId: 'U602', openedAt: open })
     labCheckins.filter((c) => c.date === T && c.calls?.length).sort((a, b) => a.at.localeCompare(b.at)).forEach((c, i) => (c.window = (i % 2) + 1))
+  }
+
+  // ---------- 出院病人住院期間的病程紀錄（示範）：主治每天早上查房寫一筆（入院、出院當天不要求）；
+  // 9 天前出院的肺炎病人（出院回診沒來那位）出院前兩天沒寫：主治的「出院病歷待完成」可以補寫，期限還沒到 ----------
+  {
+    const forgot = admissions.find((a) => a.status === 'discharged' && a.reason === '發燒咳嗽' && a.dischargedAt?.startsWith(addDays(T, -9)))
+    for (const a of admissions.filter((x) => x.status === 'discharged' && x.admittedAt && x.dischargedAt && !(x.obs && x.obs.outcome !== 'admit') && !(x.day && !x.day.converted))) {
+      const has = new Set(progressNotes.filter((n) => n.admissionId === a.id && !n.kind).map((n) => n.at.slice(0, 10)))
+      const dx = a.diagnosis.replace(/^\S+\s*/, '')
+      for (let d = addDays(a.admittedAt!.slice(0, 10), 1); d < a.dischargedAt!.slice(0, 10); d = addDays(d, 1)) {
+        if (has.has(d) || (a === forgot && d === addDays(a.dischargedAt!.slice(0, 10), -2))) continue
+        progressNotes.push({ id: id('PN'), admissionId: a.id, at: `${d} 08:30`, doctorId: a.doctorId, subjective: '病人自述症狀較昨日改善。', objective: '生命徵象穩定。', assessment: dx, plan: '續目前治療，追蹤病況。' })
+      }
+    }
   }
 
   return {
