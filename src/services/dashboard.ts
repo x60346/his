@@ -23,7 +23,7 @@ import { activeIpdChargeOf, dayToBill, deathToBill, dischargeRxPending, interimS
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { sterileCounts } from './sterile-work'
-import { implantRecallOpen } from './implant-work'
+import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { preAuthCounts } from './preauth-work'
 import { dayCounts, delayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
@@ -272,6 +272,8 @@ export interface DashboardStats {
   /** 急刀插台順延：主刀還沒讀（醫師）、病房還沒讀（護理師）；順延超過開放時段待處理（手術排程） */
   delaySurgeonUnread?: number
   delayWardUnread: number
+  /** 最近 7 天手術放了植入物、還沒印植入物卡的病人 */
+  implantCardDue: number
   delayOverflow?: number
   /** 供應中心：生物指示劑該判讀、召回用過的還沒通知、要收回的器械包 */
   cssdBiDue?: number
@@ -483,6 +485,7 @@ export function getDashboard(): Promise<DashboardStats> {
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       delayWardUnread: delayCounts().unread,
+      implantCardDue: implantCardDueCount(today()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())) } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),

@@ -13044,7 +13044,7 @@ try {
     f = await fieldsOf(() => E.scheduleExam('O:IO-EX-4', `${d2} 09:00`))
     ok(f.start?.includes('消防演練'), '休診日排不進去')
     const st = await E.examHoursSettings()
-    ok(st.rows.length === 28 && st.closures.some((c) => c.date === d2 && c.roomName === '全部檢查室') && !st.canEdit, '設定畫面：4 間 × 7 天、休診日；櫃台只能看')
+    ok(st.rows.length === 35 && st.closures.some((c) => c.date === d2 && c.roomName === '全部檢查室') && !st.canEdit, '設定畫面：5 間（含磁振造影室）× 7 天、休診日；櫃台只能看')
     await as(userOf(rad.id))
     await E.removeExamClosure(st.closures.find((c) => c.date === d2).id)
     await as('clerk01')
@@ -17232,6 +17232,92 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/pages/claim/PreAuthPanel.vue', 'utf8') + readFileSync('src/pages/claim/PreAuthDoctorSection.vue', 'utf8')
     ok(!/preAuthAllows|preAuthOverdue|db\./.test(page), '能不能用、逾時由服務層判斷')
+  }
+  // 病人植入物卡與 MRI：MRI 等級、UDI、外院登記欄位；種子（外院心律調節器、疝氣網膜、還沒印卡）；列印（記錄、第幾次、沒植入物擋）；
+  // 外院登記（權限、欄位、未來日期）；排磁振造影：不安全的櫃台擋、放射科醫師要寫確認、改期沿用；有條件的記在檢查上；沒植入物不提示
+  console.log('\n[植入物卡與MRI]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.implantApi
+    const E = api.examApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(api.worstMri(['safe', 'conditional']) === 'conditional' && api.worstMri(['safe', 'unsafe', 'conditional']) === 'unsafe' && api.worstMri([]) === undefined, 'MRI：取最嚴重的')
+    ok(api.udiOf('04719876500012', 'BS-M2610', '2028-01-14') === '(01)04719876500012(10)BS-M2610(17)280114' && api.udiOf(undefined, 'X', '2028-01-14') === '', 'UDI：(01) 識別碼 (10) 批號 (17) 效期')
+    const ee = api.checkExternalImplant({ name: ' ', mri: 'x' })
+    ok(ee.name && ee.mri, '外院植入物：名稱、MRI 相容性')
+    // 種子
+    const st = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    await as('nurse01')
+    let v = await I.patientImplants(st.patientId)
+    ok(v.mri === 'unsafe' && v.rows[0].source === 'external' && v.rows[0].name.includes('心律調節器') && !v.cardDue, '種子：腦梗塞那位外院舊型心律調節器（MRI 不安全）；沒有本院植入物不用印卡')
+    const hp = db().surgeries.find((s) => s.id === 'SG-SEED-5').patientId
+    v = await I.patientImplants(hp)
+    ok(v.rows[0].source === 'here' && v.rows[0].udi.startsWith('(01)04719876500012') && v.rows[0].mri === 'safe' && v.cardDue && v.canEdit, `種子：今天疝氣修補的網膜（UDI ${v.rows[0].udi}、MRI 安全），植入物卡還沒印`)
+    const due0 = (await api.dashboardApi.getDashboard()).implantCardDue
+    ok(due0 >= 1, `首頁：植入物卡待印 ${due0}`)
+    // 列印
+    await as('clerk01')
+    const card = await I.printImplantCard(hp)
+    ok(card.rows.length >= 1 && card.patientName && card.hospital && db().auditLogs[0].action === '列印植入物卡', '列印植入物卡：病人、醫院、植入物，稽核')
+    await I.printImplantCard(hp)
+    ok(db().auditLogs[0].detail.includes('第 2 次') && !(await I.patientImplants(hp)).cardDue, '補印記第幾次；印過不再列待印')
+    await as('nurse01')
+    ok((await api.dashboardApi.getDashboard()).implantCardDue === due0 - 1, '首頁待印少一位')
+    const none = db().patients.find((p) => !db().surgeries.some((s) => s.patientId === p.id && s.implants?.length) && !p.externalImplants?.length)
+    ok((await errOf(() => I.printImplantCard(none.id))).includes('沒有植入物'), '沒有植入物不能印')
+    // 外院登記
+    await as('clerk01')
+    ok((await errOf(() => I.addExternalImplant(none.id, { name: '人工髖關節', mri: 'conditional' }))).length > 0, '櫃台不能登記外院植入物')
+    await as('nurse01')
+    let f = await fieldsOf(() => I.addExternalImplant(none.id, { name: '人工髖關節', mri: 'conditional', implantedOn: addDaysT(3) }))
+    ok(f.implantedOn, '植入日期不能是未來')
+    v = await I.addExternalImplant(none.id, { name: '人工髖關節', mri: 'conditional', implantedOn: '2020-03-01', hospital: '外院' })
+    ok(v.rows[0].source === 'external' && v.mri === 'conditional' && db().auditLogs[0].action === '登記外院植入物', '登記外院人工髖關節（MRI 有條件）、稽核')
+    // 排磁振造影：不安全
+    const slot = `${addDaysT(1)} 10:00`
+    await as('clerk01')
+    let m = await errOf(() => E.scheduleExam('O:IO-MRI-1', slot))
+    ok(m.includes('MRI 不安全') && m.includes('放射科醫師'), `櫃台排不進去：「${m.slice(0, 30)}…」`)
+    await as('dr10')
+    f = await fieldsOf(() => E.scheduleExam('O:IO-MRI-1', slot))
+    ok(f.mriReason?.includes('心律調節器'), '放射科醫師要寫確認結果')
+    let ex = await E.scheduleExam('O:IO-MRI-1', slot, { mriReason: '查外院資料為 MRI 相容型號，心臟科會診後依條件掃描' })
+    ok(ex.room === 'MR' && ex.mri.level === 'unsafe' && ex.mri.clearedBy && db().auditLogs[0].detail.includes('放射科確認'), '放射科醫師確認後排進磁振造影室、稽核')
+    await as('clerk01')
+    ex = await E.scheduleExam('O:IO-MRI-1', `${addDaysT(1)} 13:00`)
+    ok(ex.start.endsWith('13:00') && ex.mri.clearedBy, '改期：沿用放射科的確認，櫃台可以改')
+    // 有條件、沒植入物
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.patientId === none.id) ?? db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== st.id)
+    if (adm.patientId !== none.id) await (async () => { await as('nurse01'); await I.addExternalImplant(adm.patientId, { name: '人工膝關節', mri: 'conditional' }) })()
+    await as(db().users.find((u) => u.doctorId === adm.doctorId).username)
+    const o = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P067', content: '', dose: 1, freq: 'STAT' })
+    await as('clerk01')
+    ex = await E.scheduleExam(`O:${o.id}`, `${addDaysT(2)} 10:00`)
+    ok(ex.mri?.level === 'conditional' && !ex.mri.clearedBy, '有條件的：可以排，記在檢查上')
+    const clean = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && !db().patients.find((p) => p.id === a.patientId).externalImplants?.length && !db().surgeries.some((s) => s.patientId === a.patientId && s.implants?.length))
+    await as(db().users.find((u) => u.doctorId === clean.doctorId).username)
+    const o2 = await api.ipdApi.addOrder({ admissionId: clean.id, type: 'stat', category: 'procedure', procId: 'P067', content: '', dose: 1, freq: 'STAT' })
+    await as('clerk01')
+    ex = await E.scheduleExam(`O:${o2.id}`, `${addDaysT(2)} 11:00`)
+    ok(!ex.mri, '沒有植入物：不提示')
+    const { readFileSync } = await import('node:fs')
+    ok(!/worstMri|implantCardDue|db\./.test(readFileSync('src/components/ImplantRecordPanel.vue', 'utf8')), 'MRI 等級、要不要印卡由服務層算')
   }
 } catch (e) {
   failed++

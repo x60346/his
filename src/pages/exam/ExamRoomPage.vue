@@ -26,11 +26,13 @@ const nextSlot = () => {
 const slot = reactive<Record<string, { d: string; tm: string }>>({})
 const slotOf = (key: string) => (slot[key] ??= nextSlot())
 const sched = useAction(examApi.scheduleExam, { success: (e) => `已排程：${e.roomName} ${e.start.slice(5)}（${e.patientName} ${e.procName}）` })
-const err = ref<{ key: string; msg: string }>()
+const err = ref<{ key: string; msg: string; mri?: boolean }>()
+// 磁振造影：病人有 MRI 不安全的植入物 → 放射科醫師寫確認結果才能排（服務層擋）
+const mriReason = reactive<Record<string, string>>({})
 async function schedule(key: string) {
   const s = slotOf(key)
-  const r = await sched.run(key, `${s.d} ${s.tm}`)
-  err.value = r ? undefined : { key, msg: sched.fieldErrors.value.start ?? '' }
+  const r = await sched.run(key, `${s.d} ${s.tm}`, mriReason[key] ? { mriReason: mriReason[key] } : {})
+  err.value = r ? undefined : { key, msg: sched.fieldErrors.value.start ?? sched.fieldErrors.value.mriReason ?? '', mri: !!sched.fieldErrors.value.mriReason }
   if (r) moving.value = undefined
 }
 // 改時間（還沒報到的、未到的）
@@ -116,6 +118,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 <div v-if="w.safety.metformin" class="text-xs text-amber-800">{{ w.safety.metformin }}</div>
                 <div v-if="w.cancelledReason" class="text-xs text-slate-500">上次取消：{{ w.cancelledReason }}</div>
                 <p v-if="err?.key === w.key && err.msg" class="text-xs text-red-600">{{ err.msg }}</p>
+                <UInput v-if="err?.key === w.key && err.mri" v-model="mriReason[w.key]" class="mt-1" label="MRI 確認結果（放射科醫師）" placeholder="例：已確認為 MRI 相容型號，依廠商條件掃描" />
               </div>
               <template v-if="board.canSchedule">
                 <UInput v-model="slotOf(w.key).d" type="date" class="w-40" label="日期" />
@@ -154,6 +157,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 </div>
                 <p v-if="e.stage === 'done' && (e.contrastMl || e.contrastReaction)" class="text-xs text-slate-600">{{ e.doneByName }} 完成{{ e.contrastMl ? `・顯影劑 ${e.contrastMl} mL` : '' }}
                   <span v-if="e.contrastReaction" :class="e.contrastReaction.severity === 'mild' ? 'text-amber-800' : 'font-semibold text-red-700'">・不良反應（{{ CONTRAST_REACTION_LABEL[e.contrastReaction.severity].split('（')[0] }}）：{{ e.contrastReaction.symptoms }}，{{ e.contrastReaction.action }}{{ e.contrastReaction.adrId ? '（已通報藥師評估）' : '' }}</span></p>
+                <p v-if="e.mri" :class="['text-xs', e.mri.level === 'unsafe' ? 'font-semibold text-red-700' : 'text-amber-800']">{{ e.mri.level === 'unsafe' ? `MRI 不安全植入物：${e.mri.items.join('、')}（放射科確認：${e.mri.reason}）` : `MRI 有條件植入物：${e.mri.items.join('、')}，照廠商條件掃描` }}</p>
                 <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
                   <UButton v-if="board.canSchedule" size="sm" :loading="resched.pending.value" @click="resched.run(e.id)">排到下一個空檔</UButton></p>
                 <p v-if="e.noShow" class="text-xs text-red-700">過了排程 30 分鐘還沒報到{{ e.where === '門診' ? '（開立醫師首頁看得到）' : '（請聯絡病房）' }}：改時間或取消</p>

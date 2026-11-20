@@ -1,12 +1,14 @@
 // 植入物批號登記與追溯：手術室收貨（品項、批號、效期、數量；權限「供應中心」）→ 手術中流動護理師登記用了哪一批、幾個、植入部位
 // （術式不會用到、召回、過期、不夠的擋；自費品項要病房先記錄病人同意）→ 會放植入物的手術完成前至少一筆（surgery.finishSurgery）
 // → 用掉的進住院帳單（surgery-work.surgeryFeeItems）→ 廠商召回整批：列出用過的手術與病人，逐台記錄已通知主刀。規則在 implant-rules
-import type { ImplantLot } from '@/types'
+import type { ImplantLot, MriSafety } from '@/types'
 import { db, newId } from '@/mock/db'
 import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
+import { checkExternalImplant, MRI_LABEL, worstMri } from './implant-rules'
 import { checkImplantUse, checkLotInput, IMPLANT_FOR, implantUseProblem, lotLeft, lotState, LOT_STATE_LABEL, type LotState } from './implant-rules'
-import { isSelfPayImplant, lotOf, lotSurgeries, usedOf } from './implant-work'
+import { implantCardDue, isSelfPayImplant, lotOf, lotSurgeries, patientImplantRows, usedOf, type PatientImplantRow } from './implant-work'
+import { HOSPITAL } from '@/utils/hospital'
 import { requireImplantPreAuth } from './preauth-work'
 import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { find, nameOf } from './views'
@@ -199,5 +201,71 @@ export function consentSelfPayImplant(surgeryId: string, note?: string): Promise
     s.selfPayImplant = { by: u.id, at: now(), ...(note?.trim() ? { note: note.trim() } : {}) }
     audit('自費植入物同意', `${audS(s)}${note?.trim() ? `：${note.trim()}` : ''}`)
     return surgeryView(s)
+  })
+}
+
+// ---------- 病人植入物紀錄、外院植入物、植入物卡 ----------
+
+export interface PatientImplants {
+  patientName: string
+  chartNo: string
+  rows: (PatientImplantRow & { mriLabel?: string })[]
+  /** 最嚴重的 MRI 相容性 */
+  mri?: MriSafety
+  mriLabel?: string
+  cardDue: boolean
+  prints: { at: string; byName: string }[]
+  canEdit: boolean
+}
+/** 病人身上所有的植入物（本院手術登記的＋外院的）、MRI、植入物卡列印紀錄 */
+export function patientImplants(patientId: string): Promise<PatientImplants> {
+  return query(() => implantsOf(patientId, requireUser('doctor', 'nurse', 'clerk', 'radtech', 'admin').role))
+}
+function implantsOf(patientId: string, role: string): PatientImplants {
+  {
+    const p = must(find.patient(patientId), '病患')
+    const rows = patientImplantRows(p.id).map((r) => ({ ...r, ...(r.mri ? { mriLabel: MRI_LABEL[r.mri] } : {}) }))
+    const m = worstMri(rows.map((r) => r.mri))
+    return {
+      patientName: p.name, chartNo: p.chartNo, rows, ...(m ? { mri: m, mriLabel: MRI_LABEL[m] } : {}), cardDue: implantCardDue(p.id),
+      prints: db.implantCardPrints.filter((x) => x.patientId === p.id).map((x) => ({ at: x.at, byName: nameOf.user(x.by) })).reverse(),
+      canEdit: role === 'doctor' || role === 'nurse',
+    }
+  }
+}
+
+/** 登記外院植入的植入物（醫師、護理師；病人告知或外院植入物卡）：MRI 把關一起看 */
+export function addExternalImplant(patientId: string, input: { name: string; mri: MriSafety; implantedOn?: string; hospital?: string; note?: string }): Promise<PatientImplants> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse')
+    const p = must(find.patient(patientId), '病患')
+    failFields(checkExternalImplant(input))
+    if (input.implantedOn && (!/^\d{4}-\d{2}-\d{2}$/.test(input.implantedOn) || input.implantedOn > today())) failField('implantedOn', '植入日期不對（不能是未來）')
+    p.externalImplants = [...(p.externalImplants ?? []), { id: newId('XI'), name: input.name.trim(), mri: input.mri, ...(input.implantedOn ? { implantedOn: input.implantedOn } : {}), ...(input.hospital?.trim() ? { hospital: input.hospital.trim() } : {}), ...(input.note?.trim() ? { note: input.note.trim() } : {}), by: u.id, at: now() }]
+    audit('登記外院植入物', `${p.name}：${input.name.trim()}（${MRI_LABEL[input.mri]}）`)
+    return implantsOf(patientId, u.role)
+  })
+}
+
+export interface ImplantCard {
+  hospital: string
+  patientName: string
+  chartNo: string
+  birthDate: string
+  printedAt: string
+  rows: PatientImplantRow[]
+}
+/** 列印病人植入物卡（醫師、護理師、櫃台）：本院與外院的植入物；每次列印記錄 */
+export function printImplantCard(patientId: string): Promise<ImplantCard> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse', 'clerk')
+    const p = must(find.patient(patientId), '病患')
+    const rows = patientImplantRows(p.id)
+    if (!rows.length) fail('這位病人沒有植入物紀錄', 'CONFLICT')
+    const t = now()
+    db.implantCardPrints.push({ id: newId('IC'), patientId: p.id, at: t, by: u.id })
+    const n = db.implantCardPrints.filter((x) => x.patientId === p.id).length
+    audit('列印植入物卡', `${p.name}：${rows.length} 項${n > 1 ? `（第 ${n} 次）` : ''}`)
+    return { hospital: HOSPITAL.name, patientName: p.name, chartNo: p.chartNo, birthDate: p.birthDate, printedAt: t, rows }
   })
 }

@@ -1,6 +1,6 @@
 // 植入物批號（純函式）：哪個術式用哪些植入物、批的狀態（可用、用完、過期、召回）、能不能用在這台、收貨與登記欄位。
 // 服務層（implant.ts、surgery.finishSurgery）、手術室「植入物」分頁、手術視窗、種子、測試都用這一份
-import type { ImplantLot } from '@/types'
+import type { ImplantLot, MriSafety } from '@/types'
 
 /** 術式會用到的植入物（主檔 id）：骨折開放性復位＝骨板、骨釘（自費骨板）；疝氣修補＝網膜（自費防沾黏網膜） */
 export const IMPLANT_FOR: Record<string, string[]> = { P037: ['P062', 'P063', 'P064'], P039: ['P065', 'P066'] }
@@ -48,5 +48,21 @@ export function checkLotInput(input: { procId?: string; lot?: string; expiresOn?
   else if (input.expiresOn! < today) e.expiresOn = '已過期的不能收'
   const n = Number(input.qty)
   if (!Number.isInteger(n) || n < 1 || n > 200) e.qty = '數量是 1–200'
+  return e
+}
+
+// ---------- 病人植入物紀錄、植入物卡、MRI ----------
+
+export const MRI_LABEL: Record<MriSafety, string> = { safe: 'MRI 安全', conditional: 'MRI 有條件', unsafe: 'MRI 不安全' }
+const MRI_RANK: Record<MriSafety, number> = { safe: 0, conditional: 1, unsafe: 2 }
+/** 最嚴重的那一個（沒有植入物＝undefined） */
+export const worstMri = (xs: (MriSafety | undefined)[]): MriSafety | undefined => xs.filter((x): x is MriSafety => !!x).sort((a, b) => MRI_RANK[b] - MRI_RANK[a])[0]
+/** UDI（GS1）：(01) 識別碼 (10) 批號 (17) 效期 YYMMDD */
+export const udiOf = (di: string | undefined, lot: string, expiresOn: string): string => (di ? `(01)${di}(10)${lot}(17)${expiresOn.slice(2).replace(/-/g, '')}` : '')
+
+export function checkExternalImplant(input: { name?: string; mri?: string }): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!input.name?.trim()) e.name = '請寫植入物名稱（例：心律調節器）'
+  if (!['safe', 'conditional', 'unsafe'].includes(input.mri ?? '')) e.mri = '請選 MRI 相容性（不確定請選「不安全」）'
   return e
 }

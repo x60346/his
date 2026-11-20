@@ -7,6 +7,7 @@ import { UBadge, UButton, UCard, UEmpty, UInput, UStatusBadge, UTable, UTabs, ty
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
 import DischargeSummaryView from '@/components/DischargeSummaryView.vue'
 import RecordCopyPanel from '@/components/RecordCopyPanel.vue'
+import ImplantRecordPanel from '@/components/ImplantRecordPanel.vue'
 import { useCan } from '@/composables/useCan'
 import { admissionApi, bookingApi, patientApi, preventApi, type VisitView } from '@/services'
 import { useDebounced, useQuery } from '@/composables/useService'
@@ -33,6 +34,8 @@ const tabs = computed(() => [
   { key: 'visits', label: '就醫紀錄', count: visits.value?.length },
   { key: 'admissions', label: '住院紀錄', count: admissions.value?.length },
   { key: 'prevent', label: '預防保健資格' },
+  // 植入物（本院手術登記＋外院）、MRI 相容性、植入物卡
+  { key: 'implants', label: '植入物' },
   ...(can('record.copy') ? [{ key: 'copy', label: '病歷影本' }] : []),
 ])
 const { data: visits } = useQuery(async () => (selectedId.value ? bookingApi.listVisits({ patientId: selectedId.value }) : []), [selectedId])
@@ -170,6 +173,7 @@ const fields = computed(() => {
           </ul>
         </template>
         <RecordCopyPanel v-else-if="tab === 'copy' && can('record.copy')" :patient-id="patient.id" />
+        <ImplantRecordPanel v-else-if="tab === 'implants'" :patient-id="patient.id" />
         <ul v-else class="divide-y divide-slate-100">
           <li v-for="e in eligibility" :key="e.itemCode" class="flex items-center gap-3 px-4 py-2.5 text-sm">
             <UBadge :tone="e.eligible ? 'green' : 'gray'">{{ e.eligible ? '符合' : '不符合' }}</UBadge>

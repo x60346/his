@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, PreAuth, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -3899,6 +3899,20 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 病人植入物與 MRI（示範）----------
+  // 腦梗塞那位（長期住院）外院裝過舊型心律調節器（MRI 不安全，病人帶外院植入物卡）；主治今天開頭部磁振造影、待排程——
+  // 櫃台排不進去，要放射科醫師確認。做完的疝氣修補都還沒印植入物卡
+  const implantCardPrints: ImplantCardPrint[] = []
+  {
+    const st = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63'))
+    const pt = st && patients.find((p) => p.id === st.patientId)
+    if (st && pt) {
+      const at = notFuture(addMinutes(nowStr, -60), 30)
+      pt.externalImplants = [{ id: 'XI-SEED-1', name: '心律調節器（舊型，非 MRI 相容）', mri: 'unsafe', implantedOn: '2015-06-10', hospital: '外院（中部某醫學中心）', note: '病人持外院植入物卡', by: 'U201', at: st.admittedAt ?? at }]
+      ipdOrders.push({ id: 'IO-MRI-1', admissionId: st.id, type: 'stat', category: 'procedure', procId: 'P067', content: '磁振造影（頭部）', startAt: at, status: 'active', doctorId: st.doctorId, createdAt: at, ackAt: addMinutes(at, 10), ackBy: 'U201' })
+    }
+  }
+
   // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------
   const labWindows: LabWindowSession[] = []
   {
@@ -4002,6 +4016,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     claimExclusions,
     claimCuts,
     preAuths,
+    implantCardPrints,
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,

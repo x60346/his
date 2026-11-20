@@ -521,11 +521,13 @@ const procedureBase: Procedure[] = [
   // 含顯影劑的電腦斷層：檢查前要簽同意書、確認腎功能（點數為展示用近似值）
   { id: 'P061', code: '33072B', name: '電腦斷層（腹部，含顯影劑）', category: '影像', points: 5200, selfPrice: 8500, active: true },
   // 植入物（手術室登記批號使用，住院帳單依使用紀錄帶入；門診、醫囑都不能開）。健保點數 0 的是自費品項（要病人同意）
-  { id: 'P062', code: 'FBP01LOCK', name: '鎖定骨板（橈骨遠端）', category: '處置', points: 12000, selfPrice: 15000, implant: { vendor: '康宏醫材' }, preAuth: true, active: true },
-  { id: 'P063', code: 'FBS01SCRW', name: '皮質骨螺絲', category: '處置', points: 600, selfPrice: 900, implant: { vendor: '康宏醫材' }, active: true },
-  { id: 'P064', code: 'SELF05', name: '鈦合金解剖型鎖定骨板（自費）', category: '處置', points: 0, selfPrice: 48000, implant: { vendor: '康宏醫材' }, active: true },
-  { id: 'P065', code: 'FHM01MESH', name: '人工網膜（疝氣修補）', category: '處置', points: 3500, selfPrice: 5000, implant: { vendor: '博昇生醫' }, active: true },
-  { id: 'P066', code: 'SELF06', name: '輕量化防沾黏網膜（自費）', category: '處置', points: 0, selfPrice: 28000, implant: { vendor: '博昇生醫' }, active: true },
+  { id: 'P062', code: 'FBP01LOCK', name: '鎖定骨板（橈骨遠端）', category: '處置', points: 12000, selfPrice: 15000, implant: { vendor: '康宏醫材', udiDi: '04711234500017', mri: 'conditional' }, preAuth: true, active: true },
+  { id: 'P063', code: 'FBS01SCRW', name: '皮質骨螺絲', category: '處置', points: 600, selfPrice: 900, implant: { vendor: '康宏醫材', udiDi: '04711234500024', mri: 'conditional' }, active: true },
+  { id: 'P064', code: 'SELF05', name: '鈦合金解剖型鎖定骨板（自費）', category: '處置', points: 0, selfPrice: 48000, implant: { vendor: '康宏醫材', udiDi: '04711234500031', mri: 'conditional' }, active: true },
+  { id: 'P065', code: 'FHM01MESH', name: '人工網膜（疝氣修補）', category: '處置', points: 3500, selfPrice: 5000, implant: { vendor: '博昇生醫', udiDi: '04719876500012', mri: 'safe' }, active: true },
+  { id: 'P066', code: 'SELF06', name: '輕量化防沾黏網膜（自費）', category: '處置', points: 0, selfPrice: 28000, implant: { vendor: '博昇生醫', udiDi: '04719876500029', mri: 'safe' }, active: true },
+  // 磁振造影（點數為展示用近似值）：排程時看病人身上的植入物（MRI 不安全的要放射科醫師確認）
+  { id: 'P067', code: '33084B', name: '磁振造影（頭部）', category: '影像', points: 6500, selfPrice: 12000, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]
@@ -538,6 +540,7 @@ const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
   P016: { reader: 'radiology', normal: { findings: '肝臟大小正常、實質回音均勻，無局部病灶。膽囊無結石，膽管無擴張。胰臟、脾臟、兩側腎臟無明顯異常。', impression: '腹部超音波無明顯異常。' } },
   P017: { reader: 'orderer', normal: { findings: '竇性心律，心跳 72 次／分；PR、QRS、QT 間期正常，無 ST-T 變化。', impression: '正常心電圖。' } },
   P061: { reader: 'radiology', normal: { findings: '肝、膽、胰、脾、兩側腎臟顯影正常，無局部病灶；腸道無擴張，腹腔無積液或游離氣體，無腫大淋巴結。', impression: '腹部電腦斷層（含顯影劑）無明顯異常。' } },
+  P067: { reader: 'radiology', normal: { findings: '腦實質訊號正常，無急性梗塞、出血或腫塊，腦室大小正常。', impression: '頭部磁振造影無明顯異常。' } },
   P018: { reader: 'radiology', normal: { findings: '腦實質無出血、梗塞或腫塊，腦室大小正常，中線無偏移。', impression: '頭部電腦斷層無明顯異常。' } },
 }
 
@@ -548,7 +551,7 @@ const NPO6 = { id: 'npo6', label: '禁食 6 小時（最後進食時間已確認
 const CONSENT = { id: 'consent', label: '顯影劑同意書已簽' }
 const RENAL = { id: 'renal', label: '腎功能（CrCl）已確認' }
 /** 影像在哪個檢查室做、大約幾分鐘（排程用）、檢查前準備、是否打顯影劑 */
-const examOf: Record<string, { room: ExamRoom; minutes: number; prep?: { id: string; label: string }[]; contrast?: boolean }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20, prep: [NPO6] }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 }, P061: { room: 'CT', minutes: 20, prep: [NPO6, CONSENT, RENAL], contrast: true } }
+const examOf: Record<string, { room: ExamRoom; minutes: number; prep?: { id: string; label: string }[]; contrast?: boolean }> = { P013: { room: 'XR', minutes: 10 }, P014: { room: 'XR', minutes: 10 }, P015: { room: 'XR', minutes: 10 }, P016: { room: 'US', minutes: 20, prep: [NPO6] }, P017: { room: 'ECG', minutes: 10 }, P018: { room: 'CT', minutes: 15 }, P061: { room: 'CT', minutes: 20, prep: [NPO6, CONSENT, RENAL], contrast: true }, P067: { room: 'MR', minutes: 40 } }
 /**
  * 檢驗時限（檢驗頁「時限」可改；沒列的用預設：急件 60、一般 240、危急值通報 30 分鐘）：
  * 血液氣體急件 30 分；糖化血色素一般 1 天；抗酸菌塗片 1 天；細菌培養不計時效；血糖危急值 15 分鐘內通報

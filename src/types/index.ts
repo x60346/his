@@ -223,6 +223,8 @@ export interface Patient {
   smoking: boolean
   betelNut: boolean
   defaultIdentity: string
+  /** 外院植入的植入物（病人或家屬告知、外院植入物卡）：MRI 把關要一起看 */
+  externalImplants?: ExternalImplant[]
   emergencyContact: string
   emergencyPhone: string
   note: string
@@ -927,7 +929,7 @@ export interface Specimen {
 }
 
 /** 影像檢查室：X 光室、電腦斷層室、超音波室、心電圖室 */
-export type ExamRoom = 'XR' | 'CT' | 'US' | 'ECG'
+export type ExamRoom = 'XR' | 'CT' | 'US' | 'ECG' | 'MR'
 /**
  * 影像檢查（排程與執行）：一筆待做的影像（門診 E:看診:醫令、住院 O:醫囑）排到檢查室與時間 → 報到 → 完成（住院醫囑一起完成），
  * 完成後才進判讀清單
@@ -956,6 +958,8 @@ export interface ImagingExam {
   metforminAlert?: { doctorId: string; until: string; ackAt?: string; ackBy?: string }
   /** 一鍵開的水化醫囑 */
   hydrationOrderId?: string
+  /** 磁振造影：病人身上有 MRI 有條件或不安全的植入物（不安全的要放射科醫師寫理由才能排） */
+  mri?: { level: 'conditional' | 'unsafe'; items: string[]; clearedBy?: string; reason?: string }
   /** 含顯影劑的：完成時放射師記用量（mL） */
   contrastMl?: number
   /** 顯影劑不良反應（完成時記）：嚴重度、症狀、處置；中度以上自動產生不良反應通報（adrId） */
@@ -1129,7 +1133,7 @@ export interface Procedure {
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
   recordCopy?: 'base' | 'page'
   /** 植入物（骨板、骨釘、人工網膜）：手術室登記批號使用，住院帳單依使用紀錄帶入，門診與醫囑都不能開。健保點數 0＝自費品項（病人要先同意） */
-  implant?: { vendor: string }
+  implant?: { vendor: string; /** 醫材識別碼（UDI-DI） */ udiDi?: string; /** MRI 相容性 */ mri?: MriSafety }
   /** 健保要事前審查（例：特殊材料）：核准前不能用（病人同意自費、或醫師寫緊急理由除外） */
   preAuth?: boolean
   /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
@@ -2593,6 +2597,26 @@ export interface InstrumentPack {
 }
 
 // ---------- 植入物批號 ----------
+
+/** MRI 相容性：安全、有條件（要照廠商條件）、不安全 */
+export type MriSafety = 'safe' | 'conditional' | 'unsafe'
+export interface ExternalImplant {
+  id: string
+  name: string
+  mri: MriSafety
+  implantedOn?: string
+  hospital?: string
+  note?: string
+  by: string
+  at: string
+}
+/** 病人植入物卡列印紀錄 */
+export interface ImplantCardPrint {
+  id: string
+  patientId: string
+  at: string
+  by: string
+}
 
 /** 植入物的一批（手術室收貨）：品項（主檔 Procedure.implant）、批號、效期、數量；廠商召回整批 */
 export interface ImplantLot {

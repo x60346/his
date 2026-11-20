@@ -9,6 +9,7 @@ export const EXAM_ROOMS: { id: ExamRoom; name: string }[] = [
   { id: 'CT', name: '電腦斷層室' },
   { id: 'US', name: '超音波室' },
   { id: 'ECG', name: '心電圖室' },
+  { id: 'MR', name: '磁振造影室' },
 ]
 export const examRoomName = (r: ExamRoom) => EXAM_ROOMS.find((x) => x.id === r)?.name ?? r
 /** 檢查室開放時段 */

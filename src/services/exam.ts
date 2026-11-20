@@ -16,6 +16,7 @@ import { latestWeight, renalOfPatient } from './renal-work'
 import { addDays } from '@/utils/date'
 import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type ImagingWorkItem } from './imaging-work'
 import { find, nameOf } from './views'
+import { mriRiskOf } from './implant-work'
 
 export interface ExamView extends ImagingExam {
   stage: ExamStage
@@ -186,7 +187,7 @@ export function examBoard(date: string): Promise<ExamBoard> {
 }
 
 /** 排程（或改時間：還沒報到的）：檢查室依醫令決定，同一間撞期擋、開放時段內、不能排過去 */
-export function scheduleExam(key: string, start: string): Promise<ExamView> {
+export function scheduleExam(key: string, start: string, opts: { mriReason?: string } = {}): Promise<ExamView> {
   return mutate(() => {
     const u = requireScheduler()
     const w = pendingImagingWork().find((x) => x.key === key)
@@ -203,12 +204,23 @@ export function scheduleExam(key: string, start: string): Promise<ExamView> {
     const dc = downtimeClash(liveDowntimes(), { room, start, minutes })
     if (dc) fail(`${examRoomName(room)}這段時間停機（${downtimeText(dc)}）`, 'CONFLICT', 'start')
     if (clash) fail(`${examRoomName(room)}這個時段已排 ${nameOf.patient(clash.patientId)} ${clash.start.slice(11)}–${addMinutes(clash.start, clash.minutes).slice(11)}`, 'CONFLICT', 'start')
+    // 磁振造影：病人身上有 MRI 不安全的植入物 → 要放射科醫師寫理由才能排；有條件的記在檢查上（報到、做的時候看得到）
+    const risk = room === 'MR' ? mriRiskOf(w!.patientId) : undefined
+    let mri: ImagingExam['mri']
+    if (risk?.level === 'unsafe') {
+      if (old?.mri?.clearedBy) mri = old.mri
+      else {
+        if (!isRadDoctor(u)) fail(`病人身上有 MRI 不安全的植入物：${risk.items.join('、')}。請放射科醫師確認後排程`, 'CONFLICT', 'mriReason')
+        if (!opts.mriReason?.trim()) failField('mriReason', `病人身上有 MRI 不安全的植入物（${risk.items.join('、')}）：請寫確認結果（例：已確認為 MRI 相容型號）`)
+        mri = { level: 'unsafe', items: risk.items, clearedBy: u.id, reason: opts.mriReason!.trim() }
+      }
+    } else if (risk?.level === 'conditional') mri = { level: 'conditional', items: risk.items }
     const [kind, a] = key.split(':')
     const o = kind === 'O' ? db.ipdOrders.find((x) => x.id === a) : undefined
     const e: ImagingExam = old ?? { id: newId('EX'), key, patientId: w!.patientId, procId: w!.procId, ...(o ? { orderId: o.id, admissionId: o.admissionId } : {}), room, start, minutes, scheduledBy: u.id, scheduledAt: t }
-    Object.assign(e, { start, scheduledBy: u.id, scheduledAt: t })
+    Object.assign(e, { start, scheduledBy: u.id, scheduledAt: t, ...(mri ? { mri } : {}) })
     if (!old) db.imagingExams.push(e)
-    audit(old ? '影像檢查改時間' : '影像檢查排程', `${w!.patientName} ${w!.procName}：${examRoomName(room)} ${start}${wasNoShow ? '（未到改期）' : ''}`)
+    audit(old ? '影像檢查改時間' : '影像檢查排程', `${w!.patientName} ${w!.procName}：${examRoomName(room)} ${start}${wasNoShow ? '（未到改期）' : ''}${mri ? `；${mri.level === 'unsafe' ? `MRI 不安全植入物，放射科確認：${mri.reason}` : `MRI 有條件植入物：${mri.items.join('、')}`}` : ''}`)
     return view(e)
   })
 }
