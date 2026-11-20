@@ -66,6 +66,8 @@ const todos = computed<Todo[]>(() => {
       { roles: ['nurse'], label: '器械包待收回', count: s.value.cssdToWithdraw ?? 0, hint: '過期（要重新滅菌）或召回還在架上的器械包（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
       { roles: ['nurse'], label: '生物指示劑待判讀', count: s.value.cssdBiDue ?? 0, hint: '滅菌鍋次培養滿 24 小時：判讀陰性放行、陽性整鍋召回（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
     ] : []),
+    { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「核減回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
+    ...(s.value.claimCutsAppealed !== undefined ? [{ roles: ['clerk', 'admin'], label: '申復結果待記錄', count: s.value.claimCutsAppealed ?? 0, hint: '醫師已申復的核減：健保署結果回來後記補付或維持（健保申報「核減與申復」）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },

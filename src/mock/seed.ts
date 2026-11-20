@@ -3851,6 +3851,23 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const nm = addDays(`${m}-28`, 8).slice(0, 7)
       claimSubmissions.push({ id: `CS-SEED-IPD-${m}`, kind: 'ipd', month: m, submittedAt: `${nm}-05 09:30`, submittedBy: 'U402', items: disc.filter((a) => a.dischargedAt!.startsWith(m)).sort((x, y) => x.dischargedAt!.localeCompare(y.dischargedAt!)).map((a) => ipdItem(a)!), excluded: [] })
     }
+    // 核減：上上個月門診一筆檢查被核減、主治還沒回覆；最近送出的住院一筆住院日數被核減、主治已申復、等結果；更早一筆門診已接受
+    const docUser = (doctorId: string) => users.find((u) => u.doctorId === doctorId)?.id ?? 'U001'
+    const subs = (k: string) => claimSubmissions.filter((x) => x.kind === k).sort((a, b) => b.month.localeCompare(a.month))
+    const cut = (sub: ClaimSubmission, it: ClaimItem, n: number, item: string, points: number, code: string, reason: string, at: string, extra: Partial<ClaimCut> = {}) =>
+      claimCuts.push({ id: `CC-SEED-${n}`, submissionId: sub.id, kind: sub.kind, month: sub.month, refId: it.refId, patientId: it.patientId, doctorId: it.doctorId, item, points, code, reason, at, by: 'U402', ...extra })
+    const lineOf = (it: ClaimItem) => charges.filter((c) => c.visitId === it.refId && !c.voided && !c.supplementOf).flatMap((c) => c.lines).find((l) => l.kind === 'procedure' && !l.patientPay && l.amount > 0 && l.amount <= it.claim)
+    const [o1, o2] = subs('opd')
+    const oi = o1?.items.find((x) => !x.supplementOf && lineOf(x))
+    if (o1 && oi) cut(o1, oi, 1, lineOf(oi)!.name, lineOf(oi)!.amount, '0213', '30 天內重複檢查，病歷沒有新的臨床理由', notFuture(`${cm1}-25 10:00`, 60))
+    const oj = o2?.items.find((x) => !x.supplementOf && x.claim > 100)
+    if (o2 && oj) cut(o2, oj, 2, '一般門診診察費（部分）', 100, '0501', '病歷記載不完整', `${o1?.month ?? cm1}-20 10:00`, { reply: { action: 'accept', text: '', by: docUser(oj.doctorId), at: `${o1?.month ?? cm1}-22 15:00` } })
+    const [i1] = subs('ipd')
+    const ii = i1?.items.find((x) => (x.days ?? 0) >= 3)
+    if (i1 && ii) {
+      const fee = procMap.get('P002')!.points * 2
+      if (fee <= ii.claim) cut(i1, ii, 3, '住院診察費（每日）2 天', fee, '0601', '住院日數過長，後 2 天可門診追蹤', notFuture(`${cm1}-26 10:00`, 60), { reply: { action: 'appeal', text: '肺炎合併低血氧，出院前 2 天仍需氧氣治療，病歷有記載', by: docUser(ii.doctorId), at: notFuture(`${cm1}-27 16:00`, 30) } })
+    }
   }
 
   // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------

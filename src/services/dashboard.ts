@@ -278,6 +278,9 @@ export interface DashboardStats {
   cssdToWithdraw?: number
   /** 植入物召回：用過那批、還沒通知主刀的手術 */
   implantRecallOpen?: number
+  /** 健保核減：主治待回覆（醫師）；申復中待記結果（健保申報） */
+  claimCutsToReply?: number
+  claimCutsAppealed?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -392,6 +395,7 @@ export function getDashboard(): Promise<DashboardStats> {
           bloodReactions: reactionsToAck(me.doctorId).length,
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
           delaySurgeonUnread: delayCounts(me.doctorId).unread,
+          claimCutsToReply: db.claimCuts.filter((c) => c.doctorId === me.doctorId && !c.reply).length,
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport, ...((c) => ({ frozenWaiting: c.waiting, frozenOverdue: c.overdue }))(frozenCounts(now())) } : {}),
@@ -473,6 +477,7 @@ export function getDashboard(): Promise<DashboardStats> {
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       delayWardUnread: delayCounts().unread,
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),

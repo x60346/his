@@ -40,6 +40,7 @@ import * as day from './day'
 import * as sterile from './sterile'
 import * as implant from './implant'
 import * as claim from './claim'
+import * as claimCut from './claim-cut'
 import * as line from './line'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
@@ -128,6 +129,7 @@ export const dayApi = overNetwork(day)
 export const sterileApi = overNetwork(sterile)
 export const implantApi = overNetwork(implant)
 export const claimApi = overNetwork(claim)
+export const claimCutApi = overNetwork(claimCut)
 export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
 export const nutritionApi = overNetwork(nutrition)
@@ -337,6 +339,7 @@ export type { OrMetrics } from './surgery'
 export type { DayItem, DayBoard } from './day'
 export type { BatchItem, RecallItem, SterileBoard } from './sterile'
 export type { ClaimBoard, ClaimBoardRow } from './claim'
+export type { CutBoard, CutItem, CutMonth } from './claim-cut'
 export type { ImplantBoard, ImplantOption, LotItem, LotRecallItem } from './implant'
 export type { LineView, LineInput, WardLineStats } from './line'
 export type { TubeFeedingView, FeedInput } from './tube'

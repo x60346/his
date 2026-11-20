@@ -101,3 +101,33 @@ export function claimCsv(kind: ClaimKind, rows: (ClaimItem & { patientName: stri
   const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, r.claim, r.supplementOf ?? ''].map(esc).join(','))
   return [head.join(','), ...lines].join('\n')
 }
+
+// ---------- 核減與申復 ----------
+
+/** 核減理由代碼（示範用，簡化） */
+export const CUT_REASONS: { code: string; label: string }[] = [
+  { code: '0101', label: '診斷與處置不符' },
+  { code: '0213', label: '檢查（驗）與病情不符、非必要' },
+  { code: '0302', label: '用藥不符適應症或劑量' },
+  { code: '0501', label: '病歷記載不完整，無法支持申報' },
+  { code: '0601', label: '住院日數過長' },
+]
+export type CutStatus = 'reply' | 'appealed' | 'accepted' | 'paid' | 'upheld'
+export const CUT_STATUS_LABEL: Record<CutStatus, string> = { reply: '待醫師回覆', appealed: '申復中', accepted: '接受核減', paid: '申復補付', upheld: '維持核減' }
+export function cutStatus(c: { reply?: { action: 'appeal' | 'accept' }; result?: { outcome: 'paid' | 'upheld' } }): CutStatus {
+  if (!c.reply) return 'reply'
+  if (c.reply.action === 'accept') return 'accepted'
+  if (!c.result) return 'appealed'
+  return c.result.outcome
+}
+
+/** 輸入核減：項目、點數（不超過這一筆還沒被核減的申請點數）、理由代碼 */
+export function checkCut(input: { item?: string; points?: unknown; code?: string }, left: number): Record<string, string> {
+  const e: Record<string, string> = {}
+  if (!input.item?.trim()) e.item = '請寫核減的項目（例：胸部 X 光）'
+  const n = Number(input.points)
+  if (!Number.isFinite(n) || n <= 0) e.points = '核減點數要大於 0'
+  else if (n > left) e.points = `這一筆最多還能核減 ${left} 點`
+  if (!CUT_REASONS.some((r) => r.code === input.code)) e.code = '請選核減理由'
+  return e
+}

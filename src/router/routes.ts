@@ -68,6 +68,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },
   { path: 'drugs', name: 'drugs', component: () => import('@/pages/drugs/DrugsPage.vue'), meta: { title: '藥品庫存', icon: Activity, group: '其他', roles: ['pharmacist'] } },
 
+  { path: 'claim-cuts', name: 'claim-cuts', component: () => import('@/pages/claim/ClaimReplyPage.vue'), meta: { title: '核減回覆', icon: FileSpreadsheet, group: '其他', roles: ['doctor'] } },
   { path: 'claims', name: 'claims', component: () => import('@/pages/claim/ClaimPage.vue'), meta: { title: '健保申報', icon: FileSpreadsheet, group: '系統', permission: 'nhi.claim' } },
   { path: 'management', name: 'management', component: () => import('@/pages/management/ManagementPage.vue'), meta: { title: '經營月報', icon: BarChart3, group: '系統', permission: 'report.management' } },
   { path: 'admin', name: 'admin', component: () => import('@/pages/admin/AdminPage.vue'), meta: { title: '系統管理', icon: Settings, group: '系統', roles: ['admin'] } },

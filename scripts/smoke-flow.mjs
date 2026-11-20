@@ -17013,6 +17013,86 @@ try {
     ok(!(await C.claimBoard('opd', M1)).submitted, '門診和住院分開送')
     ok((await errOf(() => C.claimBoard('xx'))).includes('類別'), '類別不對擋')
   }
+  // 健保核減與申復：狀態、輸入欄位與上限、核減率；種子（門診待回覆、更早的已接受）與首頁；輸入核減（權限、上限、稽核、統計）；
+  // 主治回覆（別人不行、申復要理由、只回一次）；申復結果（還沒申復不行、補付上限、補付與維持、統計）；接受的不能記結果
+  console.log('\n[健保核減]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const K = api.claimCutApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(api.cutStatus({}) === 'reply' && api.cutStatus({ reply: { action: 'accept' } }) === 'accepted' && api.cutStatus({ reply: { action: 'appeal' } }) === 'appealed' && api.cutStatus({ reply: { action: 'appeal' }, result: { outcome: 'paid' } }) === 'paid' && api.cutStatus({ reply: { action: 'appeal' }, result: { outcome: 'upheld' } }) === 'upheld', '狀態：待回覆、接受、申復中、補付、維持')
+    const ce = api.checkCut({ points: 600, code: 'x' }, 500)
+    ok(ce.item && ce.points?.includes('500') && ce.code && !Object.keys(api.checkCut({ item: 'X 光', points: 200, code: '0213' }, 500)).length && api.cutRate(50, 1000) === 5, '輸入欄位：項目、點數上限（還沒被核減的）、理由代碼；核減率')
+
+    // 種子
+    const c1 = db().claimCuts.find((c) => c.id === 'CC-SEED-1')
+    const c2 = db().claimCuts.find((c) => c.id === 'CC-SEED-2')
+    ok(c1 && !c1.reply && c1.code === '0213' && c2?.reply?.action === 'accept', '種子：上上個月門診一筆檢查被核減、還沒回覆；更早一筆已接受')
+    await as(userOf(c1.doctorId))
+    ok((await api.dashboardApi.getDashboard()).claimCutsToReply >= 1 && (await K.myCuts())[0].status === 'reply', '主治首頁：健保核減待回覆；清單待回覆在前')
+    await as('clerk01')
+    ok((await errOf(() => K.cutBoard())).includes('健保申報'), '沒權限看不到核減')
+    await as('clerk02')
+    let b = await K.cutBoard()
+    const m1 = b.months.find((m) => m.kind === 'opd' && m.month === c1.month)
+    ok(m1.cut >= c1.points && m1.pending >= 1 && m1.rate === api.cutRate(m1.net, m1.claimed), `每月統計：${m1.month} 門診申報 ${m1.claimed}、核減 ${m1.cut}、核減率 ${m1.rate}%`)
+    // 輸入核減
+    const sub = b.submissions.find((s) => s.kind === 'opd' && s.items.some((x) => x.refId !== c1.refId && x.left > 50))
+    const it = sub.items.find((x) => x.refId !== c1.refId && x.left > 50)
+    let f = await fieldsOf(() => K.addCut({ submissionId: sub.id, refId: it.refId, item: '', points: it.left + 1, code: '' }))
+    ok(f.item && f.points?.includes(String(it.left)) && f.code, '輸入核減：欄位一次標出、點數不能超過還沒核減的')
+    const nc = await K.addCut({ submissionId: sub.id, refId: it.refId, item: '口服藥品', points: 40, code: '0302', reason: '劑量超過仿單' })
+    ok(nc.status === 'reply' && nc.codeLabel.startsWith('0302') && db().auditLogs[0].action === '健保核減' && (await K.cutBoard()).submissions.find((s) => s.id === sub.id).items.find((x) => x.refId === it.refId).left === it.left - 40, '輸入：待主治回覆、稽核、還能核減的扣掉')
+    ok((await errOf(() => K.recordCutResult(nc.id, { outcome: 'paid', points: 10 }))).includes('還沒申復'), '醫師還沒申復不能記結果')
+    // 主治回覆
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== nc.doctorId && u.active).username
+    await as(other)
+    ok((await errOf(() => K.replyCut(nc.id, { action: 'appeal', text: 'x' }))).includes('主治'), '別的醫師不能回覆')
+    await as(userOf(nc.doctorId))
+    f = await fieldsOf(() => K.replyCut(nc.id, { action: 'appeal', text: '' }))
+    ok(f.text, '申復要寫理由')
+    let r = await K.replyCut(nc.id, { action: 'appeal', text: '病人體重 90 公斤，劑量依體重計算，病歷有記載' })
+    ok(r.status === 'appealed' && r.replyText.startsWith('申復') && db().auditLogs[0].action === '核減申復', '申復：申復中、稽核')
+    ok((await errOf(() => K.replyCut(nc.id, { action: 'accept' }))).includes('回覆過'), '只能回覆一次')
+    await as(userOf(c1.doctorId))
+    r = await K.replyCut(c1.id, { action: 'accept' })
+    ok(r.status === 'accepted', '接受核減')
+    // 申復結果
+    await as('clerk02')
+    ok((await api.dashboardApi.getDashboard()).claimCutsAppealed >= 1, '申報組首頁：申復結果待記錄')
+    f = await fieldsOf(() => K.recordCutResult(nc.id, { outcome: 'paid', points: 41 }))
+    ok(f.points?.includes('1–40'), '補付不能超過核減的')
+    r = await K.recordCutResult(nc.id, { outcome: 'paid', points: 40 })
+    const mm = (await K.cutBoard()).months.find((m) => m.kind === 'opd' && m.month === sub.month)
+    ok(r.status === 'paid' && r.resultText.includes('補付 40') && mm.paid >= 40 && mm.net === mm.cut - mm.paid && db().auditLogs[0].action === '申復結果', '補付：狀態、統計扣回、稽核')
+    ok((await errOf(() => K.recordCutResult(nc.id, { outcome: 'upheld' }))).includes('記過') && (await errOf(() => K.recordCutResult(c1.id, { outcome: 'upheld' }))).includes('還沒申復'), '不能重複記；接受的不用記結果')
+    // 維持核減
+    const c3 = db().claimCuts.find((c) => c.id === 'CC-SEED-3')
+    if (c3) {
+      r = await K.recordCutResult(c3.id, { outcome: 'upheld' })
+      ok(r.status === 'upheld' && r.resultText.includes('維持'), '種子的住院申復：維持核減')
+    } else ok(true, '（這次的示範資料沒有住院申復）')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/claim/ClaimCutPanel.vue', 'utf8') + readFileSync('src/pages/claim/ClaimReplyPage.vue', 'utf8')
+    ok(!/cutStatus|checkCut|cutRate|db\./.test(page), '狀態、上限、核減率由服務層算')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)
