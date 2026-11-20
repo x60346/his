@@ -16564,6 +16564,57 @@ try {
     const page = readFileSync('src/components/surgery/SterilePanel.vue', 'utf8') + readFileSync('src/components/surgery/PackPanel.vue', 'utf8')
     ok(!/packUseProblem|packState|PACK_VALID_DAYS|biDueAt|db\./.test(page), '能不能用、召回由服務層判斷')
   }
+  // 日間手術病人進護理站：「日間手術」單位（沒有床）列報到後、還沒回家或轉住院的日間病人；本班待辦、生命徵象、護理紀錄、交班照常；
+  // 待報到、已回家的不列；轉住院後到新床的病房
+  console.log('\n[日間手術護理站]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const N = api.nursingApi
+    const DW = api.masterApi.staticCodes.dayWard
+    const nrs = await load('/src/services/nursing-rules.ts')
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    await as('nurse01')
+    ok(DW === '日間手術', '護理站多一個「日間手術」單位')
+    let list = await N.listWardPatients(DW)
+    const d2 = list.find((p) => p.id === 'A-DAY-2')
+    ok(d2 && !d2.bed && !list.some((p) => p.id === 'A-DAY-3' || p.id === 'A-DAY-1'), '日間手術單位：今天第二期那位（沒有床）；待報到、已回家的不列')
+    const others = [...api.masterApi.staticCodes.wards, api.masterApi.staticCodes.icuWard, api.masterApi.staticCodes.obsWard]
+    let inOther = false
+    for (const w of others) if ((await N.listWardPatients(w)).some((p) => p.id === 'A-DAY-2')) inOther = true
+    ok(!inOther, '不會出現在一般病房')
+    const tasks = await N.listWardTasks(DW)
+    ok(tasks.some((x) => x.admissionId === 'A-DAY-2') && tasks.filter((x) => x.admissionId === 'A-DAY-2').every((x) => x.bedNo === '日間'), `本班待辦：${tasks.filter((x) => x.admissionId === 'A-DAY-2').map((x) => x.text).slice(0, 3).join('、')}（床號寫「日間」）`)
+    ok(!tasks.some((x) => x.admissionId === 'A-DAY-2' && x.kind === 'nutrition'), '當天回家：不列入院 48 小時營養篩檢')
+    const vs = await N.addVitals({ admissionId: 'A-DAY-2', temp: 36.6, pulse: 78, resp: 16, sbp: 126, dbp: 78, spo2: 98 })
+    list = await N.listWardPatients(DW)
+    ok(vs.id && list.find((p) => p.id === 'A-DAY-2').measuredThisShift, '量生命徵象：本班已量')
+    const note = await N.addNursingNote({ admissionId: 'A-DAY-2', focus: '術後疼痛', data: '傷口疼痛 3 分', action: '冰敷', response: '' })
+    ok(note.id && (await N.listNursingNotes('A-DAY-2')).length >= 1, '護理紀錄可以寫')
+    const ho = await N.addHandover({ ward: DW, shift: nrs.handoverShiftOf(nowStr()), admissionId: 'A-DAY-2', content: 'PADSS 8 分，疼痛再評' })
+    ok(ho.id && (await N.listHandovers(DW)).some((g) => g.items.some((x) => x.admissionId === 'A-DAY-2')), '交班寫在日間手術單位')
+    const f = await errOf(() => N.addHandover({ ward: others[0], shift: nrs.handoverShiftOf(nowStr()), admissionId: 'A-DAY-2', content: 'x' }))
+    ok(f.includes('不在此病房'), '寫到別的病房擋下')
+    const mar = await N.getMarBoard('A-DAY-2', T)
+    ok(!!mar, '給藥紀錄打得開')
+    // 轉住院：到新床的病房，不在日間手術單位
+    const doc = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === 'A-DAY-2').doctorId).username
+    await as(doc)
+    const bed = db().beds.find((b) => b.status === 'empty' && api.masterApi.staticCodes.wards.includes(b.ward))
+    await api.dayApi.convertDay('A-DAY-2', { reason: '疼痛控制不佳，留院觀察', bedId: bed.id })
+    await as('nurse01')
+    ok(!(await N.listWardPatients(DW)).some((p) => p.id === 'A-DAY-2') && (await N.listWardPatients(bed.ward)).some((p) => p.id === 'A-DAY-2' && p.bed?.bedNo === bed.bedNo), `轉住院：移到 ${bed.ward} ${bed.bedNo}`)
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/nursing/NursingPage.vue', 'utf8')
+    ok(page.includes('dayWard') && !/\.day\b|converted/.test(page), '護理站頁只加單位，誰在哪個單位由服務層判斷')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

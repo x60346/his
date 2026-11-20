@@ -17,7 +17,7 @@ import { activeIsolations, placementFor } from './flag-work'
 import { ISOLATION_REVIEW_TEXT, isolationReviewDue, isoText } from './flag-rules'
 import { scanRequired, scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
-import { admissionView, find, nameOf, type AdmissionView } from './views'
+import { admissionView, find, nameOf, wardOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, lineTodosOf, painStateOf } from './line-work'
 import { lineKind } from './line-rules'
@@ -122,7 +122,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
     const t = now()
     let changed = false
     const list = db.admissions
-      .filter((a) => a.status === 'admitted' && a.bedId && find.bed(a.bedId)?.ward === ward)
+      .filter((a) => a.status === 'admitted' && wardOf(a) === ward)
       .map((a) => {
         changed = ensureMar(a.id, today()) || changed
         const latest = latestVitalOf(a.id)
@@ -202,7 +202,7 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
             const ns = screenStateOf(a, t)
             return { ...(ns.due.status !== 'done' ? { nutritionDue: ns.due.status as 'todo' | 'due' | 'overdue' } : {}), nutritionRisk: !!ns.latest && ns.latest.score >= 3 }
           })(),
-          isolationTodo: activeIsolations(a.patientId).filter((i) => isolationReviewDue(i, a.admittedAt, t)).length + (placementFor(a.patientId, find.bed(a.bedId!)!) ? 1 : 0),
+          isolationTodo: activeIsolations(a.patientId).filter((i) => isolationReviewDue(i, a.admittedAt, t)).length + (a.bedId && placementFor(a.patientId, find.bed(a.bedId)!) ? 1 : 0),
         }
       })
       .sort((x, y) => (x.bed?.bedNo ?? '').localeCompare(y.bed?.bedNo ?? ''))
@@ -237,9 +237,9 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
     const { end } = shiftRange(t)
     const tasks: WardTask[] = []
     let changed = false
-    for (const a of db.admissions.filter((x) => x.status === 'admitted' && x.bedId && find.bed(x.bedId)?.ward === ward)) {
+    for (const a of db.admissions.filter((x) => x.status === 'admitted' && wardOf(x) === ward)) {
       changed = ensureMar(a.id, today()) || changed
-      const base = { admissionId: a.id, bedNo: find.bed(a.bedId!)?.bedNo ?? '', patientName: nameOf.patient(a.patientId) }
+      const base = { admissionId: a.id, bedNo: a.bedId ? (find.bed(a.bedId)?.bedNo ?? '') : '日間', patientName: nameOf.patient(a.patientId) }
       // 給藥：逾時、可給的一律列（不論哪一班留下的，也包括 15:30 時已可提早給的 16:10）；
       // 還沒到時間的只列到這一班結束——和病人清單的「逾時／待給」數字同一個範圍
       for (const m of db.mar.filter((x) => x.admissionId === a.id && x.status === 'pending')) {
@@ -267,7 +267,7 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
         const r = isolationReviewDue(iso, a.admittedAt, t)
         if (r) tasks.push({ ...base, id: `iso-${iso.id}`, kind: 'isolation', urgency: 'todo', text: `${isoText([iso])}：${ISOLATION_REVIEW_TEXT[r]}` })
       }
-      const misplaced = placementFor(a.patientId, find.bed(a.bedId!)!)
+      const misplaced = a.bedId ? placementFor(a.patientId, find.bed(a.bedId)!) : undefined
       if (misplaced) tasks.push({ ...base, id: `isobed-${a.id}`, kind: 'isolation', urgency: 'due', text: `請安排轉床：${misplaced}` })
       // 輸血：已發血待輸、輸血中該量 15 分鐘生命徵象（和病人清單的標記、首頁「輸血待處理」同一個判斷）
       for (const x of transfusionTasksOf(a.id, t)) tasks.push({ ...base, id: x.id, kind: 'blood', urgency: x.urgency, at: x.at, text: x.text })
@@ -691,7 +691,7 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
   return mutate(() => {
     const nurse = requireUser('nurse')
     const a = admitted(input.admissionId)
-    if (find.bed(a.bedId ?? '')?.ward !== input.ward) fail('病人不在此病房')
+    if (wardOf(a) !== input.ward) fail('病人不在此病房')
     if (!input.content.trim()) failField('content', '交班內容不可空白')
     const t = now()
     // date 是「這一班開始的日期」：午夜後才寫的小夜交班，歸在前一天的小夜

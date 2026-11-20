@@ -18,6 +18,7 @@ export const staticCodes = {
   wards: codes.wards,
   obsWard: codes.obsWard,
   icuWard: codes.icuWard,
+  dayWard: codes.dayWard,
   dischargeTypes: codes.dischargeTypes,
   familyHistoryOptions: codes.familyHistoryOptions,
   allergyOptions: codes.allergyOptions,

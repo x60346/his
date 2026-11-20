@@ -76,7 +76,7 @@ async function onResidualApproved(token: string) {
 /** 有殘餘量就先見證，沒有就直接送出 */
 function withResidual(x: { residualQty?: number; unit: string; content: string; dose?: number }, orderId: string, go: (witness?: string) => Promise<unknown>) {
   if (!x.residualQty) return go()
-  residualFor.value = { orderId, subject: `${x.content}：給 ${x.dose} ${x.unit}、殘餘 ${x.residualQty} ${x.unit} 當場銷毀\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}`, go }
+  residualFor.value = { orderId, subject: `${x.content}：給 ${x.dose} ${x.unit}、殘餘 ${x.residualQty} ${x.unit} 當場銷毀\n病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}`, go }
 }
 
 // ---------- 給藥前掃描（條碼核對）：設定開啟時，給藥、補登、PRN 都先過這一關，掃完（或選略過原因）才走原本的流程 ----------
@@ -117,7 +117,7 @@ async function giveAfterScan(m: MarView) {
   if (m.highAlert) {
     const ok = await ui.confirm({
       title: '高警訊藥品：雙人核對',
-      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}\n\n請與另一位護理師核對病人、藥名、劑量、途徑、時間後再給藥。`,
+      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}\n\n請與另一位護理師核對病人、藥名、劑量、途徑、時間後再給藥。`,
       okText: '已雙人核對，給藥',
     })
     if (!ok) return
@@ -146,7 +146,7 @@ async function submitBackdate() {
   if (m.highAlert) {
     const ok = await ui.confirm({
       title: '高警訊藥品：雙人核對',
-      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo} ${props.admission.patientName}\n實際給藥時間：${givenAt.value.slice(5)}\n\n補登也要確認當時已雙人核對。`,
+      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}\n實際給藥時間：${givenAt.value.slice(5)}\n\n補登也要確認當時已雙人核對。`,
       okText: '已雙人核對，補登',
     })
     if (!ok) return

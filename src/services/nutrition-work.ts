@@ -4,8 +4,8 @@ import { db } from '@/mock/db'
 import { NUTRITION_RISK_FROM, screenDue } from './nutrition-rules'
 import { dietOf } from './nutrition-rules'
 
-/** 要篩檢的住院：住院中、不是留觀中（留觀不篩，轉住院後從住院起算） */
-export const screenable = (a: Admission) => a.status === 'admitted' && !!a.admittedAt && !(a.obs && !a.obs.endAt)
+/** 要篩檢的住院：住院中、不是留觀中（留觀不篩，轉住院後從住院起算）、不是日間手術（當天回家；轉住院後才篩） */
+export const screenable = (a: Admission) => a.status === 'admitted' && !!a.admittedAt && !(a.obs && !a.obs.endAt) && !(a.day && !a.day.converted)
 const startOf = (a: Admission) => (a.obs?.outcome === 'admit' && a.obs.endAt ? a.obs.endAt : a.admittedAt!)
 
 export const latestScreen = (admissionId: string): NutritionScreen | undefined =>

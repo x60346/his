@@ -7,7 +7,7 @@ import { nursingApi, type WardTask } from '@/services'
 import { useQuery } from '@/composables/useService'
 import WardSendBack from './WardSendBack.vue'
 import WardUdCarts from './WardUdCarts.vue'
-import { wardStockApi } from '@/services'
+import { masterApi, wardStockApi } from '@/services'
 
 // only：只看這些病人（責任分床的「我的病人」）；沒給＝全病房
 const props = defineProps<{ ward: string; clock: string; only?: string[] }>()
@@ -17,7 +17,8 @@ const emit = defineEmits<{ open: [admissionId: string, tab: string] }>()
 const { data, loading } = useQuery(async () => ({ ward: props.ward, tasks: await nursingApi.listWardTasks(props.ward) }), [() => props.ward, () => props.clock])
 const tasks = computed(() => (data.value?.ward === props.ward ? data.value.tasks.filter((t) => !props.only || props.only.includes(t.admissionId)) : undefined))
 // 病房常備：本班還沒點班、或有低於基準量的品項就提醒（點班在「常備點班」分頁）
-const { data: ws } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.getWardStock(props.ward) }), [() => props.ward, () => props.clock])
+// 日間手術沒有病房常備（不查）
+const { data: ws } = useQuery(async () => ({ ward: props.ward, v: props.ward === masterApi.staticCodes.dayWard ? undefined : await wardStockApi.getWardStock(props.ward) }), [() => props.ward, () => props.clock])
 const stockNote = computed(() => {
   const v = ws.value?.ward === props.ward ? ws.value.v : undefined
   if (!v) return ''

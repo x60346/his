@@ -566,6 +566,8 @@ export const obsWard = '急診留觀區'
 export const OBS_BEDS = 6
 /** 加護病房：不是一般病房（住院中心不能直接排預約住院；急診收住院、或住院中轉床進來）；每床一間 */
 export const icuWard = '3I 加護病房'
+/** 日間手術：不是病房、沒有床；報到後（還沒回家、沒轉住院）的日間手術病人在護理站這個單位照顧（給藥、生命徵象、護理紀錄） */
+export const dayWard = '日間手術'
 export const ICU_BEDS = 8
 
 export const dischargeTypes = ['治癒出院', '改善出院', '轉院', '自動出院', '轉長照機構', '死亡']

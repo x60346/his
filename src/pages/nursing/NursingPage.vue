@@ -61,7 +61,9 @@ const icuWard = masterApi.staticCodes.icuWard
 // 有負壓隔離室的病房（綜合病房 705、加護病房 ICU9）：病房層級多一個「負壓室」分頁
 const { data: negRooms } = useQuery(() => pressureApi.listNegativeRooms())
 const negWards = computed(() => [...new Set((negRooms.value ?? []).map((r) => r.ward))])
-const wards = [...masterApi.staticCodes.wards, icuWard, masterApi.staticCodes.obsWard]
+// 日間手術：沒有床、沒有排班分床；報到後到回家（或轉住院）在這裡給藥、量生命徵象、寫護理紀錄
+const dayWard = masterApi.staticCodes.dayWard
+const wards = [...masterApi.staticCodes.wards, icuWard, masterApi.staticCodes.obsWard, dayWard]
 // 從急診看板點過來帶 ?ward=急診留觀區&admission=…
 const ward = ref(wards.includes(String(useRoute().query.ward)) ? String(useRoute().query.ward) : wards[0])
 
@@ -76,7 +78,7 @@ const allPatients = computed(() => (data.value?.w === ward.value ? data.value.li
 
 // ---------- 責任分床：這一班誰上班、病人分給誰；「我的病人」 ----------
 const auth = useAuth()
-const { data: asgData, reload: reloadAsg } = useQuery(async () => ({ w: ward.value, v: await staffingApi.getAssignments(ward.value) }), [ward, () => clock.value.slice(0, 13)])
+const { data: asgData, reload: reloadAsg } = useQuery(async () => ({ w: ward.value, v: ward.value === dayWard ? undefined : await staffingApi.getAssignments(ward.value) }), [ward, () => clock.value.slice(0, 13)])
 const asg = computed(() => (asgData.value?.w === ward.value ? asgData.value.v : undefined))
 const myCount = computed(() => (allPatients.value ?? []).filter((p) => p.nurseId === auth.user?.id).length)
 // 這一班有分到病人：預設只看自己的；可以切回全病房
@@ -130,10 +132,15 @@ const tabs = computed(() =>
         { key: 'tasks', label: '本班待辦' },
         ...(ward.value === icuWard ? [{ key: 'icuboard', label: '床邊看板' }] : []),
         ...(negWards.value.includes(ward.value) ? [{ key: 'negative', label: '負壓室' }] : []),
-        { key: 'stock', label: '常備點班' },
-        { key: 'scan', label: '給藥掃描' },
-        { key: 'isoward', label: '隔離與 DNR', count: (allPatients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
-        { key: 'lineward', label: '品質指標' },
+        // 日間手術沒有常備藥車、病房層級的隔離與品質指標
+        ...(ward.value === dayWard
+          ? []
+          : [
+              { key: 'stock', label: '常備點班' },
+              { key: 'scan', label: '給藥掃描' },
+              { key: 'isoward', label: '隔離與 DNR', count: (allPatients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
+              { key: 'lineward', label: '品質指標' },
+            ]),
         { key: 'handover', label: '交班' },
       ]
     : [
@@ -234,7 +241,7 @@ const wardTotals = computed(() => ({
             <li v-for="p in patients" :key="p.id">
               <button :class="['w-full px-3 py-2.5 text-left hover:bg-slate-50', p.id === admissionId && '!bg-brand-50']" @click="admissionId = p.id">
                 <div class="flex items-center gap-2">
-                  <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ p.bed?.bedNo }}</span>
+                  <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ p.bed?.bedNo ?? '日間' }}</span>
                   <span class="font-medium text-slate-800">{{ p.patientName }}</span>
                   <!-- 責任護理師：自己的不寫（「我的病人」時每一列都是自己，只會擠壓姓名）；別人的寫名字、沒分的標「未分床」 -->
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
@@ -287,7 +294,7 @@ const wardTotals = computed(() => ({
       <div data-detail class="min-w-0 space-y-3">
         <template v-if="adm">
           <PatientBanner :patient="adm">
-            <UBadge tone="blue">{{ adm.bed?.bedNo }}</UBadge>
+            <UBadge tone="blue">{{ adm.bed?.bedNo ?? '日間手術' }}</UBadge>
             <span class="tabular text-sm text-slate-600">住院號 {{ adm.admitNo }}・第 {{ adm.days }} 天・{{ adm.doctorName }}</span>
             <RiskBadges :levels="adm.riskLevels" />
             <UButton size="sm" :variant="adm.wristband ? 'ghost' : 'secondary'" :class="!adm.wristband && 'text-red-700'" @click="wristbandOpen = true">{{ adm.wristband ? '重印腕帶' : '未印腕帶：列印' }}</UButton>

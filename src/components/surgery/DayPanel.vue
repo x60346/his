@@ -6,7 +6,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect } from '@/components/ui'
-import { admissionApi, ANESTHESIA_LABEL, dayApi, PADSS_ITEMS, PADSS_MIN, SIDE_LABEL, surgeryApi, type DayItem } from '@/services'
+import { admissionApi, ANESTHESIA_LABEL, dayApi, masterApi, PADSS_ITEMS, PADSS_MIN, SIDE_LABEL, surgeryApi, type DayItem } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { today } from '@/utils/date'
@@ -159,6 +159,8 @@ async function followUp() {
           <p v-if="x.convertedText" class="text-xs text-slate-600">{{ x.convertedText }}</p>
           <p v-if="x.followUpText" class="text-xs text-slate-600">{{ x.followUpText }}</p>
           <div class="flex flex-wrap justify-end gap-2">
+            <!-- 報到後到回家（或轉住院）：在護理站「日間手術」單位給藥、量生命徵象、寫護理紀錄 -->
+            <RouterLink v-if="['checkedIn', 'inOr', 'pacu', 'phase2'].includes(x.stage)" :to="{ name: 'nursing', query: { ward: masterApi.staticCodes.dayWard, admission: x.admissionId } }" class="mr-auto self-center text-xs text-brand-700 underline">護理站（給藥、生命徵象、護理紀錄）</RouterLink>
             <UButton v-if="x.canCheckIn" size="sm" :disabled="x.asaTooHigh" :loading="checkIn.pending.value" @click="checkIn.run(x.admissionId)">報到</UButton>
             <UButton v-if="x.stage === 'checkedIn' && x.surgery.status === 'scheduled'" size="sm" variant="secondary" @click="openPrep(x)">術前準備・送手術室</UButton>
             <UButton v-if="x.canScore && scoreFor !== x.admissionId" size="sm" variant="secondary" @click="openScore(x)">評 PADSS</UButton>

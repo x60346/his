@@ -1,7 +1,7 @@
 // 服務層內部：查表與組合檢視資料（相當於後端的 JOIN + DTO）。
 // 頁面拿到的列表已經帶好姓名、科別等顯示欄位，不必自己再到處查。
 import type { Admission, DeptTransfer, RiskLevel, Bed, ClinicSession, Diagnosis, Drug, MedicationOrder, Patient, ProcedureOrder, Visit } from '@/types'
-import { obsWard } from '@/mock/codes'
+import { dayWard, obsWard } from '@/mock/codes'
 import { planUnreferred } from './discharge-plan-rules'
 import { db } from '@/mock/db'
 import { doseUnitOf } from './billing'
@@ -316,6 +316,9 @@ export const deptTransferView = (x: DeptTransfer): DeptTransferView => ({
   requestedByName: nameOf.user(x.requestedBy),
   ...(x.decidedBy ? { decidedByName: nameOf.user(x.decidedBy) } : {}),
 })
+
+/** 護理站的單位：有床＝床的病房；日間手術（沒轉住院、沒床）＝「日間手術」 */
+export const wardOf = (a: Pick<Admission, 'bedId' | 'day'>): string | undefined => (a.bedId ? find.bed(a.bedId)?.ward : a.day && !a.day.converted ? dayWard : undefined)
 
 export function admissionView(a: Admission): AdmissionView {
   const end = a.dischargedAt ?? today()

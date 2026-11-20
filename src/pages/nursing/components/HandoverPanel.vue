@@ -4,7 +4,7 @@
 // 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為清單上選取的那一位。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { handoverShiftOf, nursingApi, shiftOf, SHIFT_ORDER, udApi, wardStockApi, type Shift, type WardPatient } from '@/services'
+import { handoverShiftOf, masterApi, nursingApi, shiftOf, SHIFT_ORDER, udApi, wardStockApi, type Shift, type WardPatient } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { usePhrases } from '@/composables/usePhrases'
 import PhraseHint from '@/components/PhraseHint.vue'
@@ -25,14 +25,14 @@ const shifts: Shift[] = SHIFT_ORDER
 
 const form = reactive({ shift: handoverShiftOf(props.clock) as string | number | undefined, admissionId: props.selectedId as string | number | undefined, content: '' })
 watch(() => props.selectedId, (id) => id && (form.admissionId = id))
-const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.bed?.bedNo} ${p.patientName}`, value: p.id })))
+const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.bed?.bedNo ?? '日間'} ${p.patientName}`, value: p.id })))
 
 const phrase = usePhrases(() => props.ward)
 // 交班時提醒：還沒點收的藥車、回報不符藥局還沒處理的藥盒（和「本班待辦」同一個查詢）
 const { data: ud } = useQuery(async () => ({ ward: props.ward, r: await udApi.listWardUdCarts(props.ward) }), [() => props.ward])
-const { data: ws } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.getWardStock(props.ward) }), [() => props.ward])
+const { data: ws } = useQuery(async () => ({ ward: props.ward, v: props.ward === masterApi.staticCodes.dayWard ? undefined : await wardStockApi.getWardStock(props.ward) }), [() => props.ward])
 const udNote = computed(() => {
-  const stock = ws.value?.ward === props.ward && !ws.value.v.shift.counted ? `本班病房常備還沒點班` : ''
+  const stock = ws.value?.ward === props.ward && ws.value.v && !ws.value.v.shift.counted ? `本班病房常備還沒點班` : ''
   if (ud.value?.ward !== props.ward) return stock
   const boxes = ud.value.r.carts.reduce((n, c) => n + c.boxes.length, 0)
   return [boxes && `${ud.value.r.carts.length} 車藥（${boxes} 盒）還沒點收`, ud.value.r.issues.length && `${ud.value.r.issues.length} 盒回報不符、藥局處理中`, stock].filter(Boolean).join('；')
@@ -65,7 +65,7 @@ async function submit() {
     <section v-if="patients.some((p) => p.icuOut)" class="rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm">
       <div class="mb-1 font-semibold text-sky-900">從加護病房轉來（48 小時內）</div>
       <div v-for="p in patients.filter((x) => x.icuOut)" :key="p.id" class="mt-2 first:mt-0">
-        <div class="font-medium text-slate-800"><span class="tabular mr-2 text-slate-600">{{ p.bed?.bedNo }}</span>{{ p.patientName }}<span class="tabular ml-2 text-xs font-normal text-slate-500">{{ p.icuOut!.at.slice(5).replace('-', '/') }} 轉出</span></div>
+        <div class="font-medium text-slate-800"><span class="tabular mr-2 text-slate-600">{{ p.bed?.bedNo ?? '日間' }}</span>{{ p.patientName }}<span class="tabular ml-2 text-xs font-normal text-slate-500">{{ p.icuOut!.at.slice(5).replace('-', '/') }} 轉出</span></div>
         <dl class="mt-0.5 grid grid-cols-[auto_1fr] gap-x-3 text-slate-700">
           <template v-for="it in p.icuOut!.items" :key="it.label"><dt class="text-xs text-slate-500">{{ it.label }}</dt><dd class="whitespace-pre-line">{{ it.text || '—' }}</dd></template>
         </dl>
