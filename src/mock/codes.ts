@@ -258,6 +258,8 @@ const drugBase = [
   { ...drug('M049', 'AC00049100', 'Dopamine 400mg/250ml Premix', 'Dopamine', '400 mg/250 ml/袋（1600 mcg/ml）', 'BAG', '注射', 220, 450, 60, 1, 'QD', 'IV', true), safetyStock: 10, vaso: { unit: 'mcg/kg/min' as const, perMl: 1600, bagMl: 250, range: [2, 20] as [number, number], weanTo: 5 } },
   // 需事前審查的高價藥（示範）：開住院醫囑自動建送審單，核准前不能給
   { ...drug('M051', 'KC00051100', 'IVIG 2.5g/50ml Inj', 'Human immunoglobulin', '2.5 g/50 ml/vial', 'VIAL', '注射', 5800, 9500, 40, 1, 'QD', 'IV', true), preAuth: true },
+  // 門診需事前審查（嚴重骨質疏鬆）：核准後才能健保開，有效期限內每次回診開一支（28 天）；沒核准只能自費
+  { ...drug('M052', 'KC00052100', 'Teriparatide 20mcg Pen', 'Teriparatide', '600 mcg/2.4 ml/支（28 劑）', 'PEN', '注射', 8800, 12500, 30, 20, 'QD', 'SC', false, 'mcg'), preAuth: true },
   { ...drug('M050', 'AC00050100', 'Vasopressin 20U/100ml Premix', 'Vasopressin', '20 U/100 ml/袋（0.2 U/ml）', 'BAG', '注射', 1500, 2800, 30, 1, 'QD', 'IV', true), safetyStock: 5, vaso: { unit: 'U/min' as const, perMl: 0.2, bagMl: 100, range: [0.01, 0.04] as [number, number], weanTo: 0.01 } },
 ]
 
@@ -317,6 +319,7 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M049: ['升血壓、強心（加護病房點滴）', '由醫護人員依血壓調整；心跳很快、胸悶請告知'],
   M050: ['升血壓（加護病房點滴）', '由醫護人員依血壓調整；手腳發冷發白請告知'],
   M051: ['補充免疫球蛋白（免疫疾病、重症感染）', '輸注時若頭痛、發冷、呼吸不順請立刻告知'],
+  M052: ['治療嚴重骨質疏鬆（促進骨質生成）', '每天固定時間皮下注射；注射後頭暈請坐下休息；筆用完 28 天要換新'],
 }
 
 /**
@@ -387,6 +390,7 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M049: ['多巴胺點滴', ['Dopamine']],
   M050: ['血管加壓素點滴', ['Pitressin']],
   M051: ['靜脈注射免疫球蛋白', ['IVIG']],
+  M052: ['副甲狀腺素注射筆', ['Forteo']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */

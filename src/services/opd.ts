@@ -12,6 +12,7 @@ import { drugRefs, opdInUse, settleRxAlerts } from './rx-alert-work'
 import { audit, fail, must, mutate, query, requireUser, requirePermission } from './http'
 import { cleanRxTimings, find, nameOf, pickUsable, usable, visitView, type VisitView } from './views'
 import { stampErLabs } from './er-lab-work'
+import { requireOpdDrugPreAuth } from './preauth-work'
 import type { ExpandedOrders } from './orderset'
 
 export interface QueueItem extends VisitView {
@@ -165,6 +166,8 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     }
     cleanRxTimings(e.medications)
     specialRxCheck(e)
+    // 門診需事前審查的藥：健保開要有效期內的核准（沒有就擋，請醫師勾自費或先申請）
+    requireOpdDrugPreAuth(e, !!db.identities.find((i) => i.code === v.identityCode)?.selfPay)
     // 交互作用、重複用藥：這張處方彼此之間，以及病人還在吃的本院藥（別科、前幾天開的、出院帶藥）
     const rxAlerts = settleRxAlerts(drugRefs(e.medications.map((m) => m.drugId)), opdInUse(e.patientId, e.date, e.id), opts.rxAlertReasons)
     if (rxAlerts) e.rxAlerts = rxAlerts

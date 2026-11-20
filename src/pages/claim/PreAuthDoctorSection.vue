@@ -38,7 +38,8 @@ const errs = computed(() => (mode.value === 'fill' ? fillAct : mode.value === 's
         <li v-for="p in data" :key="p.id" class="rounded-md border border-slate-200 bg-white px-3 py-2">
           <div class="flex flex-wrap items-center gap-2">
             <UBadge :tone="TONE[p.status]">{{ p.statusLabel }}</UBadge>
-            <b>{{ p.itemName }}</b><span class="text-xs text-slate-500">{{ p.no }}・{{ p.patientName }}（{{ p.admitNo }}）</span>
+            <b>{{ p.itemName }}</b><span class="text-xs text-slate-500">{{ p.no }}・{{ p.patientName }}（{{ p.admitNo || '門診' }}）</span>
+            <UBadge v-if="p.validUntil" tone="green">門診效期到 {{ p.validUntil }}</UBadge>
             <UBadge v-if="p.allows && p.status !== 'approved'" tone="purple">可以先用</UBadge>
           </div>
           <div v-if="p.summary" class="mt-1 text-xs text-slate-700">病情：{{ p.summary }}<br />理由：{{ p.reason }}</div>
@@ -47,8 +48,8 @@ const errs = computed(() => (mode.value === 'fill' ? fillAct : mode.value === 's
           <div v-if="p.emergencyText" class="text-xs text-amber-800">{{ p.emergencyText }}</div>
           <div v-if="!['approved', 'rejected'].includes(p.status)" class="mt-1 flex flex-wrap justify-end gap-2">
             <UButton v-if="['draft', 'more', 'ready'].includes(p.status)" size="sm" :variant="p.status === 'ready' ? 'secondary' : 'primary'" @click="openAs(p, 'fill')">{{ p.status === 'more' ? '補件' : p.status === 'ready' ? '修改' : '填寫' }}</UButton>
-            <UButton v-if="!p.selfPay" size="sm" variant="secondary" @click="openAs(p, 'self')">病人同意自費</UButton>
-            <UButton v-if="!p.emergency" size="sm" variant="ghost" class="text-red-700" @click="openAs(p, 'emergency')">緊急先用</UButton>
+            <UButton v-if="!p.selfPay && !p.opd" size="sm" variant="secondary" @click="openAs(p, 'self')">病人同意自費</UButton>
+            <UButton v-if="!p.emergency && !p.opd" size="sm" variant="ghost" class="text-red-700" @click="openAs(p, 'emergency')">緊急先用</UButton>
           </div>
         </li>
       </ul>

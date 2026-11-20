@@ -87,7 +87,7 @@ async function submitEx() {
               <template v-for="r in rows" :key="r.refId + (r.supplementOf ?? '')">
                 <tr :class="r.excluded ? 'text-slate-400' : r.problems.length ? 'bg-red-50/50' : ''">
                   <td class="tabular px-2 py-1.5">{{ r.date }}</td>
-                  <td class="px-2"><span class="text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge></td>
+                  <td class="px-2"><span class="text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div></td>
                   <td class="px-2">{{ r.patientName }}<span class="ml-1 text-xs text-slate-400">{{ r.chartNo }}</span></td>
                   <td class="px-2 text-xs">{{ r.doctorName }}</td>
                   <td class="px-2 text-xs">{{ r.diagnosis || '—' }}</td>

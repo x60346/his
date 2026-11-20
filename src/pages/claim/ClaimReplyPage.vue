@@ -1,15 +1,14 @@
 <script setup lang="ts">
 // 健保審查回覆（主治醫師）：事前審查（填寫、補件、自費、緊急先用）；我的病人被健保核減的——申復（寫理由）或接受，之後看得到申復結果。
-// 誰能回覆、只回覆一次由服務層判斷（claim-cut.replyCut）
+// 申復後仍維持的，申報組可再申請爭議審議（醫師這裡看得到進度）。誰能回覆、只回覆一次由服務層判斷（claim-cut.replyCut）
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UDialog, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { CLAIM_KIND_LABEL, claimCutApi, type CutItem } from '@/services'
+import { CLAIM_KIND_LABEL, claimCutApi, CUT_STATUS_TONE as TONE, type CutItem } from '@/services'
 import PreAuthDoctorSection from './PreAuthDoctorSection.vue'
 import CodingDoctorSection from './CodingDoctorSection.vue'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data, loading } = useQuery(() => claimCutApi.myCuts(), [])
-const TONE = { reply: 'yellow', appealed: 'purple', accepted: 'gray', paid: 'green', upheld: 'red' } as const
 const fmt = (n: number) => n.toLocaleString('zh-TW')
 const rep = ref<CutItem>()
 const open = computed({ get: () => !!rep.value, set: (x) => !x && (rep.value = undefined) })
@@ -42,6 +41,8 @@ async function submit() {
           <div class="text-xs text-slate-700">{{ c.item }}・{{ c.codeLabel }}<template v-if="c.reason">：{{ c.reason }}</template></div>
           <div v-if="c.replyText" class="text-xs text-slate-600">我的回覆：{{ c.replyText }}</div>
           <div v-if="c.resultText" class="text-xs" :class="c.status === 'paid' ? 'text-emerald-700' : 'text-red-700'">申復結果：{{ c.resultText }}</div>
+          <div v-if="c.disputeText" class="text-xs text-purple-800">爭議審議（申報組）：{{ c.disputeText }}</div>
+          <div v-if="c.disputeResultText" class="text-xs" :class="c.status === 'disputePaid' ? 'text-emerald-700' : 'text-red-700'">爭議審議結果：{{ c.disputeResultText }}</div>
           <div v-if="c.status === 'reply'" class="mt-1 text-right"><UButton size="sm" @click="openRep(c)">回覆</UButton></div>
         </li>
       </ul>

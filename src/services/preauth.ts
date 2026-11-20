@@ -5,8 +5,8 @@ import type { PreAuth } from '@/types'
 import { db } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
-import { checkPreAuthFill, preAuthAllows, preAuthDays, preAuthOverdue, PREAUTH_STATUS_LABEL } from './preauth-rules'
-import { createImplantPreAuth, implantPreAuthOf } from './preauth-work'
+import { checkPreAuthFill, opdPreAuthUntil, opdPreAuthValid, preAuthAllows, preAuthDays, preAuthOverdue, PREAUTH_STATUS_LABEL } from './preauth-rules'
+import { createImplantPreAuth, createOpdDrugPreAuth, implantPreAuthOf, opdDrugPreAuthOf } from './preauth-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { stopOrderRecord } from './order-ops'
 import { surgeryOf } from './surgery-work'
@@ -27,13 +27,17 @@ export interface PreAuthView extends PreAuth {
   resultText?: string
   selfPayText?: string
   emergencyText?: string
+  /** 門診（核准後效期內回診都能健保開）或住院 */
+  opd: boolean
+  /** 門診核准的有效期限 */
+  validUntil?: string
 }
 
 function view(p: PreAuth): PreAuthView {
   const t = now()
-  const a = find.admission(p.admissionId)
+  const a = p.admissionId ? find.admission(p.admissionId) : undefined
   return {
-    ...p, statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
+    ...p, opd: !p.admissionId, ...((u) => (u && !p.admissionId ? { validUntil: u } : {}))(opdPreAuthUntil(p)), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
     ...((d) => (d !== undefined ? { days: d } : {}))(preAuthDays(p, t)), overdue: preAuthOverdue(p, t), allows: preAuthAllows(p),
     notesText: p.notes.map((n) => `${n.at.slice(5)} ${nameOf.user(n.by)}：${n.text}`),
     ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5)}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
@@ -129,6 +133,7 @@ export function selfPayPreAuth(id: string, note: string): Promise<PreAuthView> {
   return mutate(() => {
     const p = paOf(id)
     const u = requireAttending(p)
+    if (!p.admissionId) fail('門診改自費：在處方那一列勾「自費」就好（這次自費，送審單照常審）', 'CONFLICT')
     if (p.status === 'approved' || p.status === 'rejected') fail(`已經${PREAUTH_STATUS_LABEL[p.status]}`, 'CONFLICT')
     if (p.selfPay) fail('已經記過病人同意自費', 'CONFLICT')
     if (!note?.trim()) failField('note', '請寫同意情形（例：病人已簽自費同意書，了解費用）')
@@ -143,6 +148,7 @@ export function emergencyPreAuth(id: string, reason: string): Promise<PreAuthVie
   return mutate(() => {
     const p = paOf(id)
     const u = requireAttending(p)
+    if (!p.admissionId) fail('門診沒有緊急先用：核准前請自費開立，或改住院處理', 'CONFLICT')
     if (p.status === 'approved' || p.status === 'rejected') fail(`已經${PREAUTH_STATUS_LABEL[p.status]}`, 'CONFLICT')
     if (p.emergency) fail('已經寫過緊急理由', 'CONFLICT')
     if (!reason?.trim()) failField('reason', '請寫緊急理由（為什麼不能等審查結果）')
@@ -164,6 +170,48 @@ export function requestImplantPreAuth(surgeryId: string, procId: string): Promis
     if (implantPreAuthOf(s.id, procId)) fail('已經申請過了', 'CONFLICT')
     const p = createImplantPreAuth({ surgeryId: s.id, procId, patientId: s.patientId, admissionId: s.admissionId, doctorId: s.doctorId, itemName: pr!.name, createdAt: now() })
     audit('事前審查申請', `${p.no} ${p.itemName}（${nameOf.patient(p.patientId)}，${s.no}）`)
+    return view(p)
+  })
+}
+
+// ---------- 門診 ----------
+
+export interface OpdPreAuthState {
+  drugId: string
+  drugName: string
+  /** 這個病人這個藥最新的送審單（核准在效期內的優先）；沒有＝還沒申請 */
+  preAuth?: PreAuthView
+  /** 今天能不能健保開 */
+  valid: boolean
+}
+
+/** 門診處方：這幾個藥裡需事前審查的，各自的送審狀態（看診中的病歷） */
+export function opdPreAuthStates(encounterId: string, drugIds: string[]): Promise<OpdPreAuthState[]> {
+  return query(() => {
+    requireUser('doctor')
+    const e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
+    return [...new Set(drugIds)].map((id) => find.drug(id)).filter((d) => !!d?.preAuth).map((d) => {
+      const p = opdDrugPreAuthOf(e.patientId, d!.id, e.date)
+      return { drugId: d!.id, drugName: d!.name, ...(p ? { preAuth: view(p) } : {}), valid: !!p && opdPreAuthValid(p, e.date) }
+    })
+  })
+}
+
+/**
+ * 門診申請事前審查（看診醫師）：需事前審查的藥、這個病人還沒有審查中或有效的送審單 → 建一張（醫師接著填病情摘要與理由）。
+ * 這次看診先不開或自費開；核准後效期內回診就能健保開
+ */
+export function requestOpdDrugPreAuth(encounterId: string, drugId: string): Promise<PreAuthView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
+    if (e.doctorId !== u.doctorId) fail('由看診醫師申請', 'FORBIDDEN')
+    const d = find.drug(drugId)
+    if (!d?.preAuth) fail('這個藥不用事前審查', 'CONFLICT')
+    const old = opdDrugPreAuthOf(e.patientId, d!.id, e.date)
+    if (old) fail(`已經有送審單 ${old.no}（${PREAUTH_STATUS_LABEL[old.status]}${old.status === 'approved' ? `，期限 ${opdPreAuthUntil(old)}` : ''}）`, 'CONFLICT')
+    const p = createOpdDrugPreAuth({ drugId: d!.id, itemName: d!.name, patientId: e.patientId, encounterId: e.id, doctorId: e.doctorId, createdAt: now() })
+    audit('事前審查申請（門診）', `${p.no} ${p.itemName}（${nameOf.patient(p.patientId)}）`)
     return view(p)
   })
 }

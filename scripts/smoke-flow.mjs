@@ -17635,6 +17635,172 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const bytes = api.managementXlsx(r)
     ok(Buffer.from(bytes).toString('utf8').includes('name="DRG"'), '經營月報 Excel 多一張 DRG 工作表')
   }
+  // 編碼更正：審查過再改（要理由、要不同、舊版本留著、主治重新讀）；那個月已申報 → 差額列在下一個還沒送的月份補報（註明改碼）
+  console.log('\n[編碼更正]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.codingApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const subIpd = db().claimSubmissions.filter((s) => s.kind === 'ipd')
+    const cand = db().admissions.find((a) => a.coding && !a.day && a.dischargedAt && subIpd.some((s) => s.items.some((x) => x.refId === a.id && x.drg?.rule === 'fixed' && !x.supplementOf)))
+    ok(!!cand, `有已申報（DRG 定額給付）、審查過的住院：${cand?.admitNo}`)
+    await as('clerk01')
+    const before = (await C.codingQueue()).done.find((x) => x.admissionId === cand.id) ?? null
+    const curCode = cand.coding.mainDiagnosis.split(' ')[0]
+    // 找一個會換 DRG 組的主診斷
+    let alt
+    const base0 = await C.previewCoding(cand.id, { mainIcd: curCode, secondary: cand.coding.secondary ?? [] })
+    const baseCode = base0.code
+    for (const c of db().icdCodes.filter((k) => k.active !== false && k.code !== curCode)) {
+      const p = await C.previewCoding(cand.id, { mainIcd: c.code, secondary: cand.coding.secondary ?? [] })
+      if (p.code !== baseCode && p.points !== base0.points) { alt = c; break }
+    }
+    ok(!!alt, `找到會改 DRG 的碼：${alt?.code}`)
+    ok((await errOf(() => C.recodeCoding(cand.id, { mainIcd: curCode, secondary: cand.coding.secondary ?? [], reason: 'x' }))).includes('不用更正'), '和現在一樣：不用更正')
+    ok((await fieldsOf(() => C.recodeCoding(cand.id, { mainIcd: alt.code, secondary: [] }))).reason, '更正要寫理由')
+    const notCoded = db().admissions.find((a) => a.status === 'discharged' && !a.coding)
+    if (notCoded) ok((await errOf(() => C.recodeCoding(notCoded.id, { mainIcd: alt.code, secondary: [], reason: 'x' }))).includes('先審查'), '還沒審查的不能更正')
+    // 主治先讀過，更正後要重新讀
+    if (cand.coding.changed) cand.coding.ack = { at: dateUtil.now(), by: 'U101' }
+    const r = await C.recodeCoding(cand.id, { mainIcd: alt.code, secondary: [], reason: '複審病歷：主要治療的是另一個診斷' })
+    const a2 = db().admissions.find((a) => a.id === cand.id)
+    ok(r.drgBefore.code !== r.drgAfter.code && a2.coding.revisions.length === 1 && a2.coding.revisions[0].mainDiagnosis.startsWith(curCode) && a2.coding.changed && !a2.coding.ack && r.item.coded.revisions.length === 1, `更正：DRG ${r.drgBefore.code} → ${r.drgAfter.code}、舊版本留著、主治要重新讀`)
+    ok(r.item.claimed && r.item.claimed.delta !== 0 && r.item.claimed.supplementMonth, `已申報 ${r.item.claimed?.month}：差額 ${r.item.claimed?.delta} 點列 ${r.item.claimed?.supplementMonth} 補報`)
+    ok(db().auditLogs[0].action === '編碼更正' && db().auditLogs[0].detail.includes('補報'), '稽核：編碼更正（含補報點數）')
+    const doc = db().users.find((u) => u.doctorId === cand.doctorId).username
+    await as(doc)
+    ok((await C.myCodingChanges()).some((x) => x.admissionId === cand.id && !x.coded.ack), '主治：編碼更正出現在未讀')
+    await as('clerk02')
+    const b = await api.claimApi.claimBoard('ipd', r.item.claimed.supplementMonth)
+    const sr = b.rows.find((x) => x.refId === cand.id && x.supplementOf)
+    ok(sr && sr.claim === r.item.claimed.delta && sr.supplementNote?.includes(`DRG ${r.drgBefore.code} → ${r.drgAfter.code}`) && sr.supplementNote.includes(alt.code), `申報：${sr?.supplementOf} 的補報 ${sr?.claim} 點、註明「${sr?.supplementNote}」`)
+    ok(api.claimCsv('ipd', [{ ...sr, patientName: 'x', chartNo: 'x', doctorName: 'x' }]).split('\n')[1].endsWith(sr.supplementNote), 'CSV 多「補報原因」欄')
+    ok((await load('/src/services/claim-work.ts')).supplementNoteOf([{ diagnosis: 'A01 x', drg: { code: '1' } }], { diagnosis: 'A01 x', drg: { code: '1' } }) === undefined, '補收、作廢的補報：不寫改碼')
+    await as('clerk01')
+    // 再更正回原來的：差額歸零（不列補報）
+    const back = await C.recodeCoding(cand.id, { mainIcd: curCode, secondary: before?.secondary ?? [], reason: '再複審：維持原診斷' })
+    ok(back.item.coded.revisions.length === 2 && back.item.claimed && back.item.claimed.delta === 0, '改回原本的：更正紀錄 2 筆、補報差額 0')
+    const { readFileSync } = await import('node:fs')
+    ok(!/supplementDelta|claimSubmissions|db\./.test(readFileSync('src/pages/claim/CodingPage.vue', 'utf8')), '補報差額由服務層算')
+  }
+  // 爭議審議：申復維持（或部分補付）→ 60 天內申請（理由、點數＝沒補回的）→ 結果補付或駁回；期限、不能重複；核減率算進補付；首頁
+  console.log('\n[爭議審議]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const K = api.claimCutApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    // 規則
+    const R = { at: '2026-01-01 10:00' }
+    ok(api.disputeCheck({ points: 100, result: { outcome: 'upheld', points: 0, ...R } }, '2026-03-02').ok && !api.disputeCheck({ points: 100, result: { outcome: 'upheld', points: 0, ...R } }, '2026-03-03').ok, '期限：申復結果後 60 天（含第 60 天）')
+    ok(api.disputeCheck({ points: 100, result: { outcome: 'paid', points: 100, ...R } }, '2026-01-02').why.includes('全額') && api.disputeLeft({ points: 100, result: { outcome: 'paid', points: 30 } }) === 70 && !api.disputeCheck({ points: 1 }, '2026-01-02').ok, '全額補付不能申請；部分補付剩 70 點；申復還沒結果不行')
+    ok(api.cutStatus({ reply: { action: 'appeal' }, result: { outcome: 'upheld' }, dispute: {} }) === 'disputed' && api.cutStatus({ dispute: { result: { outcome: 'rejected' } } }) === 'disputeRejected', '狀態：爭議審議中、駁回')
+    await as('clerk02')
+    let v = await K.cutBoard()
+    const c = v.cuts.find((x) => x.id === 'CC-SEED-4')
+    ok(c && c.status === 'upheld' && c.canDispute && c.disputeLeft === c.points && c.disputeDeadline === dateUtil.addDays(addDaysT(-12), 60), `種子：申復維持 12 天前，可申請到 ${c?.disputeDeadline}`)
+    ok((await api.dashboardApi.getDashboard()).claimDisputes >= 1, '首頁：爭議審議待處理')
+    ok((await fieldsOf(() => K.fileDispute(c.id, { reason: ' ' }))).reason, '要寫爭議理由')
+    const d1 = await K.fileDispute(c.id, { reason: '病人有心血管危險因子，附心電圖與門診紀錄' })
+    ok(d1.status === 'disputed' && d1.dispute.points === c.points && !d1.canDispute && db().auditLogs[0].action === '爭議審議申請', '申請：爭議審議中、點數＝沒補回的、稽核')
+    ok((await errOf(() => K.fileDispute(c.id, { reason: 'x' }))).includes('申請過'), '一筆只能申請一次')
+    v = await K.cutBoard()
+    const m0 = v.months.find((m) => m.month === c.month && m.kind === c.kind)
+    ok(m0.pending >= 1 && v.cuts[0].status === 'appealed' || v.cuts.findIndex((x) => x.id === c.id) <= 1, '清單：爭議審議中排在前面、算待處理')
+    ok((await fieldsOf(() => K.recordDisputeResult(c.id, { outcome: 'paid', points: c.points + 1 }))).points, `補付不能超過 ${c.points}`)
+    ok((await fieldsOf(() => K.recordDisputeResult(c.id, { outcome: 'rejected' }))).note, '駁回要寫理由')
+    const half = Math.max(1, Math.floor(c.points / 2))
+    const d2 = await K.recordDisputeResult(c.id, { outcome: 'paid', points: half })
+    v = await K.cutBoard()
+    const m1 = v.months.find((m) => m.month === c.month && m.kind === c.kind)
+    ok(d2.status === 'disputePaid' && d2.disputeResultText.includes(`補付 ${half}`) && m1.paid === m0.paid + half && m1.net === m0.net - half, `結果：爭議審議補付 ${half} 點，算進當月補付與淨核減`)
+    ok((await errOf(() => K.recordDisputeResult(c.id, { outcome: 'rejected', note: 'x' }))).includes('記過'), '結果不能再改')
+    // 過期
+    const other = db().claimCuts.find((x) => x.id !== c.id)
+    other.reply = { action: 'appeal', text: 'x', by: 'U101', at: dateUtil.now() }
+    other.result = { outcome: 'upheld', points: 0, by: 'U402', at: `${addDaysT(-61)} 10:00` }
+    delete other.dispute
+    ok((await errOf(() => K.fileDispute(other.id, { reason: 'x' }))).includes('期限'), '超過 60 天不能申請')
+    const docU = db().users.find((u) => u.doctorId === c.doctorId).username
+    await as(docU)
+    ok((await K.myCuts()).find((x) => x.id === c.id).disputeResultText.includes('補付'), '主治看得到爭議審議結果')
+    ok((await errOf(() => K.fileDispute(c.id, { reason: 'x' }))).includes('健保申報'), '醫師不能申請（權限健保申報）')
+  }
+  // 門診事前審查：需事前審查的藥（骨鬆注射筆）門診健保開要有效期內的核准；看診醫師申請、填寫 → 申報組送審、核准（沒寫期限 180 天）→ 回診能開；
+  // 沒核准只能勾自費；過期要重新申請；門診不能用「病人同意自費」「緊急先用」
+  console.log('\n[門診事前審查]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    ok(api.opdPreAuthUntil({ status: 'approved', result: { at: '2026-01-01 10:00' } }) === '2026-06-30' && api.opdPreAuthValid({ status: 'approved', result: { at: '2026-01-01 10:00', until: '2026-02-01' } }, '2026-02-01') && !api.opdPreAuthValid({ status: 'submitted' }, '2026-01-01'), '規則：沒寫期限＝核准日 + 180 天；期限當天還能開')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    ok(seedPa && !seedPa.admissionId && seedPa.status === 'approved', '種子：門診病人上次看診申請的骨鬆注射筆已核准')
+    const DOC = seedPa?.doctorId
+    const docName = db().users.find((u) => u.doctorId === DOC)?.username
+    const todays = db().visits.filter((x) => x.date === T && x.doctorId === DOC && x.status === 'registered' && !x.refillOf && !x.er)
+    const v1 = todays.find((x) => x.patientId === seedPa?.patientId)
+    const v2 = todays.find((x) => x.patientId !== seedPa?.patientId && !db().preAuths.some((p) => p.patientId === x.patientId))
+    ok(v1 && v2, `${docName} 今天候診：有核准的 1 位、沒申請的 1 位（共 ${todays.length}）`)
+    const med = { drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty: 1, selfPay: false }
+    const draftOf = (meds) => ({ subjective: '骨鬆追蹤', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: meds, procedures: [], refillTimes: 0, admissionRequested: false })
+    await as(docName)
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    let st = await P.opdPreAuthStates(e1.id, ['M052', 'M001'])
+    ok(st.length === 1 && st[0].valid && st[0].preAuth.no === seedPa.no && st[0].preAuth.validUntil === seedPa.result.until, `有核准的：${st[0]?.preAuth.no} 效期到 ${st[0]?.preAuth.validUntil}，只列需審查的藥`)
+    await api.opdApi.completeEncounter(e1.id, draftOf([med]))
+    ok(db().encounters.find((x) => x.id === e1.id).status === 'completed', '效期內：健保開骨鬆注射筆、完成看診')
+    await as('clerk01')
+    const l1 = (await api.chargeApi.previewCharge(v1.id)).lines.find((l) => l.name.includes('Teriparatide'))
+    ok(l1 && l1.kind === 'drug' && !l1.patientPay && l1.amount === 8800, '批價：核准的照健保藥價（8800 點）')
+    await as(docName)
+    const e2 = await api.opdApi.startConsult(v2.id, { allowNotCheckedIn: true, allowParallel: true })
+    st = await P.opdPreAuthStates(e2.id, ['M052'])
+    ok(!st[0].valid && !st[0].preAuth, '沒申請的：顯示還沒申請')
+    const msg = await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf([med])))
+    ok(msg.includes('事前審查') && msg.includes('還沒申請') && msg.includes('自費'), `沒核准健保開：擋下「${msg}」`)
+    ok((await errOf(() => P.requestOpdDrugPreAuth(e2.id, 'M001'))).includes('不用'), '不用審查的藥不能申請')
+    const pa = await P.requestOpdDrugPreAuth(e2.id, 'M052')
+    ok(pa.opd && pa.status === 'draft' && pa.encounterId === e2.id && !pa.admissionId && db().auditLogs[0].action === '事前審查申請（門診）', `申請：${pa.no} 待醫師填寫（門診）`)
+    ok((await errOf(() => P.requestOpdDrugPreAuth(e2.id, 'M052'))).includes('已經有'), '不能重複申請')
+    ok((await errOf(() => P.selfPayPreAuth(pa.id, 'x'))).includes('勾「自費」') && (await errOf(() => P.emergencyPreAuth(pa.id, 'x'))).includes('門診沒有'), '門診不用「病人同意自費」「緊急先用」')
+    await P.fillPreAuth(pa.id, { summary: 'T 值 −3.1，脊椎壓迫性骨折', reason: '雙磷酸鹽治療後仍骨折' })
+    const otherDoc = db().users.find((u) => u.doctorId && u.doctorId !== DOC && u.active).username
+    await as(otherDoc)
+    ok((await errOf(() => P.requestOpdDrugPreAuth(e1.id, 'M052'))).includes('看診醫師'), '別的醫師不能替這次看診申請')
+    await as('clerk02')
+    ok((await P.preAuthBoard()).find((x) => x.id === pa.id).status === 'ready', '申報組看得到待送審（門診）')
+    await P.submitPreAuth(pa.id)
+    await as(docName)
+    ok((await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf([med])))).includes('審查中'), '審查中：還是不能健保開')
+    await as('clerk02')
+    const ap = await P.recordPreAuthResult(pa.id, { outcome: 'approved' })
+    ok(ap.validUntil === dateUtil.addDays(T, 180), `核准沒寫期限：效期到 ${ap.validUntil}`)
+    await as(docName)
+    await api.opdApi.completeEncounter(e2.id, draftOf([med]))
+    ok(db().encounters.find((x) => x.id === e2.id).status === 'completed', '核准後：健保開、完成看診')
+    // 過期 → 擋（要重新申請）；勾自費可以開
+    const v3 = todays.find((x) => x !== v1 && x !== v2)
+    if (v3) {
+      const p3 = { ...db().preAuths.find((p) => p.id === pa.id), id: 'PA-T-EXP', no: 'PA-T-EXP', patientId: v3.patientId, result: { ...ap.result, until: addDaysT(-1) } }
+      db().preAuths.push(p3)
+      const e3 = await api.opdApi.startConsult(v3.id, { allowNotCheckedIn: true, allowParallel: true })
+      st = await P.opdPreAuthStates(e3.id, ['M052'])
+      ok(!st[0].valid && !st[0].preAuth, '過期的核准不算（要重新申請）')
+      ok((await errOf(() => api.opdApi.completeEncounter(e3.id, draftOf([med])))).includes('還沒申請'), '過期：擋下')
+      await api.opdApi.completeEncounter(e3.id, draftOf([{ ...med, selfPay: true }]))
+      ok(db().encounters.find((x) => x.id === e3.id).status === 'completed', '勾自費：可以開')
+      await as('clerk01')
+      const l3 = (await api.chargeApi.previewCharge(v3.id)).lines.find((l) => l.name.includes('Teriparatide'))
+      ok(l3 && l3.kind === 'self' && l3.patientPay && l3.amount === 12500, '批價：自費開的照自費價')
+      await as(docName)
+    } else ok(true, '（今天沒有第三位候診，略過過期與自費）')
+    ok((await load('/src/services/preauth-work.ts')).preAuthUnapproved(db().admissions[0].id).every((x) => !x.includes('Teriparatide')), '門診的送審單不影響住院申報檢核')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

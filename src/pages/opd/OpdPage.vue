@@ -25,6 +25,7 @@ import ReferralPanel from '@/components/ReferralPanel.vue'
 import OpdAddonPanel from '@/components/OpdAddonPanel.vue'
 import ReferralReplyDialog from '@/components/ReferralReplyDialog.vue'
 import RxAlertList from '@/components/RxAlertList.vue'
+import OpdPreAuthBar from './components/OpdPreAuthBar.vue'
 import RxAlertConfirm from '@/components/RxAlertConfirm.vue'
 import ImagingReportList from '@/components/ImagingReportList.vue'
 import RequestConsultDialog from '@/pages/ipd/components/RequestConsultDialog.vue'
@@ -701,6 +702,7 @@ const lastOpen = ref(true)
                 </span>
                 <UButton v-if="specialRx.length && encounter?.status === 'completed'" size="sm" variant="secondary" @click="openSpecialRx(encounter.id)">專用處方箋</UButton>
               </div>
+              <OpdPreAuthBar class="mb-2" :encounter-id="encounter?.id" :medications="draft.medications" :editable="editable" />
               <RxAlertList v-if="editable" class="mb-2" :alerts="rxAlerts ?? []" />
               <RxAlertList v-else class="mb-2" :alerts="encounter?.rxAlerts ?? []" title="開立時確認過的用藥提醒" />
               <MedicationEditor v-model="draft.medications" :drugs="drugs" :freqs="freqs" :warnings="warnings ?? []" :default-days="defaultDays" :readonly="!editable" />

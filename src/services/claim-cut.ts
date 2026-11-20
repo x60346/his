@@ -4,7 +4,8 @@ import type { ClaimCut, ClaimKind } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
-import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, CUT_STATUS_LABEL, cutRate, cutStatus, type CutStatus } from './claim-rules'
+import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, CUT_STATUS_LABEL, cutRate, cutStatus, disputeCheck, disputeLeft, type CutStatus } from './claim-rules'
+import { today } from '@/utils/date'
 import { find, nameOf } from './views'
 
 export interface CutItem extends ClaimCut {
@@ -18,6 +19,14 @@ export interface CutItem extends ClaimCut {
   codeLabel: string
   replyText?: string
   resultText?: string
+  /** 爭議審議：能不能申請（不能的原因）、期限、還沒補回的點數、申請與結果 */
+  dispute?: ClaimCut['dispute']
+  canDispute: boolean
+  disputeWhy?: string
+  disputeDeadline?: string
+  disputeLeft: number
+  disputeText?: string
+  disputeResultText?: string
 }
 export interface CutMonth {
   kind: ClaimKind
@@ -49,6 +58,10 @@ function cutItem(c: ClaimCut): CutItem {
     date: it?.date ?? '', diagnosis: it?.diagnosis ?? '', codeLabel: `${c.code} ${CUT_REASONS.find((r) => r.code === c.code)?.label ?? ''}`,
     ...(c.reply ? { replyText: `${c.reply.action === 'appeal' ? '申復' : '接受'}・${nameOf.user(c.reply.by)} ${c.reply.at.slice(5)}${c.reply.text ? `：${c.reply.text}` : ''}` } : {}),
     ...(c.result ? { resultText: `${c.result.outcome === 'paid' ? `補付 ${c.result.points} 點` : '維持核減'}・${nameOf.user(c.result.by)} ${c.result.at.slice(5)}` } : {}),
+    ...((d) => ({ canDispute: d.ok, ...(d.why ? { disputeWhy: d.why } : {}), ...(d.deadline ? { disputeDeadline: d.deadline } : {}) }))(disputeCheck(c, today())),
+    disputeLeft: disputeLeft(c),
+    ...(c.dispute ? { disputeText: `申請 ${c.dispute.points} 點・${nameOf.user(c.dispute.by)} ${c.dispute.at.slice(5)}：${c.dispute.reason}` } : {}),
+    ...(c.dispute?.result ? { disputeResultText: `${c.dispute.result.outcome === 'paid' ? `補付 ${c.dispute.result.points} 點` : '駁回'}・${nameOf.user(c.dispute.result.by)} ${c.dispute.result.at.slice(5)}${c.dispute.result.note ? `：${c.dispute.result.note}` : ''}` } : {}),
   }
 }
 
@@ -58,8 +71,9 @@ function months(): CutMonth[] {
       const cs = db.claimCuts.filter((c) => c.submissionId === s.id)
       const claimed = s.items.reduce((n, x) => n + x.claim, 0)
       const cut = cs.reduce((n, c) => n + c.points, 0)
-      const paid = cs.reduce((n, c) => n + (c.result?.outcome === 'paid' ? c.result.points : 0), 0)
-      return { kind: s.kind, month: s.month, claimed, cut, paid, net: cut - paid, rate: cutRate(cut - paid, claimed), pending: cs.filter((c) => ['reply', 'appealed'].includes(cutStatus(c))).length }
+      // 補付＝申復補付＋爭議審議補付
+      const paid = cs.reduce((n, c) => n + (c.result?.outcome === 'paid' ? c.result.points : 0) + (c.dispute?.result?.outcome === 'paid' ? c.dispute.result.points : 0), 0)
+      return { kind: s.kind, month: s.month, claimed, cut, paid, net: cut - paid, rate: cutRate(cut - paid, claimed), pending: cs.filter((c) => ['reply', 'appealed', 'disputed'].includes(cutStatus(c))).length }
     })
     .sort((a, b) => b.month.localeCompare(a.month) || a.kind.localeCompare(b.kind))
 }
@@ -68,7 +82,7 @@ function months(): CutMonth[] {
 export function cutBoard(): Promise<CutBoard> {
   return query(() => {
     const u = requirePermission('nhi.claim')
-    const rank: Record<CutStatus, number> = { appealed: 0, reply: 1, accepted: 2, paid: 3, upheld: 4 }
+    const rank: Record<CutStatus, number> = { appealed: 0, disputed: 1, reply: 2, upheld: 3, paid: 4, accepted: 5, disputePaid: 6, disputeRejected: 7 }
     return {
       canManage: permissionsOf(u).includes('nhi.claim'),
       cuts: db.claimCuts.map(cutItem).sort((a, b) => rank[a.status] - rank[b.status] || b.at.localeCompare(a.at)),
@@ -133,6 +147,40 @@ export function recordCutResult(id: string, input: { outcome: 'paid' | 'upheld';
     if (input.outcome === 'paid' && (!Number.isFinite(n) || n <= 0 || n > c.points)) failField('points', `補付點數是 1–${c.points}`)
     c.result = { outcome: input.outcome, points: n, by: u.id, at: now() }
     audit('申復結果', `${c.month} ${nameOf.patient(c.patientId)} ${c.item}：${input.outcome === 'paid' ? `補付 ${n} 點` : '維持核減'}`)
+    return cutItem(c)
+  })
+}
+
+/**
+ * 申請爭議審議（申報組）：申復維持核減、或只補付一部分，申復結果後 60 天內；點數是還沒補回的（全部），要寫理由
+ * （通常引用主治的申復理由、補充病歷佐證）。一筆核減只能申請一次
+ */
+export function fileDispute(id: string, input: { reason: string }): Promise<CutItem> {
+  return mutate(() => {
+    const u = requirePermission('nhi.claim')
+    const c = must(db.claimCuts.find((x) => x.id === id), '核減')
+    const d = disputeCheck(c, today())
+    if (!d.ok) fail(`不能申請爭議審議：${d.why}`, 'CONFLICT')
+    if (!input.reason?.trim()) failField('reason', '請寫爭議理由（病情需要、病歷佐證、為什麼申復結果不合理）')
+    c.dispute = { at: now(), by: u.id, reason: input.reason.trim(), points: disputeLeft(c) }
+    audit('爭議審議申請', `${c.month} ${nameOf.patient(c.patientId)} ${c.item} ${c.dispute.points} 點：${c.dispute.reason}`)
+    return cutItem(c)
+  })
+}
+
+/** 爭議審議結果（申報組）：補付幾點（不超過申請的）或駁回（寫理由）；結果是最終的，不能再改 */
+export function recordDisputeResult(id: string, input: { outcome: 'paid' | 'rejected'; points?: number; note?: string }): Promise<CutItem> {
+  return mutate(() => {
+    const u = requirePermission('nhi.claim')
+    const c = must(db.claimCuts.find((x) => x.id === id), '核減')
+    if (!c.dispute) fail('還沒申請爭議審議', 'CONFLICT')
+    if (c.dispute!.result) fail('已經記過爭議審議結果了', 'CONFLICT')
+    if (input.outcome !== 'paid' && input.outcome !== 'rejected') failField('outcome', '請選補付或駁回')
+    const n = input.outcome === 'paid' ? Number(input.points) : 0
+    if (input.outcome === 'paid' && (!Number.isFinite(n) || n <= 0 || n > c.dispute!.points)) failField('points', `補付點數是 1–${c.dispute!.points}`)
+    if (input.outcome === 'rejected' && !input.note?.trim()) failField('note', '請寫駁回理由（審定書上的）')
+    c.dispute!.result = { outcome: input.outcome, points: n, note: input.note?.trim() ?? '', by: u.id, at: now() }
+    audit('爭議審議結果', `${c.month} ${nameOf.patient(c.patientId)} ${c.item}：${input.outcome === 'paid' ? `補付 ${n} 點` : `駁回（${input.note!.trim()}）`}`)
     return cutItem(c)
   })
 }

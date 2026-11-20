@@ -1,8 +1,8 @@
 // 事前審查的內部工具（index 不匯出、不會被包成 API）：找送審單、建送審單、給藥與登記植入物前的把關、帳單自費、申報檢核、首頁待辦
-import type { IpdOrder, PreAuth } from '@/types'
+import type { Encounter, IpdOrder, PreAuth } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { fail } from './http'
-import { preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
+import { opdPreAuthBlockText, opdPreAuthValid, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
 import { find } from './views'
 
 const live = (p: PreAuth) => p.status !== 'rejected'
@@ -28,8 +28,31 @@ export function ensureDrugPreAuth(o: IpdOrder, t: string): PreAuth | undefined {
   return create({ kind: 'drug', itemId: d.id, itemName: d.name, patientId: a.patientId, admissionId: a.id, doctorId: a.doctorId, orderId: o.id, createdAt: t })
 }
 
+export function createOpdDrugPreAuth(input: { drugId: string; itemName: string; patientId: string; encounterId: string; doctorId: string; createdAt: string }): PreAuth {
+  return create({ kind: 'drug', itemId: input.drugId, itemName: input.itemName, patientId: input.patientId, encounterId: input.encounterId, doctorId: input.doctorId, createdAt: input.createdAt })
+}
+
 export function createImplantPreAuth(input: { surgeryId: string; procId: string; patientId: string; admissionId: string; doctorId: string; itemName: string; createdAt: string }): PreAuth {
   return create({ kind: 'implant', itemId: input.procId, itemName: input.itemName, patientId: input.patientId, admissionId: input.admissionId, doctorId: input.doctorId, surgeryId: input.surgeryId, createdAt: input.createdAt })
+}
+
+/**
+ * 門診：這個病人這個藥最新的送審單（不核准的、門診核准已過期的不算）。核准在效期內的優先
+ */
+export function opdDrugPreAuthOf(patientId: string, drugId: string, date: string): PreAuth | undefined {
+  const xs = db.preAuths.filter((p) => p.kind === 'drug' && !p.admissionId && p.patientId === patientId && p.itemId === drugId && live(p)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return xs.find((p) => opdPreAuthValid(p, date)) ?? xs.find((p) => p.status !== 'approved')
+}
+
+/** 門診完成看診前：需事前審查的藥用健保開（沒勾自費、不是自費身分）要有效期內的核准 */
+export function requireOpdDrugPreAuth(e: Pick<Encounter, 'patientId' | 'date' | 'medications'>, selfPayVisit: boolean) {
+  if (selfPayVisit) return
+  for (const m of e.medications.filter((x) => !x.selfPay)) {
+    const d = find.drug(m.drugId)
+    if (!d?.preAuth) continue
+    const p = opdDrugPreAuthOf(e.patientId, d.id, e.date)
+    if (!p || !opdPreAuthValid(p, e.date)) fail(opdPreAuthBlockText(d.name, p, e.date), 'CONFLICT')
+  }
 }
 
 /** 給藥前：需事前審查的藥要核准（或自費、緊急）才能給 */

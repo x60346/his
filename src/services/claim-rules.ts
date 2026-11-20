@@ -2,6 +2,7 @@
 // 服務層（claim.ts）、申報頁、種子、測試都用這一份
 import type { ChargeLine, ClaimCategory, ClaimItem, ClaimKind, Procedure } from '@/types'
 import { drgPay } from './drg-rules'
+import { addDays } from '@/utils/date'
 
 export const CLAIM_KIND_LABEL: Record<ClaimKind, string> = { opd: '門診（含急診）', ipd: '住院（含日間手術）' }
 export const CLAIM_CATEGORY_LABEL: Record<ClaimCategory, string> = {
@@ -109,9 +110,9 @@ export const cutRate = (cut: number, claimed: number) => (claimed > 0 ? Math.rou
 /** 匯出 CSV（每筆一列）：住院多各費用類別欄 */
 export function claimCsv(kind: ClaimKind, rows: (ClaimItem & { patientName: string; chartNo: string; doctorName: string })[]): string {
   const cats = kind === 'ipd' ? CLAIM_CATEGORIES : []
-  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', ...(kind === 'ipd' ? ['DRG', 'DRG 定額', 'DRG 給付', '盈虧', '不適用 DRG'] : []), '申請點數', '補報']
+  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', ...(kind === 'ipd' ? ['DRG', 'DRG 定額', 'DRG 給付', '盈虧', '不適用 DRG'] : []), '申請點數', '補報', '補報原因']
   const esc = (v: unknown) => ((s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s))(String(v ?? ''))
-  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, ...(kind === 'ipd' ? [r.drg?.code ?? '', r.drg?.points ?? '', r.drg?.pay ?? '', r.drg?.diff ?? '', r.drgExempt ?? ''] : []), r.claim, r.supplementOf ?? ''].map(esc).join(','))
+  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, ...(kind === 'ipd' ? [r.drg?.code ?? '', r.drg?.points ?? '', r.drg?.pay ?? '', r.drg?.diff ?? '', r.drgExempt ?? ''] : []), r.claim, r.supplementOf ?? '', r.supplementNote ?? ''].map(esc).join(','))
   return [head.join(','), ...lines].join('\n')
 }
 
@@ -125,13 +126,34 @@ export const CUT_REASONS: { code: string; label: string }[] = [
   { code: '0501', label: '病歷記載不完整，無法支持申報' },
   { code: '0601', label: '住院日數過長' },
 ]
-export type CutStatus = 'reply' | 'appealed' | 'accepted' | 'paid' | 'upheld'
-export const CUT_STATUS_LABEL: Record<CutStatus, string> = { reply: '待醫師回覆', appealed: '申復中', accepted: '接受核減', paid: '申復補付', upheld: '維持核減' }
-export function cutStatus(c: { reply?: { action: 'appeal' | 'accept' }; result?: { outcome: 'paid' | 'upheld' } }): CutStatus {
+export type CutStatus = 'reply' | 'appealed' | 'accepted' | 'paid' | 'upheld' | 'disputed' | 'disputePaid' | 'disputeRejected'
+export const CUT_STATUS_LABEL: Record<CutStatus, string> = { reply: '待醫師回覆', appealed: '申復中', accepted: '接受核減', paid: '申復補付', upheld: '維持核減', disputed: '爭議審議中', disputePaid: '爭議審議補付', disputeRejected: '爭議審議駁回' }
+/** 畫面徽章顏色（申報組、醫師頁共用） */
+export const CUT_STATUS_TONE = { reply: 'yellow', appealed: 'purple', accepted: 'gray', paid: 'green', upheld: 'red', disputed: 'purple', disputePaid: 'green', disputeRejected: 'red' } as const satisfies Record<CutStatus, string>
+export function cutStatus(c: { reply?: { action: 'appeal' | 'accept' }; result?: { outcome: 'paid' | 'upheld' }; dispute?: { result?: { outcome: 'paid' | 'rejected' } } }): CutStatus {
+  if (c.dispute) return !c.dispute.result ? 'disputed' : c.dispute.result.outcome === 'paid' ? 'disputePaid' : 'disputeRejected'
   if (!c.reply) return 'reply'
   if (c.reply.action === 'accept') return 'accepted'
   if (!c.result) return 'appealed'
   return c.result.outcome
+}
+
+// ---------- 爭議審議 ----------
+
+/** 申復結果通知後幾天內可以申請爭議審議（全民健康保險爭議事項審議辦法：60 日） */
+export const DISPUTE_DAYS = 60
+
+/** 申復後還沒補回的點數（維持＝全部；部分補付＝剩下的） */
+export const disputeLeft = (c: { points: number; result?: { outcome: 'paid' | 'upheld'; points: number } }) => (c.result ? c.points - (c.result.outcome === 'paid' ? c.result.points : 0) : 0)
+
+/** 能不能申請爭議審議：申復有結果、還有沒補回的、沒申請過、在期限內（today 是 YYYY-MM-DD；deadline 給畫面看） */
+export function disputeCheck(c: { points: number; result?: { outcome: 'paid' | 'upheld'; points: number; at: string }; dispute?: unknown }, today: string): { ok: boolean; why?: string; deadline?: string } {
+  if (!c.result) return { ok: false, why: '申復還沒有結果' }
+  const deadline = addDays(c.result.at.slice(0, 10), DISPUTE_DAYS)
+  if (c.dispute) return { ok: false, why: '已經申請過爭議審議', deadline }
+  if (disputeLeft(c) <= 0) return { ok: false, why: '申復已全額補付', deadline }
+  if (today > deadline) return { ok: false, why: `超過爭議審議期限（${deadline}）`, deadline }
+  return { ok: true, deadline }
 }
 
 /** 輸入核減：項目、點數（不超過這一筆還沒被核減的申請點數）、理由代碼 */

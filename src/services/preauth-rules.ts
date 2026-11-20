@@ -1,10 +1,27 @@
 // 事前審查（純函式）：狀態、能不能用、審查逾時、填寫欄位。服務層（preauth.ts、nursing 給藥、implant 登記、申報檢核）、畫面、測試共用
 import type { PreAuth, PreAuthStatus } from '@/types'
-import { parseDate } from '@/utils/date'
+import { addDays, parseDate } from '@/utils/date'
 
 /** 送審後幾天還沒結果算逾時（健保署約兩週） */
 export const PREAUTH_DAYS = 14
 export const PREAUTH_STATUS_LABEL: Record<PreAuthStatus, string> = { draft: '待醫師填寫', ready: '待送審', submitted: '審查中', more: '補件', approved: '核准', rejected: '不核准' }
+
+/** 門診核准沒寫期限時，預設從核准日起有效幾天 */
+export const OPD_PREAUTH_VALID_DAYS = 180
+
+/** 門診核准的有效期限（YYYY-MM-DD）：審查結果寫的期限，沒寫＝核准日 + 180 天 */
+export function opdPreAuthUntil(p: Pick<PreAuth, 'status' | 'result'>): string | undefined {
+  if (p.status !== 'approved' || !p.result) return undefined
+  return p.result.until ?? addDays(p.result.at.slice(0, 10), OPD_PREAUTH_VALID_DAYS)
+}
+/** 門診這天能不能健保開：核准而且在期限內 */
+export const opdPreAuthValid = (p: Pick<PreAuth, 'status' | 'result'>, date: string): boolean => ((u) => !!u && date <= u)(opdPreAuthUntil(p))
+
+/** 門診擋下時的說明 */
+export function opdPreAuthBlockText(drugName: string, p: Pick<PreAuth, 'no' | 'status' | 'result'> | undefined, date: string): string {
+  const why = !p ? '還沒申請' : p.status === 'approved' && !opdPreAuthValid(p, date) ? `${p.no} 核准已過期（${opdPreAuthUntil(p)}）：請重新申請` : `${p.no} ${PREAUTH_STATUS_LABEL[p.status]}`
+  return `${drugName} 需健保事前審查（門診，${why}）：核准前只能自費開立（勾「自費」），或先在處方旁申請送審`
+}
 
 /** 能不能用：核准、病人同意自費、醫師寫了緊急理由 */
 export const preAuthAllows = (p: Pick<PreAuth, 'status' | 'selfPay' | 'emergency'>): boolean => p.status === 'approved' || !!p.selfPay || !!p.emergency

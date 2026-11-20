@@ -3879,6 +3879,15 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (o1 && oi) cut(o1, oi, 1, lineOf(oi)!.name, lineOf(oi)!.amount, '0213', '30 天內重複檢查，病歷沒有新的臨床理由', notFuture(`${cm1}-25 10:00`, 60))
     const oj = o2?.items.find((x) => !x.supplementOf && x.claim > 100)
     if (o2 && oj) cut(o2, oj, 2, '一般門診診察費（部分）', 100, '0501', '病歷記載不完整', `${o1?.month ?? cm1}-20 10:00`, { reply: { action: 'accept', text: '', by: docUser(oj.doctorId), at: `${o1?.month ?? cm1}-22 15:00` } })
+    // 申復後仍維持核減（12 天前結果回來）：還在 60 天內，申報組可以申請爭議審議
+    const ok4 = o2?.items.find((x) => !x.supplementOf && x !== oj && lineOf(x))
+    if (o2 && ok4) {
+      const m = o1?.month ?? cm1
+      cut(o2, ok4, 4, lineOf(ok4)!.name, lineOf(ok4)!.amount, '0101', '病歷看不出這項處置的必要', `${m}-18 10:00`, {
+        reply: { action: 'appeal', text: '門診病歷有記載當時的症狀與理學檢查，這項處置是依病情需要做的', by: docUser(ok4.doctorId), at: `${m}-19 15:00` },
+        result: { outcome: 'upheld', points: 0, by: 'U402', at: `${addDays(T, -12)} 10:00` },
+      })
+    }
     const [i1] = subs('ipd')
     const ii = i1?.items.find((x) => (x.days ?? 0) >= 3)
     if (i1 && ii) {
@@ -3913,6 +3922,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       pa('PA-SEED-2', { kind: 'implant', itemId: 'P062', itemName: '鎖定骨板（橈骨遠端）', patientId: s1.patientId, admissionId: s1.admissionId, doctorId: s1.doctorId, surgeryId: s1.id, status: 'approved', createdAt: at,
         summary: '右橈骨遠端粉碎性骨折（AO C2），關節面移位 3 mm', reason: '關節內粉碎性骨折，一般骨板無法固定，需鎖定骨板', notes: [{ at: addMinutes(at, 10), by: doc, text: '填寫送審資料' }],
         submittedAt: addMinutes(at, 30), submittedBy: 'U402', result: { outcome: 'approved', note: '', at: notFuture(addMinutes(at, 20 * 60), 10), by: 'U402', until: addDays(T, 30) } })
+    }
+  }
+
+  // 門診事前審查（示範）：今天還沒看的一位（骨科 dr07 有門診就挑骨科，沒有就家醫科 dr01；已報到的、50 歲以上女性優先、年紀大的優先），
+  // 之前在同一位醫師看診時（有的話連到那次看診）申請骨鬆注射筆、20 天前核准（效期 180 天）→ 今天開 Teriparatide 可以健保開；別的病人開會被擋（要自費或先申請）
+  {
+    const pt = (id: string) => patients.find((p) => p.id === id)!
+    const fit = (id: string) => Number(pt(id).gender === 'F' && pt(id).birthDate <= addDays(T, -50 * 365))
+    const wait = (d: string) => visits.filter((x) => x.date === T && x.doctorId === d && x.status === 'registered' && !x.refillOf && !x.er).sort((a, b) => Number(!!b.checkedInAt) - Number(!!a.checkedInAt) || fit(b.patientId) - fit(a.patientId) || pt(a.patientId).birthDate.localeCompare(pt(b.patientId).birthDate))
+    const v = wait('DR07')[0] ?? wait('DR01')[0]
+    const prev = v && encounters.filter((e) => e.patientId === v.patientId && e.doctorId === v.doctorId && e.date < T && e.status === 'completed').sort((a, b) => b.date.localeCompare(a.date))[0]
+    if (v) {
+      const d0 = prev?.date ?? addDays(T, -30)
+      const at = `${d0} 11:00`
+      const ok = `${addDays(T, -20)} 15:00`
+      const doc = users.find((u) => u.doctorId === v.doctorId)!.id
+      preAuths.push({ id: 'PA-SEED-3', no: `PA${d0.replace(/-/g, '')}${String((counters[`preauth:${d0.replace(/-/g, '')}`] = (counters[`preauth:${d0.replace(/-/g, '')}`] ?? 0) + 1)).padStart(3, '0')}`,
+        kind: 'drug', itemId: 'M052', itemName: 'Teriparatide 20mcg Pen', patientId: v.patientId, ...(prev ? { encounterId: prev.id } : {}), doctorId: v.doctorId, status: 'approved', createdAt: at,
+        summary: '停經後骨質疏鬆，骨密度 T 值 −3.3，已有兩處脊椎壓迫性骨折', reason: '使用雙磷酸鹽一年以上仍新發骨折，符合給付規定',
+        notes: [{ at: `${d0} 11:10`, by: doc, text: '填寫送審資料' }], submittedAt: addDays(d0, 1) < ok.slice(0, 10) ? `${addDays(d0, 1)} 10:00` : `${d0} 14:00`, submittedBy: 'U402',
+        result: { outcome: 'approved', note: '核准 18 個月療程，先給 6 個月', at: ok < `${d0} 16:00` ? `${d0} 16:00` : ok, by: 'U402', until: addDays(T, 160) } })
     }
   }
 

@@ -95,10 +95,33 @@ export function openMonthRows(kind: ClaimKind, month: string, current: string): 
       const base = r.item ?? prev[0]
       const dp = Math.round(((r.item?.points ?? 0) - prev.reduce((n, x) => n + x.points, 0)) * 100) / 100
       const dc = Math.round(((r.item?.copay ?? 0) - prev.reduce((n, x) => n + x.copay, 0)) * 100) / 100
-      out.push({ ...base, points: dp, copay: dc, claim: delta, categories: undefined, supplementOf: r.month, problems: [] })
+      const note = supplementNoteOf(prev, r.item)
+      out.push({ ...base, points: dp, copay: dc, claim: delta, categories: undefined, supplementOf: r.month, ...(note ? { supplementNote: note } : {}), problems: [] })
     }
   }
   return out.sort((a, b) => Number(!!a.supplementOf) - Number(!!b.supplementOf) || a.date.localeCompare(b.date))
+}
+
+/** 補報的原因：和最後一次送出的比，DRG 或主診斷變了（改碼）；其他（補收、作廢）不寫 */
+export function supplementNoteOf(prev: ClaimItem[], cur: ClaimItem | undefined): string | undefined {
+  const last = prev.at(-1)
+  if (!last || !cur) return undefined
+  const lastDrg = [...prev].reverse().find((x) => x.drg || x.drgExempt)
+  const parts: string[] = []
+  if (lastDrg?.drg && cur.drg && lastDrg.drg.code !== cur.drg.code) parts.push(`DRG ${lastDrg.drg.code} → ${cur.drg.code}`)
+  if (last.diagnosis && cur.diagnosis && last.diagnosis.split(' ')[0] !== cur.diagnosis.split(' ')[0]) parts.push(`主診斷 ${last.diagnosis.split(' ')[0]} → ${cur.diagnosis.split(' ')[0]}`)
+  return parts.length ? `改碼：${parts.join('、')}` : undefined
+}
+
+/**
+ * 這一筆送過了嗎（給編碼更正看）：原本那個月送出了（不是排除）→ 現在算的和送過的差多少、會列在哪個月補報
+ */
+export function claimedState(kind: ClaimKind, refId: string, month: string, item: ClaimItem | undefined, current: string): { month: string; delta: number; supplementMonth?: string } | undefined {
+  if (!submissionOf(kind, month) || excludedEver(kind, refId)) return undefined
+  const prev = submittedFor(kind, refId)
+  if (!prev.length) return undefined
+  const sm = supplementMonth(month, (m) => !!submissionOf(kind, m), current)
+  return { month, delta: supplementDelta(item, prev), ...(sm ? { supplementMonth: sm } : {}) }
 }
 
 /** 有申報資料的月份（新到舊）：有就醫／出院的、送過的 */

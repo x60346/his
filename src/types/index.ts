@@ -1449,7 +1449,7 @@ export interface Admission {
    * 疾病分類編碼審查（病歷管理師，出院後）：確認或修改主診斷與次診斷（DRG、申報以這裡為準）；
    * 改了要寫理由，主治已讀（可寫意見）。secondary 沒有＝沿用病摘（舊病摘沒有次診斷時，DRG 退回看病史）
    */
-  coding?: { at: string; by: string; mainDiagnosis: string; secondary?: { icd: string; name: string }[]; changed: boolean; reason?: string; before?: { main: string; secondary: { icd: string; name: string }[] }; ack?: { at: string; by: string; note?: string } }
+  coding?: { at: string; by: string; mainDiagnosis: string; secondary?: { icd: string; name: string }[]; changed: boolean; reason?: string; before?: { main: string; secondary: { icd: string; name: string }[] }; ack?: { at: string; by: string; note?: string }; /** 更正前的版本（舊到新）：審查後又改碼（申報後改碼→差額補報） */ revisions?: { at: string; by: string; mainDiagnosis: string; secondary: { icd: string; name: string }[]; reason?: string }[] }
 }
 
 /**
@@ -2666,7 +2666,10 @@ export interface PreAuth {
   itemId: string
   itemName: string
   patientId: string
-  admissionId: string
+  /** 住院的送審單；門診的沒有（看 encounterId） */
+  admissionId?: string
+  /** 門診：在哪一次看診申請的（核准後在效期內每次回診都能健保開） */
+  encounterId?: string
   doctorId: string
   orderId?: string
   surgeryId?: string
@@ -2714,6 +2717,8 @@ export interface ClaimItem {
   days?: number
   /** 補報：原本是哪個月的（點數是差額，可能是負的） */
   supplementOf?: string
+  /** 補報的原因（改碼：DRG、主診斷變了） */
+  supplementNote?: string
   /** 住院 DRG：分組、定額、給付規則與給付點數、盈虧（給付 − 實際）；申請點數＝給付 − 部分負擔 */
   drg?: { code: string; name: string; points: number; pay: number; rule: 'lower' | 'fixed' | 'outlier'; diff: number }
   /** 不適用 DRG（照實申報）的原因 */
@@ -2759,6 +2764,8 @@ export interface ClaimCut {
   by: string
   reply?: { action: 'appeal' | 'accept'; text: string; by: string; at: string }
   result?: { outcome: 'paid' | 'upheld'; points: number; by: string; at: string }
+  /** 爭議審議（申復後仍維持或只補付一部分，申報組在期限內向衛福部爭議審議會申請）：結果補付或駁回 */
+  dispute?: { at: string; by: string; reason: string; points: number; result?: { outcome: 'paid' | 'rejected'; points: number; note: string; by: string; at: string } }
 }
 
 // ---------- 病歷影本申請 ----------

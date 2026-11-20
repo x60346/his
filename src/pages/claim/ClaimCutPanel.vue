@@ -1,15 +1,15 @@
 <script setup lang="ts">
 // 核減與申復（申報組）：每月申報、核減、補付點數與核減率；輸入健保署的核減（送出過的月份的一筆）；
-// 主治回覆後，申復的記結果（補付幾點或維持）。能不能輸入、點數上限由服務層判斷（claim-cut.ts、claim-rules）
+// 主治回覆後，申復的記結果（補付幾點或維持）；維持或只補付一部分的，60 天內可申請爭議審議、記審議結果。
+// 能不能輸入、點數上限、期限由服務層判斷（claim-cut.ts、claim-rules）
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
-import { UBadge, UButton, UDialog, UInput, UQueryState, USelect } from '@/components/ui'
-import { CLAIM_KIND_LABEL, claimCutApi, CUT_REASONS, type CutItem } from '@/services'
+import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
+import { CLAIM_KIND_LABEL, claimCutApi, CUT_REASONS, CUT_STATUS_TONE as TONE, type CutItem } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: v, loading } = useQuery(() => claimCutApi.cutBoard(), [])
 const fmt = (n: number) => n.toLocaleString('zh-TW')
-const TONE = { reply: 'yellow', appealed: 'purple', accepted: 'gray', paid: 'green', upheld: 'red' } as const
 
 const addOpen = ref(false)
 const af = reactive({ submissionId: '' as string | number | undefined, refId: '' as string | number | undefined, item: '', points: undefined as number | undefined, code: '' as string | number | undefined, reason: '' })
@@ -36,13 +36,39 @@ const resAct = useAction(claimCutApi.recordCutResult, { success: (c) => `已記�
 async function submitRes() {
   if (resFor.value && (await resAct.run(resFor.value.id, { outcome: rf.outcome as 'paid' | 'upheld', points: Number(rf.points) }))) resFor.value = undefined
 }
+
+// 爭議審議：申請（理由，預帶主治的申復理由）、記結果（補付幾點或駁回）
+const dispFor = ref<CutItem>()
+const dispOpen = computed({ get: () => !!dispFor.value, set: (x) => !x && (dispFor.value = undefined) })
+const df = reactive({ reason: '' })
+function openDisp(c: CutItem) {
+  df.reason = c.reply?.text ?? ''
+  dispAct.fieldErrors.value = {}
+  dispFor.value = c
+}
+const dispAct = useAction(claimCutApi.fileDispute, { success: (c) => `已申請爭議審議：${c.patientName} ${c.item} ${c.dispute?.points ?? 0} 點` })
+async function submitDisp() {
+  if (dispFor.value && (await dispAct.run(dispFor.value.id, { reason: df.reason }))) dispFor.value = undefined
+}
+const drFor = ref<CutItem>()
+const drOpen = computed({ get: () => !!drFor.value, set: (x) => !x && (drFor.value = undefined) })
+const drf = reactive({ outcome: 'paid' as string | number | undefined, points: undefined as number | undefined, note: '' })
+function openDr(c: CutItem) {
+  Object.assign(drf, { outcome: 'paid', points: c.dispute?.points, note: '' })
+  drAct.fieldErrors.value = {}
+  drFor.value = c
+}
+const drAct = useAction(claimCutApi.recordDisputeResult, { success: (c) => `已記錄爭議審議結果：${c.disputeResultText}` })
+async function submitDr() {
+  if (drFor.value && (await drAct.run(drFor.value.id, { outcome: drf.outcome as 'paid' | 'rejected', points: Number(drf.points), note: drf.note }))) drFor.value = undefined
+}
 </script>
 
 <template>
   <UQueryState :loading="loading && !v" :ready="!!v">
     <div v-if="v" class="space-y-3 text-sm">
       <section class="overflow-x-auto rounded-md border border-slate-200 bg-white p-3">
-        <h3 class="mb-1 font-semibold text-slate-700">每月核減率<span class="ml-2 text-xs font-normal text-slate-500">淨核減＝核減 − 申復補付；核減率＝淨核減 ÷ 申報點數</span></h3>
+        <h3 class="mb-1 font-semibold text-slate-700">每月核減率<span class="ml-2 text-xs font-normal text-slate-500">淨核減＝核減 − 補付（申復、爭議審議）；核減率＝淨核減 ÷ 申報點數</span></h3>
         <table class="w-full text-sm">
           <thead class="text-xs text-slate-500"><tr><th class="py-1 text-left">月份</th><th class="text-left">類別</th><th class="text-right">申報</th><th class="text-right">核減</th><th class="text-right">補付</th><th class="text-right">淨核減</th><th class="text-right">核減率</th><th class="text-right">待處理</th></tr></thead>
           <tbody class="divide-y divide-slate-100">
@@ -70,7 +96,15 @@ async function submitRes() {
           <div class="text-xs text-slate-700">{{ c.item }}・{{ c.codeLabel }}<template v-if="c.reason">：{{ c.reason }}</template></div>
           <div v-if="c.replyText" class="text-xs text-slate-600">主治回覆：{{ c.replyText }}</div>
           <div v-if="c.resultText" class="text-xs" :class="c.status === 'paid' ? 'text-emerald-700' : 'text-red-700'">申復結果：{{ c.resultText }}</div>
-          <div v-if="c.status === 'appealed' && v.canManage" class="mt-1 text-right"><UButton size="sm" @click="openRes(c)">記錄申復結果</UButton></div>
+          <div v-if="c.disputeText" class="text-xs text-purple-800">爭議審議：{{ c.disputeText }}</div>
+          <div v-if="c.disputeResultText" class="text-xs" :class="c.status === 'disputePaid' ? 'text-emerald-700' : 'text-red-700'">爭議審議結果：{{ c.disputeResultText }}</div>
+          <div v-if="c.canDispute" class="text-xs text-amber-800">申復後還有 {{ fmt(c.disputeLeft) }} 點沒補回：{{ c.disputeDeadline }} 前可申請爭議審議</div>
+          <div v-else-if="c.disputeWhy?.startsWith('超過')" class="text-xs text-slate-400">{{ c.disputeWhy }}</div>
+          <div v-if="v.canManage && (c.status === 'appealed' || c.canDispute || c.status === 'disputed')" class="mt-1 flex justify-end gap-2">
+            <UButton v-if="c.status === 'appealed'" size="sm" @click="openRes(c)">記錄申復結果</UButton>
+            <UButton v-if="c.canDispute" size="sm" variant="secondary" @click="openDisp(c)">申請爭議審議</UButton>
+            <UButton v-if="c.status === 'disputed'" size="sm" @click="openDr(c)">記錄爭議審議結果</UButton>
+          </div>
         </li>
       </ul>
     </div>
@@ -99,6 +133,27 @@ async function submitRes() {
       <template #footer>
         <UButton variant="secondary" @click="resFor = undefined">取消</UButton>
         <UButton type="submit" :loading="resAct.pending.value">記錄</UButton>
+      </template>
+    </UDialog>
+    <UDialog v-model="dispOpen" :title="`爭議審議：${dispFor?.patientName ?? ''} ${dispFor?.item ?? ''}`" size="md" @submit="submitDisp">
+      <div v-if="dispFor" class="space-y-3 text-sm">
+        <p class="text-xs text-slate-600">申請點數：還沒補回的 <b>{{ fmt(dispFor.disputeLeft) }}</b> 點・期限 {{ dispFor.disputeDeadline }}・一筆只能申請一次</p>
+        <UTextarea v-model="df.reason" label="爭議理由（預帶主治的申復理由，可補充病歷佐證）" :error="dispAct.fieldErrors.value.reason" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="dispFor = undefined">取消</UButton>
+        <UButton type="submit" :loading="dispAct.pending.value">申請</UButton>
+      </template>
+    </UDialog>
+    <UDialog v-model="drOpen" :title="`爭議審議結果：${drFor?.patientName ?? ''} ${drFor?.item ?? ''}`" size="sm" @submit="submitDr">
+      <div class="space-y-3 text-sm">
+        <USelect v-model="drf.outcome" label="審定結果" :options="[{ label: '補付', value: 'paid' }, { label: '駁回', value: 'rejected' }]" :error="drAct.fieldErrors.value.outcome" />
+        <UInput v-if="drf.outcome === 'paid'" v-model="drf.points" type="number" :label="`補付點數（最多 ${drFor?.dispute?.points ?? 0}）`" :error="drAct.fieldErrors.value.points" />
+        <UInput v-else v-model="drf.note" label="駁回理由（審定書上的）" :error="drAct.fieldErrors.value.note" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="drFor = undefined">取消</UButton>
+        <UButton type="submit" :loading="drAct.pending.value">記錄</UButton>
       </template>
     </UDialog>
   </UQueryState>

@@ -75,6 +75,7 @@ const todos = computed<Todo[]>(() => {
     ...(s.value.preAuthToSubmit !== undefined ? [{ roles: ['clerk', 'admin'], label: '事前審查待送審', count: s.value.preAuthToSubmit ?? 0, hint: s.value.preAuthOverdue ? `另有 ${s.value.preAuthOverdue} 件審查超過 14 天沒結果` : '主治已填好的送審單：送審（健保申報「事前審查」）', route: 'claims', icon: ShieldAlert, urgent: !!s.value.preAuthOverdue }] : []),
     { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
     ...(s.value.claimCutsAppealed !== undefined ? [{ roles: ['clerk', 'admin'], label: '申復結果待記錄', count: s.value.claimCutsAppealed ?? 0, hint: '醫師已申復的核減：健保署結果回來後記補付或維持（健保申報「核減與申復」）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
+    ...(s.value.claimDisputes ? [{ roles: ['clerk', 'admin'], label: '爭議審議', count: s.value.claimDisputes, hint: '申復後仍維持核減（或只補付一部分）：60 天內可申請爭議審議；審議中的結果回來要記錄（健保申報「核減與申復」）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },
