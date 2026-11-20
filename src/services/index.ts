@@ -43,6 +43,7 @@ import * as claim from './claim'
 import * as claimCut from './claim-cut'
 import * as preauth from './preauth'
 import * as drg from './drg'
+import * as coding from './coding'
 import * as line from './line'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
@@ -134,6 +135,7 @@ export const claimApi = overNetwork(claim)
 export const claimCutApi = overNetwork(claimCut)
 export const preAuthApi = overNetwork(preauth)
 export const drgApi = overNetwork(drg)
+export const codingApi = overNetwork(coding)
 export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
 export const nutritionApi = overNetwork(nutrition)
@@ -348,6 +350,7 @@ export type { ClaimBoard, ClaimBoardRow } from './claim'
 export type { CutBoard, CutItem, CutMonth } from './claim-cut'
 export type { PreAuthView } from './preauth'
 export type { DrgEstimate } from './drg'
+export type { CodingItem } from './coding'
 export type { ImplantCard, PatientImplants } from './implant'
 export type { ImplantBoard, ImplantOption, LotItem, LotRecallItem } from './implant'
 export type { LineView, LineInput, WardLineStats } from './line'

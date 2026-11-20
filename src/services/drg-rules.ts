@@ -30,6 +30,13 @@ export const DRG_OTHER_MEDICAL = g('D999M', '其他內科', 15000)
 /** 全部的組（主檔畫面、測試） */
 export const DRG_TABLE: DrgGroup[] = [...RULES.flatMap((r) => (r.cc ? r.cc : [r.group!])), DRG_OTHER_SURGICAL, DRG_OTHER_MEDICAL]
 
+/** 次診斷最多幾個 */
+export const SECONDARY_MAX = 8
+/** 次診斷欄位（新病摘才有；沒有＝undefined，退回看病史） */
+export const secondaryFrom = (a: { coding?: { secondary?: { icd: string }[] }; dischargeSummary?: { secondaryDiagnoses?: { icd: string }[] } }) => (a.coding?.secondary ?? a.dischargeSummary?.secondaryDiagnoses)?.map((x) => x.icd)
+/** 病史裡屬於 DRG 合併症的診斷碼（寫病摘時建議加入次診斷） */
+export const ccCodesIn = (codes: string[], main: string): string[] => [...new Set(codes.map(dxCode).filter((c) => c && c !== dxCode(main) && DRG_CC.some((x) => c.startsWith(x.prefix) && !dxCode(main).startsWith(x.prefix))))]
+
 /** 算合併症的次診斷（代碼前綴）：糖尿病、慢性腎臟病、心衰竭、慢性阻塞性肺病、癌症 */
 export const DRG_CC: { prefix: string; label: string }[] = [
   { prefix: 'E11', label: '糖尿病' }, { prefix: 'E10', label: '糖尿病' }, { prefix: 'N18', label: '慢性腎臟病' }, { prefix: 'I50', label: '心衰竭' }, { prefix: 'J44', label: '慢性阻塞性肺病' }, { prefix: 'C', label: '癌症' },
@@ -42,23 +49,27 @@ export interface DrgResult extends DrgGroup {
   basis: string
   /** 算進來的合併症 */
   cc: string[]
+  /** 合併症依次診斷，還是依病史推估 */
+  ccSource: 'secondary' | 'history'
 }
 /**
  * 分組：主手術（做完的手術，第一個在分組表的）→ 主診斷 → 其他外科／其他內科。
  * 合併症：主診斷以外，病人曾有的診斷碼裡有 DRG_CC 的（同一類只算一次）；65 歲以上視同有合併症
  */
-export function groupDrg(input: { mainDiagnosis: string; doneProcs: { id: string; name: string }[]; history: string[]; age: number }): DrgResult {
+export function groupDrg(input: { mainDiagnosis: string; doneProcs: { id: string; name: string }[]; history: string[]; age: number; secondary?: string[] }): DrgResult {
   const main = dxCode(input.mainDiagnosis)
-  const cc = [...new Set(input.history.map(dxCode).filter((c) => c && c !== main).flatMap((c) => DRG_CC.filter((x) => c.startsWith(x.prefix) && !main.startsWith(x.prefix)).map((x) => x.label)))]
+  // 有次診斷欄位（新病摘）只看次診斷；沒有（舊病摘、住院中還沒寫）退回看病史推估
+  const bySecondary = input.secondary !== undefined
+  const cc = [...new Set((bySecondary ? input.secondary! : input.history).map(dxCode).filter((c) => c && c !== main).flatMap((c) => DRG_CC.filter((x) => c.startsWith(x.prefix) && !main.startsWith(x.prefix)).map((x) => x.label)))]
   const heavy = cc.length > 0 || input.age >= 65
   const pick = (r: Rule) => (r.cc ? r.cc[heavy ? 0 : 1] : r.group!)
-  const why = (k: string) => `${k}${cc.length ? `；合併症：${cc.join('、')}` : ''}${input.age >= 65 ? `；${input.age} 歲` : ''}`
+  const why = (k: string) => `${k}${cc.length ? `；合併症${bySecondary ? '' : '（依病史推估）'}：${cc.join('、')}` : ''}${input.age >= 65 ? `；${input.age} 歲` : ''}`
   const sp = input.doneProcs.find((p) => RULES.some((r) => r.surgical?.includes(p.id)))
-  if (sp) return { ...pick(RULES.find((r) => r.surgical?.includes(sp.id))!), basis: why(`主手術 ${sp.name}`), cc }
-  if (input.doneProcs.length) return { ...DRG_OTHER_SURGICAL, basis: why(`主手術 ${input.doneProcs[0].name}（不在分組表）`), cc }
+  if (sp) return { ...pick(RULES.find((r) => r.surgical?.includes(sp.id))!), basis: why(`主手術 ${sp.name}`), cc, ccSource: bySecondary ? 'secondary' : 'history' }
+  if (input.doneProcs.length) return { ...DRG_OTHER_SURGICAL, basis: why(`主手術 ${input.doneProcs[0].name}（不在分組表）`), cc, ccSource: bySecondary ? 'secondary' : 'history' }
   const dx = RULES.find((r) => r.dx?.some((p) => main.startsWith(p)))
-  if (dx) return { ...pick(dx), basis: why(`主診斷 ${main}`), cc }
-  return { ...DRG_OTHER_MEDICAL, basis: why(main ? `主診斷 ${main} 不在分組表` : '沒有主診斷'), cc }
+  if (dx) return { ...pick(dx), basis: why(`主診斷 ${main}`), cc, ccSource: bySecondary ? 'secondary' : 'history' }
+  return { ...DRG_OTHER_MEDICAL, basis: why(main ? `主診斷 ${main} 不在分組表` : '沒有主診斷'), cc, ccSource: bySecondary ? 'secondary' : 'history' }
 }
 
 /** 不適用 DRG（照實申報）：日間手術、住院超過 30 天、死亡、轉院、自動出院 */
@@ -90,10 +101,10 @@ export function drgAlert(actual: number, g: Pick<DrgGroup, 'upper'>): { pct: num
 // ---------- 分組輸入（純函式：服務層用 db、種子用建立中的陣列，算法一樣） ----------
 
 type Enc = { patientId: string; diagnoses: { icd: string }[] }
-type Adm = { id: string; patientId: string; status: string; diagnosis: string; dischargeSummary?: { diagnosis?: string } }
+type Adm = { id: string; patientId: string; status: string; diagnosis: string; dischargeSummary?: { diagnosis?: string }; coding?: { mainDiagnosis: string } }
 type Sg = { admissionId: string; status: string; procId: string; endAt?: string }
-/** 主診斷：出院病摘（寫了的話）；否則入院診斷 */
-export const mainDiagnosisFrom = (a: Pick<Adm, 'diagnosis' | 'dischargeSummary'>) => (a.dischargeSummary?.diagnosis?.trim() || a.diagnosis || '').trim()
+/** 主診斷：編碼審查過的；否則出院病摘（寫了的話）；否則入院診斷 */
+export const mainDiagnosisFrom = (a: Pick<Adm, 'diagnosis' | 'dischargeSummary' | 'coding'>) => (a.coding?.mainDiagnosis || a.dischargeSummary?.diagnosis?.trim() || a.diagnosis || '').trim()
 /** 病人曾有的診斷（門診病歷的診斷、其他住院的主診斷）：算合併症用 */
 export const historyFrom = (encs: Enc[], adms: Adm[], patientId: string, exceptAdmissionId: string): string[] => [
   ...encs.filter((e) => e.patientId === patientId).flatMap((e) => e.diagnoses.map((d) => d.icd)),

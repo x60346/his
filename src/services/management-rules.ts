@@ -1,6 +1,9 @@
 // 經營月報（純函式）：月份的期間、前後月份、指標清單與單位、和比較月份的增減。服務層、畫面、Excel 匯出共用
 import { addDays } from '@/utils/date'
 
+/** 病例組合指數（CMI）：DRG 案件的平均相對權重（兩位小數）；沒有 DRG 案件＝null */
+export const cmiOf = (weights: number[]): number | null => (weights.length ? Math.round((weights.reduce((a, b) => a + b, 0) / weights.length) * 100) / 100 : null)
+
 /** 某月的期間：月初到月底（本月只到今天，partial） */
 export function monthRange(month: string, today: string): { from: string; to: string; partial: boolean } {
   const from = `${month}-01`
@@ -16,7 +19,7 @@ export function shiftMonth(month: string, n: number): string {
 }
 
 export type MgmtKey =
-  | 'opdVisits' | 'opdFirst' | 'opdRevisit' | 'admissions' | 'discharges' | 'patientDays' | 'occupancy' | 'alos' | 'abxDdd'
+  | 'opdVisits' | 'opdFirst' | 'opdRevisit' | 'admissions' | 'discharges' | 'patientDays' | 'occupancy' | 'alos' | 'abxDdd' | 'cmi'
   | 'collected' | 'revenueOpd' | 'revenueIpd' | 'revenueOther' | 'nhiPoints' | 'drugShare' | 'labReports' | 'imagingReports' | 'prescriptions'
 
 /** 指標：名稱、單位、分組（畫面與 Excel 摘要依這個順序） */
@@ -30,6 +33,7 @@ export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門
   { key: 'occupancy', label: '佔床率', unit: '%', group: '住院' },
   { key: 'alos', label: '平均住院天數', unit: '天', group: '住院' },
   { key: 'abxDdd', label: '抗生素用量', unit: 'DDD/千人日', group: '住院' },
+  { key: 'cmi', label: '病例組合指數（CMI）', unit: 'RW', group: '住院' },
   { key: 'collected', label: '實收（日結）', unit: '元', group: '收入' },
   { key: 'revenueOpd', label: '門診收入（應收）', unit: '元', group: '收入' },
   { key: 'revenueIpd', label: '住院收入（應收）', unit: '元', group: '收入' },
@@ -46,6 +50,8 @@ export function mgmtValueText(v: number | null | undefined, unit: string): strin
   if (v === null || v === undefined) return '—'
   if (unit === '%') return `${v.toFixed(1)}%`
   if (unit === '天' || unit === 'DDD/千人日') return v.toFixed(1)
+  // 病例組合指數：平均相對權重，兩位小數
+  if (unit === 'RW') return v.toFixed(2)
   return v.toLocaleString()
 }
 
@@ -57,6 +63,7 @@ export function mgmtChangeText(cur: number | null | undefined, base: number | nu
   const d = cur - base
   const sign = d > 0 ? '+' : d < 0 ? '−' : '±'
   if (unit === '%') return `${sign}${Math.abs(d).toFixed(1)} 百分點`
+  if (unit === 'RW') return `${sign}${Math.abs(d).toFixed(2)}`
   if (base === 0) return d === 0 ? '±0' : `${sign}${Math.abs(d).toLocaleString()}`
   return `${sign}${Math.abs((d / base) * 100).toFixed(1)}%`
 }

@@ -1445,6 +1445,11 @@ export interface Admission {
   interim?: IpdInterimPayment[]
   /** 退還期中繳款（出院結帳時多繳的） */
   interimRefunds?: IpdInterimRefund[]
+  /**
+   * 疾病分類編碼審查（病歷管理師，出院後）：確認或修改主診斷與次診斷（DRG、申報以這裡為準）；
+   * 改了要寫理由，主治已讀（可寫意見）。secondary 沒有＝沿用病摘（舊病摘沒有次診斷時，DRG 退回看病史）
+   */
+  coding?: { at: string; by: string; mainDiagnosis: string; secondary?: { icd: string; name: string }[]; changed: boolean; reason?: string; before?: { main: string; secondary: { icd: string; name: string }[] }; ack?: { at: string; by: string; note?: string } }
 }
 
 /**
@@ -1517,8 +1522,10 @@ export interface Consult {
 
 /** 出院病摘 */
 export interface DischargeSummary {
-  /** 出院診斷（預設帶入院診斷，醫師可改） */
+  /** 出院診斷（主診斷，預設帶入院診斷，醫師可改） */
   diagnosis: string
+  /** 次診斷（ICD 主檔選，最多 8 個）：DRG 合併症看這裡；這個欄位之前寫的病摘沒有（DRG 退回看病史推估） */
+  secondaryDiagnoses?: { icd: string; name: string }[]
   /** 住院經過 */
   course: string
   /** 出院時狀況 */

@@ -16985,7 +16985,7 @@ try {
     await as('clerk02')
     let b0 = await C.claimBoard('ipd', M0)
     const day = b0.rows.find((r) => r.refId === 'A-DAY-1')
-    ok(day && day.caseType === 'DAY' && day.caseLabel === '日間手術' && day.categories.implant > 0 && day.categories.surgery > 0 && !day.categories.ward && !day.problems.length, '這個月：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘）')
+    ok(day && day.caseType === 'DAY' && day.caseLabel === '日間手術' && day.categories.implant > 0 && day.categories.surgery > 0 && !day.categories.ward && day.problems.length === 1 && day.problems[0].includes('編碼'), '這個月：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘；剛出院還沒編碼審查）')
     // 檢核（測試輔助製造問題）
     const r1 = b.rows[0]
     const a1 = db().admissions.find((a) => a.id === r1.refId)
@@ -17490,6 +17490,150 @@ try {
     ok(d1.drgOver === (d0.drgOver ?? 0) + (e.alert.level === 'over' ? 0 : 1), '主治首頁：住院點數超過 DRG 上限')
     const o = await api.ipdApi.addOrder({ admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P003', content: '', dose: 1, freq: 'STAT' })
     ok(!!o.id, '只提示：超過上限照常開醫囑')
+  }
+  // 次診斷：病史裡的合併症建議、DRG 只看次診斷（沒有欄位退回病史推估）、編碼優先；出院病摘存次診斷（主檔碼、重複、和主診斷同碼、上限）
+  console.log('\n[次診斷]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(api.ccCodesIn(['E11.9', 'J18.9', 'N18.3', 'E11.9', 'I10'], 'J18.9 肺炎').join() === 'E11.9,N18.3', '病史裡的合併症（不含主診斷、重複、非合併症）')
+    const G = (secondary) => api.groupDrg({ mainDiagnosis: 'J18.9 肺炎', doneProcs: [], history: ['E11.9'], age: 40, secondary })
+    ok(G(undefined).code === 'D089A' && G(undefined).basis.includes('依病史推估') && G(undefined).ccSource === 'history' && G([]).code === 'D089B' && G([]).ccSource === 'secondary' && G(['N18.3']).cc[0] === '慢性腎臟病' && !G(['N18.3']).basis.includes('推估'), 'DRG 合併症：有次診斷欄位只看次診斷；沒有才看病史（標「依病史推估」）')
+    ok(api.secondaryFrom({ coding: { secondary: [{ icd: 'A' }] }, dischargeSummary: { secondaryDiagnoses: [{ icd: 'B' }] } }).join() === 'A' && api.secondaryFrom({ dischargeSummary: {} }) === undefined, '次診斷：編碼審查過的優先')
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !x.day && !x.death && !x.dischargeSummary && !x.deptTransfers?.some((t) => t.status === 'pending'))
+    db().encounters.push({ id: 'EN-T-CC', visitId: 'x', patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: '2026-01-01', subjective: '', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'E11.9', name: '第二型糖尿病', primary: true }], medications: [], procedures: [], refillTimes: 0, admissionRequested: false, status: 'completed' })
+    await as(db().users.find((u) => u.doctorId === a.doctorId).username)
+    const sg = await api.drgApi.ccSuggestions(a.id)
+    ok(sg.some((x) => x.icd === 'E11.9' && x.name), `寫病摘時建議加入：${sg.map((x) => x.icd).join('、')}`)
+    const main = db().icdCodes.find((c) => a.diagnosis.startsWith(c.code))?.code ?? 'J18.9'
+    const base = { diagnosis: a.diagnosis, course: 'x', condition: 'x', followUp: 'x', dischargeType: '改善出院' }
+    let f = await fieldsOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: [{ icd: 'ZZZ', name: '' }] }, false))
+    ok(f.secondaryDiagnoses?.includes('不是可用'), '次診斷要是主檔的碼')
+    f = await fieldsOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: [{ icd: 'E11.9', name: '' }, { icd: 'E11.9', name: '' }] }, false))
+    ok(f.secondaryDiagnoses?.includes('重複'), '不能重複')
+    f = await fieldsOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: [{ icd: main, name: '' }] }, false))
+    ok(f.secondaryDiagnoses?.includes('主診斷'), '不能和主診斷同碼')
+    const nine = db().icdCodes.filter((c) => c.active !== false && c.code !== main).slice(0, 9).map((c) => ({ icd: c.code, name: '' }))
+    f = await fieldsOf(() => api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: nine }, false))
+    ok(f.secondaryDiagnoses?.includes('最多 8'), '最多 8 個')
+    const ds = await api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: [{ icd: 'E11.9', name: '亂寫' }] }, false)
+    ok(ds.secondaryDiagnoses.length === 1 && ds.secondaryDiagnoses[0].name !== '亂寫', '存次診斷：名稱照主檔')
+    let e = await api.drgApi.drgEstimate(a.id)
+    ok(e.group.ccSource === 'secondary' && e.group.cc.includes('糖尿病') && !e.group.basis.includes('推估'), `預估 DRG 改看次診斷：${e.group.basis}`)
+    await api.ipdApi.saveDischargeSummary(a.id, { ...base, secondaryDiagnoses: [] }, false)
+    e = await api.drgApi.drgEstimate(a.id)
+    ok(e.group.ccSource === 'secondary' && !e.group.cc.length, '次診斷拿掉：病史裡的糖尿病也不算')
+  }
+  // 編碼審查：清單（待審查、逾時）、權限、首頁；確認不改、修改要理由（修改前後 DRG）、申報以編碼為準、主治已讀；不能重複、還沒出院不行
+  console.log('\n[編碼審查]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.codingApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(db().admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && a.dischargedAt.slice(0, 10) < addDaysT(-7)).every((a) => a.coding && !a.coding.changed), '種子：出院超過 7 天的都審查過（照病摘確認）')
+    await as('clerk02')
+    ok((await errOf(() => C.codingQueue())).includes('疾病分類') && (await api.dashboardApi.getDashboard()).codingDue === undefined, '沒有「疾病分類」權限看不到')
+    // 測試輔助：一筆舊的退回成還沒審查（逾時）
+    const old = db().admissions.find((a) => a.status === 'discharged' && a.coding && !a.day && a.dischargeSummary)
+    delete old.coding
+    await as('clerk01')
+    let q = await C.codingQueue()
+    const d0 = await api.dashboardApi.getDashboard()
+    ok(q.canCode && q.todo[0].admissionId === old.id && q.todo[0].overdue && d0.codingDue === q.todo.length && d0.codingOverdue >= 1, `待審查 ${q.todo.length} 位：出院超過 7 天的排最前、標紅；首頁`)
+    const it = q.todo[0]
+    const mainCode = it.mainDiagnosis.match(/^[A-Z][0-9][0-9A-Z.]*/)[0]
+    // 申報：還沒審查擋
+    await as('clerk02')
+    const M = old.dischargedAt.slice(0, 7)
+    let b = await api.claimApi.claimBoard('ipd', M)
+    const sub = !!b.submitted
+    if (!sub) ok(b.rows.find((r) => r.refId === old.id).problems.some((p) => p.includes('編碼')), '住院申報：編碼還沒審查是檢核問題')
+    else ok(true, '（那個月已送出，略過申報檢核）')
+    await as('clerk01')
+    // 試算與修改
+    const other = db().icdCodes.find((c) => c.active !== false && c.code.startsWith('A41')) ?? db().icdCodes.find((c) => c.active !== false && c.code !== mainCode)
+    const pv = await C.previewCoding(old.id, { mainIcd: other.code, secondary: [] })
+    ok(pv.code, `試算：改成 ${other.code} 會分到 ${pv.code}`)
+    let f = await fieldsOf(() => C.confirmCoding(old.id, { mainIcd: other.code, secondary: [] }))
+    ok(f.reason, '改了編碼要寫理由')
+    const r = await C.confirmCoding(old.id, { mainIcd: other.code, secondary: [], reason: '血液培養陽性，主診斷應為敗血症' })
+    const a2 = db().admissions.find((a) => a.id === old.id)
+    ok(r.item.coded.changed && a2.coding.before.main && r.drgAfter.code === pv.code && db().auditLogs[0].action === '編碼修改' && db().auditLogs[0].detail.includes('DRG'), `修改：DRG ${r.drgBefore.code} → ${r.drgAfter.code}、稽核`)
+    ok((await errOf(() => C.confirmCoding(old.id, { mainIcd: other.code, secondary: [] }))).includes('審查過'), '不能重複審查')
+    if (!sub) {
+      await as('clerk02')
+      b = await api.claimApi.claimBoard('ipd', M)
+      const row = b.rows.find((x) => x.refId === old.id)
+      ok(row.diagnosis.startsWith(other.code) && !row.problems.some((p) => p.includes('編碼')), '申報：主診斷照編碼、不再擋')
+      await as('clerk01')
+    }
+    // 確認不改
+    const keep = (await C.codingQueue()).todo.find((x) => db().icdCodes.some((c) => c.active !== false && x.mainDiagnosis.startsWith(c.code + ' ')))
+const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().icdCodes.some((c) => x.mainDiagnosis.startsWith(c.code + ' ')))
+    if (bad) ok((await fieldsOf(() => C.confirmCoding(bad.admissionId, { mainIcd: bad.mainDiagnosis.split(' ')[0], secondary: [] }))).mainIcd?.includes('不是 ICD 主檔'), `病摘的主診斷碼不在主檔（${bad.mainDiagnosis.split(' ')[0]}）：要重新選`)
+    if (keep) {
+      const kc = keep.mainDiagnosis.match(/^[A-Z][0-9][0-9A-Z.]*/)[0]
+      const r2 = await C.confirmCoding(keep.admissionId, { mainIcd: kc, secondary: keep.secondary })
+      ok(!r2.item.coded.changed && db().auditLogs[0].action === '編碼確認', '照病摘確認：不用理由、不通知主治')
+    }
+    ok((await errOf(() => C.confirmCoding(db().admissions.find((a) => a.status === 'admitted').id, { mainIcd: other.code, secondary: [] }))).includes('出院後'), '還沒出院不能審查')
+    // 主治
+    const doc = db().users.find((u) => u.doctorId === old.doctorId).username
+    await as(doc)
+    ok((await api.dashboardApi.getDashboard()).codingChanged >= 1 && (await C.myCodingChanges())[0].admissionId === old.id, '主治首頁：編碼已修改；清單未讀在前')
+    const otherDoc = db().users.find((u) => u.doctorId && u.doctorId !== old.doctorId && u.active).username
+    await as(otherDoc)
+    ok((await errOf(() => C.ackCoding(old.id))).includes('主治'), '別的醫師不能讀')
+    await as(doc)
+    const ak = await C.ackCoding(old.id, '同意，謝謝')
+    ok(ak.coded.ack.includes('同意') && (await errOf(() => C.ackCoding(old.id))).includes('讀過'), '主治已讀（寫意見）、不能重複')
+    await as('clerk01')
+    ok((await C.codingQueue()).done.find((x) => x.admissionId === old.id).coded.ack.includes('同意'), '病歷管理師看得到主治的意見')
+    const { readFileSync } = await import('node:fs')
+    ok(!/groupDrg|dxCode|db\./.test(readFileSync('src/pages/claim/CodingPage.vue', 'utf8')), 'DRG 試算由服務層算')
+  }
+  // 病例組合指數（CMI）：平均權重、顯示與增減；經營月報（指標、近 12 個月、DRG 表權重與平均住院日、Excel DRG 工作表）；住院申報同一個數
+  console.log('\n[病例組合指數]')
+  {
+    resetDb('small')
+    ok(api.cmiOf([1, 1.5]) === 1.25 && api.cmiOf([]) === null && api.mgmtValueText(1.234, 'RW') === '1.23' && api.mgmtChangeText(1.2, 1, 'RW') === '+0.20' && api.MGMT_KPIS.some((k) => k.key === 'cmi' && k.group === '住院'), 'CMI：平均權重兩位小數、增減寫差多少、經營月報住院指標')
+    await as('clerk02')
+    let M, cb
+    for (const m of (await api.claimApi.claimBoard('ipd')).months.map((x) => x.month)) {
+      const b = await api.claimApi.claimBoard('ipd', m)
+      if (b.totals.drg?.count) { M = m; cb = b; break }
+    }
+    await as('admin')
+    const r = await api.managementApi.managementReport(M)
+    const w = r.drg.rows.reduce((n, d) => n + d.weight * d.count, 0) / r.drg.rows.reduce((n, d) => n + d.count, 0)
+    ok(r.current.cmi === Math.round(w * 100) / 100 && r.current.cmi === cb.totals.drg.cmi, `${M} CMI ${r.current.cmi}：經營月報和住院申報同一個數`)
+    ok(r.trend.length === 12 && r.trend.at(-1).cmi === r.current.cmi && r.drg.rows.every((d) => d.weight > 0 && d.alos > 0), '近 12 個月有 CMI；DRG 表有權重與平均住院日')
+    const bytes = api.managementXlsx(r)
+    ok(Buffer.from(bytes).toString('utf8').includes('name="DRG"'), '經營月報 Excel 多一張 DRG 工作表')
   }
 } catch (e) {
   failed++

@@ -33,6 +33,7 @@ export type PermKey =
   | 'pathology'
   | 'cssd'
   | 'nhi.claim'
+  | 'coding'
   | 'rrt'
   | 'palliative'
   | 'mortality.review'
@@ -85,6 +86,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'icu.attending', group: '住院', label: '加護病房主治', covers: '同意或不同意轉入加護病房、排加護病房的床、看全院的轉入申請', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給加護病房主治醫師：指定給個人（示範 dr03）。管理員只能看，同意要醫師' },
   { key: 'anesthesia', group: '住院', label: '麻醉', covers: '麻醉前評估（ASA、呼吸道、禁食、病史、麻醉計畫）、術中麻醉紀錄、恢復室轉出放行', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給麻醉科醫師：指定給個人（示範 dr03，加護病房團隊兼麻醉）。管理員只能看，評估與紀錄要醫師' },
   { key: 'pathology', group: '住院', label: '病理', covers: '手術病理檢體收件（醫檢師，逐件核對）、發病理報告（醫師）、看全院的病理檢體與報告', candidates: ['lab', 'doctor', 'admin'], defaults: ['admin'], grantable: true, note: '沒有病理科：收件指定給醫檢師（示範 lab01）、報告指定給醫師（示範 dr10）。管理員只能看' },
+  { key: 'coding', group: '系統', label: '疾病分類', covers: '出院後編碼審查：確認或修改主診斷與次診斷（影響 DRG 與申報），改了要寫理由、主治已讀', candidates: ['admin', 'clerk'], defaults: ['admin'], grantable: true, note: '交給病歷管理師：指定給個人（示範 clerk01）' },
   { key: 'nhi.claim', group: '系統', label: '健保申報', covers: '門診、住院每月申報（檢核、註記排除、送出鎖定、匯出）、輸入核減與申復結果、看核減率', candidates: ['admin', 'clerk'], defaults: ['admin'], grantable: true, note: '交給申報組：指定給個人（示範 clerk02 櫃台組長兼申報）' },
   { key: 'cssd', group: '住院', label: '供應中心', covers: '登記滅菌鍋次（化學指示劑）、判讀生物指示劑、召回追蹤（通知主刀與感控）、收回過期與召回的器械包', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師（手術中掃包號不用這個權限）；要只交給供應中心：先指定給個人，再把角色取消' },
   { key: 'rrt', group: '住院', label: '快速反應小組', covers: '看全院的快速反應呼叫（NEWS2 ≥7 自動、護理師手動）、到場評估（留原病房或申請轉加護病房）', candidates: ['doctor', 'admin'], defaults: ['admin'], grantable: true, note: '交給快速反應小組的醫師（多半是加護病房團隊）：指定給個人（示範 dr03）。管理員只能看，評估要醫師' },

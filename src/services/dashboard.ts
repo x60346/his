@@ -26,6 +26,7 @@ import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
 import { preAuthCounts } from './preauth-work'
+import { codingCounts } from './coding-work'
 import { drgAlertCounts } from './drg-work'
 import { dayCounts, delayCounts, surgeryOf, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
@@ -290,6 +291,10 @@ export interface DashboardStats {
   claimCutsAppealed?: number
   /** 事前審查：主治待填寫（含補件）；申報組待送審、審查中超過 14 天 */
   preAuthToFill?: number
+  /** 疾病分類：主治編碼修改未讀；病歷管理師待審查、出院超過 7 天還沒審查 */
+  codingChanged?: number
+  codingDue?: number
+  codingOverdue?: number
   /** DRG：我主治的住院，點數接近上限（80% 以上）、超過上限 */
   drgNear?: number
   drgOver?: number
@@ -411,6 +416,7 @@ export function getDashboard(): Promise<DashboardStats> {
           delaySurgeonUnread: delayCounts(me.doctorId).unread,
           claimCutsToReply: db.claimCuts.filter((c) => c.doctorId === me.doctorId && !c.reply).length,
           preAuthToFill: preAuthCounts(now(), me.doctorId).toFill,
+          codingChanged: codingCounts(now(), me.doctorId).changed,
           ...((c) => ({ drgNear: c.near, drgOver: c.over }))(drgAlertCounts(me.doctorId)),
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
@@ -494,6 +500,7 @@ export function getDashboard(): Promise<DashboardStats> {
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       delayWardUnread: delayCounts().unread,
       implantCardDue: implantCardDueCount(today()),
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('coding') ? ((c) => ({ codingDue: c.due, codingOverdue: c.overdue }))(codingCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())) } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),

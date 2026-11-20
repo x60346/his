@@ -11,6 +11,8 @@ import { isObsBed } from './bed-work'
 import { givenAbxDoses } from './abx-metrics-work'
 import { perThousand } from './abx-metrics-rules'
 import { ipdItemOf } from './claim-work'
+import { DRG_TABLE } from './drg-rules'
+import { cmiOf } from './management-rules'
 
 const SEEN = new Set(['consulted', 'charged', 'dispensed'])
 
@@ -31,6 +33,8 @@ export interface MonthMetrics {
   occupancy: number | null
   /** 平均住院天數（這個月出院的人） */
   alos: number | null
+  /** 病例組合指數：這個月出院、已結帳、適用 DRG 的平均權重（和住院申報同一份分組） */
+  cmi: number | null
   /** 抗生素用量：這個月已給的抗生素 DDD ÷ 住院人日 × 1000（依給藥紀錄；和抗生素審核頁「指標」同一套算法，分母用本報表的住院人日） */
   abxDdd: number | null
   /** 實收（和日結同一個數） */
@@ -65,7 +69,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
   for (let d = from; d <= to; d = addDays(d, 1)) patientDays += stayed(d)
   const hasData = visits.length > 0 || charges.length > 0 || patientDays > 0
   const empty: MonthMetrics = {
-    month, from, to, hasData, opdVisits: null, opdFirst: null, opdRevisit: null, admissions: null, discharges: null, patientDays: null, occupancy: null, alos: null, abxDdd: null,
+    month, from, to, hasData, opdVisits: null, opdFirst: null, opdRevisit: null, admissions: null, discharges: null, patientDays: null, occupancy: null, alos: null, abxDdd: null, cmi: null,
     collected: null, revenueOpd: null, revenueIpd: null, revenueOther: null, nhiPoints: null, drugShare: null, labReports: null, imagingReports: null, prescriptions: null, byFeeType: null,
   }
   if (!hasData) return empty
@@ -83,6 +87,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
     occupancy: beds ? round1((patientDays / (beds * days)) * 100) : null,
     alos: disc.length ? round1(disc.reduce((n, a) => n + Math.max(1, diffDays(a.admittedAt!.slice(0, 10), a.dischargedAt!.slice(0, 10))), 0) / disc.length) : null,
     abxDdd: perThousand(givenAbxDoses(from, to).reduce((n, d) => n + d.ddd, 0), patientDays),
+    cmi: cmiOf(drgItems(from, to).flatMap((it) => (it.drg ? [DRG_TABLE.find((g) => g.code === it.drg!.code)?.weight ?? 0] : []))),
     collected: rep.collected,
     revenueIpd: sumDept((n) => n.endsWith('（住院）')),
     revenueOther: sumDept((n) => n === '病歷影本'),
@@ -110,25 +115,27 @@ export interface ManagementReport {
   opdByDoctor: { doctorName: string; deptName: string; visits: number }[]
   ipdByDept: { deptName: string; admissions: number; discharges: number; patientDays: number }[]
   /** DRG 盈虧（這個月出院、已結帳、適用 DRG 的）：每組幾筆、實際點數、給付點數、盈虧，賠最多的在前；不適用幾筆 */
-  drg: { rows: { code: string; name: string; count: number; actual: number; pay: number; diff: number }[]; exempt: number }
+  drg: { rows: { code: string; name: string; weight: number; count: number; actual: number; pay: number; diff: number; alos: number }[]; exempt: number }
   /** 近 12 個月（含本月，舊的在前） */
-  trend: { month: string; hasData: boolean; opdVisits: number | null; collected: number | null; occupancy: number | null }[]
+  trend: { month: string; hasData: boolean; opdVisits: number | null; collected: number | null; occupancy: number | null; cmi: number | null }[]
 }
 
 /** 這段期間出院、已結帳的住院：依 DRG 分組合計盈虧（和住院申報同一份算法） */
+const drgItems = (from: string, to: string) => db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && a.dischargedAt.slice(0, 10) >= from && a.dischargedAt.slice(0, 10) <= to).map(ipdItemOf).filter((x) => !!x)
 function drgByGroup(from: string, to: string): ManagementReport['drg'] {
-  const items = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && a.dischargedAt.slice(0, 10) >= from && a.dischargedAt.slice(0, 10) <= to).map(ipdItemOf).filter((x) => !!x)
-  const m = new Map<string, { code: string; name: string; count: number; actual: number; pay: number; diff: number }>()
+  const items = drgItems(from, to)
+  const m = new Map<string, { code: string; name: string; weight: number; count: number; actual: number; pay: number; diff: number; days: number }>()
   for (const it of items) {
     if (!it.drg) continue
-    const r = m.get(it.drg.code) ?? { code: it.drg.code, name: it.drg.name, count: 0, actual: 0, pay: 0, diff: 0 }
+    const r = m.get(it.drg.code) ?? { code: it.drg.code, name: it.drg.name, weight: DRG_TABLE.find((g) => g.code === it.drg!.code)?.weight ?? 0, count: 0, actual: 0, pay: 0, diff: 0, days: 0 }
     r.count++
     r.actual += Math.round(it.points)
     r.pay += it.drg.pay
     r.diff += it.drg.diff
+    r.days += it.days ?? 0
     m.set(it.drg.code, r)
   }
-  return { rows: [...m.values()].sort((a, b) => a.diff - b.diff), exempt: items.filter((x) => x.drgExempt).length }
+  return { rows: [...m.values()].map(({ days, ...r }) => ({ ...r, alos: round1(days / r.count) })).sort((a, b) => a.diff - b.diff), exempt: items.filter((x) => x.drgExempt).length }
 }
 
 /** 月報：月份 YYYY-MM，不能是未來 */
@@ -165,7 +172,7 @@ export function managementReport(month: string): Promise<ManagementReport> {
     const trend = Array.from({ length: 12 }, (_, i) => {
       const m = shiftMonth(month, i - 11)
       const x = i === 11 ? current : metricsOf(m, t)
-      return { month: m, hasData: x.hasData, opdVisits: x.opdVisits, collected: x.collected, occupancy: x.occupancy }
+      return { month: m, hasData: x.hasData, opdVisits: x.opdVisits, collected: x.collected, occupancy: x.occupancy, cmi: x.cmi }
     })
     return {
       month, from, to, partial, beds: wardBeds(), current,

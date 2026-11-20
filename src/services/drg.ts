@@ -2,7 +2,7 @@
 import { db } from '@/mock/db'
 import { now } from '@/utils/date'
 import { must, query, requireUser } from './http'
-import { drgAlert, drgPay, DRG_PAY_RULE_LABEL, DRG_TABLE, type DrgGroup, type DrgPayRule, type DrgResult } from './drg-rules'
+import { ccCodesIn, historyFrom, mainDiagnosisFrom, drgAlert, drgPay, DRG_PAY_RULE_LABEL, DRG_TABLE, type DrgGroup, type DrgPayRule, type DrgResult } from './drg-rules'
 import { drgExemptOf, drgOfAdmission } from './drg-work'
 import { ipdBillOf } from './ipd-bill'
 import { linePoints } from './claim-rules'
@@ -12,6 +12,15 @@ export function drgTable(): Promise<DrgGroup[]> {
   return query(() => {
     requireUser()
     return DRG_TABLE
+  })
+}
+
+/** 寫出院病摘時建議加入次診斷的：病人病史裡屬於 DRG 合併症的診斷（醫師勾選才算） */
+export function ccSuggestions(admissionId: string): Promise<{ icd: string; name: string }[]> {
+  return query(() => {
+    requireUser('doctor')
+    const a = must(find.admission(admissionId), '住院紀錄')
+    return ccCodesIn(historyFrom(db.encounters, db.admissions, a.patientId, a.id), mainDiagnosisFrom(a)).map((c) => ({ icd: c, name: db.icdCodes.find((k) => k.code === c)?.name ?? '' }))
   })
 }
 

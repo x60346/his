@@ -33,6 +33,7 @@ import type { TdmState } from './renal-rules'
 import { openPharmQuery, pharmBlocksUd } from './pharm-rules'
 import { newPharm, settlePharmOnChange } from './pharm-work'
 import { ensureDrugPreAuth } from './preauth-work'
+import { dxCode, SECONDARY_MAX } from './drg-rules'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -602,7 +603,7 @@ export function addProgressNote(input: Pick<ProgressNote, 'admissionId' | 'subje
 }
 
 // ---------- 出院病摘（醫師） ----------
-export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType' | 'meds' | 'chronicRx' | 'homeMedPlan'> & {
+export type DischargeSummaryInput = Pick<DischargeSummary, 'diagnosis' | 'course' | 'condition' | 'followUp' | 'dischargeType' | 'meds' | 'chronicRx' | 'homeMedPlan' | 'secondaryDiagnoses'> & {
   /** 出院帶藥有劑量偏高的，醫師已確認（不存進病摘） */
   confirmHighDose?: boolean
 }
@@ -642,10 +643,11 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     }
     const plan = Object.fromEntries(Object.entries(input.homeMedPlan ?? {}).filter(([id]) => homeItems.some((x) => x.id === id)).map(([id, v]) => [id, { resume: !!v.resume, ...(!v.resume && v.reason?.trim() ? { reason: v.reason.trim() } : {}) }]))
     const meds = dischargeMeds(input, sign)
+    const secondary = checkSecondary(input.diagnosis, input.secondaryDiagnoses)
     const t = now()
     const trim = (x: string) => x.trim()
     a.dischargeSummary = {
-      diagnosis: trim(input.diagnosis), course: trim(input.course), condition: trim(input.condition), followUp: trim(input.followUp),
+      diagnosis: trim(input.diagnosis), secondaryDiagnoses: secondary, course: trim(input.course), condition: trim(input.condition), followUp: trim(input.followUp),
       dischargeType: input.dischargeType, doctorId: user.doctorId ?? a.doctorId, writtenAt: t, ...(sign ? { signedAt: t } : {}),
       ...(meds.length ? { meds, ...(input.chronicRx ? { chronicRx: true } : {}) } : {}),
       ...(Object.keys(plan).length ? { homeMedPlan: plan } : {}),
@@ -653,6 +655,22 @@ export function saveDischargeSummary(admissionId: string, input: DischargeSummar
     audit(sign ? '准予出院' : '出院病摘草稿', `${a.admitNo} ${find.patient(a.patientId)?.name}${sign ? `（${input.dischargeType}）` : ''}`)
     return a.dischargeSummary
   })
+}
+
+/** 次診斷：最多 8 個、要是主檔裡啟用的 ICD、不重複、不能和主診斷同一碼；回傳整理過的（名稱照主檔） */
+export function checkSecondary(main: string, xs: DischargeSummaryInput['secondaryDiagnoses']): { icd: string; name: string }[] {
+  const list = xs ?? []
+  if (list.length > SECONDARY_MAX) failField('secondaryDiagnoses', `次診斷最多 ${SECONDARY_MAX} 個`)
+  const mainCode = dxCode(main)
+  const out: { icd: string; name: string }[] = []
+  for (const x of list) {
+    const c = db.icdCodes.find((k) => k.code === x.icd)
+    if (!c || c.active === false) failField('secondaryDiagnoses', `次診斷 ${x.icd} 不是可用的診斷碼`)
+    if (c!.code === mainCode) failField('secondaryDiagnoses', `${c!.code} 已經是主診斷`)
+    if (out.some((y) => y.icd === c!.code)) failField('secondaryDiagnoses', `${c!.code} 重複了`)
+    out.push({ icd: c!.code, name: c!.name })
+  }
+  return out
 }
 
 /**

@@ -6,7 +6,7 @@ import { ageOf, now } from '@/utils/date'
 import { ipdBillOf } from './ipd-bill'
 import { linePoints } from './claim-rules'
 import { ipdDays } from './billing'
-import { doneProcsFrom, drgAlert, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom, type DrgResult } from './drg-rules'
+import { secondaryFrom, doneProcsFrom, drgAlert, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom, type DrgResult } from './drg-rules'
 import { find } from './views'
 
 export const mainDiagnosisOf = (a: Admission) => mainDiagnosisFrom(a)
@@ -16,7 +16,7 @@ export function drgOfAdmission(a: Admission): DrgResult {
   const p = find.patient(a.patientId)
   return groupDrg({
     mainDiagnosis: mainDiagnosisFrom(a), doneProcs: doneProcsFrom(db.surgeries, a.id, (id) => find.procedure(id)?.name ?? id, a.status !== 'discharged'),
-    history: historyFrom(db.encounters, db.admissions, a.patientId, a.id), age: p ? ageOf(p.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0,
+    history: historyFrom(db.encounters, db.admissions, a.patientId, a.id), secondary: secondaryFrom(a), age: p ? ageOf(p.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0,
   })
 }
 

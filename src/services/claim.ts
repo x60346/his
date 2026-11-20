@@ -8,6 +8,8 @@ import { audit, fail, failField, mutate, query, requirePermission } from './http
 import { canSubmitMonth, claimCsv, CLAIM_KIND_LABEL, monthOf } from './claim-rules'
 import { claimMonthsOf, openMonthRows, submissionOf, type ClaimRow } from './claim-work'
 import { caseTypes } from '@/mock/codes'
+import { DRG_TABLE } from './drg-rules'
+import { cmiOf } from './management-rules'
 import { find, nameOf } from './views'
 
 const KIND = (k: string): ClaimKind => (k === 'opd' || k === 'ipd' ? k : fail('申報類別不對', 'BAD_REQUEST'))
@@ -31,7 +33,7 @@ export interface ClaimBoard {
   /** 不能送的原因（月份還沒結束、已送、有問題沒處理） */
   whyNot?: string
   rows: ClaimBoardRow[]
-  totals: { count: number; points: number; copay: number; claim: number; problems: number; excluded: number; supplement: number; byCase: { caseType: string; label: string; count: number; claim: number }[]; /** 住院 DRG：適用幾筆、盈虧合計（給付 − 實際）、不適用幾筆 */ drg?: { count: number; diff: number; exempt: number } }
+  totals: { count: number; points: number; copay: number; claim: number; problems: number; excluded: number; supplement: number; byCase: { caseType: string; label: string; count: number; claim: number }[]; /** 住院 DRG：適用幾筆、盈虧合計（給付 − 實際）、不適用幾筆、病例組合指數 */ drg?: { count: number; diff: number; exempt: number; cmi: number | null } }
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -63,7 +65,7 @@ function boardOf(kind: ClaimKind, month: string): ClaimBoard {
       count: live.length, points: r2(live.reduce((n, r) => n + r.points, 0)), copay: r2(live.reduce((n, r) => n + r.copay, 0)), claim: live.reduce((n, r) => n + r.claim, 0),
       problems, excluded: rows.length - live.length, supplement: live.filter((r) => r.supplementOf).length,
       byCase: cases.map((c) => ({ caseType: c, label: caseLabel(c), count: live.filter((r) => r.caseType === c).length, claim: live.filter((r) => r.caseType === c).reduce((n, r) => n + r.claim, 0) })),
-      ...(kind === 'ipd' ? { drg: { count: live.filter((r) => r.drg && !r.supplementOf).length, diff: live.filter((r) => !r.supplementOf).reduce((n, r) => n + (r.drg?.diff ?? 0), 0), exempt: live.filter((r) => r.drgExempt).length } } : {}),
+      ...(kind === 'ipd' ? { drg: { count: live.filter((r) => r.drg && !r.supplementOf).length, diff: live.filter((r) => !r.supplementOf).reduce((n, r) => n + (r.drg?.diff ?? 0), 0), exempt: live.filter((r) => r.drgExempt).length, cmi: cmiOf(live.filter((r) => r.drg && !r.supplementOf).map((r) => DRG_TABLE.find((g) => g.code === r.drg!.code)?.weight ?? 0)) } } : {}),
     },
   }
 }

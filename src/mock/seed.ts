@@ -67,7 +67,7 @@ import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
 import { ipdCategories, ipdClaimPoints, linePoints } from '@/services/claim-rules'
-import { doneProcsFrom, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom } from '@/services/drg-rules'
+import { doneProcsFrom, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom, secondaryFrom } from '@/services/drg-rules'
 import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
@@ -258,7 +258,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U301', username: 'ph01', password: '1234', name: '方建志', roles: ['pharmacist'], active: true },
     // 第二位藥師：盤點單「清點的人不能自己覆核」，要有另一位藥師可以覆核（小診所沒有的話由管理員覆核）
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
-    { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', roles: ['clerk'], active: true },
+    { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', roles: ['clerk'], active: true, grants: ['coding'] },
     // 櫃台組長：可核准優免（「專案減免」要主管核准：clerk01 結帳時請 clerk02 輸入帳密）
     { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount', 'nhi.claim'] },
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
@@ -3797,6 +3797,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (hernias.some((x) => x.implants?.[0].lotId === m1.id)) m1.recall = { at: notFuture(`${T} 08:00`, 5), by: 'U214', reason: '廠商通知：該批包裝密封不良，可能影響無菌', notified: [] }
   }
 
+  // ---------- 疾病分類編碼審查（示範）----------
+  // 上個月以前出院的、和這個月出院超過 7 天的都審查過（病歷管理師 clerk01，出院後 3 天內，照病摘確認）；最近出院的待審查
+  {
+    const codeOf = (text: string) => text.trim().match(/^[A-Z][0-9][0-9A-Z.]*/)?.[0] ?? ''
+    for (const a of admissions.filter((x) => x.status === 'discharged' && x.dischargedAt && (x.dischargedAt.slice(0, 7) < T.slice(0, 7) || x.dischargedAt.slice(0, 10) < addDays(T, -7)))) {
+      const main = mainDiagnosisFrom(a)
+      const ic = codes.icdCodes.find((c) => c.code === codeOf(main))
+      a.coding = { at: notFuture(addMinutes(a.dischargedAt!, 3 * 24 * 60), 30), by: 'U401', mainDiagnosis: ic ? `${ic.code} ${ic.name}` : main, ...(a.dischargeSummary?.secondaryDiagnoses ? { secondary: a.dischargeSummary.secondaryDiagnoses } : {}), changed: false }
+    }
+  }
+
   // ---------- 健保申報（示範）----------
   // 前前個月以前的門診都已送出（櫃台組長 clerk02 兼申報，次月 5 日）；之後那個月最後一位的病人回來加做 GPT（次月 8 日補收）→ 上個月的申報出現一筆「補報」。
   // 上個月還沒送：第一位就醫的病歷沒有主診斷（送件前檢核要處理）。住院、核減見後面
@@ -3842,10 +3853,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (selfPay.has(patients.find((p) => p.id === a.patientId)?.defaultIdentity ?? '')) return undefined
       const day = !!a.day && !a.day.converted
       return {
-        refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: ((day ? a.diagnosis : a.dischargeSummary?.diagnosis) ?? '').trim(),
+        refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: ((a.coding?.mainDiagnosis ?? (day ? a.diagnosis : a.dischargeSummary?.diagnosis)) ?? '').trim(),
         ...((lp) => {
           const pt = patients.find((p) => p.id === a.patientId)
-          const g = groupDrg({ mainDiagnosis: mainDiagnosisFrom(a), doneProcs: doneProcsFrom(surgeries, a.id, (id) => procMap.get(id)?.name ?? id), history: historyFrom(encounters, admissions, a.patientId, a.id), age: pt ? ageOf(pt.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0 })
+          const g = groupDrg({ mainDiagnosis: mainDiagnosisFrom(a), doneProcs: doneProcsFrom(surgeries, a.id, (id) => procMap.get(id)?.name ?? id), history: historyFrom(encounters, admissions, a.patientId, a.id), secondary: secondaryFrom(a), age: pt ? ageOf(pt.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0 })
           const ex = drgExempt({ day, days: ipdDays(a.admittedAt ?? a.reservedAt, a.dischargedAt!), dischargeType: a.dischargeType ?? a.dischargeSummary?.dischargeType })
           return { ...lp, ...ipdClaimPoints(lp, g, ex) }
         })(linePoints(c.lines)), categories: ipdCategories(c.lines, (n) => procedureBy(n)), days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),

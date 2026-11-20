@@ -8,7 +8,7 @@ defineProps<{ summary: DischargeSummary; doctorName?: string; medTexts?: string[
 <template>
   <div class="space-y-2 text-sm">
     <dl class="grid gap-1.5">
-      <div v-for="[k, v] in [['出院診斷', summary.diagnosis], ['出院轉歸', summary.dischargeType], ['住院經過', summary.course], ['出院時狀況', summary.condition], ['出院後追蹤', summary.followUp]]" :key="k" class="flex gap-3">
+      <div v-for="[k, v] in [['出院診斷', summary.diagnosis], ...(summary.secondaryDiagnoses?.length ? [['次診斷', summary.secondaryDiagnoses.map((x) => `${x.icd} ${x.name}`).join('、')]] : []), ['出院轉歸', summary.dischargeType], ['住院經過', summary.course], ['出院時狀況', summary.condition], ['出院後追蹤', summary.followUp]]" :key="k" class="flex gap-3">
         <dt class="w-20 shrink-0 text-slate-500">{{ k }}</dt>
         <dd class="whitespace-pre-line text-slate-800">{{ v || '—' }}</dd>
       </div>

@@ -91,8 +91,9 @@ export function opdClaimProblems(x: { diagnosis?: string; diagnosisActive?: bool
 }
 
 /** 住院送件前檢核 */
-export function ipdClaimProblems(x: { day: boolean; diagnosis?: string; signed: boolean; implantMissing: string[]; preAuth?: string[]; daysBill?: number; daysActual: number; points: number }): string[] {
+export function ipdClaimProblems(x: { coded?: boolean; day: boolean; diagnosis?: string; signed: boolean; implantMissing: string[]; preAuth?: string[]; daysBill?: number; daysActual: number; points: number }): string[] {
   const out: string[] = []
+  if (x.coded === false) out.push('疾病分類編碼還沒審查（病歷室）')
   if (!x.diagnosis) out.push(x.day ? '沒有診斷' : '沒有出院主診斷（出院病摘）')
   else if (!x.day && !x.signed) out.push('出院病摘還沒有醫師簽署')
   if (x.implantMissing.length) out.push(`用了植入物但沒有登記批號：${x.implantMissing.join('、')}`)

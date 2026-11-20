@@ -15,8 +15,8 @@ const r = computed(() => (data.value?.month === month.value ? data.value : undef
 const groups = ['門診', '住院', '收入', '醫療服務量'] as const
 const changeTone = (t: string) => (t.startsWith('+') ? 'text-emerald-700' : t.startsWith('−') ? 'text-red-700' : 'text-slate-400')
 const shortMonth = (m: string) => `${Number(m.slice(5))} 月`
-const trend = (k: 'opdVisits' | 'collected' | 'occupancy'): BarDatum[] =>
-  (r.value?.trend ?? []).map((x) => ({ label: shortMonth(x.month), value: x[k] ?? 0, title: `${x.month}：${x.hasData ? mgmtValueText(x[k], k === 'occupancy' ? '%' : '') : '沒有資料'}` }))
+const trend = (k: 'opdVisits' | 'collected' | 'occupancy' | 'cmi'): BarDatum[] =>
+  (r.value?.trend ?? []).map((x) => ({ label: shortMonth(x.month), value: x[k] ?? 0, title: `${x.month}：${x.hasData ? mgmtValueText(x[k], k === 'occupancy' ? '%' : k === 'cmi' ? 'RW' : '') : '沒有資料'}` }))
 function exportXlsx() {
   if (r.value) downloadFile(managementXlsx(r.value), XLSX_MIME, managementXlsxFileName(r.value))
 }
@@ -54,6 +54,7 @@ function exportXlsx() {
           <UCard title="近 12 個月：門診人次"><UBarChart :data="trend('opdVisits')" unit="人次" value-labels="nonzero" /></UCard>
           <UCard title="近 12 個月：實收（元）"><UBarChart :data="trend('collected')" unit="元" value-labels="nonzero" /></UCard>
           <UCard title="近 12 個月：佔床率（%）"><UBarChart :data="trend('occupancy')" unit="%" value-labels="nonzero" /></UCard>
+          <UCard title="近 12 個月：病例組合指數（CMI）"><UBarChart :data="trend('cmi')" unit="" value-labels="nonzero" /></UCard>
         </div>
         <p class="text-xs text-slate-500">沒有資料的月份長條是 0（滑鼠移上去會寫「沒有資料」）。佔床率以目前 {{ r.beds }} 床計算。</p>
 
@@ -87,10 +88,10 @@ function exportXlsx() {
           </UCard>
           <UCard :title="`DRG 盈虧（本月出院${r.drg.exempt ? `；不適用 DRG ${r.drg.exempt} 筆` : ''}）`" :padded="false">
             <table class="w-full text-sm">
-              <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">DRG</th><th class="px-3 py-1.5 text-right">筆數</th><th class="px-3 py-1.5 text-right">實際點數</th><th class="px-3 py-1.5 text-right">給付點數</th><th class="px-3 py-1.5 text-right">盈虧</th></tr></thead>
+              <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">DRG</th><th class="px-3 py-1.5 text-right">權重</th><th class="px-3 py-1.5 text-right">筆數</th><th class="px-3 py-1.5 text-right">平均住院日</th><th class="px-3 py-1.5 text-right">實際點數</th><th class="px-3 py-1.5 text-right">給付點數</th><th class="px-3 py-1.5 text-right">盈虧</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="d in r.drg.rows" :key="d.code"><td class="px-3 py-1.5"><b class="tabular">{{ d.code }}</b> <span class="text-xs text-slate-600">{{ d.name }}</span></td><td class="tabular px-3 py-1.5 text-right">{{ d.count }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.actual.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.pay.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right" :class="d.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ d.diff >= 0 ? '+' : '' }}{{ d.diff.toLocaleString('zh-TW') }}</td></tr>
-                <tr v-if="!r.drg.rows.length"><td colspan="5" class="px-3 py-4 text-center text-slate-400">—</td></tr>
+                <tr v-for="d in r.drg.rows" :key="d.code"><td class="px-3 py-1.5"><b class="tabular">{{ d.code }}</b> <span class="text-xs text-slate-600">{{ d.name }}</span></td><td class="tabular px-3 py-1.5 text-right">{{ d.weight.toFixed(2) }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.count }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.alos }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.actual.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.pay.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right" :class="d.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ d.diff >= 0 ? '+' : '' }}{{ d.diff.toLocaleString('zh-TW') }}</td></tr>
+                <tr v-if="!r.drg.rows.length"><td colspan="7" class="px-3 py-4 text-center text-slate-400">—</td></tr>
               </tbody>
             </table>
           </UCard>

@@ -59,7 +59,7 @@ async function submitEx() {
           <div><div class="text-xs text-slate-500">{{ b.month }} 申報</div><div class="tabular text-2xl font-semibold text-slate-800">{{ fmt(b.totals.claim) }} 點</div></div>
           <div class="text-xs text-slate-600">
             {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
-            <div v-if="b.totals.drg" class="mt-0.5">DRG {{ b.totals.drg.count }} 筆，盈虧合計 <b :class="b.totals.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ b.totals.drg.diff >= 0 ? '+' : '' }}{{ fmt(b.totals.drg.diff) }}</b> 點<template v-if="b.totals.drg.exempt">・不適用 DRG {{ b.totals.drg.exempt }} 筆</template></div>
+            <div v-if="b.totals.drg" class="mt-0.5">DRG {{ b.totals.drg.count }} 筆，盈虧合計 <b :class="b.totals.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ b.totals.drg.diff >= 0 ? '+' : '' }}{{ fmt(b.totals.drg.diff) }}</b> 點<template v-if="b.totals.drg.exempt">・不適用 DRG {{ b.totals.drg.exempt }} 筆</template><template v-if="b.totals.drg.cmi !== null">・CMI {{ b.totals.drg.cmi.toFixed(2) }}</template></div>
             <div class="mt-0.5 flex flex-wrap gap-2">
               <span v-for="c in b.totals.byCase" :key="c.caseType" class="rounded bg-slate-100 px-1.5">{{ c.label }}：{{ c.count }} 筆 {{ fmt(c.claim) }} 點</span>
             </div>

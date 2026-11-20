@@ -53,7 +53,7 @@ export function ipdItemOf(a: Admission): ClaimItem | undefined {
   const categories = ipdCategories(c.lines, (n) => db.procedures.find((x) => x.name === n))
   const lp = linePoints(c.lines)
   const day = dayAdm(a)
-  const diag = day ? a.diagnosis : a.dischargeSummary?.diagnosis
+  const diag = a.coding?.mainDiagnosis ?? (day ? a.diagnosis : a.dischargeSummary?.diagnosis)
   return {
     refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: diag?.trim() ?? '',
     ...lp, ...ipdClaimPoints(lp, drgOfAdmission(a), drgExemptOf(a, a.dischargedAt)), categories, days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
@@ -65,7 +65,7 @@ export function ipdRowOf(a: Admission, item: ClaimItem): ClaimRow {
   const implantMissing = db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done' && find.procedure(s.procId)?.surgery?.implant && !s.implants?.length).map((s) => s.no)
   return {
     ...item,
-    problems: ipdClaimProblems({ day: dayAdm(a), diagnosis: item.diagnosis, signed: !!a.dischargeSummary?.signedAt, implantMissing, preAuth: preAuthUnapproved(a.id), ...(c?.ipd ? { daysBill: c.ipd.days } : {}), daysActual: ipdDays(a.admittedAt ?? a.dischargedAt!, a.dischargedAt!), points: item.points }),
+    problems: ipdClaimProblems({ coded: !!a.coding, day: dayAdm(a), diagnosis: item.diagnosis, signed: !!a.dischargeSummary?.signedAt, implantMissing, preAuth: preAuthUnapproved(a.id), ...(c?.ipd ? { daysBill: c.ipd.days } : {}), daysActual: ipdDays(a.admittedAt ?? a.dischargedAt!, a.dischargedAt!), points: item.points }),
   }
 }
 

@@ -8,6 +8,7 @@ import { useRoute } from 'vue-router'
 import { ArrowRightLeft, Droplet, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import DrgStrip from '@/components/DrgStrip.vue'
+import SecondaryDxEditor from '@/components/SecondaryDxEditor.vue'
 import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
@@ -50,7 +51,7 @@ import RequestTransferDialog from './components/RequestTransferDialog.vue'
 import AcceptTransferDialog from './components/AcceptTransferDialog.vue'
 import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
-import { bloodApi, consultApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
+import { bloodApi, consultApi, drgApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
 import { abxApi, abxStewardApi, pharmApi, medrecApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
@@ -254,6 +255,9 @@ const imgAlerts = computed(() => (imgs.value?.reports ?? []).filter((r) => r.nee
 // 已簽署（准予出院）就唯讀；要改先「取消准予出院」，內容會留成草稿
 const dischargeTypes = masterApi.staticCodes.dischargeTypes
 const dsForm = reactive({ diagnosis: '', course: '', condition: '', followUp: '', dischargeType: '' as string | number })
+// 次診斷（DRG 合併症）：病史裡屬於合併症的列成建議，醫師加入才算
+const dsSecondary = ref<{ icd: string; name: string }[]>([])
+const { data: ccSugg } = useQuery(async () => (adm.value && tab.value === 'discharge' && !isAdmin ? drgApi.ccSuggestions(adm.value.id) : []), [() => adm.value?.id, tab])
 // 出院帶藥：和門診開藥同一個編輯元件（劑量、頻率、天數、總量自動換算）；天數上限、劑量檢查在服務層
 const dsMeds = ref<MedRow[]>([])
 // 出院用藥整合：居家用藥每一項出院後恢復或停用（停用寫原因）；對照表即時比對畫面上的出院帶藥
@@ -277,6 +281,7 @@ watch(
     dsMeds.value = (d?.meds ?? []).map((m) => ({ ...m }))
     dsPlan.value = Object.fromEntries(Object.entries(d?.homeMedPlan ?? {}).map(([k, v]) => [k, { resume: v.resume, reason: v.reason ?? '' }]))
     dsChronic.value = !!d?.chronicRx
+    dsSecondary.value = (d?.secondaryDiagnoses ?? []).map((x) => ({ ...x }))
   },
   { immediate: true },
 )
@@ -288,7 +293,7 @@ async function onSaveDs(sign: boolean) {
   if (sign && high.length && !(await ui.confirm({ title: '出院帶藥劑量偏高', message: `${high.map((x) => `・${x.d!.name}：${doseNote(x.d!, x.m.dose)}`).join('\n')}\n\n確定劑量無誤？`, okText: '劑量無誤', danger: true }))) return
   const meds = dsMeds.value.map(({ _manual: _m, _qtyStale: _q, ...m }) => m)
   const homeMedPlan = Object.fromEntries(Object.entries(dsPlan.value).map(([k, v]) => [k, { resume: v.resume, ...(!v.resume && v.reason.trim() ? { reason: v.reason.trim() } : {}) }]))
-  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType), meds, chronicRx: dsChronic.value, homeMedPlan, ...(high.length ? { confirmHighDose: true } : {}) }, sign)
+  saveDs.run(adm.value.id, { ...dsForm, dischargeType: String(dsForm.dischargeType), secondaryDiagnoses: dsSecondary.value, meds, chronicRx: dsChronic.value, homeMedPlan, ...(high.length ? { confirmHighDose: true } : {}) }, sign)
 }
 const { data: recon } = useQuery(async () => (adm.value && tab.value === 'discharge' && !isAdmin ? medrecApi.dischargeReconOf(adm.value.id, { dischargeDrugIds: medKey.value ? medKey.value.split(',') : [], resumeHomeIds: resumeIds.value ? resumeIds.value.split(',') : [] }) : undefined), [medKey, resumeIds, () => adm.value?.id, tab])
 const setPlan = (id: string, resume: boolean) => (dsPlan.value = { ...dsPlan.value, [id]: { resume, reason: dsPlan.value[id]?.reason ?? '' } })
@@ -584,6 +589,7 @@ async function submitNote() {
               <UTextarea v-model="dsForm.diagnosis" label="出院診斷" :rows="2" :error="saveDs.fieldErrors.value.diagnosis" @keydown="phrase.onKey($event, (v) => (dsForm.diagnosis = v))" />
               <USelect v-model="dsForm.dischargeType" label="出院轉歸" placeholder="請選擇" :options="dischargeTypes" :error="saveDs.fieldErrors.value.dischargeType" />
             </div>
+            <SecondaryDxEditor v-model="dsSecondary" :suggestions="ccSugg ?? []" :error="saveDs.fieldErrors.value.secondaryDiagnoses" />
             <UTextarea v-model="dsForm.course" label="住院經過" :rows="3" placeholder="治療經過、重要檢查結果" :error="saveDs.fieldErrors.value.course" @keydown="phrase.onKey($event, (v) => (dsForm.course = v))" />
             <UTextarea v-model="dsForm.condition" label="出院時狀況" :rows="2" :error="saveDs.fieldErrors.value.condition" @keydown="phrase.onKey($event, (v) => (dsForm.condition = v))" />
             <UTextarea v-model="dsForm.followUp" label="出院後追蹤" :rows="2" placeholder="回診時間、居家注意事項、何時應立即回診" :error="saveDs.fieldErrors.value.followUp" @keydown="phrase.onKey($event, (v) => (dsForm.followUp = v))" />
