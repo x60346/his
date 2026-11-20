@@ -4,10 +4,10 @@
 // 點數、檢核、能不能送都由服務層算（claim.ts、claim-rules）
 import { computed, ref, watch } from 'vue'
 import { Download, Send } from 'lucide-vue-next'
-import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
+import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import ClaimCutPanel from './ClaimCutPanel.vue'
 import PreAuthPanel from './PreAuthPanel.vue'
-import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, CLAIM_REJECT_CODES, claimApi, DRG_PAY_RULE_LABEL } from '@/services'
+import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, CLAIM_REJECT_CODES, claimApi, DRG_PAY_RULE_LABEL, type RejectFilePreview } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { downloadFile } from '@/utils/download'
@@ -54,6 +54,23 @@ const unRjAct = useAction(claimApi.unrejectClaimItem, { success: '已取消退�
 async function submitRj() {
   if (b.value && rjFor.value && (await rjAct.run(b.value.kind, b.value.month, rjFor.value.refId, { code: String(rj.value.code ?? ''), note: rj.value.note }))) rjFor.value = undefined
 }
+// 檢核結果檔匯入：貼上 → 預覽（每行對到哪一筆、哪行有問題）→ 只記沒問題的
+const fileOpen = ref(false)
+const fileText = ref('')
+const filePv = ref<RejectFilePreview>()
+function openFile() {
+  fileText.value = '病歷號,日期,代碼,說明\n'
+  filePv.value = undefined
+  fileOpen.value = true
+}
+const pvAct = useAction(claimApi.previewRejectFile)
+async function previewFile() {
+  if (b.value) filePv.value = (await pvAct.run(b.value.kind, b.value.month, fileText.value)) ?? undefined
+}
+const impAct = useAction(claimApi.importRejectFile, { success: (r) => `已記退件 ${r.preview.ok} 筆${r.preview.bad ? `，略過 ${r.preview.bad} 行` : ''}` })
+async function importFile() {
+  if (b.value && (await impAct.run(b.value.kind, b.value.month, fileText.value))) fileOpen.value = false
+}
 async function submitEx() {
   if (b.value && exFor.value && (await exAct.run(b.value.kind, b.value.month, exFor.value.refId, reason.value))) exFor.value = undefined
 }
@@ -81,6 +98,7 @@ async function submitEx() {
           <div class="ml-auto flex flex-wrap items-center gap-2">
             <UBadge v-if="b.submitted" tone="green">已送出・{{ b.submitted.at.slice(5) }} {{ b.submitted.byName }}</UBadge>
             <UBadge v-else-if="b.totals.problems" tone="red">檢核有問題 {{ b.totals.problems }} 筆</UBadge>
+            <UButton v-if="b.submitted" size="sm" variant="secondary" @click="openFile">匯入檢核結果</UButton>
             <UButton size="sm" variant="secondary" :icon="Download" @click="exportCsv">匯出 CSV</UButton>
             <UButton size="sm" variant="secondary" :icon="Download" :title="b.submitted ? '' : '還沒送出：檔案標為草稿'" @click="exportXml">匯出 XML{{ b.submitted ? '' : '（草稿）' }}</UButton>
             <UButton v-if="!b.submitted" size="sm" :icon="Send" :disabled="!b.canSubmit" :title="b.whyNot" :loading="submitAct.pending.value" @click="submit">送出</UButton>
@@ -135,6 +153,27 @@ async function submitEx() {
         </div>
       </template>
     </UQueryState>
+    <UDialog v-model="fileOpen" :title="`匯入檢核結果：${b?.month ?? ''}`" size="lg">
+      <div class="space-y-3 text-sm">
+        <p class="text-xs text-slate-500">每行：病歷號,就醫日（住院是出院日）,退件代碼,說明。代碼：{{ CLAIM_REJECT_CODES.map((c) => c.code + ' ' + c.label).join('；') }}</p>
+        <UTextarea v-model="fileText" label="檢核結果（貼上）" :rows="6" />
+        <table v-if="filePv" class="w-full text-xs">
+          <thead class="text-slate-500"><tr><th class="text-left">行</th><th class="text-left">病歷號</th><th class="text-left">日期</th><th class="text-left">代碼</th><th class="text-left">對到</th><th class="text-left">結果</th></tr></thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr v-for="l in filePv.lines" :key="l.line" :class="l.error ? 'text-red-700' : ''">
+              <td class="tabular">{{ l.line }}</td><td class="tabular">{{ l.chartNo }}</td><td class="tabular">{{ l.date }}</td><td>{{ l.codeLabel || l.code }}</td>
+              <td>{{ l.patientName ? `${l.patientName}・${fmt(l.claim ?? 0)} 點` : '—' }}</td><td>{{ l.error ?? '可以記' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="filePv" class="text-xs">可以記 <b>{{ filePv.ok }}</b> 筆<template v-if="filePv.bad">、有問題 <b class="text-red-700">{{ filePv.bad }}</b> 行（匯入時略過）</template></p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="fileOpen = false">取消</UButton>
+        <UButton variant="secondary" :loading="pvAct.pending.value" @click="previewFile">預覽</UButton>
+        <UButton :disabled="!filePv?.ok" :loading="impAct.pending.value" @click="importFile">匯入 {{ filePv?.ok ?? 0 }} 筆</UButton>
+      </template>
+    </UDialog>
     <UDialog v-model="rjOpen" :title="`記退件：${rjFor?.label ?? ''}`" size="sm" @submit="submitRj">
       <div class="space-y-3 text-sm">
         <USelect v-model="rj.code" label="退件代碼（健保署檢核結果）" placeholder="選擇" :options="CLAIM_REJECT_CODES.map((c) => ({ label: `${c.code} ${c.label}`, value: c.code }))" :error="rjAct.fieldErrors.value.code" />

@@ -3944,7 +3944,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         kind: 'drug', itemId: 'M052', itemName: 'Teriparatide 20mcg Pen', patientId: v.patientId, ...(prev ? { encounterId: prev.id } : {}), doctorId: v.doctorId, status: 'approved', createdAt: at,
         summary: '停經後骨質疏鬆，骨密度 T 值 −3.3，已有兩處脊椎壓迫性骨折', reason: '使用雙磷酸鹽一年以上仍新發骨折，符合給付規定',
         notes: [{ at: `${d0} 11:10`, by: doc, text: '填寫送審資料' }], submittedAt: addDays(d0, 1) < ok.slice(0, 10) ? `${addDays(d0, 1)} 10:00` : `${d0} 14:00`, submittedBy: 'U402',
-        result: { outcome: 'approved', note: '核准 18 個月療程，先給 6 個月', at: ok < `${d0} 16:00` ? `${d0} 16:00` : ok, by: 'U402', until: addDays(T, 160), qty: 6, times: 6 } })
+        result: { outcome: 'approved', note: '核准 18 個月療程，先給 6 個月', at: ok < `${d0} 16:00` ? `${d0} 16:00` : ok, by: 'U402', until: addDays(T, 160), qty: 6, times: 6, interval: 28 } })
     }
   }
 

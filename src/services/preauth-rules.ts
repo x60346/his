@@ -22,6 +22,13 @@ export const opdPreAuthLeft = (p: Pick<PreAuth, 'result'>, used: number): number
 
 /** 門診核准次數還剩幾次（沒寫＝undefined 不限） */
 export const opdPreAuthTimesLeft = (p: Pick<PreAuth, 'result'>, used: number): number | undefined => (p.result?.times !== undefined ? Math.max(0, p.result.times - used) : undefined)
+/** 間隔天數：上次健保開立那天到這次差幾天，不足核准間隔就不行（回傳還要等幾天；沒限制或夠了＝0） */
+export function opdIntervalWait(interval: number | undefined, last: string | undefined, date: string): number {
+  if (!interval || !last) return 0
+  const d = Math.round((new Date(`${date}T00:00:00`).getTime() - new Date(`${last}T00:00:00`).getTime()) / 86400000)
+  return Math.max(0, interval - d)
+}
+
 /** 一張處方算幾次調劑：慢箋＝可調劑次數，其他 1 次 */
 export const opdRxTimes = (refillTimes: number) => (refillTimes >= 2 ? refillTimes : 1)
 

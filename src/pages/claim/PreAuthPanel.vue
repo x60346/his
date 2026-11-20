@@ -11,15 +11,15 @@ const TONE = { draft: 'gray', ready: 'yellow', submitted: 'blue', more: 'yellow'
 const subAct = useAction(preAuthApi.submitPreAuth, { success: (p) => `已送審 ${p.no}` })
 const resFor = ref<PreAuthView>()
 const open = computed({ get: () => !!resFor.value, set: (x) => !x && (resFor.value = undefined) })
-const f = reactive({ outcome: 'approved' as string | number | undefined, note: '', until: '', qty: undefined as number | undefined, times: undefined as number | undefined })
+const f = reactive({ outcome: 'approved' as string | number | undefined, note: '', until: '', qty: undefined as number | undefined, times: undefined as number | undefined, interval: undefined as number | undefined })
 function openRes(p: PreAuthView) {
-  Object.assign(f, { outcome: 'approved', note: '', until: '', qty: undefined, times: undefined })
+  Object.assign(f, { outcome: 'approved', note: '', until: '', qty: undefined, times: undefined, interval: undefined })
   resAct.fieldErrors.value = {}
   resFor.value = p
 }
 const resAct = useAction(preAuthApi.recordPreAuthResult, { success: (p) => `${p.no}：${p.statusLabel}` })
 async function submitRes() {
-  if (resFor.value && (await resAct.run(resFor.value.id, { outcome: f.outcome as 'approved' | 'rejected' | 'more', note: f.note, ...(f.until ? { until: f.until } : {}), ...(f.qty ? { qty: Number(f.qty) } : {}), ...(f.times ? { times: Number(f.times) } : {}) }))) resFor.value = undefined
+  if (resFor.value && (await resAct.run(resFor.value.id, { outcome: f.outcome as 'approved' | 'rejected' | 'more', note: f.note, ...(f.until ? { until: f.until } : {}), ...(f.qty ? { qty: Number(f.qty) } : {}), ...(f.times ? { times: Number(f.times) } : {}), ...(f.interval ? { interval: Number(f.interval) } : {}) }))) resFor.value = undefined
 }
 </script>
 
@@ -53,6 +53,7 @@ async function submitRes() {
         <UInput v-if="f.outcome === 'approved'" v-model="f.until" type="date" :label="resFor?.opd ? `核准期限（選填，沒寫＝核准日起 ${OPD_PREAUTH_VALID_DAYS} 天）` : '核准期限（選填）'" :error="resAct.fieldErrors.value.until" />
         <UInput v-if="f.outcome === 'approved' && resFor?.opd" v-model="f.qty" type="number" label="核准量（選填，藥品單位，例：6 支；沒寫＝不限）" :error="resAct.fieldErrors.value.qty" />
         <UInput v-if="f.outcome === 'approved' && resFor?.opd" v-model="f.times" type="number" label="核准次數（選填，療程可調劑幾次，慢箋每次領藥都算；沒寫＝不限）" :error="resAct.fieldErrors.value.times" />
+        <UInput v-if="f.outcome === 'approved' && resFor?.opd" v-model="f.interval" type="number" label="間隔天數（選填，兩次健保開立至少隔幾天，例：28）" :error="resAct.fieldErrors.value.interval" />
         <UInput v-model="f.note" :label="f.outcome === 'rejected' ? '不核准理由' : f.outcome === 'more' ? '要補哪些資料' : '備註（選填）'" :error="resAct.fieldErrors.value.note" />
         <p v-if="f.outcome === 'rejected' && resFor?.kind === 'drug' && !resFor.opd" class="text-xs text-red-700">不核准：這次住院這個藥還在用的醫囑會自動停止（病人已同意自費的不停）。</p>
       </div>

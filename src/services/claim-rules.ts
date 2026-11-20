@@ -228,3 +228,32 @@ export function claimXml(kind: ClaimKind, month: string, rows: (ClaimItem & { pa
     `</claim>`,
   ].join('\n')
 }
+
+// ---------- 檢核結果檔（退件）：每行「病歷號,就醫日（住院是出院日）,退件代碼,說明」；第一行是標題可以有可以沒有 ----------
+
+export interface RejectFileLine {
+  line: number
+  chartNo: string
+  date: string
+  code: string
+  note: string
+  /** 這行格式本身的問題（找不找得到那筆由服務層判斷） */
+  error?: string
+}
+export function parseRejectFile(text: string): RejectFileLine[] {
+  const out: RejectFileLine[] = []
+  ;(text ?? '').split(/\r?\n/).forEach((raw, i) => {
+    const s = raw.trim()
+    if (!s || s.startsWith('#') || (i === 0 && s.includes('病歷號'))) return
+    // 說明欄可以有逗號：前三欄切開，剩下的原樣保留
+    const parts = s.split(/[,\t]/)
+    const [chartNo = '', date = '', code = ''] = parts.slice(0, 3).map((x) => x.trim())
+    const note = parts.slice(3).join(s.includes('\t') ? '\t' : ',').trim()
+    const x: RejectFileLine = { line: i + 1, chartNo, date, code: code.toUpperCase(), note }
+    if (!chartNo || !date || !code) x.error = '欄位不足（要：病歷號,日期,代碼,說明）'
+    else if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)) x.error = `日期格式不對（${date}，要 YYYY-MM-DD）`
+    else if (!CLAIM_REJECT_CODES.some((c) => c.code === x.code)) x.error = `退件代碼 ${code} 不認得`
+    out.push(x)
+  })
+  return out
+}

@@ -21,9 +21,10 @@ export function shiftMonth(month: string, n: number): string {
 export type MgmtKey =
   | 'opdVisits' | 'opdFirst' | 'opdRevisit' | 'admissions' | 'discharges' | 'patientDays' | 'occupancy' | 'alos' | 'abxDdd' | 'cmi'
   | 'collected' | 'revenueOpd' | 'revenueIpd' | 'revenueOther' | 'nhiPoints' | 'drugShare' | 'labReports' | 'imagingReports' | 'prescriptions'
+  | 'claimPoints' | 'rejectRate' | 'cutRate' | 'supplementPoints' | 'interimPoints'
 
 /** 指標：名稱、單位、分組（畫面與 Excel 摘要依這個順序） */
-export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門診' | '住院' | '收入' | '醫療服務量' }[] = [
+export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門診' | '住院' | '收入' | '醫療服務量' | '健保申報' }[] = [
   { key: 'opdVisits', label: '門診人次', unit: '人次', group: '門診' },
   { key: 'opdFirst', label: '初診', unit: '人次', group: '門診' },
   { key: 'opdRevisit', label: '複診', unit: '人次', group: '門診' },
@@ -43,7 +44,16 @@ export const MGMT_KPIS: { key: MgmtKey; label: string; unit: string; group: '門
   { key: 'prescriptions', label: '門診處方', unit: '張', group: '醫療服務量' },
   { key: 'labReports', label: '檢驗報告', unit: '份', group: '醫療服務量' },
   { key: 'imagingReports', label: '影像報告', unit: '份', group: '醫療服務量' },
+  // 健保申報：這個月份送出的申報（門診＋住院；沒送＝—）
+  { key: 'claimPoints', label: '申報點數（送出）', unit: '點', group: '健保申報' },
+  { key: 'rejectRate', label: '退件率（點數）', unit: '%', group: '健保申報' },
+  { key: 'cutRate', label: '核減率（淨核減）', unit: '%', group: '健保申報' },
+  { key: 'supplementPoints', label: '補報點數（含退件重送）', unit: '點', group: '健保申報' },
+  { key: 'interimPoints', label: '住院期中申報點數', unit: '點', group: '健保申報' },
 ]
+
+/** 退件率 %（一位小數）：退件的申請點數 ÷ 送出的申請點數 */
+export const rejectRateOf = (rejected: number, claimed: number) => (claimed > 0 ? Math.round((rejected / claimed) * 1000) / 10 : 0)
 
 /** 數值顯示：沒有資料「—」；百分比、天數一位小數；其他千分位 */
 export function mgmtValueText(v: number | null | undefined, unit: string): string {

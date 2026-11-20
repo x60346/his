@@ -5,8 +5,8 @@ import type { PreAuth } from '@/types'
 import { db } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requirePermission, requireUser } from './http'
-import { checkPreAuthFill, opdPreAuthLeft, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, preAuthAllows, preAuthDays, preAuthOverdue, PREAUTH_STATUS_LABEL } from './preauth-rules'
-import { createImplantPreAuth, createOpdDrugPreAuth, implantPreAuthOf, opdDrugPreAuthOf, opdPreAuthUsed, opdPreAuthUsedTimes } from './preauth-work'
+import { checkPreAuthFill, opdIntervalWait, opdPreAuthLeft, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, preAuthAllows, preAuthDays, preAuthOverdue, PREAUTH_STATUS_LABEL } from './preauth-rules'
+import { createImplantPreAuth, createOpdDrugPreAuth, implantPreAuthOf, lastOpdNhiDate, opdDrugPreAuthOf, opdPreAuthUsed, opdPreAuthUsedTimes } from './preauth-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { stopOrderRecord } from './order-ops'
 import { surgeryOf } from './surgery-work'
@@ -35,6 +35,8 @@ export interface PreAuthView extends PreAuth {
   qty?: { approved: number; used: number; left: number; unit: string }
   /** 門診核准次數：核准、已開、還剩 */
   times?: { approved: number; used: number; left: number }
+  /** 門診間隔天數 */
+  interval?: number
 }
 
 function view(p: PreAuth): PreAuthView {
@@ -43,10 +45,11 @@ function view(p: PreAuth): PreAuthView {
   return {
     ...p, opd: !p.admissionId, ...((u) => (u && !p.admissionId ? { validUntil: u } : {}))(opdPreAuthUntil(p)),
     ...(!p.admissionId && p.status === 'approved' && p.result?.qty !== undefined ? ((used) => ({ qty: { approved: p.result!.qty!, used, left: opdPreAuthLeft(p, used)!, unit: find.drug(p.itemId)?.unit ?? '' } }))(opdPreAuthUsed(p)) : {}),
-    ...(!p.admissionId && p.status === 'approved' && p.result?.times !== undefined ? ((used) => ({ times: { approved: p.result!.times!, used, left: opdPreAuthTimesLeft(p, used)! } }))(opdPreAuthUsedTimes(p)) : {}), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
+    ...(!p.admissionId && p.status === 'approved' && p.result?.times !== undefined ? ((used) => ({ times: { approved: p.result!.times!, used, left: opdPreAuthTimesLeft(p, used)! } }))(opdPreAuthUsedTimes(p)) : {}),
+    ...(!p.admissionId && p.result?.interval !== undefined ? { interval: p.result.interval } : {}), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
     ...((d) => (d !== undefined ? { days: d } : {}))(preAuthDays(p, t)), overdue: preAuthOverdue(p, t), allows: preAuthAllows(p),
     notesText: p.notes.map((n) => `${n.at.slice(5)} ${nameOf.user(n.by)}：${n.text}`),
-    ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5)}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.qty !== undefined ? `・核准量 ${p.result.qty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.times !== undefined ? `・核准 ${p.result.times} 次` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
+    ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5)}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.qty !== undefined ? `・核准量 ${p.result.qty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.times !== undefined ? `・核准 ${p.result.times} 次` : ''}${p.result.interval !== undefined ? `・間隔 ${p.result.interval} 天` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
     ...(p.selfPay ? { selfPayText: `病人同意自費・${nameOf.user(p.selfPay.by)} ${p.selfPay.at.slice(5)}：${p.selfPay.note}` } : {}),
     ...(p.emergency ? { emergencyText: `緊急先用・${nameOf.user(p.emergency.by)} ${p.emergency.at.slice(5)}：${p.emergency.reason}` } : {}),
   }
@@ -109,7 +112,7 @@ export function submitPreAuth(id: string): Promise<PreAuthView> {
 }
 
 /** 審查結果（申報組）：核准（可寫期限）、不核准（寫理由；藥品醫囑自動停）、補件（寫要補什麼） */
-export function recordPreAuthResult(id: string, input: { outcome: 'approved' | 'rejected' | 'more'; note?: string; until?: string; qty?: number | null; times?: number | null }): Promise<PreAuthView> {
+export function recordPreAuthResult(id: string, input: { outcome: 'approved' | 'rejected' | 'more'; note?: string; until?: string; qty?: number | null; times?: number | null; interval?: number | null }): Promise<PreAuthView> {
   return mutate(() => {
     const u = requirePermission('nhi.claim')
     const p = paOf(id)
@@ -122,8 +125,10 @@ export function recordPreAuthResult(id: string, input: { outcome: 'approved' | '
     if (hasQty && (!Number.isInteger(Number(input.qty)) || Number(input.qty) <= 0)) failField('qty', '核准量是正整數（例：6 支）')
     const hasTimes = input.outcome === 'approved' && !p.admissionId && input.times !== undefined && input.times !== null && String(input.times) !== ''
     if (hasTimes && (!Number.isInteger(Number(input.times)) || Number(input.times) <= 0)) failField('times', '核准次數是正整數（例：6 次）')
+    const hasInterval = input.outcome === 'approved' && !p.admissionId && input.interval !== undefined && input.interval !== null && String(input.interval) !== ''
+    if (hasInterval && (!Number.isInteger(Number(input.interval)) || Number(input.interval) <= 0 || Number(input.interval) > 365)) failField('interval', '間隔天數是 1–365 的整數')
     const t = now()
-    p.result = { outcome: input.outcome, note: input.note?.trim() ?? '', at: t, by: u.id, ...(input.until ? { until: input.until } : {}), ...(hasQty ? { qty: Number(input.qty) } : {}), ...(hasTimes ? { times: Number(input.times) } : {}) }
+    p.result = { outcome: input.outcome, note: input.note?.trim() ?? '', at: t, by: u.id, ...(input.until ? { until: input.until } : {}), ...(hasQty ? { qty: Number(input.qty) } : {}), ...(hasTimes ? { times: Number(input.times) } : {}), ...(hasInterval ? { interval: Number(input.interval) } : {}) }
     p.status = input.outcome
     // 不核准：這次住院這個藥還在用的醫囑停掉（自費、緊急先用的除外）
     let stopped = 0
@@ -192,8 +197,11 @@ export interface OpdPreAuthState {
   drugName: string
   /** 這個病人這個藥最新的送審單（核准在效期內的優先）；沒有＝還沒申請 */
   preAuth?: PreAuthView
-  /** 今天能不能健保開 */
+  /** 今天能不能健保開（核准、效期） */
   valid: boolean
+  /** 上次健保開立日、離核准間隔還要等幾天（0＝可以） */
+  lastNhi?: string
+  wait: number
 }
 
 /** 門診處方：這幾個藥裡需事前審查的，各自的送審狀態（看診中的病歷） */
@@ -203,7 +211,8 @@ export function opdPreAuthStates(encounterId: string, drugIds: string[]): Promis
     const e = must(db.encounters.find((x) => x.id === encounterId), '病歷')
     return [...new Set(drugIds)].map((id) => find.drug(id)).filter((d) => !!d?.preAuth).map((d) => {
       const p = opdDrugPreAuthOf(e.patientId, d!.id, e.date)
-      return { drugId: d!.id, drugName: d!.name, ...(p ? { preAuth: view(p) } : {}), valid: !!p && opdPreAuthValid(p, e.date) }
+      const last = lastOpdNhiDate(e.patientId, d!.id, e.id)
+      return { drugId: d!.id, drugName: d!.name, ...(p ? { preAuth: view(p) } : {}), valid: !!p && opdPreAuthValid(p, e.date), ...(last ? { lastNhi: last } : {}), wait: p ? opdIntervalWait(p.result?.interval, last, e.date) : 0 }
     })
   })
 }

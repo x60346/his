@@ -12,7 +12,7 @@ import { today } from '@/utils/date'
 const month = ref(today().slice(0, 7))
 const { data, loading } = useQuery(() => managementApi.managementReport(month.value), [month])
 const r = computed(() => (data.value?.month === month.value ? data.value : undefined))
-const groups = ['門診', '住院', '收入', '醫療服務量'] as const
+const groups = ['門診', '住院', '收入', '醫療服務量', '健保申報'] as const
 const changeTone = (t: string) => (t.startsWith('+') ? 'text-emerald-700' : t.startsWith('−') ? 'text-red-700' : 'text-slate-400')
 const shortMonth = (m: string) => `${Number(m.slice(5))} 月`
 const trend = (k: 'opdVisits' | 'collected' | 'occupancy' | 'cmi'): BarDatum[] =>
@@ -24,7 +24,7 @@ function exportXlsx() {
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="經營月報" description="門診、住院、收入、醫療服務量；和上個月、去年同月比較">
+    <UPageHeader title="經營月報" description="門診、住院、收入、醫療服務量、健保申報；和上個月、去年同月比較">
         <input v-model="month" type="month" :max="today().slice(0, 7)" class="form-control w-40" aria-label="月份" />
         <UButton variant="secondary" :icon="FileSpreadsheet" :disabled="!r" @click="exportXlsx">匯出 Excel</UButton>
     </UPageHeader>

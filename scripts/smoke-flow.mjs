@@ -18174,6 +18174,89 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
       ok(work.opdPreAuthUsedTimes(db().preAuths.find((p) => p.id === 'PA-T-T')) === 0, '自費開的不算次數')
     } else ok(true, '（沒有第三位，略過）')
   }
+  // 經營月報的健保申報指標：送出的申報點數（退件不算）、退件率、淨核減率、補報點數、期中申報點數；沒送的月份「—」；Excel 也有
+  console.log('\n[經營月報申報指標]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    ok(api.MGMT_KPIS.filter((k) => k.group === '健保申報').length === 5 && api.rejectRateOf(50, 1000) === 5 && api.rejectRateOf(1, 0) === 0, '指標 5 個、退件率一位小數')
+    const S0 = db().claimSubmissions.filter((s) => s.kind === 'opd').sort((a, b) => b.month.localeCompare(a.month))[0]
+    const M = S0.month
+    const subs = db().claimSubmissions.filter((s) => s.month === M)
+    const all = subs.flatMap((s) => s.items).reduce((n, x) => n + x.claim, 0)
+    await as('admin')
+    let r = await api.managementApi.managementReport(M)
+    const cuts = db().claimCuts.filter((c) => subs.some((s) => s.id === c.submissionId))
+    const net = cuts.reduce((n, c) => n + c.points - (c.result?.outcome === 'paid' ? c.result.points : 0) - (c.dispute?.result?.outcome === 'paid' ? c.dispute.result.points : 0), 0)
+    ok(r.current.claimPoints === all && r.current.rejectRate === 0 && r.current.cutRate === api.cutRate(net, all) && r.current.supplementPoints === subs.flatMap((s) => s.items).filter((x) => x.supplementOf).reduce((n, x) => n + x.claim, 0), `${M}：申報 ${all} 點、退件率 0%、核減率 ${r.current.cutRate}%（和核減頁同一算法）、補報點數`)
+    ok((await api.managementApi.managementReport(T.slice(0, 7))).current.claimPoints === null, '還沒送的月份：—')
+    const it = S0.items.find((x) => !x.supplementOf && !db().claimCuts.some((c) => c.submissionId === S0.id && c.refId === x.refId))
+    await as('clerk02')
+    await api.claimApi.rejectClaimItem('opd', M, it.refId, { code: 'R04' })
+    await as('admin')
+    r = await api.managementApi.managementReport(M)
+    ok(r.current.rejectRate === api.rejectRateOf(it.claim, all) && r.current.claimPoints === all - it.claim, `記一筆退件：退件率 ${r.current.rejectRate}%、申報點數扣掉退件`)
+    ok(Buffer.from(api.managementXlsx(r)).toString('utf8').includes('退件率'), 'Excel 摘要也有申報指標')
+  }
+  // 事前審查間隔天數：兩次健保開立至少隔幾天（含慢箋領藥）；不足就擋，說還要幾天；自費不擋
+  console.log('\n[事前審查間隔天數]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.opdIntervalWait(28, '2026-11-01', '2026-11-20') === 9 && api.opdIntervalWait(28, '2026-10-23', '2026-11-20') === 0 && api.opdIntervalWait(28, undefined, '2026-11-20') === 0 && api.opdIntervalWait(undefined, '2026-11-19', '2026-11-20') === 0, '規則：還要等幾天（沒限制、沒開過＝0）')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    ok(seedPa.result.interval === 28, '種子：間隔 28 天')
+    const docName = db().users.find((u) => u.doctorId === seedPa.doctorId).username
+    const v1 = db().visits.find((x) => x.date === T && x.patientId === seedPa.patientId && x.status === 'registered')
+    // 測試輔助：10 天前在別處健保開過一次
+    db().encounters.push({ id: 'E-T-PREV', visitId: 'V-NONE', patientId: seedPa.patientId, doctorId: seedPa.doctorId, deptId: 'D01', date: addDaysT(-10), subjective: '', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: 'x', primary: true }], medications: [{ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty: 1, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false, status: 'completed', completedAt: `${addDaysT(-10)} 10:00` })
+    await as(docName)
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    const st = (await P.opdPreAuthStates(e1.id, ['M052']))[0]
+    ok(st.lastNhi === addDaysT(-10) && st.wait === 18 && st.preAuth.interval === 28, '看診時：上次健保開立 10 天前、還要 18 天')
+    const draftOf = (selfPay) => ({ subjective: 's', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: [{ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty: 1, selfPay }], procedures: [], refillTimes: 0, admissionRequested: false })
+    const m = await errOf(() => api.opdApi.completeEncounter(e1.id, draftOf(false)))
+    ok(m.includes('間隔') && m.includes('還要 18 天'), `不足間隔：擋下「${m}」`)
+    db().encounters.find((e) => e.id === 'E-T-PREV').date = addDaysT(-28)
+    ok((await P.opdPreAuthStates(e1.id, ['M052']))[0].wait === 0, '剛好 28 天：可以')
+    await api.opdApi.completeEncounter(e1.id, draftOf(false))
+    ok(db().encounters.find((e) => e.id === e1.id).status === 'completed', '夠間隔：健保開、完成看診')
+    await as('clerk02')
+    ok((await P.preAuthBoard()).find((x) => x.id === seedPa.id).resultText.includes('間隔 28 天'), '申報組看得到間隔')
+    const pa2 = db().preAuths.find((p) => p.status === 'submitted') ?? (() => { const p = db().preAuths.find((x) => x.id === 'PA-SEED-1'); return p })()
+    if (pa2 && pa2.status === 'ready') await P.submitPreAuth(pa2.id)
+    const target = db().preAuths.find((p) => p.status === 'submitted')
+    if (target) ok((await fieldsOf(() => P.recordPreAuthResult(target.id, { outcome: 'approved', interval: 400 }))).interval || !!target.admissionId, '間隔天數 1–365（住院的不記）')
+    else ok(true, '（沒有審查中的送審單，略過）')
+  }
+  // 檢核結果檔匯入：解析（標題、空行、註解、欄位、日期、代碼）；預覽不存；只記沒問題的、略過的回報；全部有問題擋；稽核
+  console.log('\n[檢核結果檔匯入]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.claimApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const p = api.parseRejectFile(['病歷號,日期,代碼,說明', '', '# 註解', '100001,2026-10-01,r01,身分證號錯, 第 5 碼', '100002,2026/10/01,R01,x', '100003,2026-10-01,Z9,x', '100004,2026-10-01'].join('\n'))
+    ok(p.length === 4 && p[0].code === 'R01' && p[0].note === '身分證號錯, 第 5 碼' && p[0].line === 4 && !p[0].error && p[1].error.includes('日期') && p[2].error.includes('代碼') && p[3].error.includes('欄位'), '解析：跳過標題、空行、註解；代碼大小寫、說明可有逗號；日期、代碼、欄位錯誤')
+    const S0 = db().claimSubmissions.filter((s) => s.kind === 'opd').sort((a, b) => b.month.localeCompare(a.month))[0]
+    const pts = new Map(db().patients.map((x) => [x.id, x.chartNo]))
+    const uniq = S0.items.filter((x) => !x.supplementOf && !db().claimCuts.some((c) => c.submissionId === S0.id && c.refId === x.refId) && S0.items.filter((y) => y.date === x.date && y.patientId === x.patientId).length === 1)
+    const [a1, a2] = uniq
+    await as('clerk02')
+    const open = (await C.claimBoard('opd')).month
+    ok((await errOf(() => C.previewRejectFile('opd', open, 'x'))).includes('還沒送出'), '還沒送出的月份不能匯入')
+    const text = [`${pts.get(a1.patientId)},${a1.date},R01,身分證號錯`, `${pts.get(a2.patientId)}\t${a2.date}\tR02\t主診斷碼不完整`, `${pts.get(a1.patientId)},${a1.date},R03,重複`, `999999,${a1.date},R01,x`, `${pts.get(a1.patientId)},${a1.date},R9,x`].join('\n')
+    const pv = await C.previewRejectFile('opd', S0.month, text)
+    ok(pv.ok === 2 && pv.bad === 3 && pv.lines[0].refId === a1.refId && pv.lines[1].refId === a2.refId && pv.lines[1].codeLabel.startsWith('R02') && pv.lines[2].error === '檔案裡重複' && pv.lines[3].error.includes('找不到') && pv.lines[4].error.includes('代碼') && !db().claimSubmissions.find((s) => s.id === S0.id).rejects?.length, '預覽：對到 2 筆（逗號、Tab 都可以）、重複、找不到、代碼錯；不存')
+    const r = await C.importRejectFile('opd', S0.month, text)
+    const rj = db().claimSubmissions.find((s) => s.id === S0.id).rejects
+    ok(rj.length === 2 && rj.map((x) => x.code).join() === 'R01,R02' && r.board.totals.rejected === 2 && db().auditLogs[0].action === '健保申報退件匯入' && db().auditLogs[0].detail.includes('略過 3 行'), '匯入：記 2 筆、略過 3 行、稽核')
+    ok((await errOf(() => C.importRejectFile('opd', S0.month, text))).includes('沒有可以記的') && (await C.previewRejectFile('opd', S0.month, text)).lines[0].error === '已經記過退件', '再匯一次：都記過了 → 擋')
+    ok((await errOf(() => C.importRejectFile('opd', S0.month, '病歷號,日期,代碼,說明'))).includes('空的'), '只有標題：檔案是空的')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

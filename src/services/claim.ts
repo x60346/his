@@ -5,7 +5,7 @@ import type { ClaimItem, ClaimKind, ClaimSubmission } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, mutate, query, requirePermission } from './http'
-import { canSubmitMonth, claimCsv, claimXml, CLAIM_KIND_LABEL, CLAIM_REJECT_CODES, monthOf, rejectLabel } from './claim-rules'
+import { canSubmitMonth, claimCsv, claimXml, CLAIM_KIND_LABEL, CLAIM_REJECT_CODES, monthOf, parseRejectFile, rejectLabel } from './claim-rules'
 import { claimMonthsOf, openMonthRows, submissionOf, type ClaimRow } from './claim-work'
 import { caseTypes } from '@/mock/codes'
 import { DRG_TABLE } from './drg-rules'
@@ -168,6 +168,57 @@ export function rejectClaimItem(kind: string, month: string, refId: string, inpu
     ;(s!.rejects ??= []).push({ refId, code: input.code, note: input.note?.trim() ?? '', by: u.id, at: now() })
     audit('健保申報退件', `${CLAIM_KIND_LABEL[k]} ${m}：${nameOf.patient(it!.patientId)} ${it!.date} ${it!.claim} 點（${rejectLabel(input.code)}${input.note?.trim() ? `，${input.note.trim()}` : ''}）`)
     return boardOf(k, m)
+  })
+}
+
+export interface RejectFilePreview {
+  lines: { line: number; chartNo: string; date: string; code: string; codeLabel: string; note: string; refId?: string; patientName?: string; claim?: number; error?: string }[]
+  ok: number
+  bad: number
+}
+/** 檢核結果檔每一行對到送出申報的哪一筆（病歷號＋日期），能不能記退件 */
+function resolveRejectFile(s: ClaimSubmission, text: string): RejectFilePreview {
+  const seen = new Set<string>()
+  const lines = parseRejectFile(text).map((x) => {
+    const base = { line: x.line, chartNo: x.chartNo, date: x.date, code: x.code, codeLabel: x.error ? '' : rejectLabel(x.code), note: x.note }
+    if (x.error) return { ...base, error: x.error }
+    const hits = s.items.filter((i) => i.date === x.date && find.patient(i.patientId)?.chartNo === x.chartNo)
+    const it = hits.length > 1 ? hits.filter((i) => !i.supplementOf) : hits
+    if (!it.length) return { ...base, error: `這個月送出的申報裡找不到 ${x.chartNo} ${x.date}` }
+    if (it.length > 1) return { ...base, error: '同一天有兩筆以上，請到畫面上逐筆記' }
+    const r = it[0]
+    const more = { refId: r.refId, patientName: nameOf.patient(r.patientId), claim: r.claim }
+    const why = seen.has(r.refId) ? '檔案裡重複' : s.rejects?.some((j) => j.refId === r.refId) ? '已經記過退件' : sentLater(s, r.refId) ? '之後的月份已經重送或補報這筆' : db.claimCuts.some((c) => c.submissionId === s.id && c.refId === r.refId) ? '這筆已經有核減紀錄' : undefined
+    seen.add(r.refId)
+    return { ...base, ...more, ...(why ? { error: why } : {}) }
+  })
+  return { lines, ok: lines.filter((l) => !l.error).length, bad: lines.filter((l) => l.error).length }
+}
+
+/** 預覽檢核結果檔（不存）：每行對到哪一筆、哪些行有問題 */
+export function previewRejectFile(kind: string, month: string, text: string): Promise<RejectFilePreview> {
+  return query(() => {
+    requirePermission('nhi.claim')
+    const s = submissionOf(KIND(kind), MONTH(month))
+    if (!s) fail('這個月還沒送出：送出後才有檢核結果', 'CONFLICT')
+    return resolveRejectFile(s!, text)
+  })
+}
+
+/** 匯入檢核結果檔：只記沒問題的行（有問題的略過，回傳結果讓畫面列出）；一行都沒有可以記的就擋 */
+export function importRejectFile(kind: string, month: string, text: string): Promise<{ board: ClaimBoard; preview: RejectFilePreview }> {
+  return mutate(() => {
+    const u = requirePermission('nhi.claim')
+    const k = KIND(kind)
+    const m = MONTH(month)
+    const s = submissionOf(k, m)
+    if (!s) fail('這個月還沒送出：送出後才有檢核結果', 'CONFLICT')
+    const pv = resolveRejectFile(s!, text)
+    if (!pv.ok) fail(pv.lines.length ? '沒有可以記的退件（每一行都有問題，請看預覽）' : '檔案是空的', 'CONFLICT')
+    const t = now()
+    for (const l of pv.lines.filter((x) => !x.error)) (s!.rejects ??= []).push({ refId: l.refId!, code: l.code, note: l.note, by: u.id, at: t })
+    audit('健保申報退件匯入', `${CLAIM_KIND_LABEL[k]} ${m}：記 ${pv.ok} 筆${pv.bad ? `、略過 ${pv.bad} 行` : ''}`)
+    return { board: boardOf(k, m), preview: pv }
   })
 }
 

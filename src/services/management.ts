@@ -12,7 +12,8 @@ import { givenAbxDoses } from './abx-metrics-work'
 import { perThousand } from './abx-metrics-rules'
 import { ipdItemOf } from './claim-work'
 import { DRG_TABLE } from './drg-rules'
-import { cmiOf } from './management-rules'
+import { cmiOf, rejectRateOf } from './management-rules'
+import { cutRate } from './claim-rules'
 
 const SEEN = new Set(['consulted', 'charged', 'dispensed'])
 
@@ -50,6 +51,12 @@ export interface MonthMetrics {
   imagingReports: number | null
   /** 門診有開藥的看診數 */
   prescriptions: number | null
+  /** 健保申報（這個月份送出的，門診＋住院；沒送的月份 null）：申請點數、退件率、淨核減率、補報點數、期中申報點數 */
+  claimPoints: number | null
+  rejectRate: number | null
+  cutRate: number | null
+  supplementPoints: number | null
+  interimPoints: number | null
   byFeeType: DailyReport['byFeeType'] | null
 }
 
@@ -71,6 +78,7 @@ function metricsOf(month: string, t: string): MonthMetrics {
   const empty: MonthMetrics = {
     month, from, to, hasData, opdVisits: null, opdFirst: null, opdRevisit: null, admissions: null, discharges: null, patientDays: null, occupancy: null, alos: null, abxDdd: null, cmi: null,
     collected: null, revenueOpd: null, revenueIpd: null, revenueOther: null, nhiPoints: null, drugShare: null, labReports: null, imagingReports: null, prescriptions: null, byFeeType: null,
+    claimPoints: null, rejectRate: null, cutRate: null, supplementPoints: null, interimPoints: null,
   }
   if (!hasData) return empty
   const days = diffDays(from, to) + 1
@@ -98,6 +106,22 @@ function metricsOf(month: string, t: string): MonthMetrics {
     imagingReports: db.imagingReports.filter((r) => inR(r.reportedAt, from, to)).length,
     prescriptions: db.encounters.filter((e) => e.status === 'completed' && e.medications.length && e.date >= from && e.date <= to).length,
     byFeeType: rep.byFeeType,
+    ...claimMetrics(month),
+  }
+}
+
+/** 健保申報指標：這個月份送出的申報（退件的不算申報點數；核減率用申復、爭議審議補付後的淨核減） */
+function claimMetrics(month: string): Pick<MonthMetrics, 'claimPoints' | 'rejectRate' | 'cutRate' | 'supplementPoints' | 'interimPoints'> {
+  const subs = db.claimSubmissions.filter((s) => s.month === month)
+  if (!subs.length) return { claimPoints: null, rejectRate: null, cutRate: null, supplementPoints: null, interimPoints: null }
+  const items = subs.flatMap((s) => s.items.map((x) => ({ x, rejected: !!s.rejects?.some((r) => r.refId === x.refId) })))
+  const all = items.reduce((n, i) => n + i.x.claim, 0)
+  const rejected = items.filter((i) => i.rejected).reduce((n, i) => n + i.x.claim, 0)
+  const cuts = db.claimCuts.filter((c) => subs.some((s) => s.id === c.submissionId))
+  const net = cuts.reduce((n, c) => n + c.points - (c.result?.outcome === 'paid' ? c.result.points : 0) - (c.dispute?.result?.outcome === 'paid' ? c.dispute.result.points : 0), 0)
+  return {
+    claimPoints: all - rejected, rejectRate: rejectRateOf(rejected, all), cutRate: cutRate(net, all - rejected),
+    supplementPoints: items.filter((i) => i.x.supplementOf && !i.rejected).reduce((n, i) => n + i.x.claim, 0), interimPoints: items.filter((i) => i.x.interim && !i.rejected).reduce((n, i) => n + i.x.claim, 0),
   }
 }
 

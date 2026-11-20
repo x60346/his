@@ -2683,7 +2683,7 @@ export interface PreAuth {
   notes: { at: string; by: string; text: string }[]
   submittedAt?: string
   submittedBy?: string
-  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string; /** 門診核准量（藥品單位，例：6 支）；沒有＝不限 */ qty?: number; /** 門診核准次數（療程：可調劑幾次，慢箋每次領藥都算）；沒有＝不限 */ times?: number }
+  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string; /** 門診核准量（藥品單位，例：6 支）；沒有＝不限 */ qty?: number; /** 門診核准次數（療程：可調劑幾次，慢箋每次領藥都算）；沒有＝不限 */ times?: number; /** 門診兩次健保開立至少間隔幾天（例：28）；沒有＝不限 */ interval?: number }
   /** 病人同意改自費（這次自費，之後核准也不退） */
   selfPay?: { at: string; by: string; note: string }
   /** 緊急先用（醫師寫理由；仍要送審、申報照檢核） */
