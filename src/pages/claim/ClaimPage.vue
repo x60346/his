@@ -28,6 +28,11 @@ async function submit() {
   if (!(await ui.confirm({ title: `送出 ${b.value.month} 申報`, message: `${b.value.totals.count} 筆、申請 ${fmt(b.value.totals.claim)} 點。送出後這個月鎖定，之後的更正列在下個月補報。`, okText: '送出' }))) return
   await submitAct.run(b.value.kind, b.value.month)
 }
+async function exportXml() {
+  if (!b.value) return
+  const r = await claimApi.claimXmlOf(b.value.kind, b.value.month)
+  downloadFile(r.xml, 'application/xml;charset=utf-8', r.filename)
+}
 async function exportCsv() {
   if (!b.value) return
   const r = await claimApi.claimCsvOf(b.value.kind, b.value.month)
@@ -58,7 +63,7 @@ async function submitEx() {
         <section class="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
           <div><div class="text-xs text-slate-500">{{ b.month }} 申報</div><div class="tabular text-2xl font-semibold text-slate-800">{{ fmt(b.totals.claim) }} 點</div></div>
           <div class="text-xs text-slate-600">
-            {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
+            {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.interim">・期中 {{ b.totals.interim }} 筆</template><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
             <div v-if="b.totals.drg" class="mt-0.5">DRG {{ b.totals.drg.count }} 筆，盈虧合計 <b :class="b.totals.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ b.totals.drg.diff >= 0 ? '+' : '' }}{{ fmt(b.totals.drg.diff) }}</b> 點<template v-if="b.totals.drg.exempt">・不適用 DRG {{ b.totals.drg.exempt }} 筆</template><template v-if="b.totals.drg.cmi !== null">・CMI {{ b.totals.drg.cmi.toFixed(2) }}</template></div>
             <div class="mt-0.5 flex flex-wrap gap-2">
               <span v-for="c in b.totals.byCase" :key="c.caseType" class="rounded bg-slate-100 px-1.5">{{ c.label }}：{{ c.count }} 筆 {{ fmt(c.claim) }} 點</span>
@@ -68,6 +73,7 @@ async function submitEx() {
             <UBadge v-if="b.submitted" tone="green">已送出・{{ b.submitted.at.slice(5) }} {{ b.submitted.byName }}</UBadge>
             <UBadge v-else-if="b.totals.problems" tone="red">檢核有問題 {{ b.totals.problems }} 筆</UBadge>
             <UButton size="sm" variant="secondary" :icon="Download" @click="exportCsv">匯出 CSV</UButton>
+            <UButton size="sm" variant="secondary" :icon="Download" :title="b.submitted ? '' : '還沒送出：檔案標為草稿'" @click="exportXml">匯出 XML{{ b.submitted ? '' : '（草稿）' }}</UButton>
             <UButton v-if="!b.submitted" size="sm" :icon="Send" :disabled="!b.canSubmit" :title="b.whyNot" :loading="submitAct.pending.value" @click="submit">送出</UButton>
           </div>
           <p v-if="!b.submitted && b.whyNot" class="w-full text-xs text-amber-800">{{ b.whyNot }}</p>
@@ -87,7 +93,7 @@ async function submitEx() {
               <template v-for="r in rows" :key="r.refId + (r.supplementOf ?? '')">
                 <tr :class="r.excluded ? 'text-slate-400' : r.problems.length ? 'bg-red-50/50' : ''">
                   <td class="tabular px-2 py-1.5">{{ r.date }}</td>
-                  <td class="px-2"><span class="text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div></td>
+                  <td class="px-2"><span class="text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div><UBadge v-if="r.interim" tone="blue" class="ml-1">期中（住院中，到 {{ r.interim.through.slice(5) }}）</UBadge><div v-if="r.interimPrior" class="text-xs text-blue-800">期中已報 {{ fmt(r.interimPrior) }} 點，這筆報差額</div></td>
                   <td class="px-2">{{ r.patientName }}<span class="ml-1 text-xs text-slate-400">{{ r.chartNo }}</span></td>
                   <td class="px-2 text-xs">{{ r.doctorName }}</td>
                   <td class="px-2 text-xs">{{ r.diagnosis || '—' }}</td>

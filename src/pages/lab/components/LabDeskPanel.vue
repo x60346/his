@@ -70,6 +70,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
       <div class="flex min-w-[14rem] flex-1 flex-col gap-2">
         <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
           <span>等候 <b class="tabular text-base text-slate-900">{{ data.queue.waiting.length }}</b> 位</span>
+          <span v-for="l in data.queue.lanes.filter((x) => x.called)" :key="l.lane" class="text-xs text-slate-500">{{ l.label }}：叫了 {{ l.called }} 位・平均等 {{ l.avgWait ?? '—' }} 分</span>
           <span>今天平均等候 <b class="tabular text-base text-slate-900">{{ data.queue.avgWait ?? '—' }}</b> 分鐘</span>
           <a :href="screenUrl" target="_blank" rel="noopener" class="ml-auto inline-flex items-center gap-1 text-blue-700 hover:underline"><ExternalLink class="h-3.5 w-3.5" />候診螢幕</a>
         </div>

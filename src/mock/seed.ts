@@ -761,10 +761,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   ipdScenarios.forEach((sc, i) => {
     const pt = ipdPatients[i]
-    // 腦梗塞（雙人房）住比較久：示範住院中費用查詢、期中繳款提醒（滿 30 天、部分負擔進第二段）。亂數照樣抽，其他人的資料不變
+    // 腦梗塞（雙人房）住比較久：示範住院中費用查詢、期中繳款提醒（滿 30 天、部分負擔進第二段）、健保期中申報（上個月底已住滿 30 天：
+    // 入院日依今天是幾號往前推，最多 60 天，部分負擔仍在第二段）。亂數照樣抽，其他人的資料不變
     const rolled = int(1, 6)
     // 蜂窩性組織炎住 9 天：示範抗生素每日審視「Vancomycin 超過 7 天」
-    const daysIn = i === 4 ? 32 : i === 5 ? 9 : rolled
+    const daysIn = i === 4 ? Math.min(60, Math.max(32, 31 + Number(T.slice(8, 10)))) : i === 5 ? 9 : rolled
     const admitDate = addDays(T, -daysIn)
     // 隔離示範（不抽亂數）：肺炎（疑似肺結核、空氣隔離）住綜合病房的單人房；蜂窩性組織炎（MRSA、接觸隔離）住綜合病房健保床，同房另一床空著
     const cls: Bed['bedClass'] = i === 0 || i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'

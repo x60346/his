@@ -207,6 +207,8 @@ try {
   }
   /** 今天前後 n 天（YYYY-MM-DD） */
   const addDaysT = (n) => dateUtil.addDays(T, n)
+  /** 種子腦梗塞那位住了幾天（上個月底就要住滿 30 天：依今天幾號往前推，最多 60，見 seed） */
+  const LONG_DAYS = Math.min(60, Math.max(32, 31 + Number(T.slice(8, 10))))
   /** 退回藥庫：藥庫全部同意、藥局送出（申請 → 核准 → 運送中） */
   const approveAndShip = async (rt) => {
     await api.transferApi.approveReturn(rt.id, { approved: Object.fromEntries(rt.lines.map((l) => [l.id, l.lots.map((x) => x.requestedQty ?? x.qty)])) })
@@ -10566,7 +10568,7 @@ try {
     ok(tl.from === cell.admittedAt.slice(0, 10) && tl.to === T && tl.days.length === 10 && van?.restricted && van.dot >= 7 && tl.rows.find((r) => r.drugId === 'M036')?.name === 'Ceftriaxone', `蜂窩性組織炎：住院 ${tl.days.length} 天、Ceftriaxone 與 Vancomycin（管制性）各一列`)
     ok(tl.cultures.length === 2 && tl.cultures[0].summary.includes('MRSA') && tl.cultures[1].summary === '無菌生長' && tl.labs.some((l) => l.kind === 'vant' && l.value === 22 && l.flag === 'H') && tl.advice.length === 1 && tl.advice[0].statusLabel === '待主治回覆', '培養（MRSA、無菌生長）、谷濃度 22（高）、感染科建議（待回覆）都在時間軸上')
     tl = await api.abxTimelineApi.abxTimeline(st.id)
-    ok(tl.days.length === 33 && tl.rows.map((r) => r.drugId).join() === 'M042,M004' && tl.cultures.some((c) => c.summary.includes('大腸桿菌')), '腦梗塞（住 33 天）：前天的 Vancomycin 預防、昨天的 Augmentin；尿液培養大腸桿菌')
+    ok(tl.days.length === LONG_DAYS + 1 && tl.rows.map((r) => r.drugId).join() === 'M042,M004' && tl.cultures.some((c) => c.summary.includes('大腸桿菌')), `腦梗塞（住 ${LONG_DAYS + 1} 天）：前天的 Vancomycin 預防、昨天的 Augmentin；尿液培養大腸桿菌`)
     await as('nurse01')
     let msg = ''
     try { await api.abxTimelineApi.abxTimeline(cell.id) } catch (e) { msg = e.message }
@@ -13782,21 +13784,21 @@ try {
       }
     }
     const adm = (id) => db().admissions.find((a) => a.id === id)
-    // 種子：腦梗塞住了 32 天（滿 30 天提醒、部分負擔進第二段）；其他人住幾天、費用不多，不提醒
+    // 種子：腦梗塞住了 LONG_DAYS 天（32–60：滿 30 天提醒、部分負擔進第二段）；其他人住幾天、費用不多，不提醒
     const long = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('I63.9'))
-    ok(!!long && long.admittedAt.startsWith(addDaysT(-32)) && !long.dischargeSummary?.signedAt, '種子：腦梗塞住院 32 天、還沒准出院')
+    ok(!!long && long.admittedAt.startsWith(addDaysT(-LONG_DAYS)) && !long.dischargeSummary?.signedAt, `種子：腦梗塞住院 ${LONG_DAYS} 天、還沒准出院`)
     // 種子今天這位病人有一台擴大切除送到手術室（手術室效率的首台延誤示範）；這段測帳務，先把那台當作取消（測試輔助）
     for (const s of db().surgeries.filter((x) => x.admissionId === long.id && x.status === 'sent')) Object.assign(s, { status: 'cancelled', cancelled: { by: 'U202', at: nowStr(), reason: '測試輔助' } })
     await as('clerk01')
     const lst = await IC.listIpdBilling()
     const li = lst.find((x) => x.admissionId === long.id)
-    ok(li.suggestInterim?.includes('住院第 33 天') && li.interimPaid === 0, `住院結帳清單標「${li.suggestInterim}」`)
+    ok(li.suggestInterim?.includes(`住院第 ${LONG_DAYS + 1} 天`) && li.interimPaid === 0, `住院結帳清單標「${li.suggestInterim}」`)
     const others = lst.filter((x) => x.admissionId !== long.id && x.status === 'admitted' && !x.receiptNo)
     const bills = await Promise.all(others.map((x) => IC.getIpdBill(x.admissionId)))
     ok(others.every((x, i) => !x.suggestInterim === (x.dischargeReady || x.days < 30 && bills[i].bill.patientTotal < 30000)), '其他住院病人：沒滿 30 天、累計沒到 30,000 元（或已准出院）就不提醒')
     ok((await api.dashboardApi.getDashboard()).ipdInterim === lst.filter((x) => x.suggestInterim).length, '櫃台首頁「建議期中繳款」＝清單上標記的人數')
     const v0 = await IC.getIpdBill(long.id)
-    ok(v0.bill.meta.days === 32 && v0.bill.meta.copay.length === 2 && v0.interim.held === 0 && v0.interim.due === v0.bill.patientTotal && v0.interim.max === v0.bill.patientTotal && !v0.interim.blocked, `試算 ${v0.bill.patientTotal} 元（32 天、部分負擔兩段）；最多可期中繳 ${v0.interim.max} 元`)
+    ok(v0.bill.meta.days === LONG_DAYS && v0.bill.meta.copay.length === 2 && v0.interim.held === 0 && v0.interim.due === v0.bill.patientTotal && v0.interim.max === v0.bill.patientTotal && !v0.interim.blocked, `試算 ${v0.bill.patientTotal} 元（${LONG_DAYS} 天、部分負擔兩段）；最多可期中繳 ${v0.interim.max} 元`)
     // 權限
     await as('ph01')
     await expectError(() => IC.getIpdStatement(long.id), '藥師查住院費用明細')
@@ -16979,7 +16981,7 @@ try {
     }
     const MT = b.month
     ok(MT < M0 && !b.submitted && b.canSubmit && b.rows.length >= 1, `預設最近一個已結束、還沒送的月份（${MT}）：${b.rows.length} 筆可以送`)
-    ok(b.rows.every((r) => r.caseType === 'IPD' && r.days >= 1 && Math.abs(Object.values(r.categories).reduce((n, x) => n + x, 0) - r.points) < 0.01 && r.categories.ward > 0), '每筆：天數、各類別加總＝健保點數、有病房費')
+    ok(b.rows.filter((r) => !r.interim).every((r) => r.caseType === 'IPD' && r.days >= 1 && Math.abs(Object.values(r.categories).reduce((n, x) => n + x, 0) - r.points) < 0.01 && r.categories.ward > 0), '每筆（期中的除外，期中是累計差額、不分類別）：天數、各類別加總＝健保點數、有病房費')
     await as('clerk01')
     await api.ipdChargeApi.payIpd('A-DAY-1', { payMethod: 'card', received: 0 })
     await as('clerk02')
@@ -17007,7 +17009,7 @@ try {
     sg.implants = keep
     // 送出、匯出
     b = await C.submitClaim('ipd', MT)
-    ok(b.submitted && db().claimSubmissions.find((s) => s.kind === 'ipd' && s.month === MT).items.every((x) => x.categories && x.days), `送出 ${MT} 住院：${b.totals.count} 筆、申請 ${b.totals.claim} 點`)
+    ok(b.submitted && db().claimSubmissions.find((s) => s.kind === 'ipd' && s.month === MT).items.every((x) => x.interim || (x.categories && x.days)), `送出 ${MT} 住院：${b.totals.count} 筆、申請 ${b.totals.claim} 點`)
     const ex = await C.claimCsvOf('ipd', MT)
     ok(ex.csv.split('\n')[0].includes('天數') && ex.csv.split('\n')[0].includes('特材（植入物）') && ex.filename.includes('住院'), '匯出：住院多天數與各類別欄')
     ok(!(await C.claimBoard('opd', M1)).submitted, '門診和住院分開送')
@@ -17676,7 +17678,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const b = await api.claimApi.claimBoard('ipd', r.item.claimed.supplementMonth)
     const sr = b.rows.find((x) => x.refId === cand.id && x.supplementOf)
     ok(sr && sr.claim === r.item.claimed.delta && sr.supplementNote?.includes(`DRG ${r.drgBefore.code} → ${r.drgAfter.code}`) && sr.supplementNote.includes(alt.code), `申報：${sr?.supplementOf} 的補報 ${sr?.claim} 點、註明「${sr?.supplementNote}」`)
-    ok(api.claimCsv('ipd', [{ ...sr, patientName: 'x', chartNo: 'x', doctorName: 'x' }]).split('\n')[1].endsWith(sr.supplementNote), 'CSV 多「補報原因」欄')
+    ok(api.claimCsv('ipd', [{ ...sr, patientName: 'x', chartNo: 'x', doctorName: 'x' }]).split('\n')[1].includes(`,${sr.supplementNote}`), 'CSV 多「補報原因」欄')
     ok((await load('/src/services/claim-work.ts')).supplementNoteOf([{ diagnosis: 'A01 x', drg: { code: '1' } }], { diagnosis: 'A01 x', drg: { code: '1' } }) === undefined, '補收、作廢的補報：不寫改碼')
     await as('clerk01')
     // 再更正回原來的：差額歸零（不列補報）
@@ -17962,6 +17964,97 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await D.closeLabWindow()
     desk = await D.labDesk()
     ok(!desk.queue.dropOpen && !(await D.labQueueDisplay()).nextDrop, '檢體窗口關了：照一條排、候診螢幕不分')
+  }
+  // 住院期中申報：到月底住滿 30 天、還沒出院的先報到月底的累計；下個月報增加的；出院那筆只報差額
+  console.log('\n[住院期中申報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const CW = await load('/src/services/claim-work.ts')
+    const IB = await load('/src/services/ipd-bill.ts')
+    ok(api.monthEnd('2026-02') === '2026-02-28' && api.monthEnd('2024-02') === '2024-02-29' && api.monthEnd('2026-12') === '2026-12-31', '月底：平年、閏年、12 月')
+    ok(api.interimDaysOf({ admittedAt: '2026-10-02 10:00' }, '2026-10') === 30 && api.interimDaysOf({ admittedAt: '2026-10-02 10:00', dischargedAt: '2026-10-20 10:00' }, '2026-10') === undefined && api.interimDaysOf({ admittedAt: '2026-11-02 10:00' }, '2026-10') === undefined && api.interimDaysOf({ admittedAt: '2026-10-02 10:00', dischargedAt: '2026-11-03 10:00' }, '2026-10') === 30, '到月底住幾天（入院當天算 1）；月底前出院、還沒入院的不算；下個月才出院的算')
+    const cm0 = T.slice(0, 7)
+    const cm1 = dateUtil.addDays(`${cm0}-01`, -1).slice(0, 7)
+    const a = db().admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('I63'))
+    ok(a && api.interimDaysOf(a, cm1) >= 30, `種子：腦梗塞那位到 ${cm1} 月底住 ${api.interimDaysOf(a, cm1)} 天`)
+    await as('clerk02')
+    let b = await api.claimApi.claimBoard('ipd', cm1)
+    const row = b.rows.find((r) => r.refId === a.id)
+    const lp1 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm1)).lines)
+    ok(row && row.interim?.through === api.monthEnd(cm1) && row.caseLabel === '住院' && !row.problems.length && row.claim === lp1.claim && row.days === api.interimDaysOf(a, cm1) && b.totals.interim === 1, `${cm1} 期中：申報到月底 ${row?.claim} 點（帳單算到月底）、天數、不用編碼檢核`)
+    ok(!(await api.claimApi.claimBoard('ipd', cm0)).rows.some((r) => r.interim), '這個月還沒結束：不列期中')
+    const csv = (await api.claimApi.claimCsvOf('ipd', cm1)).csv
+    ok(csv.split('\n')[0].includes('期中申報到') && csv.includes(api.monthEnd(cm1)), 'CSV 有期中欄')
+    // 送出這個月（有檢核問題的先排除）
+    for (const r of b.rows.filter((x) => x.problems.length && !x.excluded && !x.supplementOf)) await api.claimApi.excludeClaim('ipd', cm1, r.refId, '測試：排除')
+    b = await api.claimApi.submitClaim('ipd', cm1)
+    const sub = db().claimSubmissions.find((s) => s.kind === 'ipd' && s.month === cm1)
+    const it1 = sub.items.find((x) => x.refId === a.id)
+    ok(it1?.interim && it1.claim === lp1.claim, '送出：期中那筆鎖在這個月')
+    // 下一個月（還沒出院）：報增加的
+    const next = api.nextMonth(cm0)
+    const rows2 = CW.openMonthRows('ipd', cm0, next)
+    const r2 = rows2.find((r) => r.refId === a.id)
+    const lp2 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm0)).lines)
+    ok(r2?.interim && r2.claim === lp2.claim - lp1.claim && r2.claim > 0, `下個月還住著：期中報增加的 ${r2?.claim} 點（累計 − 已報）`)
+    // 出院（測試輔助：直接改成已出院、補一張住院收據）：出院那筆只報差額
+    const t = dateUtil.now()
+    a.status = 'discharged'
+    a.dischargedAt = t
+    a.dischargeType = '治癒出院'
+    a.coding = { at: t, by: 'U401', mainDiagnosis: a.diagnosis, secondary: [], changed: false }
+    a.dischargeSummary = { ...(a.dischargeSummary ?? {}), diagnosis: a.diagnosis, signedAt: t }
+    const full = IB.ipdBillOf(a, T)
+    db().charges.push({ id: 'CH-T-INT', visitId: '', admissionId: a.id, patientId: a.patientId, lines: full.lines, voided: false, paidAt: t })
+    const r3 = CW.openMonthRows('ipd', cm0, next).find((r) => r.refId === a.id)
+    const lpF = api.linePoints(full.lines)
+    ok(r3 && !r3.interim && r3.interimPrior === lp1.claim && r3.claim === lpF.claim - lp1.claim, `出院那筆：期中已報 ${lp1.claim}，只報差額 ${r3?.claim}`)
+    ok(api.claimXml('ipd', cm0, [{ ...r3, patientName: 'x', chartNo: 'x', doctorName: 'x' }], { generatedAt: t }).includes(`interimPrior="${lp1.claim}"`), 'XML 帶期中已報')
+  }
+  // 申報 XML（示範格式）：表頭、總表、每一筆；跳脫；草稿／已送出；身分證號；稽核；權限
+  console.log('\n[申報 XML]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const x = api.claimXml('opd', '2026-10', [{ refId: 'V1', patientId: 'P', doctorId: 'D', deptId: 'X', date: '2026-10-01', caseType: '01', diagnosis: 'A&B <c> "d"', points: 100, copay: 50, claim: 50, patientName: '王<小>明', chartNo: '1', doctorName: '醫', idNo: 'A123456789' }], { generatedAt: '2026-11-01 10:00' })
+    ok(x.startsWith('<?xml') && x.includes('status="draft"') && x.includes('diagnosis="A&amp;B &lt;c&gt; &quot;d&quot;"') && x.includes('name="王&lt;小&gt;明"') && x.includes('<summary count="1" points="100" copay="50" claim="50"') && x.includes('不是健保署正式申報格式'), '格式：跳脫特殊字元、草稿、總表、註明示範')
+    const sub = db().claimSubmissions.find((s) => s.kind === 'opd')
+    await as('dr01')
+    ok((await errOf(() => api.claimApi.claimXmlOf('opd', sub.month))).includes('健保申報'), '要「健保申報」權限')
+    await as('clerk02')
+    const r = await api.claimApi.claimXmlOf('opd', sub.month)
+    const n = (r.xml.match(/<case /g) ?? []).length
+    const pt = db().patients.find((p) => p.id === sub.items[0].patientId)
+    ok(r.filename.endsWith(`${sub.month}.xml`) && r.xml.includes('status="submitted"') && n === sub.items.length && r.xml.includes(`idNo="${pt.idNo}"`) && db().auditLogs[0].action === '健保申報匯出 XML', `已送出 ${sub.month}：${n} 筆、帶身分證號、稽核`)
+    const open = (await api.claimApi.claimBoard('opd')).month
+    const r2 = await api.claimApi.claimXmlOf('opd', open)
+    ok(r2.filename.includes('草稿') && r2.xml.includes('status="draft"') && db().auditLogs[0].detail.includes('草稿'), `還沒送的 ${open}：檔名與內容標草稿`)
+    const ri = await api.claimApi.claimXmlOf('ipd', db().claimSubmissions.find((s) => s.kind === 'ipd').month)
+    ok(ri.xml.includes('<category code=') && (ri.xml.includes('<drg ') || ri.xml.includes('<drgExempt')), '住院：費用類別、DRG')
+  }
+  // 抽血分流統計：抽血、交檢體各叫了幾位、平均等候；候診螢幕在檢體窗口開著時顯示交檢體的平均等候
+  console.log('\n[抽血分流統計]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.labDeskApi
+    await as('lab01')
+    let q = (await D.labDesk()).queue
+    const blood = q.lanes.find((l) => l.lane === 'blood')
+    const drop = q.lanes.find((l) => l.lane === 'drop')
+    const cs = db().labCheckins.filter((c) => c.date === T)
+    ok(blood.label === '抽血' && drop.label === '交檢體' && drop.called === cs.filter((c) => c.lane === 'drop' && c.calls?.length).length && blood.called === cs.filter((c) => !c.lane && c.calls?.length).length, `今天抽血叫了 ${blood.called} 位、交檢體 ${drop.called} 位`)
+    ok(drop.called === 0 || drop.avgWait === api.avgWait(cs.filter((c) => c.lane === 'drop')), `交檢體平均等 ${drop.avgWait ?? '—'} 分（和規則同一算法）`)
+    ok((await D.labQueueDisplay()).avgWaitDrop === undefined, '檢體窗口沒開：候診螢幕不分')
+    await as('lab02')
+    const cur2 = db().labCheckins.find((c) => c.date === T && c.window === 2 && c.calls?.length && !c.servedAt && !c.skippedAt)
+    if (cur2) await D.skipLab(cur2.patientId)
+    if (db().labWindows.some((w) => w.date === T && w.userId === 'U602' && !w.closedAt)) await D.closeLabWindow()
+    await D.openLabWindow(3)
+    const disp = await D.labQueueDisplay()
+    ok(drop.called ? disp.avgWaitDrop === drop.avgWait : disp.avgWaitDrop === undefined, '檢體窗口開著：候診螢幕顯示交檢體的平均等候')
   }
 } catch (e) {
   failed++

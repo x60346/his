@@ -16,6 +16,22 @@ export function nextMonth(m: string): string {
   const [y, mo] = m.split('-').map(Number)
   return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`
 }
+/** 住院期中申報：到月底已住滿幾天、還沒出院的，那個月先報（之後每月報增加的，出院那個月報剩下的差額） */
+export const INTERIM_DAYS = 30
+/** 這個月最後一天 */
+export const monthEnd = (m: string) => {
+  const d = new Date(`${nextMonth(m)}-01T00:00:00`)
+  d.setDate(d.getDate() - 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+/** 到 m 月底住了幾天（入院那天算第 1 天）；月底前已出院、還沒入院的＝undefined */
+export function interimDaysOf(a: { admittedAt?: string; dischargedAt?: string }, m: string): number | undefined {
+  const end = monthEnd(m)
+  if (!a.admittedAt || a.admittedAt.slice(0, 10) > end) return undefined
+  if (a.dischargedAt && a.dischargedAt.slice(0, 10) <= end) return undefined
+  return Math.round((new Date(`${end}T00:00:00`).getTime() - new Date(`${a.admittedAt.slice(0, 10)}T00:00:00`).getTime()) / 86400000) + 1
+}
+
 /** 月份要結束了才能送（這個月以前） */
 export const canSubmitMonth = (month: string, today: string) => month < monthOf(today)
 
@@ -110,9 +126,9 @@ export const cutRate = (cut: number, claimed: number) => (claimed > 0 ? Math.rou
 /** 匯出 CSV（每筆一列）：住院多各費用類別欄 */
 export function claimCsv(kind: ClaimKind, rows: (ClaimItem & { patientName: string; chartNo: string; doctorName: string })[]): string {
   const cats = kind === 'ipd' ? CLAIM_CATEGORIES : []
-  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', ...(kind === 'ipd' ? ['DRG', 'DRG 定額', 'DRG 給付', '盈虧', '不適用 DRG'] : []), '申請點數', '補報', '補報原因']
+  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', ...(kind === 'ipd' ? ['DRG', 'DRG 定額', 'DRG 給付', '盈虧', '不適用 DRG'] : []), '申請點數', '補報', '補報原因', ...(kind === 'ipd' ? ['期中申報到', '期中已報'] : [])]
   const esc = (v: unknown) => ((s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s))(String(v ?? ''))
-  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, ...(kind === 'ipd' ? [r.drg?.code ?? '', r.drg?.points ?? '', r.drg?.pay ?? '', r.drg?.diff ?? '', r.drgExempt ?? ''] : []), r.claim, r.supplementOf ?? '', r.supplementNote ?? ''].map(esc).join(','))
+  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, ...(kind === 'ipd' ? [r.drg?.code ?? '', r.drg?.points ?? '', r.drg?.pay ?? '', r.drg?.diff ?? '', r.drgExempt ?? ''] : []), r.claim, r.supplementOf ?? '', r.supplementNote ?? '', ...(kind === 'ipd' ? [r.interim?.through ?? '', r.interimPrior ?? ''] : [])].map(esc).join(','))
   return [head.join(','), ...lines].join('\n')
 }
 
@@ -165,4 +181,40 @@ export function checkCut(input: { item?: string; points?: unknown; code?: string
   else if (n > left) e.points = `這一筆最多還能核減 ${left} 點`
   if (!CUT_REASONS.some((r) => r.code === input.code)) e.code = '請選核減理由'
   return e
+}
+
+// ---------- 申報 XML（示範格式） ----------
+
+/** 示範醫院（醫事機構代號是假的） */
+export const CLAIM_HOSPITAL = { code: '0000000000', name: 'HIS 展示醫院' }
+
+const xmlEsc = (v: unknown) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const attrs = (o: Record<string, unknown>) => Object.entries(o).filter(([, v]) => v !== undefined && v !== '' && v !== null).map(([k, v]) => ` ${k}="${xmlEsc(v)}"`).join('')
+
+/**
+ * 申報 XML：表頭（醫院、月份、類別、送出狀態）＋總表＋每一筆（住院多費用類別、DRG、期中、補報）。
+ * 示範用的簡化格式：欄位用好讀的英文名，不是健保署正式的 XML 欄位代碼（t1、d1…），也沒有電子簽章
+ */
+export function claimXml(kind: ClaimKind, month: string, rows: (ClaimItem & { patientName: string; chartNo: string; doctorName: string; idNo?: string })[], status: { submittedAt?: string; generatedAt: string }): string {
+  const sum = (k: 'points' | 'copay' | 'claim') => Math.round(rows.reduce((n, r) => n + r[k], 0) * 100) / 100
+  const head = `<?xml version="1.0" encoding="UTF-8"?>\n<!-- 示範格式：不是健保署正式申報格式，不能上傳 -->`
+  const lines = rows.map((r, i) => {
+    const a = attrs({
+      seq: i + 1, refId: r.refId, date: r.date, caseType: r.caseType, chartNo: r.chartNo, idNo: r.idNo, name: r.patientName, doctor: r.doctorName, diagnosis: r.diagnosis,
+      days: kind === 'ipd' ? r.days : undefined, points: r.points, copay: r.copay, claim: r.claim, supplementOf: r.supplementOf, supplementNote: r.supplementNote, interimThrough: r.interim?.through, interimPrior: r.interimPrior,
+    })
+    const cats = kind === 'ipd' ? CLAIM_CATEGORIES.filter((c) => r.categories?.[c]).map((c) => `      <category code="${c}" name="${xmlEsc(CLAIM_CATEGORY_LABEL[c])}" points="${r.categories![c]}"/>`) : []
+    const drg = r.drg ? [`      <drg${attrs({ code: r.drg.code, name: r.drg.name, fixed: r.drg.points, pay: r.drg.pay, rule: r.drg.rule, diff: r.drg.diff })}/>`] : r.drgExempt ? [`      <drgExempt reason="${xmlEsc(r.drgExempt)}"/>`] : []
+    const inner = [...cats, ...drg]
+    return inner.length ? `    <case${a}>\n${inner.join('\n')}\n    </case>` : `    <case${a}/>`
+  })
+  return [
+    head,
+    `<claim${attrs({ kind, month, hospitalCode: CLAIM_HOSPITAL.code, hospitalName: CLAIM_HOSPITAL.name, status: status.submittedAt ? 'submitted' : 'draft', submittedAt: status.submittedAt, generatedAt: status.generatedAt })}>`,
+    `  <summary${attrs({ count: rows.length, points: sum('points'), copay: sum('copay'), claim: sum('claim'), supplement: rows.filter((r) => r.supplementOf).length, interim: rows.filter((r) => r.interim).length })}/>`,
+    `  <cases>`,
+    ...lines,
+    `  </cases>`,
+    `</claim>`,
+  ].join('\n')
 }

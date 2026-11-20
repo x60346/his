@@ -2,7 +2,8 @@
 // API 在 claim.ts、規則在 claim-rules
 import type { Admission, ClaimItem, ClaimKind, Visit } from '@/types'
 import { db } from '@/mock/db'
-import { ipdCategories, ipdClaimPoints, ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
+import { INTERIM_DAYS, interimDaysOf, ipdCategories, ipdClaimPoints, ipdClaimProblems, linePoints, monthEnd, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
+import { ipdBillOf } from './ipd-bill'
 import { ipdDays } from './billing'
 import { find } from './views'
 import { preAuthUnapproved } from './preauth-work'
@@ -69,6 +70,31 @@ export function ipdRowOf(a: Admission, item: ClaimItem): ClaimRow {
   }
 }
 
+// ---------- 住院期中申報 ----------
+
+/** m 月要期中申報的住院：到月底住滿 30 天、還沒出院（日間手術、急診留觀中的不算）；點數＝帳單算到月底的累計 − 之前報過的 */
+function interimRows(m: string): ClaimRow[] {
+  const end = monthEnd(m)
+  const out: ClaimRow[] = []
+  for (const a of db.admissions) {
+    if (a.status === 'cancelled' || a.status === 'reserved' || (a.day && !a.day.converted) || (a.obs && !a.obs.endAt)) continue
+    const days = interimDaysOf(a, m)
+    if (days === undefined || days < INTERIM_DAYS) continue
+    const lp = linePoints(ipdBillOf(a, end).lines)
+    const prev = submittedFor('ipd', a.id)
+    const r2 = (n: number) => Math.round(n * 100) / 100
+    const claim = lp.claim - prev.reduce((n, x) => n + x.claim, 0)
+    if (claim <= 0) continue
+    const diag = a.diagnosis?.trim() ?? ''
+    out.push({
+      refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: end, caseType: 'IPD', diagnosis: diag,
+      points: r2(lp.points - prev.reduce((n, x) => n + x.points, 0)), copay: r2(lp.copay - prev.reduce((n, x) => n + x.copay, 0)), claim, days, interim: { through: end },
+      problems: diag ? [] : ['沒有入院診斷'],
+    })
+  }
+  return out
+}
+
 // ---------- 月份：這個月的申報清單（還沒送：現在算的＋補報；送了：送出的那份） ----------
 
 const submissionOf = (kind: ClaimKind, month: string) => db.claimSubmissions.find((s) => s.kind === kind && s.month === month)
@@ -87,7 +113,13 @@ export function openMonthRows(kind: ClaimKind, month: string, current: string): 
   const done = (m: string) => !!submissionOf(kind, m)
   for (const r of allRefs(kind)) {
     if (r.month === month && !done(r.month)) {
-      if (r.item) out.push(r.row(r.item))
+      // 出院那筆：之前期中申報過的，只報差額（DRG 照整次住院算，申請點數扣掉期中報過的）
+      const prior = kind === 'ipd' ? submittedFor(kind, r.refId).filter((x) => x.interim) : []
+      if (r.item && prior.length) {
+        const row = r.row(r.item)
+        const p = (k: 'points' | 'copay' | 'claim') => Math.round((row[k] - prior.reduce((n, x) => n + x[k], 0)) * 100) / 100
+        out.push({ ...row, points: p('points'), copay: p('copay'), claim: p('claim'), interimPrior: prior.reduce((n, x) => n + x.claim, 0) })
+      } else if (r.item) out.push(r.row(r.item))
     } else if (done(r.month) && !excludedEver(kind, r.refId) && supplementMonth(r.month, done, current) === month) {
       const prev = submittedFor(kind, r.refId)
       const delta = supplementDelta(r.item, prev)
@@ -99,7 +131,8 @@ export function openMonthRows(kind: ClaimKind, month: string, current: string): 
       out.push({ ...base, points: dp, copay: dc, claim: delta, categories: undefined, supplementOf: r.month, ...(note ? { supplementNote: note } : {}), problems: [] })
     }
   }
-  return out.sort((a, b) => Number(!!a.supplementOf) - Number(!!b.supplementOf) || a.date.localeCompare(b.date))
+  if (kind === 'ipd' && month < current && !done(month)) out.push(...interimRows(month))
+  return out.sort((a, b) => Number(!!a.supplementOf) - Number(!!b.supplementOf) || Number(!!a.interim) - Number(!!b.interim) || a.date.localeCompare(b.date))
 }
 
 /** 補報的原因：和最後一次送出的比，DRG 或主診斷變了（改碼）；其他（補收、作廢）不寫 */

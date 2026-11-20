@@ -73,6 +73,8 @@ export interface DeskQueue {
   streak: number
   skipped: { no: number; patientId: string; patientName: string; skippedAt: string }[]
   avgWait?: number
+  /** 分流統計（今天）：抽血、交檢體各叫了幾位、平均等幾分鐘 */
+  lanes: { lane: 'blood' | 'drop'; label: string; called: number; avgWait?: number }[]
   maxCalls: number
   /** 我開著的窗口；各窗口誰開著、正在叫幾號、今天採了幾位 */
   myWindow?: number
@@ -117,6 +119,7 @@ function deskQueue(userId?: string): DeskQueue {
     streak: streakNow(),
     skipped: cs.filter((c) => queueStage(c) === 'skipped').sort((a, b) => a.no - b.no).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), skippedAt: c.skippedAt! })),
     ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),
+    lanes: (['blood', 'drop'] as const).map((lane) => ((xs) => ({ lane, label: QUEUE_LANE_LABEL[lane], called: xs.filter((c) => c.calls?.length).length, ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(xs)) }))(cs.filter((c) => (c.lane ?? 'blood') === lane))),
     maxCalls: QUEUE_MAX_CALLS,
   }
 }
@@ -293,6 +296,8 @@ export interface QueueDisplay {
   nextDrop?: { no: number; name: string }[]
   waitingCount: number
   avgWait?: number
+  /** 檢體窗口開著時：交檢體的今天平均等候 */
+  avgWaitDrop?: number
 }
 export function labQueueDisplay(): Promise<QueueDisplay> {
   return query(() => {
@@ -305,7 +310,7 @@ export function labQueueDisplay(): Promise<QueueDisplay> {
       ...(cur ? { current: { no: cur.no, name: maskName(nameOf.patient(cur.patientId)), ...(cur.window ? { window: cur.window } : {}) } } : {}),
       calling: cs.filter((c) => queueStage(c) === 'called' && c.window).sort((a, b) => b.calls!.at(-1)!.localeCompare(a.calls!.at(-1)!)).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), window: c.window! })),
       next: order.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), priority: !!c.priority })),
-      ...(dropOpenNow() ? { nextDrop: lo.drop.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)) })) } : {}),
+      ...(dropOpenNow() ? { nextDrop: lo.drop.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)) })), ...((m) => (m !== undefined ? { avgWaitDrop: m } : {}))(avgWait(cs.filter((c) => c.lane === 'drop'))) } : {}),
       waitingCount: order.length + lo.drop.length,
       ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),
     }

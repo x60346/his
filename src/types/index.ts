@@ -2721,6 +2721,10 @@ export interface ClaimItem {
   supplementOf?: string
   /** 補報的原因（改碼：DRG、主診斷變了） */
   supplementNote?: string
+  /** 住院期中申報：還沒出院，申報到這一天（月底）為止；點數是累計到月底、扣掉之前報過的 */
+  interim?: { through: string }
+  /** 出院那筆：之前期中申報過的點數合計（這筆只報差額） */
+  interimPrior?: number
   /** 住院 DRG：分組、定額、給付規則與給付點數、盈虧（給付 − 實際）；申請點數＝給付 − 部分負擔 */
   drg?: { code: string; name: string; points: number; pay: number; rule: 'lower' | 'fixed' | 'outlier'; diff: number }
   /** 不適用 DRG（照實申報）的原因 */

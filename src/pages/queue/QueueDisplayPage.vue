@@ -44,6 +44,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
           <ol v-else class="space-y-2">
             <li v-for="n in data.nextDrop" :key="n.no" class="flex items-center gap-4 text-2xl"><span class="tabular w-24 font-bold">{{ n.no }}</span><span>{{ n.name }}</span></li>
           </ol>
+          <p v-if="data.avgWaitDrop !== undefined" class="mt-2 text-lg text-amber-200">交檢體今天平均等候 {{ data.avgWaitDrop }} 分鐘</p>
         </template>
         <div class="mt-auto space-y-1 pt-6 text-xl text-slate-300">
           <p>等候 <b class="tabular text-white">{{ data.waitingCount }}</b> 位</p>
