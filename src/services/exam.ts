@@ -8,6 +8,7 @@
 // 有在用 Metformin 且 CrCl < 45（或算不出）：排程、報到時提醒，住院做完後主治首頁「暫停 Metformin 48 小時」要按已處理。規則在 exam-rules
 import type { AdrReport, ContrastClearance, ExamClosure, ExamRoomHours, ImagingExam, RoomDowntime } from '@/types'
 import { db, newId } from '@/mock/db'
+import { examConsentOk } from './consent-rules'
 import { addMinutes, now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser, sessionRole, sessionUser } from './http'
 import { checkExamSlot, contrastAllergy, contrastCheck, hydrationRate, HYDRATION, metforminAtRisk, metforminText, METFORMIN_HOLD_HOURS, examClash, examNoShow, examRoomName, examStage, EXAM_ROOMS, EXAM_STAGE_LABEL, marConflicts, examPrepMissing, type ExamStage, checkContrastDone, CONTRAST_AGENT, CONTRAST_REACTION_LABEL, contrastReactionReportable, type ContrastReactionSeverity, checkDowntime, downtimeClash, downtimeEnd, downtimeHours, downtimeNow, downtimeText, nextFreeSlot, DOWNTIME_REASON_LABEL, type DowntimeReason, examDayOf, examDayText, outOfHours, checkExamHours, WEEKDAY_LABEL, EXAM_DAY } from './exam-rules'
@@ -381,6 +382,8 @@ export function confirmExamPrep(id: string, item: string, ok: boolean, note?: st
     if (!d) fail('這項檢查沒有這個準備項目')
     let n = note?.trim()
     if (!ok && !n) failField('note', '沒完成請寫原因（例：早上 8 點吃過早餐）')
+    // 同意書：要有這筆檢查、有效的檢查同意書紀錄（醫師說明後在病人「同意書」記錄）
+    if (ok && item === 'consent' && !examConsentOk(db.consents, e.id)) fail('還沒有這筆檢查的同意書紀錄：請醫師說明後在病人資料「同意書」記錄簽署', 'CONFLICT')
     if (ok && item === 'renal') {
       const c = contrastOf(e)!
       if (c.level === 'block') fail(c.text, 'CONFLICT')

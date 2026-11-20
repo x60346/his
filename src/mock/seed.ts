@@ -3900,8 +3900,26 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
 
   // ---------- 知情同意書（示範）：術前準備勾了「同意書」的手術，都有對應的手術同意書（非局部麻醉另有麻醉同意書）；
-  // 主刀說明、病人本人簽，簽在勾術前準備之前 ----------
+  // 主刀說明、病人本人簽，簽在勾術前準備之前；備血單都有輸血同意書（開單時醫師說明取得）----------
   const consents: Consent[] = []
+  // 影像檢查報到時確認過「同意書」的：補上檢查同意書（開單醫師說明）
+  for (const e of imagingExams.filter((x) => x.prep?.consent?.ok)) {
+    const adm = admissions.find((a) => a.id === e.admissionId)
+    const doc = users.find((u) => u.doctorId === adm?.doctorId) ?? users.find((u) => u.doctorId)
+    const at = addMinutes(e.prep!.consent!.at, -30)
+    const d = at.slice(0, 10).replace(/-/g, '')
+    const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
+    consents.push({ id: `CN-SEED-E${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind: 'procedure', patientId: e.patientId, ...(e.admissionId ? { admissionId: e.admissionId } : {}), examId: e.id, title: `${procMap.get(e.procId)?.name ?? '檢查'}（顯影劑）`, explainedBy: doc!.id, explanation: '說明顯影劑過敏、腎功能影響與替代檢查', signer: { name: patients.find((p) => p.id === e.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc!.id })
+  }
+  for (const r of bloodRequests) {
+    if (consents.some((c) => c.kind === 'transfusion' && c.admissionId === r.admissionId)) continue
+    const doc = users.find((u) => u.doctorId === r.doctorId)
+    if (!doc) continue
+    const at = r.orderedAt
+    const d = at.slice(0, 10).replace(/-/g, '')
+    const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
+    consents.push({ id: `CN-SEED-B${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind: 'transfusion', patientId: r.patientId, admissionId: r.admissionId, title: '輸血（紅血球、血小板、血漿）', explainedBy: doc.id, explanation: '說明輸血的必要、過敏與發燒反應、極少見的感染風險與替代方案', signer: { name: patients.find((p) => p.id === r.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc.id })
+  }
   for (const s of surgeries.filter((x) => x.prep.consent)) {
     const doc = users.find((u) => u.doctorId === s.doctorId)
     if (!doc) continue

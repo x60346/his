@@ -63,6 +63,20 @@ try {
     }
     return prepRaw.markPrep(id, key, input)
   }
+  // 輸血同意書、檢查同意書：開始輸血、確認檢查前準備的「同意書」前自動補一張（測試輔助）；要測把關的用 bloodRaw／examRaw
+  const tconsent = (kind, patientId, extra) => dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId, ...extra, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101' })
+  const bloodRaw = { startTransfusion: api.bloodApi.startTransfusion }
+  api.bloodApi.startTransfusion = async (requestId, unitId, input) => {
+    const r = dbm.db.bloodRequests.find((x) => x.id === requestId)
+    if (r && !api.transfusionConsentOk(dbm.db.consents, r.admissionId)) tconsent('transfusion', r.patientId, { admissionId: r.admissionId })
+    return bloodRaw.startTransfusion(requestId, unitId, input)
+  }
+  const examRaw = { confirmExamPrep: api.examApi.confirmExamPrep }
+  api.examApi.confirmExamPrep = async (id, item, ok, note) => {
+    const e = dbm.db.imagingExams.find((x) => x.id === id)
+    if (e && item === 'consent' && ok && !api.examConsentOk(dbm.db.consents, e.id)) tconsent('procedure', e.patientId, { examId: e.id, ...(e.admissionId ? { admissionId: e.admissionId } : {}) })
+    return examRaw.confirmExamPrep(id, item, ok, note)
+  }
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
     api.labApi[k] = async (input) => {
@@ -18658,6 +18672,70 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await api.recordAuditApi.myMissingProgressNotes()).find((x) => x.admissionId === a.id)?.dates.length === n0, '今天寫的不補昨天（每天要各自寫）')
     db().progressNotes.push({ id: 'PN-T-1', admissionId: a.id, at: `${addDaysT(-1)} 18:00`, doctorId: a.doctorId, subjective: 'x', objective: 'x', assessment: 'x', plan: 'x' })
     ok((await api.recordAuditApi.myMissingProgressNotes()).find((x) => x.admissionId === a.id)?.dates.length === n0 - 1, '昨天有一筆：少一天')
+  }
+  // 輸血同意書：開始輸血前這次住院要有有效的輸血同意書；記錄（住院中、一次一張）；撤回後又擋；種子備血單都有
+  console.log('\n[輸血同意書]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.consentApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(db().bloodRequests.every((r) => api.transfusionConsentOk(db().consents, r.admissionId)), '種子：備血單的住院都有輸血同意書')
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !api.transfusionConsentOk(db().consents, x.id))
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as('nurse01')
+    ok((await C.consentTargets(a.patientId)).admission?.transfusion === false, '可以記錄的對象：這次住院還沒有輸血同意書')
+    // 沒有同意書：開始輸血擋（直接打開始輸血；其他條件先不管，同意書在最前面檢查之後）
+    let r0 = db().bloodRequests.find((r) => r.issues.some((i) => !i.transfusion))
+    if (!r0) {
+      // 測試輔助：備血單第二袋標成已發血（還沒開始輸）
+      const r = db().bloodRequests.find((x) => x.crossmatch?.some((c) => !x.issues.some((i) => i.unitId === c.unitId)))
+      if (r) { const cm = r.crossmatch.find((c) => !r.issues.some((i) => i.unitId === c.unitId)); r.issues.push({ unitId: cm.unitId, issuedAt: dateUtil.now(), issuedBy: 'U601' }); db().bloodUnits.find((u) => u.id === cm.unitId).status = 'issued'; r0 = r }
+    }
+    if (r0) {
+      const cs = db().consents.filter((c) => c.kind === 'transfusion' && c.admissionId === r0.admissionId)
+      for (const c of cs) c.revoked = { at: dateUtil.now(), by: 'U101', reason: '測試' }
+      const u0 = r0.issues.find((i) => !i.transfusion).unitId
+      ok((await errOf(() => bloodRaw.startTransfusion(r0.id, u0, { vitals: { temp: 36.5, pulse: 80, sbp: 120, dbp: 70 } }))).includes('輸血同意書'), '沒有有效的輸血同意書：開始輸血擋')
+    } else ok(true, '（沒有已發血未開始的，略過）')
+    await as(doc)
+    ok((await fieldsOf(() => C.recordConsent({ patientId: a.patientId, kind: 'transfusion', title: '輸血', explanation: 'x', signerName: 'x', relation: '本人' }))).admissionId, '輸血同意書要選住院中的那次住院')
+    const c1 = await C.recordConsent({ patientId: a.patientId, kind: 'transfusion', admissionId: a.id, title: '輸血', explanation: '過敏與發燒反應', signerName: 'x', relation: '本人' })
+    ok(c1.admissionId === a.id && api.transfusionConsentOk(db().consents, a.id), `記錄：${c1.no} 綁這次住院`)
+    ok((await errOf(() => C.recordConsent({ patientId: a.patientId, kind: 'transfusion', admissionId: a.id, title: '輸血', explanation: 'x', signerName: 'x', relation: '本人' }))).includes('已經有'), '一次住院一張有效的')
+    await C.revokeConsent(c1.id, '病人拒絕輸血')
+    ok(!api.transfusionConsentOk(db().consents, a.id), '撤回後：沒有有效的')
+  }
+  // 檢查同意書：要同意書的影像檢查，報到確認「同意書」前要有綁這筆的檢查同意書；記錄（還沒做的、一筆一張）
+  console.log('\n[檢查同意書]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.consentApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    ok(db().imagingExams.filter((e) => e.prep?.consent?.ok).every((e) => api.examConsentOk(db().consents, e.id)), '種子：確認過同意書的檢查都有紀錄')
+    const needs = (e) => (db().procedures.find((p) => p.id === e.procId)?.imaging?.prep ?? []).some((x) => x.id === 'consent')
+    let e = db().imagingExams.find((x) => !x.cancelled && !x.doneAt && needs(x))
+    if (!e) {
+      const o = db().ipdOrders.find((x) => x.status === 'active' && x.procId && (db().procedures.find((p) => p.id === x.procId)?.imaging?.prep ?? []).some((p) => p.id === 'consent') && !db().imagingExams.some((z) => z.orderId === x.id && !z.cancelled))
+      if (o) { await as('clerk01'); await as('rt01'); e = await api.examApi.scheduleExam(`O:${o.id}`, `${addDaysT(1)} 09:00`).then((v) => db().imagingExams.find((z) => z.id === v.id)).catch(() => undefined) }
+    }
+    if (e) {
+      await as('nurse01')
+      const tg = await C.consentTargets(e.patientId)
+      ok(tg.exams.some((x) => x.id === e.id && !x.has), '可以記錄的對象：這筆檢查還沒有同意書')
+      await as('rt01')
+      if (!e.arrivedAt) await api.examApi.arriveExam(e.id)
+      ok((await errOf(() => examRaw.confirmExamPrep(e.id, 'consent', true))).includes('同意書紀錄'), '沒有檢查同意書：確認「同意書」擋')
+      const docU = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === e.admissionId)?.doctorId)?.username ?? 'dr01'
+      await as(docU)
+      const c = await C.recordConsent({ patientId: e.patientId, kind: 'procedure', examId: e.id, title: '顯影劑檢查', explanation: '顯影劑過敏、腎功能', signerName: 'x', relation: '本人' })
+      ok(c.examId === e.id && (await errOf(() => C.recordConsent({ patientId: e.patientId, kind: 'procedure', examId: e.id, title: 'x', explanation: 'x', signerName: 'x', relation: '本人' }))).includes('已經有'), '記錄檢查同意書（一筆一張）')
+      await as('rt01')
+      const v = await examRaw.confirmExamPrep(e.id, 'consent', true)
+      ok(v.prep?.consent?.ok || db().imagingExams.find((z) => z.id === e.id).prep.consent.ok, '有同意書：確認得了')
+    } else ok(true, '（沒有要同意書的檢查，略過）')
   }
 } catch (e) {
   failed++

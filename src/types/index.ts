@@ -2771,6 +2771,8 @@ export interface Consent {
   patientId: string
   admissionId?: string
   surgeryId?: string
+  /** 侵入性檢查（含顯影劑的影像檢查）：綁那一筆排程 */
+  examId?: string
   /** 同意的項目（術式名稱等） */
   title: string
   /** 說明的醫師（使用者 id）與說明重點（風險、替代方案） */

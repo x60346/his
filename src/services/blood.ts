@@ -14,6 +14,7 @@ import {
 } from './blood-work'
 import { checkPatientScan, SCAN_SKIP_LABEL, type ScanResult } from './scan-rules'
 import { allScanAdmissions, scanAdmission, scanDemoAssist, scanRequired } from './scan-work'
+import { transfusionConsentOk } from './consent-rules'
 import { consumeWitness, transfusionRef, witnessFor } from './witness-core'
 import { vitalInputProblem } from './nursing-rules'
 import { careRoleOf, requireCare } from './care-team'
@@ -465,6 +466,8 @@ export function startTransfusion(requestId: string, unitId: string, input: Start
     if (unitExpired(unit, t.slice(0, 10))) fail(`血袋已過期（${unit.expiresOn}），不能輸：請送回血庫`, 'CONFLICT')
     const c = r.typing ? bloodCompatible(r.product, r.typing, unit) : { ok: false, message: '這張單還沒有血型' }
     if (!c.ok) fail(`血型不相容，不能輸：${c.message}`, 'CONFLICT')
+    // 輸血同意書：這次住院要有有效的一張（醫師說明後在病人「同意書」記錄）
+    if (!transfusionConsentOk(db.consents, a.id)) fail('這次住院還沒有輸血同意書：請醫師說明後記錄簽署（病人資料「同意書」）', 'CONFLICT')
     // 掃描
     let scan: NonNullable<BloodRequest['issues'][number]['transfusion']>['scan']
     if (scanRequired()) {

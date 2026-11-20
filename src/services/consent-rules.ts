@@ -19,6 +19,12 @@ export function checkConsentInput(x: { kind?: string; title?: string; explanatio
 /** 有效：沒撤回 */
 export const consentValid = (c: Pick<Consent, 'revoked'>) => !c.revoked
 
+/** 這筆檢查有沒有有效的檢查同意書 */
+export const examConsentOk = (cs: Pick<Consent, 'kind' | 'examId' | 'revoked'>[], examId: string) => cs.some((c) => c.kind === 'procedure' && c.examId === examId && consentValid(c))
+
+/** 這次住院有沒有有效的輸血同意書（一次住院簽一次即可） */
+export const transfusionConsentOk = (cs: Pick<Consent, 'kind' | 'admissionId' | 'revoked'>[], admissionId: string) => cs.some((c) => c.kind === 'transfusion' && c.admissionId === admissionId && consentValid(c))
+
 /** 這台手術要哪幾張：手術同意書；不是局部麻醉再加麻醉同意書 */
 export const consentsForSurgery = (anesthesia: string): Consent['kind'][] => (anesthesia === 'local' ? ['surgery'] : ['surgery', 'anesthesia'])
 

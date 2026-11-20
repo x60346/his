@@ -5,7 +5,8 @@ import type { Consent } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
-import { checkConsentInput, CONSENT_KIND_LABEL } from './consent-rules'
+import { checkConsentInput, CONSENT_KIND_LABEL, examConsentOk, transfusionConsentOk } from './consent-rules'
+import { imagingOf } from './imaging-work'
 import { find, nameOf } from './views'
 import { surgeryOf } from './surgery-work'
 
@@ -32,7 +33,7 @@ export function listConsents(patientId: string, surgeryId?: string): Promise<Con
  * 記錄簽署（說明的醫師記）：種類、項目、說明重點、簽署人（不是本人寫原因）。
  * 手術、麻醉同意書要綁一台還沒完成的手術（同一台同一種只能有一張有效的）
  */
-export function recordConsent(input: { patientId: string; kind: Consent['kind']; title: string; explanation: string; signerName: string; relation: string; reason?: string; surgeryId?: string; admissionId?: string }): Promise<ConsentView> {
+export function recordConsent(input: { patientId: string; kind: Consent['kind']; title: string; explanation: string; signerName: string; relation: string; reason?: string; surgeryId?: string; admissionId?: string; examId?: string }): Promise<ConsentView> {
   return mutate(() => {
     const u = requireUser('doctor')
     must(find.patient(input.patientId), '病患')
@@ -48,16 +49,45 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
       surgeryId = s!.id
       admissionId = s!.admissionId
     }
+    // 輸血：綁這位病人住院中的那次住院（一次住院一張有效的）
+    if (input.kind === 'transfusion') {
+      const a = db.admissions.find((x) => x.id === input.admissionId && x.patientId === input.patientId && x.status === 'admitted')
+      if (!a) failField('admissionId', '輸血同意書要選這位病人住院中的那次住院')
+      if (db.consents.some((c) => c.kind === 'transfusion' && c.admissionId === a!.id && !c.revoked)) fail('這次住院已經有有效的輸血同意書', 'CONFLICT')
+      admissionId = a!.id
+    }
+    // 檢查：綁一筆還沒做完的影像檢查排程
+    let examId: string | undefined
+    if (input.kind === 'procedure' && input.examId) {
+      const e = db.imagingExams.find((x) => x.id === input.examId && x.patientId === input.patientId)
+      if (!e || e.cancelled || e.doneAt) failField('examId', '要選這位病人還沒做的檢查')
+      if (db.consents.some((c) => c.examId === e!.id && !c.revoked)) fail('這筆檢查已經有有效的同意書', 'CONFLICT')
+      examId = e!.id
+      admissionId = e!.admissionId
+    }
     const t = now()
     const d = t.slice(0, 10).replace(/-/g, '')
     const c: Consent = {
-      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}),
+      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}), ...(examId ? { examId } : {}),
       title: input.title.trim(), explainedBy: u.id, explanation: input.explanation.trim(),
       signer: { name: input.signerName.trim(), relation: input.relation, ...(input.relation !== '本人' ? { reason: input.reason!.trim() } : {}) }, signedAt: t, recordedBy: u.id,
     }
     db.consents.push(c)
     audit('同意書簽署', `${c.no} ${CONSENT_KIND_LABEL[c.kind]}：${nameOf.patient(c.patientId)} ${c.title}（簽署 ${c.signer.name}・${c.signer.relation}；說明 ${u.name}）`)
     return view(c)
+  })
+}
+
+/** 可以記錄同意書的對象：住院中那次住院（有沒有輸血同意書）、還沒做完、要同意書的影像檢查（有沒有） */
+export function consentTargets(patientId: string): Promise<{ admission?: { id: string; admitNo: string; transfusion: boolean }; exams: { id: string; name: string; start: string; has: boolean }[] }> {
+  return query(() => {
+    requireUser('doctor', 'nurse')
+    const a = db.admissions.find((x) => x.patientId === patientId && x.status === 'admitted')
+    const exams = db.imagingExams.filter((e) => e.patientId === patientId && !e.cancelled && !e.doneAt && (imagingOf(e.procId)?.prep ?? []).some((p) => p.id === 'consent'))
+    return {
+      ...(a ? { admission: { id: a.id, admitNo: a.admitNo, transfusion: transfusionConsentOk(db.consents, a.id) } } : {}),
+      exams: exams.map((e) => ({ id: e.id, name: find.procedure(e.procId)?.name ?? e.procId, start: e.start, has: examConsentOk(db.consents, e.id) })),
+    }
   })
 }
 
