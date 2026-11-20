@@ -2,10 +2,10 @@
 // 主治看「我的病歷待完成」（逾期在前）；病歷室（權限「疾病分類」）看全院清單與每月準時完成率。規則在 record-audit-rules
 import type { Admission } from '@/types'
 import { db } from '@/mock/db'
-import { today } from '@/utils/date'
+import { now, today } from '@/utils/date'
 import { query, requirePermission, requireUser } from './http'
 import { recordCompletedAt, recordDue, recordGaps, recordOnTimeRate, recordOverdue } from './record-audit-rules'
-import { discharged, progressGapsOf, recordInputOf } from './record-audit-work'
+import { discharged, nursingGapsOf, progressGapsOf, recordInputOf } from './record-audit-work'
 import { shiftMonth } from './management-rules'
 import { find, nameOf } from './views'
 
@@ -50,6 +50,17 @@ export function myMissingProgressNotes(): Promise<{ admissionId: string; admitNo
     return db.admissions.filter((a) => a.doctorId === u.doctorId).map((a) => ({ a, dates: progressGapsOf(a, t) })).filter((x) => x.dates.length)
       .map(({ a, dates }) => ({ admissionId: a.id, admitNo: a.admitNo, patientName: nameOf.patient(a.patientId), bedText: a.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '', admittedAt: a.admittedAt ?? '', dates }))
       .sort((x, y) => y.dates.length - x.dates.length)
+  })
+}
+
+/** 護理：住院中最近 6 個已結束的班缺護理紀錄的病人（依病房、床號） */
+export function missingNursingNotes(): Promise<{ admissionId: string; patientName: string; ward: string; bedNo: string; shifts: string[] }[]> {
+  return query(() => {
+    requireUser('nurse')
+    const t = now()
+    return db.admissions.map((a) => ({ a, shifts: nursingGapsOf(a, t) })).filter((x) => x.shifts.length)
+      .map(({ a, shifts }) => ((b) => ({ admissionId: a.id, patientName: nameOf.patient(a.patientId), ward: b?.ward ?? '', bedNo: b?.bedNo ?? '', shifts }))(a.bedId ? find.bed(a.bedId) : undefined))
+      .sort((x, y) => x.ward.localeCompare(y.ward) || x.bedNo.localeCompare(y.bedNo))
   })
 }
 

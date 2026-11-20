@@ -18737,6 +18737,62 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
       ok(v.prep?.consent?.ok || db().imagingExams.find((z) => z.id === e.id).prep.consent.ok, '有同意書：確認得了')
     } else ok(true, '（沒有要同意書的檢查，略過）')
   }
+  // 護理紀錄：住院中每一班至少一筆（最近 6 個已結束的班、入院前開始的班不算）；護理站本班待辦與首頁
+  console.log('\n[護理紀錄完整性]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const NR = await load('/src/services/nursing-rules.ts')
+    const sh = NR.recentShifts('2026-11-20 14:30', 7).slice(1)
+    const g = api.nursingGapShifts('2026-11-19 09:00', ['2026-11-19 20:00', '2026-11-20 03:00'], '2026-11-20 14:30', sh)
+    ok(g.join() === '' && api.nursingGapShifts('2026-11-18 09:00', ['2026-11-19 20:00'], '2026-11-20 14:30', sh).join() === '11-18 小夜,11-19 大夜,11-19 白班,11-20 大夜', '規則：入院後開始的、已結束的班每班一筆（入院那班、現在這班不算）')
+    const late = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('C18'))
+    await as('nurse01')
+    let list = await api.recordAuditApi.missingNursingNotes()
+    ok(list.length === 1 && list[0].admissionId === late.id && list[0].shifts.length === 1, `種子：只有 ${list[0]?.patientName}（${list[0]?.ward} ${list[0]?.bedNo}）缺 ${list[0]?.shifts.join('')}`)
+    ok((await api.dashboardApi.getDashboard()).nursingRecordMissing === 1, '護理師首頁：護理紀錄缺漏')
+    const [md, shift] = list[0].shifts[0].split(' ')
+    const start = `${T.slice(0, 4)}-${md} ${shift === '大夜' ? '00' : shift === '白班' ? '08' : '16'}:00`
+    db().nursingNotes.push({ id: 'NN-T-GAP', admissionId: late.id, at: dateUtil.addMinutes(start, 60), focus: '補記', data: 'x', action: 'x', response: 'x', nurseId: 'U201' })
+    list = await api.recordAuditApi.missingNursingNotes()
+    ok(!list.length, '補記那一班：不再缺')
+    ok((await (async () => { try { await as('dr01'); await api.recordAuditApi.missingNursingNotes(); return '' } catch (e) { return e.message } })()).length > 0, '醫師看不到（護理師的清單）')
+  }
+  // 手術同意書側別：同意書記簽的時候的側別；主刀更正側別 → 舊同意書不算（要重簽）、術前準備同意書與部位標記取消；重簽時舊的自動撤回
+  console.log('\n[同意書側別]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.consentMissing('local', [{ kind: 'surgery', side: 'left' }], 'right').join() === 'surgery' && !api.consentMissing('local', [{ kind: 'surgery' }], 'right').length && api.consentSideMismatch([{ kind: 'surgery', side: 'left' }], 'right'), '規則：側別不符就算缺；舊資料沒記側別不比')
+    ok(db().consents.filter((c) => c.kind === 'surgery').every((c) => c.side === db().surgeries.find((s) => s.id === c.surgeryId).side), '種子：手術同意書都記了側別')
+    const s = db().surgeries.find((x) => x.status === 'scheduled' && x.prep.consent && x.prep.siteMark && !x.prep.siteMark.notNeeded && x.side !== 'na') ?? db().surgeries.find((x) => x.status === 'scheduled' && x.prep.consent)
+    const doc = db().users.find((u) => u.doctorId === s.doctorId).username
+    const other = s.side === 'left' ? 'right' : 'left'
+    await as('dr01' === doc ? 'dr02' : 'dr01')
+    ok((await errOf(() => S.changeSurgerySide(s.id, { side: other, reason: 'x' }))).includes('主刀'), '由主刀更正')
+    await as(doc)
+    ok((await fieldsOf(() => S.changeSurgerySide(s.id, { side: s.side, reason: 'x' }))).side && (await fieldsOf(() => S.changeSurgerySide(s.id, { side: other, reason: ' ' }))).reason, '一樣的側別、沒寫原因：擋')
+    const v = await S.changeSurgerySide(s.id, { side: other, reason: '影像確認' })
+    const s2 = db().surgeries.find((x) => x.id === s.id)
+    ok(s2.side === other && !s2.prep.consent && db().auditLogs[0].action === '手術側別更正' && v.consentMissing.some((m) => m.label.includes('側別不符')), `更正側別：術前準備同意書取消、顯示「${v.consentMissing[0]?.label}」`)
+    await as('nurse01')
+    ok((await errOf(() => prepRaw.markPrep(s.id, 'consent'))).includes('手術同意書'), '舊側別的同意書不算：術前準備勾不了')
+    await as(doc)
+    const c = await api.consentApi.recordConsent({ patientId: s.patientId, kind: 'surgery', surgeryId: s.id, title: '重簽', explanation: '側別更正後重新說明', signerName: 'x', relation: '本人' })
+    ok(c.side === other && db().consents.filter((x) => x.surgeryId === s.id && x.kind === 'surgery' && x.revoked?.reason.includes('側別')).length === 1, '重簽：新的記新側別、舊的自動撤回')
+    await as('nurse01')
+    await prepRaw.markPrep(s.id, 'consent')
+    ok(db().surgeries.find((x) => x.id === s.id).prep.consent, '重簽後勾得了')
+  }
+  // 病患資料頁版面：右欄不被內容撐開（窄畫面不會整頁左右捲動）
+  console.log('\n[病患資料版面]')
+  {
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/patients/PatientsPage.vue', 'utf8').includes('lg:grid-cols-[18rem_minmax(0,1fr)]'), '兩欄用 minmax(0,1fr)、1024–1280 左欄 18rem')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

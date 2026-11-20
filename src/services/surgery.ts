@@ -309,7 +309,7 @@ export function markPrep(id: string, key: SurgeryPrepKey, input: { notNeeded?: s
     }
     // 同意書：要有綁這台、有效的手術同意書（非局部麻醉再加麻醉同意書），由說明的醫師在系統記錄簽署
     if (!notNeeded && key === 'consent') {
-      const miss = consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id))
+      const miss = consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id), s.side)
       if (miss.length) fail(`還沒有${miss.map((k) => CONSENT_KIND_LABEL[k]).join('、')}：請主刀（麻醉）醫師說明後在「同意書」記錄簽署`, 'CONFLICT')
     }
     // 禁食可以連禁食醫囑（選填）：連了就要是這次住院有效的禁食醫囑
@@ -566,5 +566,27 @@ export function orMetrics(days = 30): Promise<OrMetrics> {
       delays: delayStats(list, from, to),
       cancel: { ...c, reasons: c.reasons.map((r) => ({ ...r, patientName: nameOf.patient(list.find((x) => x.no === r.no)?.patientId ?? '') })) },
     }
+  })
+}
+
+/**
+ * 更正側別（主刀；送手術室前）：寫原因。手術同意書是照原本側別簽的就不算了（要重簽），
+ * 術前準備的「同意書」「手術部位標記」一起取消（部位要重新畫）
+ */
+export function changeSurgerySide(id: string, input: { side: SurgerySide; reason: string }): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const s = must(surgeryOf(id), '手術')
+    if (s.doctorId !== u.doctorId) fail('由主刀更正', 'FORBIDDEN')
+    if (s.status !== 'requested' && s.status !== 'scheduled') fail('已經送手術室，不能再改側別', 'CONFLICT')
+    if (!(input.side in SIDE_LABEL)) failField('side', '請選側別')
+    if (input.side === s.side) failField('side', '和現在的側別一樣')
+    if (!input.reason?.trim()) failField('reason', '請寫更正原因（例：影像確認是左側）')
+    const before = s.side
+    s.side = input.side
+    const undo = (['consent', 'siteMark'] as const).filter((k) => s.prep[k] && !s.prep[k]!.notNeeded)
+    for (const k of undo) delete s.prep[k]
+    audit('手術側別更正', `${audText(s)}：${SIDE_LABEL[before]} → ${SIDE_LABEL[input.side]}（${input.reason.trim()}）${undo.length ? `；術前準備取消：${undo.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label).join('、')}` : ''}`)
+    return surgeryView(s)
   })
 }

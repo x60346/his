@@ -28,6 +28,8 @@ export const transfusionConsentOk = (cs: Pick<Consent, 'kind' | 'admissionId' | 
 /** 這台手術要哪幾張：手術同意書；不是局部麻醉再加麻醉同意書 */
 export const consentsForSurgery = (anesthesia: string): Consent['kind'][] => (anesthesia === 'local' ? ['surgery'] : ['surgery', 'anesthesia'])
 
-/** 這台手術還缺哪幾張（有效的、綁這台的） */
-export const consentMissing = (anesthesia: string, have: Pick<Consent, 'kind' | 'revoked'>[]): Consent['kind'][] =>
-  consentsForSurgery(anesthesia).filter((k) => !have.some((c) => c.kind === k && consentValid(c)))
+/** 這台手術還缺哪幾張（有效的、綁這台的；手術同意書的側別要和手術一致） */
+export const consentMissing = (anesthesia: string, have: Pick<Consent, 'kind' | 'revoked' | 'side'>[], side?: string): Consent['kind'][] =>
+  consentsForSurgery(anesthesia).filter((k) => !have.some((c) => c.kind === k && consentValid(c) && (k !== 'surgery' || !side || !c.side || c.side === side)))
+/** 有效但側別和手術不符的手術同意書（手術側別被更正過） */
+export const consentSideMismatch = (have: Pick<Consent, 'kind' | 'revoked' | 'side'>[], side: string) => have.find((c) => c.kind === 'surgery' && consentValid(c) && c.side && c.side !== side)

@@ -96,7 +96,8 @@ const fields = computed(() => {
 </script>
 
 <template>
-  <div class="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_1fr]">
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)]">
+    <!-- 右欄 minmax(0,1fr)：不被裡面的分頁、表格撐開（以前用 1fr，窄畫面會左右捲動）；1024–1280 左欄窄一點 -->
     <UCard title="病患搜尋" :padded="false">
       <template #actions>
         <UButton v-if="canEdit" size="sm" :icon="UserPlus" @click="openCreate">新增</UButton>

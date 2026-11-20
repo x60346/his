@@ -56,3 +56,25 @@ export function progressGapDates(admittedAt: string, noteDates: string[], today:
   for (let d = from; d < today; d = addDays(d, 1)) if (!has.has(d)) out.push(d)
   return out
 }
+
+// ── 住院中護理紀錄：每一班至少一筆（Focus DAR）；看最近 6 個已經結束的班（兩天），入院前開始的班不算 ──
+
+export const NURSING_LOOKBACK_SHIFTS = 6
+const SHIFT_HOUR: Record<string, number> = { 大夜: 0, 白班: 8, 小夜: 16 }
+/** 缺護理紀錄的班（舊到新）：「11-19 小夜」 */
+export function nursingGapShifts(admittedAt: string, noteTimes: string[], now: string, shifts: { date: string; shift: string }[]): string[] {
+  const out: string[] = []
+  for (const s of [...shifts].reverse()) {
+    const start = `${s.date} ${String(SHIFT_HOUR[s.shift]).padStart(2, '0')}:00`
+    const end = addMinutes8(start)
+    if (start < admittedAt.slice(0, 16) || end > now) continue
+    if (!noteTimes.some((t) => t >= start && t < end)) out.push(`${s.date.slice(5)} ${s.shift}`)
+  }
+  return out
+}
+const addMinutes8 = (start: string) => {
+  const d = new Date(`${start.replace(' ', 'T')}:00`)
+  d.setHours(d.getHours() + 8)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}

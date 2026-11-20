@@ -7,7 +7,7 @@ import { nursingApi, type WardTask } from '@/services'
 import { useQuery } from '@/composables/useService'
 import WardSendBack from './WardSendBack.vue'
 import WardUdCarts from './WardUdCarts.vue'
-import { masterApi, wardStockApi } from '@/services'
+import { masterApi, recordAuditApi, wardStockApi } from '@/services'
 
 // only：只看這些病人（責任分床的「我的病人」）；沒給＝全病房
 const props = defineProps<{ ward: string; clock: string; only?: string[] }>()
@@ -18,6 +18,8 @@ const { data, loading } = useQuery(async () => ({ ward: props.ward, tasks: await
 const tasks = computed(() => (data.value?.ward === props.ward ? data.value.tasks.filter((t) => !props.only || props.only.includes(t.admissionId)) : undefined))
 // 病房常備：本班還沒點班、或有低於基準量的品項就提醒（點班在「常備點班」分頁）
 // 日間手術沒有病房常備（不查）
+// 護理紀錄缺漏：這個病房最近 6 個已結束的班沒有護理紀錄的病人（服務層 record-audit.missingNursingNotes）
+const { data: gaps } = useQuery(async () => (await recordAuditApi.missingNursingNotes()).filter((x) => x.ward === props.ward), [() => props.ward, () => props.clock])
 const { data: ws } = useQuery(async () => ({ ward: props.ward, v: props.ward === masterApi.staticCodes.dayWard ? undefined : await wardStockApi.getWardStock(props.ward) }), [() => props.ward, () => props.clock])
 const stockNote = computed(() => {
   const v = ws.value?.ward === props.ward ? ws.value.v : undefined
@@ -45,6 +47,7 @@ const counts = computed(() => ({
       <span class="font-semibold text-slate-700">本班待辦・{{ ward }}</span>
       <span v-if="tasks" class="text-xs text-slate-500">逾時 {{ counts.overdue }}・現在可做 {{ counts.due }}・共 {{ tasks.length }} 項　點選一列前往該病人</span>
     </div>
+    <p v-if="gaps?.length" class="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"><b>護理紀錄缺漏</b>（每班至少一筆，看最近 6 班）：<span v-for="g in gaps" :key="g.admissionId" class="mr-3">{{ g.bedNo }} {{ g.patientName }}（{{ g.shifts.join('、') }}）</span></p>
     <p v-if="stockNote" class="mb-3 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">{{ stockNote }}（「常備點班」分頁）</p>
     <WardUdCarts :ward="ward" />
     <WardSendBack :ward="ward" />

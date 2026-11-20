@@ -2773,6 +2773,8 @@ export interface Consent {
   surgeryId?: string
   /** 侵入性檢查（含顯影劑的影像檢查）：綁那一筆排程 */
   examId?: string
+  /** 手術同意書：簽的時候手術的側別（手術側別之後被更正，這張就不算，要重簽） */
+  side?: SurgerySide
   /** 同意的項目（術式名稱等） */
   title: string
   /** 說明的醫師（使用者 id）與說明重點（風險、替代方案） */

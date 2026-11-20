@@ -16,7 +16,7 @@ import { implantFeeItems, implantRows, isSelfPayImplant } from './implant-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { implantPreAuthOf } from './preauth-work'
 import { preAuthAllows, PREAUTH_STATUS_LABEL } from './preauth-rules'
-import { CONSENT_KIND_LABEL, consentMissing } from './consent-rules'
+import { CONSENT_KIND_LABEL, consentMissing, consentSideMismatch } from './consent-rules'
 import { delayOverflow, delayTotal, NPO_DELAY_ALERT, pullBackOf } from './or-shift-rules'
 import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
@@ -105,7 +105,7 @@ export interface SurgeryView extends Surgery {
   /** 這個術式會用到、需健保事前審查的植入物：申請了沒、狀態、能不能用 */
   preAuthItems: { procId: string; name: string; preAuth?: { id: string; no: string; statusLabel: string; allows: boolean } }[]
   /** 知情同意書：綁這台的（含撤回的）、還缺哪幾張 */
-  consents: { id: string; no: string; kind: string; kindLabel: string; title: string; signerText: string; signedAt: string; explainedByName: string; revoked?: string }[]
+  consents: { id: string; no: string; kind: string; kindLabel: string; title: string; sideText?: string; signerText: string; signedAt: string; explainedByName: string; revoked?: string }[]
   consentMissing: { kind: string; label: string }[]
 }
 /** 順延的一行：「11-20 09:10 急刀 OR… 插台：09:00 → 11:00（延後 120 分）」；跨日的寫日期 */
@@ -156,8 +156,8 @@ export function surgeryView(s: Surgery): SurgeryView {
     implant: !!find.procedure(s.procId)?.surgery?.implant,
     ...((rows) => ({ implantRows: rows, implantRecalled: rows.some((r) => r.recalled), implantMissing: !!find.procedure(s.procId)?.surgery?.implant && !rows.length && ['sent', 'in-progress'].includes(s.status) }))(implantRows(s)),
     selfPayOption: (IMPLANT_FOR[s.procId] ?? []).some((id) => isSelfPayImplant(find.procedure(id))),
-    consents: db.consents.filter((c) => c.surgeryId === s.id).map((c) => ({ id: c.id, no: c.no, kind: c.kind, kindLabel: CONSENT_KIND_LABEL[c.kind], title: c.title, signerText: `${c.signer.name}（${c.signer.relation}${c.signer.reason ? `：${c.signer.reason}` : ''}）`, signedAt: c.signedAt, explainedByName: nameOf.user(c.explainedBy), ...(c.revoked ? { revoked: `${c.revoked.at.slice(5)} ${nameOf.user(c.revoked.by)}：${c.revoked.reason}` } : {}) })),
-    consentMissing: consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id)).map((k) => ({ kind: k, label: CONSENT_KIND_LABEL[k] })),
+    consents: db.consents.filter((c) => c.surgeryId === s.id).map((c) => ({ id: c.id, no: c.no, kind: c.kind, kindLabel: CONSENT_KIND_LABEL[c.kind], title: c.title, signerText: `${c.signer.name}（${c.signer.relation}${c.signer.reason ? `：${c.signer.reason}` : ''}）`, ...(c.side ? { sideText: SIDE_LABEL[c.side] } : {}), signedAt: c.signedAt, explainedByName: nameOf.user(c.explainedBy), ...(c.revoked ? { revoked: `${c.revoked.at.slice(5)} ${nameOf.user(c.revoked.by)}：${c.revoked.reason}` } : {}) })),
+    consentMissing: consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id), s.side).map((k) => ((mm) => ({ kind: k, label: mm && k === 'surgery' ? `${CONSENT_KIND_LABEL[k]}（側別不符：同意書是${SIDE_LABEL[mm.side!]}、手術是${SIDE_LABEL[s.side]}，要重簽）` : CONSENT_KIND_LABEL[k] }))(consentSideMismatch(db.consents.filter((c) => c.surgeryId === s.id), s.side))),
     preAuthItems: (IMPLANT_FOR[s.procId] ?? []).filter((id) => find.procedure(id)?.preAuth).map((id) => ((p) => ({ procId: id, name: find.procedure(id)!.name, ...(p ? { preAuth: { id: p.id, no: p.no, statusLabel: PREAUTH_STATUS_LABEL[p.status], allows: preAuthAllows(p) } } : {}) }))(implantPreAuthOf(s.id, id))),
     ...(s.selfPayImplant ? { selfPayText: `病人已同意自費植入物・${who(s.selfPayImplant)}${s.selfPayImplant.note ? `（${s.selfPayImplant.note}）` : ''}` } : {}),
     preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),

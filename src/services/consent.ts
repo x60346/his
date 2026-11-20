@@ -39,13 +39,17 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
     must(find.patient(input.patientId), '病患')
     failFields(checkConsentInput(input))
     let surgeryId: string | undefined
+    let surgerySide: Consent['side']
     let admissionId = input.admissionId
     if (input.kind === 'surgery' || input.kind === 'anesthesia') {
       const s = input.surgeryId ? surgeryOf(input.surgeryId) : undefined
       if (!s || s.patientId !== input.patientId) failField('surgeryId', '手術、麻醉同意書要選這位病人的一台手術')
       if (s!.status === 'done' || s!.status === 'cancelled') failField('surgeryId', '這台手術已完成或取消')
       if (input.kind === 'anesthesia' && s!.anesthesia === 'local') failField('kind', '局部麻醉不用麻醉同意書')
-      if (db.consents.some((c) => c.surgeryId === s!.id && c.kind === input.kind && !c.revoked)) fail(`這台已經有有效的${CONSENT_KIND_LABEL[input.kind]}`, 'CONFLICT')
+      if (db.consents.some((c) => c.surgeryId === s!.id && c.kind === input.kind && !c.revoked && (input.kind !== 'surgery' || !c.side || c.side === s!.side))) fail(`這台已經有有效的${CONSENT_KIND_LABEL[input.kind]}`, 'CONFLICT')
+      // 側別不符的舊同意書（手術側別更正過）：重簽時自動撤回
+      for (const old of db.consents.filter((c) => c.surgeryId === s!.id && c.kind === 'surgery' && !c.revoked && c.side && c.side !== s!.side && input.kind === 'surgery')) old.revoked = { at: now(), by: u.id, reason: '手術側別更正，重簽' }
+      surgerySide = s!.side
       surgeryId = s!.id
       admissionId = s!.admissionId
     }
@@ -68,7 +72,7 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
     const t = now()
     const d = t.slice(0, 10).replace(/-/g, '')
     const c: Consent = {
-      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}), ...(examId ? { examId } : {}),
+      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}), ...(examId ? { examId } : {}), ...(input.kind === 'surgery' && surgerySide ? { side: surgerySide } : {}),
       title: input.title.trim(), explainedBy: u.id, explanation: input.explanation.trim(),
       signer: { name: input.signerName.trim(), relation: input.relation, ...(input.relation !== '本人' ? { reason: input.reason!.trim() } : {}) }, signedAt: t, recordedBy: u.id,
     }

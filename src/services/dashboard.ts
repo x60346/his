@@ -26,7 +26,7 @@ import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
 import { opdExpiringOf, preAuthCounts, preAuthExpiringCount } from './preauth-work'
-import { progressMissingCount, recordCounts } from './record-audit-work'
+import { nursingGapsOf, progressMissingCount, recordCounts } from './record-audit-work'
 import { wardExpiryCounts } from './ward-stock-work'
 import { claimDeadlineOf, cutReplyDue, daysUntil, deadlineText, disputeCheck, monthOf, nextMonth } from './claim-rules'
 import { codingCounts } from './coding-work'
@@ -314,6 +314,8 @@ export interface DashboardStats {
   recordOverdueAll?: number
   /** 主治：住院中最近 7 天缺病程紀錄的病人 */
   progressMissing?: number
+  /** 護理師：住院中最近 6 班缺護理紀錄的病人 */
+  nursingRecordMissing?: number
   /** 病歷室：門診抽審待審查；醫師：抽審有不符合待回覆 */
   opdReviewPending?: number
   /** 藥師：病房常備已過期、30 天內到期的批號 */
@@ -512,6 +514,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { mdroAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult' && mdroAlertsOf(a.patientId, t).length > 0).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
+          ...(sessionRole() === 'nurse' ? { nursingRecordMissing: db.admissions.filter((a) => (!scope || scope.has(a.id)) && nursingGapsOf(a, t).length).length } : {}),
           ...(sessionRole() === 'nurse' ? { negativeRoomTodo: db.beds.filter((b) => b.negativePressure && negativeRoomState(b, t).state !== 'ok').length } : {}),
           ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length, newsRecheckOverdue: inpt.filter((a) => newsStateOf(a, t)?.recheck?.status === 'overdue').length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { newsAlerts: newsAlertCount(me.doctorId, t) } : {}),

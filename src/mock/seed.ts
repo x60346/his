@@ -63,6 +63,7 @@ import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { laneOf, priorityOf } from '@/services/lab-queue-rules'
 import { consentsForSurgery } from '@/services/consent-rules'
+import { recentShifts } from '@/services/nursing-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
@@ -3899,6 +3900,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 護理紀錄（示範）：住院中的病人最近 6 個已結束的班，每班一筆例行 DAR（交班前寫）；
+  // 大腸癌末期那位最近一班沒寫（護理紀錄缺漏示範）----------
+  {
+    const SH: Record<string, number> = { 大夜: 0, 白班: 8, 小夜: 16 }
+    const late = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('C18'))
+    const shifts = recentShifts(nowStr, 7).slice(1)
+    for (const a of admissions.filter((x) => x.status === 'admitted' && x.admittedAt && !x.obs && !(x.day && !x.day.converted))) {
+      shifts.forEach((s, i) => {
+        const start = `${s.date} ${String(SH[s.shift]).padStart(2, '0')}:00`
+        if (start < a.admittedAt!.slice(0, 16)) return
+        if (a === late && i === 0) return
+        const at = addMinutes(start, 7 * 60)
+        if (nursingNotes.some((n) => n.admissionId === a.id && n.at >= start && n.at < addMinutes(start, 480))) return
+        nursingNotes.push({ id: `NN-SH-${a.id}-${s.date}-${SH[s.shift]}`, admissionId: a.id, at, focus: '例行評估', data: `${s.shift}：意識清楚、生命徵象穩定，主訴無特殊不適。`, action: '依醫囑給藥、協助翻身與個人衛生，衛教跌倒預防。', response: '病人配合，未主訴不適。', nurseId: 'U201' })
+      })
+    }
+  }
+
   // ---------- 知情同意書（示範）：術前準備勾了「同意書」的手術，都有對應的手術同意書（非局部麻醉另有麻醉同意書）；
   // 主刀說明、病人本人簽，簽在勾術前準備之前；備血單都有輸血同意書（開單時醫師說明取得）----------
   const consents: Consent[] = []
@@ -3928,7 +3947,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const title = procMap.get(s.procId)?.name ?? '手術'
     for (const kind of consentsForSurgery(s.anesthesia)) {
       const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
-      consents.push({ id: `CN-SEED-${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind, patientId: s.patientId, admissionId: s.admissionId, surgeryId: s.id, title: kind === 'surgery' ? title : `${title}（${s.anesthesia === 'general' ? '全身麻醉' : s.anesthesia === 'spinal' ? '脊髓麻醉' : '神經阻斷麻醉'}）`, explainedBy: doc.id, explanation: kind === 'surgery' ? '說明手術方式、出血與感染風險、替代方案與不手術的後果' : '說明麻醉方式、術後噁心、喉嚨痛等常見不適與少見的嚴重併發症', signer: { name: patients.find((p) => p.id === s.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc.id })
+      consents.push({ id: `CN-SEED-${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind, patientId: s.patientId, admissionId: s.admissionId, surgeryId: s.id, ...(kind === 'surgery' ? { side: s.side } : {}), title: kind === 'surgery' ? title : `${title}（${s.anesthesia === 'general' ? '全身麻醉' : s.anesthesia === 'spinal' ? '脊髓麻醉' : '神經阻斷麻醉'}）`, explainedBy: doc.id, explanation: kind === 'surgery' ? '說明手術方式、出血與感染風險、替代方案與不手術的後果' : '說明麻醉方式、術後噁心、喉嚨痛等常見不適與少見的嚴重併發症', signer: { name: patients.find((p) => p.id === s.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc.id })
     }
   }
 
