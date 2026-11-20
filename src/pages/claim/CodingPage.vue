@@ -4,7 +4,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USearchSelect, UTabs } from '@/components/ui'
 import SecondaryDxEditor from '@/components/SecondaryDxEditor.vue'
-import { codingApi, masterApi, type CodingItem, type PcsCode } from '@/services'
+import { codingApi, decodePcs, masterApi, type CodingItem, type PcsCode } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { IcdCode } from '@/types'
 
@@ -26,6 +26,7 @@ function openCode(x: CodingItem) {
 }
 // 試算：照現在畫面上的編碼會分到哪一組
 const { data: preview } = useQuery(async () => (cur.value && f.mainIcd ? codingApi.previewCoding(cur.value.admissionId, { mainIcd: f.mainIcd, secondary: f.secondary, procedures: f.procedures }) : undefined), [() => cur.value?.admissionId, () => f.mainIcd, () => f.secondary.map((x) => x.icd).join(), () => f.procedures.map((x) => x.code).join()])
+const openPcs = ref('')
 function addPcs(c: PcsCode) {
   if (!f.procedures.some((p) => p.code === c.code)) f.procedures.push({ code: c.code, name: c.name, or: c.or })
 }
@@ -88,9 +89,16 @@ async function submit() {
           <div class="text-sm font-medium text-slate-700">處置碼（ICD-10-PCS）<span class="text-xs font-normal text-slate-500">（最多 6 個；手術室處置才影響 DRG）</span></div>
           <p v-if="!f.procedures.length" class="text-xs text-slate-400">沒有處置碼<template v-if="cur.suggestedProcedures.length">（手術紀錄建議：{{ cur.suggestedProcedures.map((p) => p.code).join('、') }}）</template></p>
           <ul class="my-1 space-y-1">
-            <li v-for="(p, i) in f.procedures" :key="p.code" class="flex items-center gap-2 rounded border border-slate-200 px-2 py-0.5 text-xs">
-              <b class="tabular">{{ p.code }}</b>{{ p.name }}<UBadge :tone="p.or ? 'purple' : 'gray'">{{ p.or ? '手術室' : '非手術室' }}</UBadge>
-              <button type="button" class="ml-auto text-red-600" @click="f.procedures.splice(i, 1)">移除</button>
+            <li v-for="(p, i) in f.procedures" :key="p.code" class="rounded border border-slate-200 px-2 py-0.5 text-xs">
+              <div class="flex items-center gap-2">
+                <b class="tabular">{{ p.code }}</b>{{ p.name }}<UBadge :tone="p.or ? 'purple' : 'gray'">{{ p.or ? '手術室' : '非手術室' }}</UBadge>
+                <button type="button" class="ml-auto text-slate-500 underline" :aria-expanded="openPcs === p.code" @click="openPcs = openPcs === p.code ? '' : p.code">七碼</button>
+                <button type="button" class="text-red-600" @click="f.procedures.splice(i, 1)">移除</button>
+              </div>
+              <!-- 七碼結構：每一碼是一個軸，意思看章節（第 1 碼） -->
+              <table v-if="openPcs === p.code" class="my-1 w-full text-xs">
+                <tr v-for="x in decodePcs(p.code)" :key="x.pos"><td class="w-6 tabular text-slate-400">{{ x.pos }}</td><td class="w-6 tabular font-bold">{{ x.char }}</td><td class="w-28 text-slate-500">{{ x.axis }}</td><td>{{ x.meaning }}</td></tr>
+              </table>
             </li>
           </ul>
           <USearchSelect placeholder="加處置碼：輸入 PCS 代碼或名稱" :search="(kw) => codingApi.searchPcs(kw)" :item-key="(c: PcsCode) => c.code" :item-label="(c: PcsCode) => `${c.code}　${c.name}${c.or ? '' : '（非手術室）'}`" @select="addPcs" />

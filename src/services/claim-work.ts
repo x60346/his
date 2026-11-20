@@ -2,7 +2,7 @@
 // API 在 claim.ts、規則在 claim-rules
 import type { Admission, ClaimItem, ClaimKind, Visit } from '@/types'
 import { db } from '@/mock/db'
-import { INTERIM_DAYS, interimDaysOf, ipdCategories, ipdClaimPoints, ipdClaimProblems, linePoints, monthEnd, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
+import { rejectLabel, INTERIM_DAYS, interimDaysOf, ipdCategories, ipdClaimPoints, ipdClaimProblems, linePoints, monthEnd, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
 import { ipdBillOf } from './ipd-bill'
 import { ipdDays } from './billing'
 import { find } from './views'
@@ -98,7 +98,10 @@ function interimRows(m: string): ClaimRow[] {
 // ---------- 月份：這個月的申報清單（還沒送：現在算的＋補報；送了：送出的那份） ----------
 
 const submissionOf = (kind: ClaimKind, month: string) => db.claimSubmissions.find((s) => s.kind === kind && s.month === month)
-const submittedFor = (kind: ClaimKind, refId: string) => db.claimSubmissions.filter((s) => s.kind === kind).flatMap((s) => s.items.filter((x) => x.refId === refId))
+/** 送過、而且沒被退件的（退件的不算申報過，差額＝整筆重送） */
+const submittedFor = (kind: ClaimKind, refId: string) => db.claimSubmissions.filter((s) => s.kind === kind).flatMap((s) => s.items.filter((x) => x.refId === refId && !s.rejects?.some((r) => r.refId === refId)))
+/** 最近一次被退件（還沒重送的話，重送那筆要寫原因、要重新檢核） */
+export const lastRejectOf = (kind: ClaimKind, refId: string) => db.claimSubmissions.filter((s) => s.kind === kind && s.items.some((x) => x.refId === refId)).sort((a, b) => a.month.localeCompare(b.month)).map((s) => ({ month: s.month, r: s.rejects?.find((x) => x.refId === refId) })).at(-1)
 const excludedEver = (kind: ClaimKind, refId: string) => db.claimSubmissions.some((s) => s.kind === kind && s.excluded.some((x) => x.refId === refId))
 
 /** 所有申報對象（門診：就醫；住院：出院的住院）與它所屬的月份、現在的內容 */
@@ -127,8 +130,10 @@ export function openMonthRows(kind: ClaimKind, month: string, current: string): 
       const base = r.item ?? prev[0]
       const dp = Math.round(((r.item?.points ?? 0) - prev.reduce((n, x) => n + x.points, 0)) * 100) / 100
       const dc = Math.round(((r.item?.copay ?? 0) - prev.reduce((n, x) => n + x.copay, 0)) * 100) / 100
-      const note = supplementNoteOf(prev, r.item)
-      out.push({ ...base, points: dp, copay: dc, claim: delta, categories: undefined, supplementOf: r.month, ...(note ? { supplementNote: note } : {}), problems: [] })
+      // 上次送的被退件：這筆是重送（整筆，要重新檢核）
+      const rej = lastRejectOf(kind, r.refId)
+      const note = rej?.r ? `退件重送（${rej.month} ${rejectLabel(rej.r.code)}）` : supplementNoteOf(prev, r.item)
+      out.push({ ...base, points: dp, copay: dc, claim: delta, categories: rej?.r ? base.categories : undefined, supplementOf: r.month, ...(note ? { supplementNote: note } : {}), problems: rej?.r && r.item ? r.row(r.item).problems : [] })
     }
   }
   if (kind === 'ipd' && month < current && !done(month)) out.push(...interimRows(month))

@@ -7,7 +7,7 @@ import { Download, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import ClaimCutPanel from './ClaimCutPanel.vue'
 import PreAuthPanel from './PreAuthPanel.vue'
-import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, claimApi, DRG_PAY_RULE_LABEL } from '@/services'
+import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, CLAIM_REJECT_CODES, claimApi, DRG_PAY_RULE_LABEL } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { downloadFile } from '@/utils/download'
@@ -45,6 +45,15 @@ const exOpen = computed({ get: () => !!exFor.value, set: (x) => !x && (exFor.val
 const reason = ref('')
 const exAct = useAction(claimApi.excludeClaim, { success: '已註記排除' })
 const unAct = useAction(claimApi.unexcludeClaim, { success: '已取消排除' })
+// 健保署檢核退件（送出後）：記退件 → 改好資料後自動列在下一個還沒送的月份重送
+const rjFor = ref<{ refId: string; label: string }>()
+const rjOpen = computed({ get: () => !!rjFor.value, set: (x) => !x && (rjFor.value = undefined) })
+const rj = ref({ code: '' as string | number | undefined, note: '' })
+const rjAct = useAction(claimApi.rejectClaimItem, { success: '已記退件：資料改好後會列在下一個還沒送的月份「退件重送」' })
+const unRjAct = useAction(claimApi.unrejectClaimItem, { success: '已取消退件' })
+async function submitRj() {
+  if (b.value && rjFor.value && (await rjAct.run(b.value.kind, b.value.month, rjFor.value.refId, { code: String(rj.value.code ?? ''), note: rj.value.note }))) rjFor.value = undefined
+}
 async function submitEx() {
   if (b.value && exFor.value && (await exAct.run(b.value.kind, b.value.month, exFor.value.refId, reason.value))) exFor.value = undefined
 }
@@ -63,7 +72,7 @@ async function submitEx() {
         <section class="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
           <div><div class="text-xs text-slate-500">{{ b.month }} 申報</div><div class="tabular text-2xl font-semibold text-slate-800">{{ fmt(b.totals.claim) }} 點</div></div>
           <div class="text-xs text-slate-600">
-            {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.interim">・期中 {{ b.totals.interim }} 筆</template><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
+            {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.interim">・期中 {{ b.totals.interim }} 筆</template><span v-if="b.totals.rejected" class="text-red-700">・退件 {{ b.totals.rejected }} 筆 {{ fmt(b.totals.rejectedClaim) }} 點</span><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
             <div v-if="b.totals.drg" class="mt-0.5">DRG {{ b.totals.drg.count }} 筆，盈虧合計 <b :class="b.totals.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ b.totals.drg.diff >= 0 ? '+' : '' }}{{ fmt(b.totals.drg.diff) }}</b> 點<template v-if="b.totals.drg.exempt">・不適用 DRG {{ b.totals.drg.exempt }} 筆</template><template v-if="b.totals.drg.cmi !== null">・CMI {{ b.totals.drg.cmi.toFixed(2) }}</template></div>
             <div class="mt-0.5 flex flex-wrap gap-2">
               <span v-for="c in b.totals.byCase" :key="c.caseType" class="rounded bg-slate-100 px-1.5">{{ c.label }}：{{ c.count }} 筆 {{ fmt(c.claim) }} 點</span>
@@ -102,13 +111,19 @@ async function submitEx() {
                   <td class="tabular px-2 text-right">{{ fmt(r.copay) }}</td>
                   <td class="tabular px-2 text-right font-medium">{{ fmt(r.claim) }}</td>
                   <td class="px-2 text-right">
-                    <template v-if="!b.submitted && !r.supplementOf">
+                    <template v-if="b.submitted && !r.excluded && r.canReject">
+                      <UButton v-if="r.rejected" size="sm" variant="ghost" :loading="unRjAct.pending.value" @click="unRjAct.run(b.kind, b.month, r.refId)">取消退件</UButton>
+                      <UButton v-else size="sm" variant="ghost" @click="rjFor = { refId: r.refId, label: `${r.patientName} ${r.date}` }; rj = { code: '', note: '' }">記退件</UButton>
+                    </template>
+                    <template v-if="!b.submitted && (!r.supplementOf || r.supplementNote?.startsWith('退件重送'))">
                       <UButton v-if="r.excluded" size="sm" variant="ghost" @click="unAct.run(b.kind, b.month, r.refId)">取消排除</UButton>
                       <UButton v-else-if="r.problems.length" size="sm" variant="ghost" @click="exFor = { refId: r.refId, label: `${r.patientName} ${r.date}` }; reason = ''">註記排除</UButton>
                     </template>
                   </td>
                 </tr>
                 <tr v-if="r.problems.length && !r.excluded" class="bg-red-50/50"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700">檢核：{{ r.problems.join('；') }}</td></tr>
+                <tr v-if="r.rejected"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700"><UBadge tone="red">退件</UBadge> {{ r.rejected.label }}<template v-if="r.rejected.note">：{{ r.rejected.note }}</template>（{{ r.rejected.byName }} {{ r.rejected.at.slice(5) }}）・改好資料後列在下一個還沒送的月份重送</td></tr>
+                <tr v-if="!b.submitted && r.supplementOf && r.problems.length"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700">檢核：{{ r.problems.join('；') }}</td></tr>
                 <tr v-if="r.excluded"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-slate-500">已排除：{{ r.excluded.reason }}（{{ r.excluded.byName }}）</td></tr>
                 <tr v-if="b.kind === 'ipd' && r.categories && !r.excluded"><td colspan="10" class="px-2 pb-1.5 text-xs text-slate-500">{{ CLAIM_CATEGORIES.filter((c) => r.categories?.[c]).map((c) => `${CLAIM_CATEGORY_LABEL[c]} ${fmt(r.categories![c]!)}`).join('・') }}
                   <div v-if="r.drg" class="text-slate-700">DRG <b>{{ r.drg.code }}</b> {{ r.drg.name }}・定額 {{ fmt(r.drg.points) }}・給付 {{ fmt(r.drg.pay) }}（{{ DRG_PAY_RULE_LABEL[r.drg.rule] }}）・<span :class="r.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ r.drg.diff >= 0 ? '盈' : '虧' }} {{ fmt(Math.abs(r.drg.diff)) }}</span></div>
@@ -120,6 +135,17 @@ async function submitEx() {
         </div>
       </template>
     </UQueryState>
+    <UDialog v-model="rjOpen" :title="`記退件：${rjFor?.label ?? ''}`" size="sm" @submit="submitRj">
+      <div class="space-y-3 text-sm">
+        <USelect v-model="rj.code" label="退件代碼（健保署檢核結果）" placeholder="選擇" :options="CLAIM_REJECT_CODES.map((c) => ({ label: `${c.code} ${c.label}`, value: c.code }))" :error="rjAct.fieldErrors.value.code" />
+        <UInput v-model="rj.note" label="說明（選填）" placeholder="例：身分證號第 5 碼打錯" />
+        <p class="text-xs text-slate-500">退件的不算申報過；把資料改好後，這筆會整筆列在下一個還沒送的月份「退件重送」，並重新檢核。</p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="rjFor = undefined">取消</UButton>
+        <UButton type="submit" :loading="rjAct.pending.value">記退件</UButton>
+      </template>
+    </UDialog>
     <UDialog v-model="exOpen" :title="`註記排除：${exFor?.label ?? ''}`" size="sm" @submit="submitEx">
       <UInput v-model="reason" label="排除原因" placeholder="例：病人改自費、重複掛號已退費" :error="exAct.fieldErrors.value.reason" />
       <template #footer>

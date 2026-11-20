@@ -69,7 +69,8 @@ function months(): CutMonth[] {
   return db.claimSubmissions
     .map((s) => {
       const cs = db.claimCuts.filter((c) => c.submissionId === s.id)
-      const claimed = s.items.reduce((n, x) => n + x.claim, 0)
+      // 退件的不算申報（之後重送的算在重送那個月）
+      const claimed = s.items.filter((x) => !s.rejects?.some((r) => r.refId === x.refId)).reduce((n, x) => n + x.claim, 0)
       const cut = cs.reduce((n, c) => n + c.points, 0)
       // 補付＝申復補付＋爭議審議補付
       const paid = cs.reduce((n, c) => n + (c.result?.outcome === 'paid' ? c.result.points : 0) + (c.dispute?.result?.outcome === 'paid' ? c.dispute.result.points : 0), 0)
@@ -89,7 +90,7 @@ export function cutBoard(): Promise<CutBoard> {
       months: months(),
       submissions: db.claimSubmissions.slice().sort((a, b) => b.month.localeCompare(a.month)).map((s) => ({
         id: s.id, kind: s.kind, month: s.month, label: `${s.month} ${CLAIM_KIND_LABEL[s.kind]}`,
-        items: s.items.filter((x) => !x.supplementOf).map((x) => ({ refId: x.refId, label: `${x.date} ${nameOf.patient(x.patientId)}・${x.diagnosis || '—'}・${x.claim} 點`, claim: x.claim, left: x.claim - cutPoints(s.id, x.refId) })),
+        items: s.items.filter((x) => !x.supplementOf && !s.rejects?.some((r) => r.refId === x.refId)).map((x) => ({ refId: x.refId, label: `${x.date} ${nameOf.patient(x.patientId)}・${x.diagnosis || '—'}・${x.claim} 點`, claim: x.claim, left: x.claim - cutPoints(s.id, x.refId) })),
       })),
     }
   })
@@ -100,7 +101,7 @@ export function addCut(input: { submissionId: string; refId: string; item: strin
   return mutate(() => {
     const u = requirePermission('nhi.claim')
     const s = must(subOf(input.submissionId), '送出的申報')
-    const it = s.items.find((x) => x.refId === input.refId && !x.supplementOf)
+    const it = s.items.find((x) => x.refId === input.refId && !x.supplementOf && !s.rejects?.some((r) => r.refId === x.refId))
     if (!it) failField('refId', '請選這個月申報的一筆')
     failFields(checkCut(input, it!.claim - cutPoints(s.id, it!.refId)))
     const c: ClaimCut = {

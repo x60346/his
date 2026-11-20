@@ -2,7 +2,7 @@
 import type { Encounter, IpdOrder, PreAuth } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { fail } from './http'
-import { opdPreAuthBlockText, opdPreAuthLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
+import { opdPreAuthBlockText, opdPreAuthLeft, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, opdRxTimes, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
 import { find } from './views'
 
 const live = (p: PreAuth) => p.status !== 'rejected'
@@ -56,6 +56,15 @@ export function opdPreAuthUsed(p: PreAuth, exceptEncounterId?: string): number {
     .reduce((n, e) => n + e.medications.filter((m) => m.drugId === p.itemId && !m.selfPay).reduce((k, m) => k + opdRxQty(m.qty, e.refillTimes), 0), 0)
 }
 
+/** 門診核准後已經健保開了幾次（同上的範圍；一張處方有這個藥就算，慢箋算可調劑次數） */
+export function opdPreAuthUsedTimes(p: PreAuth, exceptEncounterId?: string): number {
+  const from = p.result?.at.slice(0, 10) ?? ''
+  const until = opdPreAuthUntil(p) ?? ''
+  return db.encounters
+    .filter((e) => e.patientId === p.patientId && e.status === 'completed' && e.id !== exceptEncounterId && e.date >= from && e.date <= until && !find.visit(e.visitId)?.refillOf && e.medications.some((m) => m.drugId === p.itemId && !m.selfPay))
+    .reduce((n, e) => n + opdRxTimes(e.refillTimes), 0)
+}
+
 /** 門診完成看診前：需事前審查的藥用健保開（沒勾自費、不是自費身分）要有效期內的核准，而且不超過核准量（慢箋算整張） */
 export function requireOpdDrugPreAuth(e: Pick<Encounter, 'id' | 'patientId' | 'date' | 'medications' | 'refillTimes'>, selfPayVisit: boolean) {
   if (selfPayVisit) return
@@ -66,6 +75,9 @@ export function requireOpdDrugPreAuth(e: Pick<Encounter, 'id' | 'patientId' | 'd
     if (!p || !opdPreAuthValid(p, e.date)) fail(opdPreAuthBlockText(d.name, p, e.date), 'CONFLICT')
     const want = e.medications.filter((m) => m.drugId === id && !m.selfPay).reduce((n, m) => n + opdRxQty(m.qty, e.refillTimes), 0)
     const left = opdPreAuthLeft(p!, opdPreAuthUsed(p!, e.id))
+    const tLeft = opdPreAuthTimesLeft(p!, opdPreAuthUsedTimes(p!, e.id))
+    const tWant = opdRxTimes(e.refillTimes)
+    if (tLeft !== undefined && tWant > tLeft) fail(`${d.name} 超過事前審查核准次數（${p!.no} 核准 ${p!.result!.times} 次、還剩 ${tLeft} 次，這次${e.refillTimes >= 2 ? `慢箋 ${tWant} 次` : ' 1 次'}）：請重新申請或改自費`, 'CONFLICT')
     if (left !== undefined && want > left) fail(`${d.name} 超過事前審查核准量（${p!.no} 核准 ${p!.result!.qty} ${d.unit}、還剩 ${left}，這次${e.refillTimes >= 2 ? `慢箋共` : ''} ${want}）：請減量、改自費，或重新申請`, 'CONFLICT')
   }
 }

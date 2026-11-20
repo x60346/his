@@ -134,6 +134,16 @@ export function claimCsv(kind: ClaimKind, rows: (ClaimItem & { patientName: stri
 
 // ---------- 核減與申復 ----------
 
+/** 健保署檢核退件代碼（示範用，簡化） */
+export const CLAIM_REJECT_CODES: { code: string; label: string }[] = [
+  { code: 'R01', label: '身分資料不符（身分證號、生日）' },
+  { code: 'R02', label: '主診斷碼錯誤或不完整' },
+  { code: 'R03', label: '重複申報' },
+  { code: 'R04', label: '醫令或點數計算錯誤' },
+  { code: 'R05', label: '缺必要欄位' },
+]
+export const rejectLabel = (code: string) => `${code} ${CLAIM_REJECT_CODES.find((r) => r.code === code)?.label ?? ''}`.trim()
+
 /** 核減理由代碼（示範用，簡化） */
 export const CUT_REASONS: { code: string; label: string }[] = [
   { code: '0101', label: '診斷與處置不符' },

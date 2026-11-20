@@ -2683,7 +2683,7 @@ export interface PreAuth {
   notes: { at: string; by: string; text: string }[]
   submittedAt?: string
   submittedBy?: string
-  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string; /** 門診核准量（藥品單位，例：6 支）；沒有＝不限 */ qty?: number }
+  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string; /** 門診核准量（藥品單位，例：6 支）；沒有＝不限 */ qty?: number; /** 門診核准次數（療程：可調劑幾次，慢箋每次領藥都算）；沒有＝不限 */ times?: number }
   /** 病人同意改自費（這次自費，之後核准也不退） */
   selfPay?: { at: string; by: string; note: string }
   /** 緊急先用（醫師寫理由；仍要送審、申報照檢核） */
@@ -2740,6 +2740,8 @@ export interface ClaimSubmission {
   submittedBy: string
   items: ClaimItem[]
   excluded: { refId: string; patientId: string; date: string; reason: string; by: string; at: string }[]
+  /** 健保署檢核退件（送出後記）：退件的那筆不算申報過，改好後列在下一個還沒送的月份重送 */
+  rejects?: { refId: string; code: string; note: string; by: string; at: string }[]
 }
 
 /** 送出前註記排除（這筆不申報：例自費改健保還在處理）；送出時一起鎖進申報 */

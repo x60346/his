@@ -20,6 +20,11 @@ export const opdPreAuthValid = (p: Pick<PreAuth, 'status' | 'result'>, date: str
 /** 門診核准量還剩多少（沒寫核准量＝undefined 不限）：used＝效期內已經健保開的量 */
 export const opdPreAuthLeft = (p: Pick<PreAuth, 'result'>, used: number): number | undefined => (p.result?.qty !== undefined ? Math.max(0, p.result.qty - used) : undefined)
 
+/** 門診核准次數還剩幾次（沒寫＝undefined 不限） */
+export const opdPreAuthTimesLeft = (p: Pick<PreAuth, 'result'>, used: number): number | undefined => (p.result?.times !== undefined ? Math.max(0, p.result.times - used) : undefined)
+/** 一張處方算幾次調劑：慢箋＝可調劑次數，其他 1 次 */
+export const opdRxTimes = (refillTimes: number) => (refillTimes >= 2 ? refillTimes : 1)
+
 /** 這次要開的量：慢箋算整張（每次調劑同量 × 可調劑次數） */
 export const opdRxQty = (qty: number, refillTimes: number) => qty * (refillTimes >= 2 ? refillTimes : 1)
 

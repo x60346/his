@@ -18056,6 +18056,124 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const disp = await D.labQueueDisplay()
     ok(drop.called ? disp.avgWaitDrop === drop.avgWait : disp.avgWaitDrop === undefined, '檢體窗口開著：候診螢幕顯示交檢體的平均等候')
   }
+  // 申報退件與重送：送出後記健保署退件（代碼）→ 退件的不算申報過、不能核減 → 下一個還沒送的月份「退件重送」（整筆、重新檢核、可排除）→ 重送送出後不能再改
+  console.log('\n[申報退件重送]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.claimApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.rejectLabel('R02') === 'R02 主診斷碼錯誤或不完整' && api.CLAIM_REJECT_CODES.length === 5, '退件代碼')
+    const subs = db().claimSubmissions.filter((s) => s.kind === 'opd').sort((a, b) => b.month.localeCompare(a.month))
+    const S0 = subs[0]
+    const it = S0.items.find((x) => !x.supplementOf && !db().claimCuts.some((c) => c.submissionId === S0.id && c.refId === x.refId) && db().encounters.find((e) => e.visitId === x.refId)?.diagnoses.length)
+    await as('dr01')
+    ok((await errOf(() => C.rejectClaimItem('opd', S0.month, it.refId, { code: 'R01' }))).includes('健保申報'), '要「健保申報」權限')
+    await as('clerk02')
+    const open = (await C.claimBoard('opd')).month
+    ok((await errOf(() => C.rejectClaimItem('opd', open, it.refId, { code: 'R01' }))).includes('還沒送出'), '還沒送出的月份不能記退件')
+    ok((await fieldsOf(() => C.rejectClaimItem('opd', S0.month, it.refId, { code: 'X' }))).code, '要選退件代碼')
+    let b = await C.rejectClaimItem('opd', S0.month, it.refId, { code: 'R01', note: '身分證號第 5 碼錯' })
+    const rr = b.rows.find((r) => r.refId === it.refId)
+    ok(rr.rejected?.label.startsWith('R01') && rr.rejected.note.includes('第 5 碼') && b.totals.rejected === 1 && b.totals.rejectedClaim === it.claim && db().auditLogs[0].action === '健保申報退件', `記退件：${S0.month} ${rr.patientName} ${it.claim} 點、總計、稽核`)
+    ok((await errOf(() => C.rejectClaimItem('opd', S0.month, it.refId, { code: 'R01' }))).includes('記過'), '不能重複記')
+    // 不能核減、不算申報
+    const cb = await api.claimCutApi.cutBoard()
+    ok(!cb.submissions.find((s) => s.id === S0.id).items.some((x) => x.refId === it.refId) && cb.months.find((m) => m.month === S0.month && m.kind === 'opd').claimed === S0.items.reduce((n, x) => n + x.claim, 0) - it.claim, '退件的不能核減、不算進申報點數')
+    ok(Object.keys(await (async () => { try { await api.claimCutApi.addCut({ submissionId: S0.id, refId: it.refId, item: 'x', points: 1, code: '0101' }); return {} } catch (e) { return e.fields ?? { [e.field]: 1 } } })()).includes('refId'), '輸入核減選不到退件的那筆')
+    // 下一個還沒送的月份：退件重送（整筆）
+    b = await C.claimBoard('opd', open)
+    let rs = b.rows.find((r) => r.refId === it.refId)
+    const cur = (await load('/src/services/claim-work.ts')).opdItemOf(db().visits.find((v) => v.id === it.refId))
+    ok(rs && rs.supplementOf === S0.month && rs.claim === cur.claim && rs.supplementNote.startsWith('退件重送') && rs.supplementNote.includes('R01') && !rs.problems.length, `${open}：退件重送 ${rs?.claim} 點（整筆）`)
+    // 取消退件 → 重送那筆消失；再記一次
+    await C.unrejectClaimItem('opd', S0.month, it.refId)
+    ok(!(await C.claimBoard('opd', open)).rows.some((r) => r.refId === it.refId), '取消退件：不用重送')
+    await C.rejectClaimItem('opd', S0.month, it.refId, { code: 'R02' })
+    // 重送也要重新檢核：資料沒改好就擋；可以排除（放棄）
+    const enc = db().encounters.find((e) => e.visitId === it.refId)
+    const dx = enc.diagnoses
+    enc.diagnoses = []
+    b = await C.claimBoard('opd', open)
+    rs = b.rows.find((r) => r.refId === it.refId)
+    ok(rs.problems.includes('沒有主診斷') && !b.canSubmit, '重送那筆重新檢核：沒有主診斷 → 擋送出')
+    const normalSup = b.rows.find((r) => r.supplementOf && !r.supplementNote?.startsWith('退件'))
+    if (normalSup) ok((await errOf(() => C.excludeClaim('opd', open, normalSup.refId, 'x'))).includes('補報'), '一般補報還是不能排除')
+    await C.excludeClaim('opd', open, it.refId, '測試：放棄')
+    ok((await C.claimBoard('opd', open)).rows.find((r) => r.refId === it.refId).excluded, '退件重送可以排除（放棄申報）')
+    await C.unexcludeClaim('opd', open, it.refId)
+    // 前面有失敗的呼叫會換掉 db 物件：重新找
+    db().encounters.find((e) => e.visitId === it.refId).diagnoses = dx
+    // 送出這個月（其他有問題的先排除）→ 原月份不能再改退件
+    b = await C.claimBoard('opd', open)
+    for (const r of b.rows.filter((x) => x.problems.length && !x.excluded)) await C.excludeClaim('opd', open, r.refId, '測試：排除')
+    await C.submitClaim('opd', open)
+    const after = (await C.claimBoard('opd', S0.month)).rows.find((r) => r.refId === it.refId)
+    ok(after.rejected && after.canReject === false && (await errOf(() => C.unrejectClaimItem('opd', S0.month, it.refId))).includes('重送'), '重送送出後：原月份不能取消退件')
+    ok(!(await (await load('/src/services/claim-work.ts')).openMonthRows('opd', api.nextMonth(open), api.nextMonth(open))).some((r) => r.refId === it.refId), '重送過了：之後不再列')
+  }
+  // 處置碼七碼：每一碼的軸與意思；主檔每個碼都解得出來；章節決定軸
+  console.log('\n[處置碼七碼]')
+  {
+    const d = api.decodePcs('0dtj4zz')
+    ok(d.map((x) => x.char).join('') === '0DTJ4ZZ' && d.map((x) => x.meaning).join('/') === '醫療與外科/消化系統/切除（整個器官）/闌尾/經皮內視鏡/無/無' && d[2].axis === '術式（根本操作）', '0DTJ4ZZ：醫療與外科／消化系統／切除／闌尾／經皮內視鏡／無／無（小寫也可）')
+    const v = api.decodePcs('5A1955Z')
+    ok(v[3].axis === '器官系統' && v[3].meaning === '呼吸系統' && v[4].meaning === '連續超過 96 小時' && v[5].meaning === '換氣', '5A1955Z：體外輔助章節的軸不一樣（器官系統、持續時間、功能）')
+    ok(api.decodePcs('30233N1')[5].axis === '物質' && api.decodePcs('30233N1')[5].meaning === '紅血球', '30233N1：給藥章節第 6 碼是物質')
+    ok(api.PCS_CODES.every((c) => api.decodePcs(c.code).every((x) => x.meaning !== '—')), `主檔 ${api.PCS_CODES.length} 個碼每一碼都解得出來`)
+    ok(api.decodePcs('9ZZ').every((x, i) => (i < 3 ? x.meaning === '—' : x.char === '')) && api.decodePcs('9ZZ')[0].axis === '第 1 碼', '不認得的寫「—」')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/claim/CodingPage.vue', 'utf8').includes('decodePcs('), '編碼畫面用同一份解析')
+  }
+  // 事前審查核准次數：一張處方算一次（慢箋算可調劑次數）、自費不算；和核准量一起檢查
+  console.log('\n[事前審查核准次數]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const work = await load('/src/services/preauth-work.ts')
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.opdPreAuthTimesLeft({ result: { times: 3 } }, 1) === 2 && api.opdPreAuthTimesLeft({ result: {} }, 9) === undefined && api.opdRxTimes(3) === 3 && api.opdRxTimes(0) === 1, '規則：還剩幾次、慢箋算可調劑次數')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    ok(seedPa.result.times === 6, '種子：核准 6 次')
+    const DOC = seedPa.doctorId
+    const docName = db().users.find((u) => u.doctorId === DOC).username
+    const todays = db().visits.filter((x) => x.date === T && x.doctorId === DOC && x.status === 'registered' && !x.refillOf && !x.er)
+    const v1 = todays.find((x) => x.patientId === seedPa.patientId)
+    const v2 = todays.find((x) => x.patientId !== seedPa.patientId && !db().preAuths.some((p) => p.patientId === x.patientId))
+    const med = (qty, selfPay = false) => ({ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty, selfPay })
+    const draftOf = (meds, refillTimes = 0) => ({ subjective: '骨鬆追蹤', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: meds, procedures: [], refillTimes, admissionRequested: false })
+    await as(docName)
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    await api.opdApi.completeEncounter(e1.id, draftOf([med(1)]))
+    await as('clerk02')
+    const pv = (await P.preAuthBoard()).find((x) => x.id === seedPa.id)
+    ok(pv.times.used === 1 && pv.times.left === 5 && pv.resultText.includes('核准 6 次'), '開一次後：已開 1 次、還剩 5 次')
+    await as(docName)
+    const e2 = await api.opdApi.startConsult(v2.id, { allowNotCheckedIn: true, allowParallel: true })
+    const pa = await P.requestOpdDrugPreAuth(e2.id, 'M052')
+    await P.fillPreAuth(pa.id, { summary: 'T 值 −3.0', reason: '仍骨折' })
+    await as('clerk02')
+    await P.submitPreAuth(pa.id)
+    ok((await fieldsOf(() => P.recordPreAuthResult(pa.id, { outcome: 'approved', times: -1 }))).times, '核准次數要正整數')
+    await P.recordPreAuthResult(pa.id, { outcome: 'approved', times: 2 })
+    db().visits.find((x) => x.id === v2.id).caseType = '04'
+    await as(docName)
+    const m = await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf([med(1)], 3)))
+    ok(m.includes('核准次數') && m.includes('慢箋 3 次') && m.includes('還剩 2 次'), `慢箋 3 次超過核准 2 次：「${m}」`)
+    await api.opdApi.completeEncounter(e2.id, draftOf([med(1)], 2))
+    ok(work.opdPreAuthUsedTimes(db().preAuths.find((p) => p.id === pa.id)) === 2, '慢箋 2 次：剛好用完')
+    const v3 = todays.find((x) => x !== v1 && x !== v2)
+    if (v3) {
+      db().preAuths.push({ ...JSON.parse(JSON.stringify(db().preAuths.find((p) => p.id === pa.id))), id: 'PA-T-T', no: 'PA-T-T', patientId: v3.patientId })
+      db().preAuths.find((p) => p.id === 'PA-T-T').result.times = 1
+      const e3 = await api.opdApi.startConsult(v3.id, { allowNotCheckedIn: true, allowParallel: true })
+      await api.opdApi.completeEncounter(e3.id, draftOf([med(1, true)]))
+      ok(work.opdPreAuthUsedTimes(db().preAuths.find((p) => p.id === 'PA-T-T')) === 0, '自費開的不算次數')
+    } else ok(true, '（沒有第三位，略過）')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

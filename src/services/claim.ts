@@ -5,7 +5,7 @@ import type { ClaimItem, ClaimKind, ClaimSubmission } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'
 import { audit, fail, failField, mutate, query, requirePermission } from './http'
-import { canSubmitMonth, claimCsv, claimXml, CLAIM_KIND_LABEL, monthOf } from './claim-rules'
+import { canSubmitMonth, claimCsv, claimXml, CLAIM_KIND_LABEL, CLAIM_REJECT_CODES, monthOf, rejectLabel } from './claim-rules'
 import { claimMonthsOf, openMonthRows, submissionOf, type ClaimRow } from './claim-work'
 import { caseTypes } from '@/mock/codes'
 import { DRG_TABLE } from './drg-rules'
@@ -23,6 +23,10 @@ export interface ClaimBoardRow extends ClaimRow {
   deptName: string
   caseLabel: string
   excluded?: { reason: string; byName: string }
+  /** 送出後被健保署退件 */
+  rejected?: { code: string; label: string; note: string; byName: string; at: string }
+  /** 還能記退件／取消退件（之後的月份還沒把這筆送出去） */
+  canReject?: boolean
 }
 export interface ClaimBoard {
   kind: ClaimKind
@@ -33,7 +37,7 @@ export interface ClaimBoard {
   /** 不能送的原因（月份還沒結束、已送、有問題沒處理） */
   whyNot?: string
   rows: ClaimBoardRow[]
-  totals: { count: number; points: number; copay: number; claim: number; problems: number; excluded: number; supplement: number; /** 住院期中申報幾筆 */ interim: number; byCase: { caseType: string; label: string; count: number; claim: number }[]; /** 住院 DRG：適用幾筆、盈虧合計（給付 − 實際）、不適用幾筆、病例組合指數 */ drg?: { count: number; diff: number; exempt: number; cmi: number | null } }
+  totals: { count: number; points: number; copay: number; claim: number; problems: number; excluded: number; supplement: number; /** 住院期中申報幾筆 */ interim: number; /** 送出後被退件幾筆、幾點 */ rejected: number; rejectedClaim: number; byCase: { caseType: string; label: string; count: number; claim: number }[]; /** 住院 DRG：適用幾筆、盈虧合計（給付 − 實際）、不適用幾筆、病例組合指數 */ drg?: { count: number; diff: number; exempt: number; cmi: number | null } }
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -44,12 +48,19 @@ function decorate(r: ClaimRow, excluded?: { reason: string; by: string }): Claim
   }
 }
 
+/** 這筆送出之後，有沒有更後面的月份又送過（重送或補報）：有就不能再改退件 */
+const sentLater = (s: ClaimSubmission, refId: string) => db.claimSubmissions.some((x) => x.kind === s.kind && x.month > s.month && x.items.some((i) => i.refId === refId))
+function withReject(s: ClaimSubmission, r: ClaimBoardRow): ClaimBoardRow {
+  const j = s.rejects?.find((x) => x.refId === r.refId)
+  return { ...r, ...(j ? { rejected: { code: j.code, label: rejectLabel(j.code), note: j.note, byName: nameOf.user(j.by), at: j.at } } : {}), canReject: !sentLater(s, r.refId) }
+}
+
 function boardOf(kind: ClaimKind, month: string): ClaimBoard {
   const t = today()
   const cur = monthOf(t)
   const sub = submissionOf(kind, month)
   const rows: ClaimBoardRow[] = sub
-    ? [...sub.items.map((x) => decorate({ ...x, problems: [] })), ...sub.excluded.map((e) => decorate({ refId: e.refId, patientId: e.patientId, doctorId: '', deptId: '', date: e.date, caseType: '', diagnosis: '', points: 0, copay: 0, claim: 0, problems: [] }, e))]
+    ? [...sub.items.map((x) => withReject(sub, decorate({ ...x, problems: [] }))), ...sub.excluded.map((e) => decorate({ refId: e.refId, patientId: e.patientId, doctorId: '', deptId: '', date: e.date, caseType: '', diagnosis: '', points: 0, copay: 0, claim: 0, problems: [] }, e))]
     : openMonthRows(kind, month, cur).map((r) => decorate(r, db.claimExclusions.find((x) => x.kind === kind && x.month === month && x.refId === r.refId)))
   const live = rows.filter((r) => !r.excluded)
   const problems = live.filter((r) => r.problems.length).length
@@ -63,7 +74,7 @@ function boardOf(kind: ClaimKind, month: string): ClaimBoard {
     rows,
     totals: {
       count: live.length, points: r2(live.reduce((n, r) => n + r.points, 0)), copay: r2(live.reduce((n, r) => n + r.copay, 0)), claim: live.reduce((n, r) => n + r.claim, 0),
-      problems, excluded: rows.length - live.length, supplement: live.filter((r) => r.supplementOf).length, interim: live.filter((r) => r.interim).length,
+      problems, excluded: rows.length - live.length, supplement: live.filter((r) => r.supplementOf).length, interim: live.filter((r) => r.interim).length, rejected: live.filter((r) => r.rejected).length, rejectedClaim: live.filter((r) => r.rejected).reduce((n, r) => n + r.claim, 0),
       byCase: cases.map((c) => ({ caseType: c, label: caseLabel(c), count: live.filter((r) => r.caseType === c).length, claim: live.filter((r) => r.caseType === c).reduce((n, r) => n + r.claim, 0) })),
       ...(kind === 'ipd' ? { drg: { count: live.filter((r) => r.drg && !r.supplementOf).length, diff: live.filter((r) => !r.supplementOf).reduce((n, r) => n + (r.drg?.diff ?? 0), 0), exempt: live.filter((r) => r.drgExempt).length, cmi: cmiOf(live.filter((r) => r.drg && !r.supplementOf).map((r) => DRG_TABLE.find((g) => g.code === r.drg!.code)?.weight ?? 0)) } } : {}),
     },
@@ -90,7 +101,8 @@ export function excludeClaim(kind: string, month: string, refId: string, reason:
     if (submissionOf(k, m)) fail('這個月已經送出，不能再改', 'CONFLICT')
     const row = openMonthRows(k, m, monthOf(today())).find((r) => r.refId === refId)
     if (!row) fail('這筆不在這個月的申報清單', 'NOT_FOUND')
-    if (row!.supplementOf) fail('補報的差額不能排除', 'CONFLICT')
+    // 補報的差額一定要報；退件重送的可以排除（放棄申報，例：查證後確實不該報）
+    if (row!.supplementOf && !row!.supplementNote?.startsWith('退件重送')) fail('補報的差額不能排除', 'CONFLICT')
     if (db.claimExclusions.some((x) => x.kind === k && x.month === m && x.refId === refId)) fail('已經註記排除了', 'CONFLICT')
     if (!reason?.trim()) failField('reason', '請寫排除原因（例：病人改自費、重複掛號已退費）')
     db.claimExclusions.push({ id: newId('CX'), kind: k, month: m, refId, reason: reason.trim(), by: u.id, at: now() })
@@ -132,6 +144,45 @@ export function submitClaim(kind: string, month: string): Promise<ClaimBoard> {
     db.claimSubmissions.push(s)
     db.claimExclusions = db.claimExclusions.filter((x) => !(x.kind === k && x.month === m))
     audit('健保申報送出', `${CLAIM_KIND_LABEL[k]} ${m}：${s.items.length} 筆、申請 ${s.items.reduce((n, x) => n + x.claim, 0)} 點${s.excluded.length ? `、排除 ${s.excluded.length} 筆` : ''}`)
+    return boardOf(k, m)
+  })
+}
+
+/**
+ * 記健保署檢核退件（送出的月份、那一筆、退件代碼、說明）：退件的不算申報過，資料改好後自動列在下一個還沒送的月份「退件重送」（會重新檢核）。
+ * 之後的月份已經把這筆送出去了就不能再改
+ */
+export function rejectClaimItem(kind: string, month: string, refId: string, input: { code: string; note?: string }): Promise<ClaimBoard> {
+  return mutate(() => {
+    const u = requirePermission('nhi.claim')
+    const k = KIND(kind)
+    const m = MONTH(month)
+    const s = submissionOf(k, m)
+    if (!s) fail('這個月還沒送出：送出後才有檢核結果', 'CONFLICT')
+    const it = s!.items.find((x) => x.refId === refId)
+    if (!it) fail('這筆不在這個月送出的申報裡', 'NOT_FOUND')
+    if (s!.rejects?.some((x) => x.refId === refId)) fail('已經記過退件了', 'CONFLICT')
+    if (sentLater(s!, refId)) fail('之後的月份已經重送或補報這筆，不能再記退件', 'CONFLICT')
+    if (!CLAIM_REJECT_CODES.some((c) => c.code === input.code)) failField('code', '請選退件代碼')
+    if (db.claimCuts.some((c) => c.submissionId === s!.id && c.refId === refId)) fail('這筆已經有核減紀錄：退件和核減不會同時發生，請確認', 'CONFLICT')
+    ;(s!.rejects ??= []).push({ refId, code: input.code, note: input.note?.trim() ?? '', by: u.id, at: now() })
+    audit('健保申報退件', `${CLAIM_KIND_LABEL[k]} ${m}：${nameOf.patient(it!.patientId)} ${it!.date} ${it!.claim} 點（${rejectLabel(input.code)}${input.note?.trim() ? `，${input.note.trim()}` : ''}）`)
+    return boardOf(k, m)
+  })
+}
+
+/** 取消退件（記錯了）：之後的月份還沒送出這筆才行 */
+export function unrejectClaimItem(kind: string, month: string, refId: string): Promise<ClaimBoard> {
+  return mutate(() => {
+    requirePermission('nhi.claim')
+    const k = KIND(kind)
+    const m = MONTH(month)
+    const s = submissionOf(k, m)
+    const i = s?.rejects?.findIndex((x) => x.refId === refId) ?? -1
+    if (!s || i < 0) fail('這筆沒有記退件', 'CONFLICT')
+    if (sentLater(s!, refId)) fail('之後的月份已經重送這筆，不能取消退件', 'CONFLICT')
+    s!.rejects!.splice(i, 1)
+    audit('健保申報取消退件', `${CLAIM_KIND_LABEL[k]} ${m}：${refId}`)
     return boardOf(k, m)
   })
 }
