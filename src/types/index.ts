@@ -1115,7 +1115,7 @@ export interface Procedure {
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
   recordCopy?: 'base' | 'page'
   /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
-  surgery?: { minutes: number }
+  surgery?: { minutes: number; /** 會放植入物（骨板、人工網膜）：器械包要等生物指示劑陰性才能用 */ implant?: boolean }
   /** 急診計費：診察費（取代門診診察費）、觀察床費（每 6 小時）；急診就醫依紀錄自動帶入，門診與醫囑都不能開 */
   er?: 'consult' | 'obs'
   /** 伙食費（每日，自費）：哪幾種飲食用這個價格；住院帳單依每天的飲食醫囑自動帶入（禁食不收），門診與醫囑都不能開 */
@@ -2535,6 +2535,39 @@ export interface Surgery {
   delays?: SurgeryDelay[]
   /** 順延到超過開放時段：排程人同意加班（不改期）；之後再被順延要重新同意 */
   overtime?: { by: string; at: string }
+}
+
+// ---------- 器械包與滅菌（供應中心） ----------
+
+/** 器械包種類：基本手術包、腹腔鏡器械包、骨科器械包、小手術包 */
+export type PackSet = 'basic' | 'lap' | 'ortho' | 'minor'
+
+/**
+ * 滅菌鍋次：哪一台滅菌鍋、什麼時候、誰；化學指示劑合格才登記（不合格整鍋重新滅菌）。
+ * 生物指示劑培養 24 小時後判讀：陰性＝放行；陽性＝整鍋召回（沒用的收回、用過的追到手術與病人，逐台通知主刀與感控）
+ */
+export interface SterileBatch {
+  id: string
+  /** 鍋次號：「S1-20261120-1」 */
+  no: string
+  sterilizer: string
+  at: string
+  by: string
+  bi?: { result: 'negative' | 'positive'; at: string; by: string }
+  /** 生物指示劑陽性：召回；用過的手術逐台記「已通知主刀與感控」 */
+  recall?: { at: string; by: string; notified: { surgeryId: string; at: string; by: string; note: string }[] }
+}
+
+/** 器械包：包號（條碼）、種類、哪一鍋、效期（滅菌後 30 天）；手術中掃描綁到手術；收回（召回、過期重新滅菌）就不能再用 */
+export interface InstrumentPack {
+  id: string
+  no: string
+  set: PackSet
+  batchId: string
+  /** 效期最後一天（YYYY-MM-DD） */
+  expiresOn: string
+  used?: { surgeryId: string; at: string; by: string }
+  withdrawn?: { at: string; by: string; reason: string }
 }
 
 // ---------- 病歷影本申請 ----------

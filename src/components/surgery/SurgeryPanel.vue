@@ -117,6 +117,7 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <p v-if="s.preAnesText" class="text-xs" :class="s.preAnes?.difficult ? 'font-medium text-red-700' : 'text-slate-600'">麻醉前評估：{{ s.preAnesText }}（{{ s.preAnesByName }}）</p>
           <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
           <p v-if="s.team && s.status !== 'cancelled'" class="text-xs text-slate-600">手術團隊：{{ s.teamText }}</p>
+          <p v-if="s.packRows.length" class="text-xs" :class="s.packRecalled ? 'font-semibold text-red-700' : 'text-slate-600'">器械包：{{ s.packRows.map((p) => `${p.no} ${p.setLabel}（${p.batchNo}）`).join('、') }}<template v-if="s.packRecalled">——其中一鍋生物指示劑陽性已召回，供應中心會通知主刀與感控</template></p>
           <p v-if="s.cancelled" class="text-xs text-slate-500">已取消：{{ s.cancelled.reason }}・{{ s.cancelledByName }}</p>
 
           <!-- 術前準備 -->

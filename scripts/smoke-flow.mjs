@@ -150,7 +150,21 @@ try {
   }
   // 完成手術要有麻醉開始與結束（局部麻醉不用）：其他段落測的是完成本身，沒記的直接補（測試輔助）；要測擋的用 surgeryRaw.finishSurgery
   // 完成手術要有檢體或確認「本台無檢體」：其他段落沒登記檢體的自動勾無檢體；要測擋的用 specRaw
-  const specRaw = { finishSurgery: api.surgeryApi.finishSurgery }
+  // 完成手術要掃過器械包（滅菌追溯）：其他段落沒掃的，直接補一包生物指示劑陰性的、綁到這台（測試輔助）；要測擋的用 packRaw
+  const packRaw = { finishSurgery: api.surgeryApi.finishSurgery }
+  const specRaw = {
+    finishSurgery: (id, input) => {
+      const d = dbm.db
+      if (!d.instrumentPacks.some((p) => p.used?.surgeryId === id)) {
+        const t = nowStr().slice(0, 16)
+        let b = d.sterileBatches.find((x) => x.id === 'SB-TEST')
+        if (!b) d.sterileBatches.push((b = { id: 'SB-TEST', no: 'S9-TEST-1', sterilizer: 'S1', at: dateUtil.addMinutes(t, -3 * 24 * 60), by: 'U214', bi: { result: 'negative', at: dateUtil.addMinutes(t, -2 * 24 * 60), by: 'U214' } }))
+        const n = d.instrumentPacks.length + 1
+        d.instrumentPacks.push({ id: `PK-TEST-${n}`, no: `PKT${n}`, set: 'basic', batchId: b.id, expiresOn: dateUtil.addDays(t.slice(0, 10), 20), used: { surgeryId: id, at: t, by: 'U205' } })
+      }
+      return packRaw.finishSurgery(id, input)
+    },
+  }
   surgeryRaw.finishSurgery = (id, input) => {
     const s = dbm.db.surgeries.find((x) => x.id === id)
     return specRaw.finishSurgery(id, { ...(s && !s.specimens?.length && input?.noSpecimen === undefined ? { noSpecimen: true } : {}), ...input })
@@ -16400,6 +16414,155 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/components/surgery/DelayNote.vue', 'utf8') + readFileSync('src/pages/or/OrPage.vue', 'utf8')
     ok(!/shiftPlan|OR_GAP|NPO_DELAY_ALERT|db\./.test(page), '順延怎麼推、要不要提醒由服務層判斷')
+  }
+  // 器械包與滅菌：效期、狀態、能不能用（植入物要生物指示劑陰性）、庫存、登記欄位；種子（召回、培養中、過期、首頁）；
+  // 登記鍋次、判讀時機、掃描擋（找不到、召回、過期、用過、重複、植入物）、拿掉、完成手術要有器械包；召回追到手術、通知、收回
+  console.log('\n[器械包與滅菌]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const X = api.sterileApi
+    const S = api.surgeryApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.expiresOnOf('2026-03-02 06:30') === '2026-04-01', '效期：滅菌後 30 天')
+    const neg = { at: '2026-03-01 06:30', bi: { result: 'negative' } }
+    const pend = { at: '2026-03-02 06:30' }
+    const pos = { at: '2026-03-01 06:30', bi: { result: 'positive' } }
+    const pk = { expiresOn: '2026-04-01' }
+    ok(api.packState(pk, neg, '2026-03-02') === 'available' && api.packState({ ...pk, used: {} }, pos, '2026-03-02') === 'used' && api.packState(pk, pos, '2026-03-02') === 'recalled' && api.packState(pk, neg, '2026-04-02') === 'expired' && api.packState({ ...pk, withdrawn: {} }, neg, 'x') === 'withdrawn', '狀態：可用、用過、召回（沒用的）、過期、收回')
+    ok(!api.packUseProblem(pk, pend, '2026-03-02', '2026-03-02 10:00', false) && api.packUseProblem(pk, pend, '2026-03-02', '2026-03-02 10:00', true)?.includes('植入物') && !api.packUseProblem(pk, neg, '2026-03-02', '2026-03-02 10:00', true), '生物指示劑還在培養：一般手術可以用、會放植入物的不行（陰性才行）')
+    ok(api.packUseProblem(pk, pos, '2026-03-02', 'x', false)?.includes('召回') && api.packUseProblem(pk, neg, '2026-04-02', 'x', false)?.includes('過效期') && api.packUseProblem({ ...pk, used: {} }, neg, 'x', 'x', false)?.includes('用過'), '召回、過期、用過的不能用')
+    ok(api.biText(pend, '2026-03-03 06:29').includes('培養中') && api.biText(pend, '2026-03-03 06:30').includes('該判讀'), '生物指示劑：滿 24 小時才能判讀')
+    const e = api.checkBatchInput({ sterilizer: 'S3', ciPass: false, packs: { basic: 21 } })
+    ok(e.sterilizer && e.ciPass && e.basic && Object.keys(api.checkBatchInput({ sterilizer: 'S1', ciPass: true, packs: {} })).join() === 'packs', '登記：滅菌鍋、化學指示劑合格、每種 0–20 包、至少一包')
+
+    // 種子
+    const T3 = addDaysT(-3).replace(/-/g, '')
+    await as('nurse01')
+    let b = await X.sterileBoard()
+    const rc = b.recalls[0]
+    ok(b.canManage && b.recalls.length === 1 && rc.batchNo === `S2-${T3}-1` && rc.affected.length === 1 && rc.affected[0].surgeryId === 'SG-SEED-3' && !rc.affected[0].notified && rc.toWithdraw.length === 6, `種子：${rc.batchNo} 召回，前天清創用了那鍋、還沒通知；架上 ${rc.toWithdraw.length} 包要收回`)
+    ok(b.expired.length === 1 && b.batches.filter((x) => x.biState === 'pending').length === 2 && b.stock.find((x) => x.set === 'ortho').biPending === 2, '種子：過期 1 包；昨天下午與今天早上兩鍋還在培養')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.cssdRecallOpen === 1 && dash.cssdToWithdraw === 7 && dash.cssdBiDue === 0, '首頁：召回待通知 1、待收回 7（召回 6＋過期 1）')
+    let v = (await S.orBoard(addDaysT(-2))).cases.find((x) => x.id === 'SG-SEED-3')
+    ok(v.packRecalled && v.packRows[0].recalled, '手術室：前天清創那台標器械召回')
+    ok(db().surgeries.filter((s) => s.status === 'done' && (s.specimens || s.noSpecimen)).every((s) => db().instrumentPacks.some((p) => p.used?.surgeryId === s.id)), '種子：做完的手術都有器械包')
+    ok(db().instrumentPacks.filter((p) => p.used && ['P037', 'P039'].includes(db().surgeries.find((x) => x.id === p.used.surgeryId).procId)).every((p) => { const bb = db().sterileBatches.find((x) => x.id === p.batchId); return bb.bi?.result === 'negative' && bb.bi.at <= p.used.at }), '種子：會放植入物的手術用的都是生物指示劑已陰性的包')
+    await as(userOf(db().surgeries.find((s) => s.id === 'SG-SEED-3').doctorId))
+    ok((await errOf(() => X.sterileBoard())).length > 0 && (await errOf(() => X.registerBatch({ sterilizer: 'S1', ciPass: true, packs: { basic: 1 } }))).length > 0, '醫師看不到供應中心、不能登記')
+    await as('nurse01')
+
+    // 登記鍋次
+    let f = await fieldsOf(() => X.registerBatch({ sterilizer: 'S1', ciPass: false, packs: { minor: 2 } }))
+    ok(f.ciPass?.includes('化學指示劑'), '化學指示劑沒勾合格不能登記')
+    const r = await X.registerBatch({ sterilizer: 'S1', ciPass: true, packs: { minor: 2, ortho: 1 } })
+    ok(r.packNos.length === 3 && r.batch.no === `S1-${T.replace(/-/g, '')}-2` && r.batch.biState === 'pending' && db().auditLogs[0].action === '滅菌鍋次' && db().instrumentPacks.find((p) => p.no === r.packNos[0]).expiresOn === addDaysT(30), `登記：${r.batch.no} 3 包（${r.packNos.join('、')}），效期 30 天、稽核`)
+    f = await errOf(() => X.recordBi(r.batch.id, 'negative'))
+    ok(f.includes('24 小時'), '培養不到 24 小時不能判讀')
+
+    // 掃描：今天 OR1 擴大切除（已送到、脊髓麻醉、不放植入物）
+    const sg = 'SG-SEED-6'
+    const pkOf = (pred) => db().instrumentPacks.find(pred)
+    f = await fieldsOf(() => X.scanPack(sg, 'PK99999'))
+    ok(f.packNo?.includes('找不到'), '找不到的包號')
+    f = await fieldsOf(() => X.scanPack(sg, rc.toWithdraw[0].no))
+    ok(f.packNo?.includes('召回'), '召回那鍋的不能用')
+    f = await fieldsOf(() => X.scanPack(sg, b.expired[0].no))
+    ok(f.packNo?.includes('過效期'), '過期的不能用')
+    const usedNo = pkOf((p) => p.used?.surgeryId === 'SG-SEED-4').no
+    f = await fieldsOf(() => X.scanPack(sg, usedNo))
+    ok(f.packNo?.includes('用過'), '用在別台的不能再用')
+    v = await X.scanPack(sg, r.packNos[0].toLowerCase())
+    ok(v.packRows.length === 1 && v.packRows[0].no === r.packNos[0] && v.packRows[0].biText.includes('培養中') && db().auditLogs[0].action === '使用器械包', '一般手術：生物指示劑還在培養的可以用（小寫也找得到）、稽核')
+    f = await fieldsOf(() => X.scanPack(sg, r.packNos[0]))
+    ok(f.packNo?.includes('已經掃過'), '同一包不能掃兩次')
+    v = await X.unscanPack(sg, v.packRows[0].id)
+    ok(!v.packRows.length && !pkOf((p) => p.no === r.packNos[0]).used, '掃錯可以拿掉（回到架上）')
+    await as(userOf(db().surgeries.find((s) => s.id === sg).doctorId))
+    ok((await errOf(() => X.scanPack(sg, r.packNos[0]))).length > 0, '醫師不能掃')
+    await as('nurse01')
+    // 會放植入物：骨折那台（測試輔助：直接改成已送到）
+    db().surgeries.find((s) => s.id === 'SG-SEED-1').status = 'sent'
+    f = await fieldsOf(() => X.scanPack('SG-SEED-1', r.packNos[2]))
+    ok(f.packNo?.includes('植入物'), `會放植入物：培養中的骨科包不能用「${f.packNo}」`)
+    const okOrtho = pkOf((p) => p.set === 'ortho' && !p.used && db().sterileBatches.find((x) => x.id === p.batchId).bi?.result === 'negative' && p.expiresOn >= T)
+    v = await X.scanPack('SG-SEED-1', okOrtho.no)
+    ok(v.implant && v.packRows.length === 1, '會放植入物：生物指示劑陰性的骨科包可以')
+    db().surgeries.find((s) => s.id === 'SG-SEED-1').status = 'scheduled'
+    f = await errOf(() => X.scanPack('SG-SEED-1', r.packNos[1]))
+    ok(f.includes('送到手術室後'), '還沒送到手術室不能掃')
+
+    // 完成手術要有器械包（packRaw：不自動補）
+    await S.recordCheck(sg, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(sg, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sg, { abxReason: 'x' })
+    const s6 = db().surgeries.find((s) => s.id === sg)
+    s6.anes = { startAt: s6.startAt.slice(0, 16), endAt: nowStr().slice(0, 16), entries: [] }
+    const fin = { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20, noSpecimen: true }
+    f = await fieldsOf(() => packRaw.finishSurgery(sg, fin))
+    ok(f.packs?.includes('器械包'), '沒掃器械包不能完成手術')
+    await X.scanPack(sg, r.packNos[0])
+    await X.scanPack(sg, r.packNos[1])
+    v = await packRaw.finishSurgery(sg, fin)
+    ok(v.status === 'done' && v.packRows.length === 2, '掃了兩包：可以完成')
+    f = await errOf(() => X.unscanPack(sg, v.packRows[0].id))
+    ok(f.includes('已完成'), '完成後不能拿掉')
+
+    // 召回：那一鍋判讀陽性（測試輔助：把鍋次時間改到 25 小時前）
+    db().sterileBatches.find((x) => x.id === r.batch.id).at = dateUtil.addMinutes(nowStr().slice(0, 16), -25 * 60)
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.cssdBiDue === 1, '首頁：生物指示劑待判讀 1')
+    let bi = await X.recordBi(r.batch.id, 'positive')
+    ok(bi.biState === 'positive' && db().auditLogs[0].action === '滅菌召回', '判讀陽性：召回、稽核')
+    f = await errOf(() => X.recordBi(r.batch.id, 'negative'))
+    ok(f.includes('判讀過'), '判讀過不能再改')
+    b = await X.sterileBoard()
+    const rc2 = b.recalls.find((x) => x.batchId === r.batch.id)
+    ok(rc2.affected.length === 2 && rc2.affected.every((a) => a.surgeryId === sg) && rc2.toWithdraw.length === 1 && (await S.orBoard(T)).cases.find((x) => x.id === sg).packRecalled, '召回追到今天這台（2 包）、骨科包還在架上要收回；手術室標紅')
+    dash = await api.dashboardApi.getDashboard()
+    ok(dash.cssdRecallOpen === 2 && dash.cssdBiDue === 0, '首頁：召回待通知 2 台')
+    f = await fieldsOf(() => X.notifyRecall(r.batch.id, sg, ''))
+    ok(f.note, '通知要寫說明')
+    f = await errOf(() => X.notifyRecall(r.batch.id, 'SG-SEED-3', '已通知'))
+    ok(f.includes('沒有用到'), '沒用到這鍋的手術不能記')
+    const nr = await X.notifyRecall(r.batch.id, sg, '已電話通知主刀與感控，追蹤傷口 30 天')
+    ok(nr.affected.every((a) => a.notified?.includes('感控')) && db().auditLogs[0].action === '滅菌召回通知', '記錄通知（同一台兩包一起）、稽核')
+    f = await errOf(() => X.notifyRecall(r.batch.id, sg, 'x'))
+    ok(f.includes('記過'), '不能重複記')
+    // 收回
+    f = await errOf(() => X.withdrawPack(pkOf((p) => p.no === r.packNos[0]).id, '召回'))
+    ok(f.includes('用在手術上'), '用過的不能收回')
+    const left = pkOf((p) => p.no === r.packNos[2])
+    f = await fieldsOf(() => X.withdrawPack(left.id, ''))
+    ok(f.reason, '收回要原因')
+    await X.withdrawPack(left.id, '生物指示劑陽性召回')
+    b = await X.sterileBoard()
+    ok(!b.recalls.find((x) => x.batchId === r.batch.id).toWithdraw.length && db().auditLogs[0].action === '器械包收回', '收回：不再列待收回、稽核')
+    f = await errOf(() => X.withdrawPack(left.id, 'x'))
+    ok(f.includes('已經收回'), '不能重複收回')
+    await X.withdrawPack(b.expired[0].id, '過期，重新滅菌')
+    ok(!(await X.sterileBoard()).expired.length, '過期的收回')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/components/surgery/SterilePanel.vue', 'utf8') + readFileSync('src/components/surgery/PackPanel.vue', 'utf8')
+    ok(!/packUseProblem|packState|PACK_VALID_DAYS|biDueAt|db\./.test(page), '能不能用、召回由服務層判斷')
   }
 } catch (e) {
   failed++

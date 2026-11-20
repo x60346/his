@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -66,6 +66,7 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
+import { biDueAt, expiresOnOf, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
 import { autoVerify, qcFailedCodes } from '@/services/analyzer-rules'
@@ -3701,6 +3702,64 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (free[2]) make(3, free[2], s3, 'reserved')
   }
 
+  // ---------- 器械包與滅菌（示範，不抽亂數）----------
+  // 近 7 天每天兩鍋（S1 早上 06:30、S2 下午 16:00；今天只有早上那鍋），每鍋基本 3、腹腔鏡 1、骨科 1、小手術 2；
+  // 24 小時後判讀生物指示劑：前天前一天下午那鍋（T-3 S2）陽性召回——前天的清創（SG-SEED-3）用了那鍋的小手術包、還沒通知；
+  // 昨天下午與今天早上那鍋還在培養（會放植入物的手術不能用）；一包 35 天前滅菌的基本包過期還在架上。
+  // 已完成的手術（這個功能之後的，有逐件登記或確認無檢體的）照先進先出綁上器械包
+  const sterileBatches: SterileBatch[] = []
+  const instrumentPacks: InstrumentPack[] = []
+  {
+    const cssd = 'U214'
+    const content: Record<PackSet, number> = { basic: 3, lap: 1, ortho: 1, minor: 2 }
+    const mkBatch = (st: string, at: string, packs: Partial<Record<PackSet, number>>, bi?: 'negative' | 'positive') => {
+      const ymd = at.slice(0, 10).replace(/-/g, '')
+      const n = (counters[`sterile:${st}:${ymd}`] ?? 0) + 1
+      counters[`sterile:${st}:${ymd}`] = n
+      const b: SterileBatch = { id: `SB-SEED-${st}-${ymd}-${n}`, no: `${st}-${ymd}-${n}`, sterilizer: st, at, by: cssd }
+      const due = biDueAt(b)
+      if (due <= nowStr) {
+        const r = bi ?? 'negative'
+        const rat = notFuture(addMinutes(due, 30), 5)
+        b.bi = { result: r, at: rat, by: cssd }
+        if (r === 'positive') b.recall = { at: rat, by: cssd, notified: [] }
+      }
+      sterileBatches.push(b)
+      for (const set of PACK_SETS) for (let i = 0; i < (packs[set] ?? 0); i++) {
+        const k = (counters.pack ?? 0) + 1
+        counters.pack = k
+        instrumentPacks.push({ id: `PK-SEED-${k}`, no: `PK${String(k).padStart(5, '0')}`, set, batchId: b.id, expiresOn: expiresOnOf(at) })
+      }
+      return b
+    }
+    mkBatch('S1', `${addDays(T, -35)} 06:30`, { basic: 1 })
+    let positive: SterileBatch | undefined
+    for (let k = 6; k >= 0; k--) {
+      const d = addDays(T, -k)
+      if (`${d} 06:30` <= nowStr) mkBatch('S1', `${d} 06:30`, content)
+      if (k >= 1) {
+        const b = mkBatch('S2', `${d} 16:00`, content, k === 3 ? 'positive' : undefined)
+        if (k === 3) positive = b
+      }
+    }
+    const setOf: Record<string, PackSet> = { P037: 'ortho', P038: 'lap', P039: 'basic', P040: 'minor' }
+    const procs = new Map(codes.procedures.map((p) => [p.id, p]))
+    const bOf = (id: string) => sterileBatches.find((b) => b.id === id)!
+    const done = surgeries.filter((x) => x.status === 'done' && x.startAt && (x.specimens || x.noSpecimen) && setOf[x.procId]).sort((a, b) => a.startAt!.localeCompare(b.startAt!))
+    for (const sg of done) {
+      const at = addMinutes(sg.startAt!, -10)
+      const implant = !!procs.get(sg.procId)?.surgery?.implant
+      const ok = (p: InstrumentPack) => {
+        const b = bOf(p.batchId)
+        if (p.used || p.set !== setOf[sg.procId] || b.at > addMinutes(at, -30) || p.expiresOn < at.slice(0, 10)) return false
+        if (b.bi?.result === 'positive' && b.bi.at <= at) return false
+        return !implant || (b.bi?.result === 'negative' && b.bi.at <= at)
+      }
+      const pick = (sg.id === 'SG-SEED-3' && positive ? instrumentPacks.filter((p) => p.batchId === positive!.id) : instrumentPacks).filter(ok).sort((a, b) => bOf(a.batchId).at.localeCompare(bOf(b.batchId).at))[0]
+      if (pick) pick.used = { surgeryId: sg.id, at, by: sg.team?.circulating?.[0]?.userId ?? 'U205' }
+    }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -3759,6 +3818,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     bloodRequests,
     recordCopies: [],
     surgeries,
+    sterileBatches,
+    instrumentPacks,
     lines,
     nutritionScreens,
     nutritionAssessments,

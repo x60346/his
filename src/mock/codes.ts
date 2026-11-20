@@ -484,9 +484,9 @@ const procedureBase: Procedure[] = [
   { id: 'P035', code: 'SELF03', name: '病歷影本基本費', category: '處置', points: 0, selfPrice: 100, recordCopy: 'base', active: true },
   { id: 'P036', code: 'SELF04', name: '病歷影本（每頁）', category: '處置', points: 0, selfPrice: 10, recordCopy: 'page', active: true },
   // 手術與麻醉（手術室紀錄做完才列入住院帳單；門診、醫囑都不能開）。點數為展示用近似值
-  { id: 'P037', code: '64029B', name: '開放性復位術（橈骨遠端）', category: '處置', points: 9800, selfPrice: 30000, surgery: { minutes: 120 }, active: true },
+  { id: 'P037', code: '64029B', name: '開放性復位術（橈骨遠端）', category: '處置', points: 9800, selfPrice: 30000, surgery: { minutes: 120, implant: true }, active: true },
   { id: 'P038', code: '74207B', name: '腹腔鏡闌尾切除術', category: '處置', points: 19800, selfPrice: 45000, surgery: { minutes: 90 }, active: true },
-  { id: 'P039', code: '75607C', name: '腹股溝疝氣修補術', category: '處置', points: 9000, selfPrice: 25000, surgery: { minutes: 60 }, active: true },
+  { id: 'P039', code: '75607C', name: '腹股溝疝氣修補術', category: '處置', points: 9000, selfPrice: 25000, surgery: { minutes: 60, implant: true }, active: true },
   { id: 'P040', code: '48004C', name: '清創術（大）', category: '處置', points: 2000, selfPrice: 6000, surgery: { minutes: 45 }, active: true },
   { id: 'P041', code: '96020C', name: '全身麻醉費', category: '處置', points: 3700, selfPrice: 8000, anesthesiaFee: 'general', active: true },
   { id: 'P042', code: '96005C', name: '脊髓麻醉費', category: '處置', points: 2000, selfPrice: 5000, anesthesiaFee: 'spinal', active: true },

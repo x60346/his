@@ -14,6 +14,8 @@ import PathPanel from '@/components/surgery/PathPanel.vue'
 import OrMetricsPanel from '@/components/surgery/OrMetricsPanel.vue'
 import DayPanel from '@/components/surgery/DayPanel.vue'
 import DelayNote from '@/components/surgery/DelayNote.vue'
+import SterilePanel from '@/components/surgery/SterilePanel.vue'
+import PackPanel from '@/components/surgery/PackPanel.vue'
 
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
@@ -105,8 +107,9 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
     <UPageHeader title="手術室" description="排程、送來的病人、三段安全查核（麻醉前、劃刀前暫停確認、離開前）">
       <input v-if="mode === 'board'" v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
-    <UTabs v-model="mode" :tabs="[{ key: 'board', label: '排程與查核' }, { key: 'day', label: '日間手術' }, { key: 'metrics', label: '效率' }]" />
+    <UTabs v-model="mode" :tabs="[{ key: 'board', label: '排程與查核' }, { key: 'day', label: '日間手術' }, { key: 'sterile', label: '器械滅菌' }, { key: 'metrics', label: '效率' }]" />
     <OrMetricsPanel v-if="mode === 'metrics'" />
+    <SterilePanel v-else-if="mode === 'sterile'" />
     <DayPanel v-else-if="mode === 'day'" />
     <UQueryState v-else :loading="loading && !board" :ready="!!board">
       <template v-if="board">
@@ -183,6 +186,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
                 <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
                 <UBadge v-if="s.teamMissing.length" tone="yellow">團隊未齊</UBadge>
                 <UBadge v-for="z in s.frozenWaiting" :key="z.label" :tone="z.overdue ? 'red' : 'yellow'">冰凍 {{ z.label }} 等 {{ z.minutes }} 分</UBadge>
+                <UBadge v-if="s.packRecalled" tone="red">器械召回</UBadge>
                 <AlertTriangle v-if="s.countMismatch" class="h-3.5 w-3.5 text-red-600" />
               </div>
               <div class="font-medium text-slate-800">{{ s.patientName }}<span class="ml-1 text-xs font-normal text-slate-500">{{ s.bedNo }}</span></div>
@@ -239,6 +243,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
         <TeamPanel v-if="current.status !== 'cancelled'" :surgery="current" :can-schedule="!!board?.canSchedule" :is-nurse="isNurse" />
         <DelayNote :surgery="current" :can-schedule="!!board?.canSchedule" @reschedule="reschedule(current)" />
         <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
+        <PackPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery="current" :is-nurse="isNurse" />
         <SpecimenPanel v-if="['in-progress', 'done'].includes(current.status)" :surgery="current" :is-nurse="isNurse" />
         <PathPanel v-if="current.path" :surgery-id="current.id" />
         <PacuPanel v-if="current.pacu" :surgery-id="current.id" @changed="reloadPacu" />
@@ -264,6 +269,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <UInput v-model="counts.instrumentAfter" type="number" label="器械（術後）" :error="finishAct.fieldErrors.value.instrumentAfter" />
               <div v-if="!current.specimenRows.length" class="col-span-2 sm:col-span-4"><UCheckbox v-model="counts.noSpecimen" label="本台無檢體（有檢體請先在上面「檢體」逐件登記）" /><p v-if="finishAct.fieldErrors.value.noSpecimen" class="text-xs text-red-600">{{ finishAct.fieldErrors.value.noSpecimen }}</p></div>
               <p v-else class="col-span-2 text-xs text-slate-600 sm:col-span-4">檢體 {{ current.specimenRows.length }} 件，手術完成時一起送病理。</p>
+              <p v-if="finishAct.fieldErrors.value.packs" class="col-span-2 text-xs text-red-600 sm:col-span-4">{{ finishAct.fieldErrors.value.packs }}</p>
               <div class="col-span-2 sm:col-span-4"><UInput v-model="counts.mismatchReason" label="計數不符時：原因與處理（例：已照 X 光確認無遺留，已告知主刀）" :error="finishAct.fieldErrors.value.mismatchReason" /></div>
             </div>
             <p v-if="(c.stage === 'signOut' ? finishAct : checkAct).fieldErrors.value.items" class="mt-1 text-xs text-red-600">{{ (c.stage === 'signOut' ? finishAct : checkAct).fieldErrors.value.items }}</p>
