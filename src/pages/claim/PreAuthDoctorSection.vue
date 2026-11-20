@@ -39,7 +39,7 @@ const errs = computed(() => (mode.value === 'fill' ? fillAct : mode.value === 's
           <div class="flex flex-wrap items-center gap-2">
             <UBadge :tone="TONE[p.status]">{{ p.statusLabel }}</UBadge>
             <b>{{ p.itemName }}</b><span class="text-xs text-slate-500">{{ p.no }}・{{ p.patientName }}（{{ p.admitNo || '門診' }}）</span>
-            <UBadge v-if="p.validUntil" tone="green">門診效期到 {{ p.validUntil }}</UBadge>
+            <UBadge v-if="p.validUntil" tone="green">門診效期 {{ p.validFrom }} ～ {{ p.validUntil }}</UBadge>
             <UBadge v-if="p.allows && p.status !== 'approved'" tone="purple">可以先用</UBadge>
             <UBadge v-if="p.expiring" tone="yellow">快到期：{{ p.expiring }}（看診時可續約申請）</UBadge>
           </div>

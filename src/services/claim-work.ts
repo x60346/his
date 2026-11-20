@@ -80,7 +80,8 @@ function interimRows(m: string): ClaimRow[] {
     if (a.status === 'cancelled' || a.status === 'reserved' || (a.day && !a.day.converted) || (a.obs && !a.obs.endAt)) continue
     const days = interimDaysOf(a, m)
     if (days === undefined || days < INTERIM_DAYS) continue
-    const lp = linePoints(ipdBillOf(a, end).lines)
+    // 期中：病房天數、藥、處置都切到月底（之後的算在下個月）
+    const lp = linePoints(ipdBillOf(a, end, { itemsUntil: true }).lines)
     const prev = submittedFor('ipd', a.id)
     const r2 = (n: number) => Math.round(n * 100) / 100
     const claim = lp.claim - prev.reduce((n, x) => n + x.claim, 0)

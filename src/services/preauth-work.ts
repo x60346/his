@@ -2,7 +2,7 @@
 import type { Encounter, IpdOrder, PreAuth } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { fail } from './http'
-import { opdExpiringText, opdPreAuthBlockText, opdPreAuthLeft, opdIntervalWait, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, opdRxTimes, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
+import { opdExpiringText, opdPreAuthBlockText, opdPreAuthFrom, opdPreAuthLeft, opdIntervalWait, opdPreAuthTimesLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, opdRxTimes, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
 import { find } from './views'
 
 const live = (p: PreAuth) => p.status !== 'rejected'
@@ -49,7 +49,7 @@ export function opdDrugPreAuthOf(patientId: string, drugId: string, date: string
  * 慢箋原處方算整張（每次調劑同量 × 可調劑次數），之後的領藥不再重算
  */
 export function opdPreAuthUsed(p: PreAuth, exceptEncounterId?: string): number {
-  const from = p.result?.at.slice(0, 10) ?? ''
+  const from = opdPreAuthFrom(p)
   const until = opdPreAuthUntil(p) ?? ''
   return db.encounters
     .filter((e) => e.patientId === p.patientId && e.status === 'completed' && e.id !== exceptEncounterId && e.date >= from && e.date <= until && !find.visit(e.visitId)?.refillOf)
@@ -58,7 +58,7 @@ export function opdPreAuthUsed(p: PreAuth, exceptEncounterId?: string): number {
 
 /** 門診核准後已經健保開了幾次（同上的範圍；一張處方有這個藥就算，慢箋算可調劑次數） */
 export function opdPreAuthUsedTimes(p: PreAuth, exceptEncounterId?: string): number {
-  const from = p.result?.at.slice(0, 10) ?? ''
+  const from = opdPreAuthFrom(p)
   const until = opdPreAuthUntil(p) ?? ''
   return db.encounters
     .filter((e) => e.patientId === p.patientId && e.status === 'completed' && e.id !== exceptEncounterId && e.date >= from && e.date <= until && !find.visit(e.visitId)?.refillOf && e.medications.some((m) => m.drugId === p.itemId && !m.selfPay))

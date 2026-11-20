@@ -9,13 +9,15 @@ export const PREAUTH_STATUS_LABEL: Record<PreAuthStatus, string> = { draft: '待
 /** 門診核准沒寫期限時，預設從核准日起有效幾天 */
 export const OPD_PREAUTH_VALID_DAYS = 180
 
-/** 門診核准的有效期限（YYYY-MM-DD）：審查結果寫的期限，沒寫＝核准日 + 180 天 */
+/** 門診核准的效期起日：續約的接在舊核准到期隔天，其他＝核准那天 */
+export const opdPreAuthFrom = (p: Pick<PreAuth, 'result'>): string => p.result?.from ?? p.result?.at.slice(0, 10) ?? ''
+/** 門診核准的有效期限（YYYY-MM-DD）：審查結果寫的期限，沒寫＝起日 + 180 天 */
 export function opdPreAuthUntil(p: Pick<PreAuth, 'status' | 'result'>): string | undefined {
   if (p.status !== 'approved' || !p.result) return undefined
-  return p.result.until ?? addDays(p.result.at.slice(0, 10), OPD_PREAUTH_VALID_DAYS)
+  return p.result.until ?? addDays(opdPreAuthFrom(p), OPD_PREAUTH_VALID_DAYS)
 }
-/** 門診這天能不能健保開：核准而且在期限內 */
-export const opdPreAuthValid = (p: Pick<PreAuth, 'status' | 'result'>, date: string): boolean => ((u) => !!u && date <= u)(opdPreAuthUntil(p))
+/** 門診這天能不能健保開：核准而且在起日到期限之間 */
+export const opdPreAuthValid = (p: Pick<PreAuth, 'status' | 'result'>, date: string): boolean => ((u) => !!u && date >= opdPreAuthFrom(p) && date <= u)(opdPreAuthUntil(p))
 
 /** 門診核准量還剩多少（沒寫核准量＝undefined 不限）：used＝效期內已經健保開的量 */
 export const opdPreAuthLeft = (p: Pick<PreAuth, 'result'>, used: number): number | undefined => (p.result?.qty !== undefined ? Math.max(0, p.result.qty - used) : undefined)

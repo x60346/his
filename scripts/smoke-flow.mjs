@@ -17981,7 +17981,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('clerk02')
     let b = await api.claimApi.claimBoard('ipd', cm1)
     const row = b.rows.find((r) => r.refId === a.id)
-    const lp1 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm1)).lines)
+    const lp1 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm1), { itemsUntil: true }).lines)
     ok(row && row.interim?.through === api.monthEnd(cm1) && row.caseLabel === '住院' && !row.problems.length && row.claim === lp1.claim && row.days === api.interimDaysOf(a, cm1) && b.totals.interim === 1, `${cm1} 期中：申報到月底 ${row?.claim} 點（帳單算到月底）、天數、不用編碼檢核`)
     ok(!(await api.claimApi.claimBoard('ipd', cm0)).rows.some((r) => r.interim), '這個月還沒結束：不列期中')
     const csv = (await api.claimApi.claimCsvOf('ipd', cm1)).csv
@@ -17996,7 +17996,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const next = api.nextMonth(cm0)
     const rows2 = CW.openMonthRows('ipd', cm0, next)
     const r2 = rows2.find((r) => r.refId === a.id)
-    const lp2 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm0)).lines)
+    const lp2 = api.linePoints(IB.ipdBillOf(a, api.monthEnd(cm0), { itemsUntil: true }).lines)
     ok(r2?.interim && r2.claim === lp2.claim - lp1.claim && r2.claim > 0, `下個月還住著：期中報增加的 ${r2?.claim} 點（累計 − 已報）`)
     // 出院（測試輔助：直接改成已出院、補一張住院收據）：出院那筆只報差額
     const t = dateUtil.now()
@@ -18394,6 +18394,59 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     db().preAuths.find((p) => p.id === 'PA-SEED-3').result.until = addDaysT(150)
     db().preAuths = db().preAuths.filter((p) => p.id !== nw.id)
     ok((await errOf(() => P.requestOpdDrugPreAuth(e1.id, 'M052'))).includes('已經有送審單'), '還沒快到期：不能另外申請')
+  }
+  // 期中申報依日期切：藥與處置只算到月底（之後的算在下個月），出院結帳照舊算全部
+  console.log('\n[期中申報依日期切]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const IB = await load('/src/services/ipd-bill.ts')
+    const cur = T.slice(0, 7)
+    const cm1 = dateUtil.addDays(`${cur}-01`, -1).slice(0, 7)
+    const end = api.monthEnd(cm1)
+    const a = db().admissions.find((x) => x.status === 'admitted' && x.diagnosis.startsWith('I63'))
+    const cut = api.linePoints(IB.ipdBillOf(a, end, { itemsUntil: true }).lines)
+    const all = api.linePoints(IB.ipdBillOf(a, end).lines)
+    const later = db().udDispenses.some((d) => d.lines.some((l) => l.admissionId === a.id && l.txnId)) || db().ipdOrders.some((o) => o.admissionId === a.id)
+    ok(cut.points <= all.points && (!later || cut.points < all.points), `${cm1} 月底：切到月底 ${cut.points} 點 < 不切 ${all.points} 點（這個月的藥、處置不算進去）`)
+    await as('clerk02')
+    const row = (await api.claimApi.claimBoard('ipd', cm1)).rows.find((r) => r.refId === a.id && r.interim)
+    ok(row?.claim === cut.claim, '期中那筆用切到月底的')
+    ok(api.linePoints(IB.ipdBillOf(a).lines).points >= all.points, '不加選項（結帳、住院中費用）：照舊算全部')
+  }
+  // 續約效期接續：舊核准還有效時核准續約 → 新的從舊的到期隔天起算（沒寫期限＝再 180 天）；期間用舊的、之後用新的；用量從新起日算
+  console.log('\n[續約效期接續]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const work = await load('/src/services/preauth-work.ts')
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.opdPreAuthFrom({ result: { at: '2026-11-20 10:00', from: '2026-12-11' } }) === '2026-12-11' && api.opdPreAuthUntil({ status: 'approved', result: { at: '2026-11-20 10:00', from: '2026-12-11' } }) === '2027-06-09' && !api.opdPreAuthValid({ status: 'approved', result: { at: '2026-11-20 10:00', from: '2026-12-11' } }, '2026-12-10'), '規則：起日、期限從起日算 180 天、起日前不能用')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    seedPa.result.until = addDaysT(20)
+    await as('clerk02')
+    let d = await api.dashboardApi.getDashboard()
+    ok(d.preAuthExpiringAll >= 1 && (await P.preAuthBoard()).find((x) => x.id === seedPa.id).expiring, '申報組首頁：事前審查快到期（全院）、清單標快到期')
+    const docName = db().users.find((u) => u.doctorId === seedPa.doctorId).username
+    await as(docName)
+    const v1 = db().visits.find((x) => x.date === T && x.patientId === seedPa.patientId && x.status === 'registered')
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    const nw = await P.requestOpdDrugPreAuth(e1.id, 'M052')
+    await P.fillPreAuth(nw.id, { summary: '持續治療', reason: '療程未完成' })
+    await as('clerk02')
+    await P.submitPreAuth(nw.id)
+    ok((await fieldsOf(() => P.recordPreAuthResult(nw.id, { outcome: 'approved', until: addDaysT(10) }))).until?.includes(addDaysT(21)), '續約期限早於新起日：擋')
+    const r = await P.recordPreAuthResult(nw.id, { outcome: 'approved', qty: 6 })
+    ok(r.result.from === addDaysT(21) && r.validFrom === addDaysT(21) && r.validUntil === dateUtil.addDays(addDaysT(21), 180) && r.resultText.includes('續約'), `續約核准：效期 ${r.validFrom} ～ ${r.validUntil}（接在舊的到期隔天）`)
+    ok(work.opdDrugPreAuthOf(seedPa.patientId, 'M052', T).id === seedPa.id && work.opdDrugPreAuthOf(seedPa.patientId, 'M052', addDaysT(20)).id === seedPa.id && work.opdDrugPreAuthOf(seedPa.patientId, 'M052', addDaysT(21)).id === nw.id, '到期前用舊的、隔天起用新的')
+    await as(docName)
+    await api.opdApi.completeEncounter(e1.id, { subjective: 's', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: [{ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty: 1, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false })
+    const nNow = db().preAuths.find((p) => p.id === nw.id)
+    ok(work.opdPreAuthUsed(nNow) === 0 && work.opdPreAuthUsed(db().preAuths.find((p) => p.id === seedPa.id)) === 1, '今天開的算舊的用量，新的從起日起算')
+    await as('clerk02')
+    d = await api.dashboardApi.getDashboard()
+    ok(!d.preAuthExpiringAll && !(await P.preAuthBoard()).find((x) => x.id === seedPa.id).expiring, '續約核准後：不再提醒')
   }
 } catch (e) {
   failed++

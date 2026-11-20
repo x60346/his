@@ -25,7 +25,7 @@ import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-wo
 import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
-import { preAuthCounts, preAuthExpiringCount } from './preauth-work'
+import { opdExpiringOf, preAuthCounts, preAuthExpiringCount } from './preauth-work'
 import { claimDeadlineOf, cutReplyDue, daysUntil, deadlineText, disputeCheck, monthOf, nextMonth } from './claim-rules'
 import { codingCounts } from './coding-work'
 import { drgAlertCounts } from './drg-work'
@@ -297,6 +297,8 @@ export interface DashboardStats {
   claimSubmitUrgent?: boolean
   /** 主治：門診事前審查快到期或快用完 */
   preAuthExpiring?: number
+  /** 申報組：全院門診事前審查快到期（還沒續約） */
+  preAuthExpiringAll?: number
   claimCutsAppealed?: number
   /** 爭議審議：可以申請（期限內）＋審議中待記結果（健保申報） */
   claimDisputes?: number
@@ -514,7 +516,7 @@ export function getDashboard(): Promise<DashboardStats> {
       delayWardUnread: delayCounts().unread,
       implantCardDue: implantCardDueCount(today()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('coding') ? ((c) => ({ codingDue: c.due, codingOverdue: c.overdue }))(codingCounts(now())) : {}))(sessionUser(), sessionRole()),
-      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...claimSubmitDue(today()), claimDisputes: db.claimCuts.filter((c) => (c.dispute && !c.dispute.result) || disputeCheck(c, today()).ok).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())) } : {}))(sessionUser(), sessionRole()),
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...claimSubmitDue(today()), claimDisputes: db.claimCuts.filter((c) => (c.dispute && !c.dispute.result) || disputeCheck(c, today()).ok).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())), preAuthExpiringAll: db.preAuths.filter((p) => opdExpiringOf(p, today())).length } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),

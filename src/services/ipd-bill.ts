@@ -136,8 +136,11 @@ export interface IpdBill {
   identityName: string
 }
 
-/** 這次住院到 to（預設今天）為止的帳單 */
-export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
+/**
+ * 這次住院到 to（預設今天）為止的帳單。病房天數算到 to；藥與處置預設是全部（出院帶藥可能在出院後才調劑），
+ * itemsUntil＝true 時也只算 to 那天以前的（健保期中申報：切到月底）
+ */
+export function ipdBillOf(a: Admission, to: string = today(), opts: { itemsUntil?: boolean } = {}): IpdBill {
   const from = wardFromOf(a).slice(0, 10)
   const p = find.patient(a.patientId)
   const identity = db.identities.find((x) => x.code === p?.defaultIdentity) ?? db.identities[0]
@@ -147,8 +150,8 @@ export function ipdBillOf(a: Admission, to: string = today()): IpdBill {
     // 日間手術（沒轉住院）：不排病房床、不收病房費護理費診察費
     beds: a.day && !a.day.converted ? [] : bedSegments(a, from, to, days),
     daily: a.day && !a.day.converted ? [] : db.procedures.filter((x) => x.dailyFee && x.active),
-    drugs: drugsOf(a),
-    procedures: [...proceduresOf(a), ...mealItems(a, from, days)],
+    drugs: opts.itemsUntil ? drugsOf(a).filter((x) => x.date.slice(0, 10) <= to.slice(0, 10)) : drugsOf(a),
+    procedures: [...(opts.itemsUntil ? proceduresOf(a).filter((x) => x.date.slice(0, 10) <= to.slice(0, 10)) : proceduresOf(a)), ...mealItems(a, from, days)],
     copay: db.billingSettings.ipdCopay ?? IPD_COPAY_DEFAULT,
     erLines: erLinesOf(a),
   })
