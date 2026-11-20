@@ -51,6 +51,18 @@ try {
   // 住院檢體條碼：已採檢的檢體要檢驗科收件後才能發報告；檢驗品管：今天品管沒通過的項目不能發報告。
   // 其他段落測的是報告本身，發報告前自動收件、自動補做品管（都走正式的 API）；
   // 要測「沒收件不能發」的段落用 labRaw（沒包裝的原函式）
+  // 知情同意書：術前準備勾「同意書」要先有手術（非局部麻醉再加麻醉）同意書紀錄。其他段落測的是術前準備本身，
+  // 勾之前自動補齊（測試輔助，直接寫進資料庫）；要測「沒同意書不能勾」的段落用 prepRaw
+  const prepRaw = { markPrep: api.surgeryApi.markPrep }
+  api.surgeryApi.markPrep = async (id, key, input = {}) => {
+    if (key === 'consent' && !input.notNeeded) {
+      const sg = dbm.db.surgeries.find((x) => x.id === id)
+      if (sg) for (const kind of api.consentMissing(sg.anesthesia, dbm.db.consents.filter((c) => c.surgeryId === sg.id))) {
+        dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId: sg.patientId, admissionId: sg.admissionId, surgeryId: sg.id, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101' })
+      }
+    }
+    return prepRaw.markPrep(id, key, input)
+  }
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
     api.labApi[k] = async (input) => {
@@ -18553,6 +18565,99 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok(r.lots === 2 && r.no.startsWith('WX') && db().drugLots.find((l) => l.id === l1.id).qty === 0 && after === before + q1 && db().auditLogs[0].action === '病房效期收回' && db().auditLogs[0].detail.includes('已過期'), `收回 ${r.lots} 批到住院藥局（${r.no}）：病房歸零、藥局同批號加回、稽核`)
     const wd = await W.getWardStock(ward.ward)
     ok(!wd.expiryLots.some((x) => x.lotId === l1.id || x.lotId === l2.id) && wd.expiryLots.every((x) => !x.expired), '收回後：這個病房這兩批不再列、沒有過期的（別的病房同批號還要各自收回）')
+  }
+  // 管制藥收回見證：效期收回裡有管制藥，要病房護理師或另一位藥師當場見證（一次性、綁病房、不能自己）；沒有管制藥不用
+  console.log('\n[管制藥收回見證]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const W = api.wardStockApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const ward = db().stockLocations.find((l) => l.kind === 'ward' && l.active)
+    const mor = db().drugLots.find((l) => l.locationId === ward.id && l.drugId === 'M039' && l.qty > 0)
+    const plain = db().drugLots.find((l) => l.locationId === ward.id && l.drugId === 'M001' && l.qty > 0)
+    for (const x of db().drugLots.filter((l) => l.lotNo === mor.lotNo || l.lotNo === plain.lotNo)) x.expiry = addDaysT(-1)
+    await as('ph01')
+    ok((await fieldsOf(() => W.returnWardExpiry(ward.ward, [mor.id, plain.id]))).witness?.includes('Morphine'), '有管制藥沒見證：擋（說是哪個管制藥）')
+    const self = await api.witnessApi.approveWitness({ purpose: 'wardReturn', ward: ward.ward, username: 'ph01', password: '1234' })
+    const clerk = await api.witnessApi.approveWitness({ purpose: 'wardReturn', ward: ward.ward, username: 'clerk01', password: '1234' })
+    ok(!self.ok && self.message.includes('不能見證自己') && !clerk.ok && clerk.message.includes('不是護理師或藥師'), '不能自己見證、要護理師或藥師')
+    const w = await api.witnessApi.approveWitness({ purpose: 'wardReturn', ward: ward.ward, username: 'nurse01', password: '1234' })
+    ok(w.ok && db().auditLogs[0].action === '管制藥收回見證' && db().auditLogs[0].detail.includes('Morphine'), '病房護理師見證（稽核寫管制藥）')
+    const r = await W.returnWardExpiry(ward.ward, [mor.id, plain.id], { witness: w.token })
+    ok(r.lots === 2 && db().auditLogs[0].detail.includes(`見證 ${w.witnessName}`), `收回 ${r.no}：稽核寫見證人`)
+    // 見證一次性；沒有管制藥不需要見證
+    for (const x of db().drugLots.filter((l) => l.lotNo === mor.lotNo)) x.expiry = addDaysT(-1)
+    const ward2 = db().stockLocations.filter((l) => l.kind === 'ward' && l.active)[1]
+    const mor2 = db().drugLots.find((l) => l.locationId === ward2.id && l.lotNo === mor.lotNo && l.qty > 0)
+    if (mor2) ok((await fieldsOf(() => W.returnWardExpiry(ward2.ward, [mor2.id], { witness: w.token }))).witness, '見證綁病房、一次性：別的病房用不了')
+    else ok(true, '（第二個病房沒有同批號，略過）')
+    for (const x of db().drugLots.filter((l) => l.lotNo === mor.lotNo)) x.expiry = addDaysT(200)
+    const plain2 = db().drugLots.find((l) => l.locationId === ward2.id && l.drugId === 'M001' && l.qty > 0)
+    if (plain2) {
+      for (const x of db().drugLots.filter((l) => l.lotNo === plain2.lotNo)) x.expiry = addDaysT(5)
+      ok((await errOf(() => api.witnessApi.approveWitness({ purpose: 'wardReturn', ward: ward2.ward, username: 'nurse01', password: '1234' }))).includes('不需要見證'), '要收回的沒有管制藥：不用見證')
+      ok((await W.returnWardExpiry(ward2.ward, db().drugLots.filter((l) => l.locationId === ward2.id && l.lotNo === plain2.lotNo && l.qty > 0).map((l) => l.id))).lots >= 1, '沒有管制藥：直接收回')
+    } else ok(true, '（略過）')
+  }
+  // 知情同意書：欄位、手術要哪幾張；術前準備「同意書」要先有紀錄；記錄（醫師、綁手術、局麻不用麻醉、不重複）；撤回取消術前準備；種子都對得上
+  console.log('\n[知情同意書]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.consentApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const e0 = api.checkConsentInput({ kind: 'surgery', title: 'x', explanation: 'x', signerName: 'x', relation: '配偶' })
+    ok(e0.reason && !Object.keys(api.checkConsentInput({ kind: 'surgery', title: 'x', explanation: 'x', signerName: 'x', relation: '本人' })).length && api.checkConsentInput({}).kind, '欄位：不是本人要寫原因')
+    ok(api.consentsForSurgery('local').join() === 'surgery' && api.consentsForSurgery('general').join() === 'surgery,anesthesia' && api.consentMissing('general', [{ kind: 'surgery' }, { kind: 'anesthesia', revoked: {} }]).join() === 'anesthesia', '局麻只要手術同意書；撤回的不算')
+    ok(db().surgeries.filter((s) => s.prep.consent).every((s) => !api.consentMissing(s.anesthesia, db().consents.filter((c) => c.surgeryId === s.id)).length), '種子：勾了同意書的手術都有紀錄')
+    const s = db().surgeries.find((x) => (x.status === 'scheduled' || x.status === 'requested') && x.prep.consent && x.anesthesia !== 'local')
+    const sc = db().consents.find((c) => c.surgeryId === s.id && c.kind === 'surgery')
+    await as('nurse01')
+    ok((await fieldsOf(() => C.revokeConsent(sc.id, ' '))).reason, '撤回要寫原因')
+    await C.revokeConsent(sc.id, '病人要再考慮')
+    ok(!db().surgeries.find((x) => x.id === s.id).prep.consent && db().auditLogs[0].detail.includes('術前準備同意書取消'), '撤回：術前準備的同意書勾取消')
+    ok((await errOf(() => prepRaw.markPrep(s.id, 'consent'))).includes('還沒有手術同意書'), '沒有有效的手術同意書：術前準備勾不了')
+    const doc = db().users.find((u) => u.doctorId === s.doctorId).username
+    await as(doc)
+    ok((await fieldsOf(() => C.recordConsent({ patientId: s.patientId, kind: 'surgery', title: 'x', explanation: 'x', signerName: '王大明', relation: '子女', surgeryId: s.id }))).reason, '家屬簽要寫原因')
+    ok((await errOf(() => C.recordConsent({ patientId: s.patientId, kind: 'anesthesia', title: 'x', explanation: 'x', signerName: 'x', relation: '本人', surgeryId: s.id }))).includes('已經有'), '同一台同一種只能一張有效的')
+    const c1 = await C.recordConsent({ patientId: s.patientId, kind: 'surgery', title: '再次說明', explanation: '風險與替代方案', signerName: '王大明', relation: '子女', reason: '病人意識不清', surgeryId: s.id })
+    ok(c1.no.startsWith('CN') && c1.signer.reason === '病人意識不清' && c1.admissionId === s.admissionId && db().auditLogs[0].action === '同意書簽署', `記錄：${c1.no}（家屬簽、原因、綁住院、稽核）`)
+    ok((await fieldsOf(() => C.recordConsent({ patientId: s.patientId, kind: 'surgery', title: 'x', explanation: 'x', signerName: 'x', relation: '本人' }))).surgeryId, '手術同意書要選手術')
+    const loc = db().surgeries.find((x) => x.anesthesia === 'local' && x.status !== 'done' && x.status !== 'cancelled')
+    if (loc) {
+      await as(db().users.find((u) => u.doctorId === loc.doctorId).username)
+      ok((await fieldsOf(() => C.recordConsent({ patientId: loc.patientId, kind: 'anesthesia', title: 'x', explanation: 'x', signerName: 'x', relation: '本人', surgeryId: loc.id }))).kind, '局部麻醉不用麻醉同意書')
+      await as(doc)
+    } else ok(true, '（沒有局麻的，略過）')
+    await as('nurse01')
+    await prepRaw.markPrep(s.id, 'consent')
+    ok(db().surgeries.find((x) => x.id === s.id).prep.consent, '補簽後：術前準備的同意書勾得了')
+    const list = await C.listConsents(s.patientId, s.id)
+    ok(list.length === 3 && list.some((x) => x.revoked), '病人的同意書：含撤回的')
+  }
+  // 每日病程紀錄：住院中入院隔天到昨天、每天至少一筆（看最近 7 天）；主治首頁與清單；補寫後少一天
+  console.log('\n[每日病程紀錄]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    ok(api.progressGapDates('2026-11-15 10:00', ['2026-11-16 09:00', '2026-11-18 09:00'], '2026-11-20').join() === '2026-11-17,2026-11-19' && api.progressGapDates('2026-11-01 10:00', [], '2026-11-20').length === 7 && !api.progressGapDates('2026-11-19 10:00', [], '2026-11-20').length, '規則：入院隔天到昨天、今天不算、只看 7 天')
+    const a = db().admissions.find((x) => x.status === 'admitted' && !x.obs && !x.day && !db().progressNotes.some((n) => n.admissionId === x.id && !n.kind))
+    ok(!!a, `種子：${a?.admitNo} 住院中沒有病程紀錄`)
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(doc)
+    const d = await api.dashboardApi.getDashboard()
+    const mine = await api.recordAuditApi.myMissingProgressNotes()
+    const row = mine.find((x) => x.admissionId === a.id)
+    ok(d.progressMissing >= 1 && row && row.dates.at(-1) === addDaysT(-1), `首頁：病程紀錄缺漏 ${d.progressMissing}；${row?.patientName} 缺 ${row?.dates.length} 天`)
+    const n0 = row.dates.length
+    await api.ipdApi.addProgressNote({ admissionId: a.id, subjective: '補寫', objective: 'x', assessment: 'x', plan: 'x' })
+    ok((await api.recordAuditApi.myMissingProgressNotes()).find((x) => x.admissionId === a.id)?.dates.length === n0, '今天寫的不補昨天（每天要各自寫）')
+    db().progressNotes.push({ id: 'PN-T-1', admissionId: a.id, at: `${addDaysT(-1)} 18:00`, doctorId: a.doctorId, subjective: 'x', objective: 'x', assessment: 'x', plan: 'x' })
+    ok((await api.recordAuditApi.myMissingProgressNotes()).find((x) => x.admissionId === a.id)?.dates.length === n0 - 1, '昨天有一筆：少一天')
   }
 } catch (e) {
   failed++

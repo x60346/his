@@ -1,10 +1,11 @@
 // 住院病歷完整性稽核：出院後病歷要在 14 天內完成（出院病摘簽署、手術紀錄、死亡證明書、會診回覆）。
 // 主治看「我的病歷待完成」（逾期在前）；病歷室（權限「疾病分類」）看全院清單與每月準時完成率。規則在 record-audit-rules
 import type { Admission } from '@/types'
+import { db } from '@/mock/db'
 import { today } from '@/utils/date'
 import { query, requirePermission, requireUser } from './http'
 import { recordCompletedAt, recordDue, recordGaps, recordOnTimeRate, recordOverdue } from './record-audit-rules'
-import { discharged, recordInputOf } from './record-audit-work'
+import { discharged, progressGapsOf, recordInputOf } from './record-audit-work'
 import { shiftMonth } from './management-rules'
 import { find, nameOf } from './views'
 
@@ -38,6 +39,17 @@ export function myIncompleteRecords(): Promise<RecordItem[]> {
     const u = requireUser('doctor')
     const t = today()
     return sortItems(discharged().filter((a) => a.doctorId === u.doctorId).map((a) => item(a, t)).filter((x) => x.gaps.length))
+  })
+}
+
+/** 主治：我主治的住院中病人，最近 7 天缺病程紀錄的日期 */
+export function myMissingProgressNotes(): Promise<{ admissionId: string; admitNo: string; patientName: string; bedText: string; admittedAt: string; dates: string[] }[]> {
+  return query(() => {
+    const u = requireUser('doctor')
+    const t = today()
+    return db.admissions.filter((a) => a.doctorId === u.doctorId).map((a) => ({ a, dates: progressGapsOf(a, t) })).filter((x) => x.dates.length)
+      .map(({ a, dates }) => ({ admissionId: a.id, admitNo: a.admitNo, patientName: nameOf.patient(a.patientId), bedText: a.bedId ? find.bed(a.bedId)?.bedNo ?? '' : '', admittedAt: a.admittedAt ?? '', dates }))
+      .sort((x, y) => y.dates.length - x.dates.length)
   })
 }
 

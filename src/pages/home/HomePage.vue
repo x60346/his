@@ -69,6 +69,7 @@ const todos = computed<Todo[]>(() => {
       { roles: ['nurse'], label: '生物指示劑待判讀', count: s.value.cssdBiDue ?? 0, hint: '滅菌鍋次培養滿 24 小時：判讀陰性放行、陽性整鍋召回（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
     ] : []),
     { roles: ['doctor'], label: '住院點數接近 DRG 上限', count: (s.value.drgNear ?? 0) + (s.value.drgOver ?? 0), hint: s.value.drgOver ? `其中 ${s.value.drgOver} 位已超過上限（超出部分只給付 80%）：住院醫囑頁上方看預估 DRG` : '我主治的住院病人，目前健保點數已到 DRG 上限的 80%（住院醫囑頁上方看預估 DRG；只提示、不擋醫囑）', route: 'ipd', icon: ShieldAlert, urgent: !!s.value.drgOver },
+    ...(s.value.progressMissing ? [{ roles: ['doctor'], label: '病程紀錄缺漏', count: s.value.progressMissing, hint: '住院中的病人最近 7 天有幾天沒寫病程紀錄（每天至少一筆）：到「住院醫囑」頁補寫（「健保審查回覆」頁列出哪幾天）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.recordIncomplete ? [{ roles: ['doctor'], label: '出院病歷待完成', count: s.value.recordIncomplete, hint: s.value.recordOverdue ? `其中 ${s.value.recordOverdue} 份出院超過 14 天（逾期）：出院病摘簽署、手術紀錄、死亡證明書、會診回覆` : '出院後 14 天內要完成：出院病摘簽署、手術紀錄、死亡證明書、會診回覆（「健保審查回覆」頁列出缺什麼）', route: 'claim-cuts', icon: ShieldAlert, urgent: !!s.value.recordOverdue }] : []),
     ...(s.value.opdReviewToAck ? [{ roles: ['doctor'], label: '門診病歷抽審待回覆', count: s.value.opdReviewToAck, hint: '病歷室抽審我的門診病歷有不符合的項目：看意見、寫改善說明（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
     { roles: ['doctor'], label: '編碼已修改', count: s.value.codingChanged ?? 0, hint: '病歷室修改了我的病人的出院診斷編碼（會影響 DRG）：看修改前後與理由後按已讀（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false },

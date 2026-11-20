@@ -11,6 +11,7 @@ import PacuPanel from './PacuPanel.vue'
 import PostopDialog from './PostopDialog.vue'
 import PathPanel from './PathPanel.vue'
 import DelayNote from './DelayNote.vue'
+import SurgeryConsents from './SurgeryConsents.vue'
 import { ANESTHESIA_LABEL, implantApi, preAuthApi, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
@@ -122,6 +123,7 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
           <p v-if="s.team && s.status !== 'cancelled'" class="text-xs text-slate-600">手術團隊：{{ s.teamText }}</p>
           <p v-if="s.implantRows.length" class="text-xs" :class="s.implantRecalled ? 'font-semibold text-red-700' : 'text-slate-600'">植入物：{{ s.implantRows.map((r) => r.text + (r.selfPay ? '（自費）' : '')).join('；') }}<template v-if="s.implantRecalled">——其中一批廠商召回，供應中心會通知主刀</template></p>
+          <SurgeryConsents :surgery="s" />
           <div v-for="x in s.status === 'cancelled' ? [] : s.preAuthItems" :key="x.procId" class="flex flex-wrap items-center gap-2 text-xs">
             <span class="text-slate-600">{{ x.name }} 需健保事前審查：</span>
             <span v-if="x.preAuth" :class="x.preAuth.allows ? 'text-emerald-700' : 'text-amber-800'">{{ x.preAuth.no }} {{ x.preAuth.statusLabel }}{{ x.preAuth.allows ? '（可以用）' : '（核准前不能用）' }}</span>

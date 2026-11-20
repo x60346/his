@@ -1,7 +1,7 @@
 // 病歷完整性的內部工具（index 不匯出、不會被包成 API）：一次住院的完整性輸入、出院清單、首頁計數。API 在 record-audit.ts、規則在 record-audit-rules
 import type { Admission } from '@/types'
 import { db } from '@/mock/db'
-import { recordGaps, recordOverdue, type RecordInput } from './record-audit-rules'
+import { progressGapDates, recordGaps, recordOverdue, type RecordInput } from './record-audit-rules'
 import { nameOf } from './views'
 
 /** 出院的住院（急診留觀沒轉住院的不算） */
@@ -23,3 +23,11 @@ export function recordCounts(t: string, doctorId?: string) {
   const xs = discharged().filter((a) => !doctorId || a.doctorId === doctorId).map((a) => recordInputOf(a))
   return { incomplete: xs.filter((x) => recordGaps(x).length).length, overdue: xs.filter((x) => recordOverdue(x, t)).length }
 }
+
+/** 住院中（不含急診留觀中、日間手術）每日病程紀錄缺的日期 */
+export function progressGapsOf(a: Admission, t: string): string[] {
+  if (a.status !== 'admitted' || !a.admittedAt || (a.obs && !a.obs.endAt) || (a.day && !a.day.converted)) return []
+  return progressGapDates(a.admittedAt, db.progressNotes.filter((n) => n.admissionId === a.id && !n.kind).map((n) => n.at), t)
+}
+/** 首頁（主治）：我主治、住院中、最近 7 天有缺病程紀錄的病人數 */
+export const progressMissingCount = (t: string, doctorId: string) => db.admissions.filter((a) => a.doctorId === doctorId && progressGapsOf(a, t).length).length

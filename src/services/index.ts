@@ -46,6 +46,7 @@ import * as drg from './drg'
 import * as coding from './coding'
 import * as recordAudit from './record-audit'
 import * as opdReview from './opd-review'
+import * as consent from './consent'
 import * as line from './line'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
@@ -140,6 +141,7 @@ export const drgApi = overNetwork(drg)
 export const codingApi = overNetwork(coding)
 export const recordAuditApi = overNetwork(recordAudit)
 export const opdReviewApi = overNetwork(opdReview)
+export const consentApi = overNetwork(consent)
 export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
 export const nutritionApi = overNetwork(nutrition)
@@ -272,6 +274,7 @@ export * from './drg-rules'
 export * from './pcs-rules'
 export * from './record-audit-rules'
 export * from './opd-review-rules'
+export * from './consent-rules'
 export * from './day-rules'
 export * from './line-rules'
 export * from './nutrition-rules'
@@ -358,6 +361,7 @@ export type { ClaimBoard, ClaimBoardRow, RejectFilePreview } from './claim'
 export type { CutBoard, CutFilePreview, CutItem, CutMonth } from './claim-cut'
 export type { RecordAudit, RecordItem } from './record-audit'
 export type { OpdReviewBoard, OpdReviewView } from './opd-review'
+export type { ConsentView } from './consent'
 export type { PreAuthView } from './preauth'
 export type { DrgEstimate } from './drg'
 export type { CodingItem } from './coding'

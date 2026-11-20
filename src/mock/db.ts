@@ -2,7 +2,7 @@
 // 服務層（src/services）是唯一可以讀寫這裡的程式；頁面一律透過服務層存取。
 import { ref } from 'vue'
 import type {
-  DnrRecord, Isolation, BloodUnit, BloodRequest, RecordCopyRequest, Surgery, SterileBatch, InstrumentPack, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, OpdRecordReview, PreAuth, ImplantCardPrint, LineDevice, NutritionScreen, NutritionAssessment, TubeFormula, TubeFeedRecord, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, StaffingSettings, DischargePlan, ShiftRequest, PcaOrder, InfectionCase, InfusionRun, Wound, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport, AbxIntervention, AdrReport, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult, ContrastClearance, RoomDowntime, ExamRoomHours, ExamClosure, FollowUpAdvice, Incident, DispenseMismatch,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, RecordCopyRequest, Surgery, SterileBatch, InstrumentPack, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, OpdRecordReview, Consent, PreAuth, ImplantCardPrint, LineDevice, NutritionScreen, NutritionAssessment, TubeFormula, TubeFeedRecord, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, StaffingSettings, DischargePlan, ShiftRequest, PcaOrder, InfectionCase, InfusionRun, Wound, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport, AbxIntervention, AdrReport, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult, ContrastClearance, RoomDowntime, ExamRoomHours, ExamClosure, FollowUpAdvice, Incident, DispenseMismatch,
   Admission,
   AuditLog,
   Bed,
@@ -186,6 +186,7 @@ export interface Database {
   claimExclusions: ClaimExclusion[]
   claimCuts: ClaimCut[]
   opdReviews: OpdRecordReview[]
+  consents: Consent[]
   preAuths: PreAuth[]
   implantCardPrints: ImplantCardPrint[]
   analyzerResults: AnalyzerResult[]
@@ -245,7 +246,7 @@ export interface Database {
 }
 
 /** 資料結構或種子內容變更時遞增，使用者瀏覽器裡的舊資料會自動重建 */
-export const SCHEMA_VERSION = 169
+export const SCHEMA_VERSION = 170
 const STORAGE_KEY = 'his-demo-db'
 
 function freshSeed(scale: HospitalScale = 'small'): Database {

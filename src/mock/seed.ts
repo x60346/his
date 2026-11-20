@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -62,6 +62,7 @@ import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { laneOf, priorityOf } from '@/services/lab-queue-rules'
+import { consentsForSurgery } from '@/services/consent-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
@@ -3898,6 +3899,21 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 知情同意書（示範）：術前準備勾了「同意書」的手術，都有對應的手術同意書（非局部麻醉另有麻醉同意書）；
+  // 主刀說明、病人本人簽，簽在勾術前準備之前 ----------
+  const consents: Consent[] = []
+  for (const s of surgeries.filter((x) => x.prep.consent)) {
+    const doc = users.find((u) => u.doctorId === s.doctorId)
+    if (!doc) continue
+    const at = addMinutes(s.prep.consent!.at, -30)
+    const d = at.slice(0, 10).replace(/-/g, '')
+    const title = procMap.get(s.procId)?.name ?? '手術'
+    for (const kind of consentsForSurgery(s.anesthesia)) {
+      const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
+      consents.push({ id: `CN-SEED-${consents.length + 1}`, no: `CN${d}${String(n).padStart(3, '0')}`, kind, patientId: s.patientId, admissionId: s.admissionId, surgeryId: s.id, title: kind === 'surgery' ? title : `${title}（${s.anesthesia === 'general' ? '全身麻醉' : s.anesthesia === 'spinal' ? '脊髓麻醉' : '神經阻斷麻醉'}）`, explainedBy: doc.id, explanation: kind === 'surgery' ? '說明手術方式、出血與感染風險、替代方案與不手術的後果' : '說明麻醉方式、術後噁心、喉嚨痛等常見不適與少見的嚴重併發症', signer: { name: patients.find((p) => p.id === s.patientId)?.name ?? '', relation: '本人' }, signedAt: at, recordedBy: doc.id })
+    }
+  }
+
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
   // 明天骨折那台的鎖定骨板：主刀申請、已核准
@@ -4065,6 +4081,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     claimExclusions,
     claimCuts,
     opdReviews: [] as OpdRecordReview[],
+    consents,
     preAuths,
     implantCardPrints,
     analyzerResults,

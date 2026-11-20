@@ -2760,6 +2760,28 @@ export interface ClaimExclusion {
  * 門診病歷品質抽審（病歷室）：每月從每位醫師上個月完成的門診病歷抽幾份，逐項審查（符合／不符合），
  * 有不符合的醫師要看過回覆（改善說明）
  */
+/**
+ * 知情同意書：醫師說明（風險、替代方案）→ 病人本人（或法定代理人、家屬）簽署（紙本簽名，系統記錄誰簽、和病人的關係）。
+ * 手術要有手術同意書、非局部麻醉要有麻醉同意書，術前準備的「同意書」才能勾。病人可以撤回
+ */
+export interface Consent {
+  id: string
+  no: string
+  kind: 'surgery' | 'anesthesia' | 'transfusion' | 'procedure'
+  patientId: string
+  admissionId?: string
+  surgeryId?: string
+  /** 同意的項目（術式名稱等） */
+  title: string
+  /** 說明的醫師（使用者 id）與說明重點（風險、替代方案） */
+  explainedBy: string
+  explanation: string
+  signer: { name: string; relation: string; reason?: string }
+  signedAt: string
+  recordedBy: string
+  revoked?: { at: string; by: string; reason: string }
+}
+
 export interface OpdRecordReview {
   id: string
   /** 抽的是哪個月份的病歷 */

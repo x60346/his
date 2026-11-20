@@ -4,13 +4,27 @@
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UQueryState, USearchSelect } from '@/components/ui'
-import { masterApi, wardStockApi, type WardStockView } from '@/services'
+import { masterApi, wardStockApi, witnessApi, type WardStockView } from '@/services'
+import WitnessDialog from '@/components/WitnessDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import type { Drug } from '@/types'
 
 const { data: wards, loading } = useQuery(() => wardStockApi.listWardStocks())
 const pars = reactive<Record<string, number | undefined>>({})
 const key = (w: string, d: string) => `${w}|${d}`
+// 效期收回：有管制藥要病房護理師或另一位藥師當場見證（服務層 returnWardExpiry 沒有見證就擋）
+const retWard = ref<{ ward: string; name: string; lotIds: string[]; ctrl: string }>()
+const witnessOpen = ref(false)
+const approveFn = (cred: { username: string; password: string }) => witnessApi.approveWitness({ purpose: 'wardReturn', ward: retWard.value!.ward, ...cred })
+function startReturn(w: { ward: string; locationName: string; expiryLots: { lotId: string; drugName: string; lotNo: string; qty: number; controlled?: number }[] }) {
+  const ctrl = w.expiryLots.filter((x) => x.controlled)
+  retWard.value = { ward: w.ward, name: w.locationName, lotIds: w.expiryLots.map((x) => x.lotId), ctrl: ctrl.map((x) => `${x.drugName} ${x.lotNo} ${x.qty}`).join('、') }
+  if (ctrl.length) witnessOpen.value = true
+  else ret.run(w.ward, retWard.value.lotIds)
+}
+function onWitnessed(token: string) {
+  if (retWard.value) ret.run(retWard.value.ward, retWard.value.lotIds, { witness: token })
+}
 const ret = useAction(wardStockApi.returnWardExpiry, { success: (r) => `已收回 ${r.lots} 批、${r.qty} 個到住院藥局（${r.no}）：照報廢流程處理` })
 const save = useAction(wardStockApi.saveWardStockItem, { success: (r) => (r ? `已設定基準量 ${r.par}` : '已移除常備品項') })
 async function onSave(w: WardStockView, drugId: string) {
@@ -58,7 +72,7 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
           </li>
         </ul>
         <div v-if="w.expiryLots.length" class="border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-          <div class="mb-1 flex items-center gap-2"><b>效期（過期、30 天內到期）</b><UButton size="sm" variant="secondary" class="ml-auto" :loading="ret.pending.value" @click="ret.run(w.ward, w.expiryLots.map((x) => x.lotId))">全部收回到住院藥局</UButton></div>
+          <div class="mb-1 flex items-center gap-2"><b>效期（過期、30 天內到期）</b><UButton size="sm" variant="secondary" class="ml-auto" :loading="ret.pending.value" @click="startReturn(w)">全部收回到住院藥局</UButton></div>
           <div v-for="x in w.expiryLots" :key="x.lotId" :class="x.expired ? 'font-semibold text-red-700' : ''">{{ x.drugName }} {{ x.lotNo }}・{{ x.expiry }}{{ x.expired ? '（已過期）' : `（剩 ${x.daysLeft} 天）` }}・{{ x.qty }}</div>
         </div>
         <div class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
@@ -77,5 +91,16 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
         </div>
       </UCard>
     </div>
+    <WitnessDialog
+      v-model="witnessOpen"
+      title="管制藥收回見證"
+      who="見證人（病房護理師或另一位藥師）"
+      ok-text="見證並收回"
+      :subject="retWard ? `${retWard.name} 效期收回
+管制藥：${retWard.ctrl}` : ''"
+      note="見證人要和收回的藥師一起當場清點管制藥。"
+      :approve="approveFn"
+      @approved="onWitnessed"
+    />
   </UQueryState>
 </template>

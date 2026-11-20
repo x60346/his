@@ -44,3 +44,15 @@ export function recordOnTimeRate(xs: RecordInput[], today: string): number | nul
   const due = xs.filter((x) => recordCompletedAt(x) || today > recordDue(x.dischargedAt))
   return due.length ? Math.round((due.filter(recordOnTime).length / due.length) * 1000) / 10 : null
 }
+
+// ── 住院中每日病程紀錄：入院隔天到昨天，每天至少一筆一般病程紀錄（今天還沒過完不算）；只看最近 7 天 ──
+
+export const PROGRESS_LOOKBACK_DAYS = 7
+/** 缺病程紀錄的日期（舊到新） */
+export function progressGapDates(admittedAt: string, noteDates: string[], today: string): string[] {
+  const has = new Set(noteDates.map((d) => d.slice(0, 10)))
+  const from = [addDays(admittedAt.slice(0, 10), 1), addDays(today, -PROGRESS_LOOKBACK_DAYS)].sort().at(-1)!
+  const out: string[] = []
+  for (let d = from; d < today; d = addDays(d, 1)) if (!has.has(d)) out.push(d)
+  return out
+}

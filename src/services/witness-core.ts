@@ -10,7 +10,7 @@ import type { User } from '@/types'
 import { db, newId } from '@/mock/db'
 import { audit, fieldErrors } from './http'
 
-export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion' | 'pca'
+export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion' | 'pca' | 'wardReturn'
 export const WITNESS_MIN = 10
 
 export interface WitnessGrant {
@@ -80,6 +80,8 @@ export function consumeWitness(token: string | undefined): void {
   if (token) grants.delete(token)
 }
 
+/** 病房效期收回（有管制藥）：綁那個病房 */
+export const wardReturnRef = (ward: string) => `WR|${ward}`
 /** 報廢確認綁定的對象：某藥在某地點的過期批號；待報廢區的一個批號 */
 export const expiredScrapRef = (drugId: string, locationId: string) => `E|${drugId}|${locationId}`
 export const quarantineScrapRef = (lotId: string) => `Q|${lotId}`

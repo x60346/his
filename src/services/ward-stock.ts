@@ -11,7 +11,7 @@ import { shiftInstanceOf, shiftOf } from './nursing-rules'
 import { allocateFefo, usableQty } from './stock-rules'
 import { wardExpiryLots, type WardExpiryLot } from './ward-stock-work'
 import { find, nameOf, stockLoc } from './views'
-import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
+import { consumeWitness, wardReturnRef, WITNESS_MIN, witnessFor } from './witness-core'
 
 function wardLoc(ward: string) {
   const l = stockLoc.ward(ward)
@@ -80,7 +80,7 @@ function wardView(ward: string): WardStockView {
  * 收回病房常備的過期、近效期藥（藥師）：選的批號整批從病房轉回住院藥局（同批號、同效期），藥局再照報廢流程處理；
  * 收回後病房低於基準量的照常補充（補的是效期較新的）
  */
-export function returnWardExpiry(ward: string, lotIds: string[]): Promise<{ no: string; lots: number; qty: number }> {
+export function returnWardExpiry(ward: string, lotIds: string[], opts: { witness?: string } = {}): Promise<{ no: string; lots: number; qty: number }> {
   return mutate(() => {
     const u = requireUser('pharmacist')
     const loc = wardLoc(ward)
@@ -88,13 +88,19 @@ export function returnWardExpiry(ward: string, lotIds: string[]): Promise<{ no: 
     const can = wardExpiryLots(loc.id, t.slice(0, 10))
     const picks = [...new Set(lotIds ?? [])].map((id) => can.find((x) => x.lotId === id) ?? fail('只能收回這個病房過期或 30 天內到期的批號', 'CONFLICT'))
     if (!picks.length) fail('請選要收回的批號')
+    // 有管制藥：要病房護理師或另一位藥師當場見證（witness.approveWitness wardReturn）
+    const ctrl = picks.filter((x) => find.drug(x.drugId)?.controlled)
+    const w = ctrl.length ? witnessFor(opts.witness, 'wardReturn', wardReturnRef(ward), u.id) : null
+    if (ctrl.length && !w) failField('witness', `收回的藥有管制藥（${ctrl.map((x) => x.drugName).join('、')}）：要病房護理師或另一位藥師當場見證`)
+    if (w === 'expired') failField('witness', `見證已超過 ${WITNESS_MIN} 分鐘，請重新見證`)
     const dst = stockLoc.ipd()
     const no = `WX${t.slice(0, 10).replace(/-/g, '')}-${String(nextCounter(`wardexp:${t.slice(0, 10)}`)).padStart(2, '0')}`
     for (const x of picks) {
       postStock({ kind: 'out', type: 'transfer-out', drugId: x.drugId, locationId: loc.id, qty: x.qty, lotId: x.lotId, includeExpired: true, ref: no, reason: `病房效期收回 ${ward}` }, u.id, t)
       postStock({ kind: 'in', type: 'transfer-in', drugId: x.drugId, locationId: dst, qty: x.qty, lot: { lotNo: x.lotNo, expiry: x.expiry }, ref: no }, u.id, t)
     }
-    audit('病房效期收回', `${no} ${ward}：${picks.map((x) => `${x.drugName} ${x.lotNo}（${x.expiry}${x.expired ? '，已過期' : ''}）${x.qty}`).join('、')}`)
+    if (w) consumeWitness(opts.witness)
+    audit('病房效期收回', `${no} ${ward}：${picks.map((x) => `${x.drugName} ${x.lotNo}（${x.expiry}${x.expired ? '，已過期' : ''}）${x.qty}`).join('、')}${w ? `；見證 ${w.witnessName}` : ''}`)
     return { no, lots: picks.length, qty: picks.reduce((n, x) => n + x.qty, 0) }
   })
 }

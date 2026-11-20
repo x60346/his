@@ -5,6 +5,7 @@ import type { AnesthesiaType, Surgery, SurgeryCheckStage, SurgeryPrepKey, Surger
 import { db, newId, nextCounter } from '@/mock/db'
 import { addDays, addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
+import { CONSENT_KIND_LABEL, consentMissing } from './consent-rules'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
 import { delayUnread, surgeryOf, surgeryView, teamClash, type SurgeryView } from './surgery-work'
@@ -305,6 +306,11 @@ export function markPrep(id: string, key: SurgeryPrepKey, input: { notNeeded?: s
       if (!input.refId) failField('refId', key === 'blood' ? '請選這次住院的備血單（不需要備血請寫原因）' : '請選這次住院的抗生素醫囑（不需要請寫原因）')
       if (key === 'blood' && !db.bloodRequests.some((r) => r.id === input.refId && r.admissionId === s.admissionId && !r.cancelled)) failField('refId', '備血單不是這次住院的（或已取消）')
       if (key === 'abx' && !db.ipdOrders.some((o) => o.id === input.refId && o.admissionId === s.admissionId && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? '')))) failField('refId', '這不是這次住院有效的抗生素醫囑')
+    }
+    // 同意書：要有綁這台、有效的手術同意書（非局部麻醉再加麻醉同意書），由說明的醫師在系統記錄簽署
+    if (!notNeeded && key === 'consent') {
+      const miss = consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id))
+      if (miss.length) fail(`還沒有${miss.map((k) => CONSENT_KIND_LABEL[k]).join('、')}：請主刀（麻醉）醫師說明後在「同意書」記錄簽署`, 'CONFLICT')
     }
     // 禁食可以連禁食醫囑（選填）：連了就要是這次住院有效的禁食醫囑
     if (!notNeeded && key === 'npo' && input.refId && !db.ipdOrders.some((o) => o.id === input.refId && o.admissionId === s.admissionId && o.category === 'diet' && o.status === 'active' && dietOf(o).kind === 'npo')) failField('refId', '這不是這次住院有效的禁食醫囑')

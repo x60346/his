@@ -6,7 +6,8 @@ import { today } from '@/utils/date'
 import { fail, must, mutate, requireUser } from './http'
 import { find, nameOf, stockLoc } from './views'
 import { residualOf } from './drug-rules'
-import { expiredScrapRef, grantWitness, hasRole, pcaRef, quarantineScrapRef, returnScrapRef, transfusionRef, type WitnessResult } from './witness-core'
+import { wardExpiryLots } from './ward-stock-work'
+import { expiredScrapRef, grantWitness, hasRole, pcaRef, wardReturnRef, quarantineScrapRef, returnScrapRef, transfusionRef, type WitnessResult } from './witness-core'
 import { BLOOD_PRODUCT_LABEL, bloodTypeText, issueState, latestIssue } from './blood-rules'
 
 export type WitnessTarget =
@@ -24,6 +25,8 @@ export type WitnessTarget =
   | { purpose: 'transfusion'; requestId: string; unitId: string }
   /** PCA 架設（藥袋、設定）與結束（剩餘量銷毀）：另一位護理師 */
   | { purpose: 'pca'; pcaId: string; stage: 'setup' | 'end' }
+  /** 病房效期收回裡有管制藥：病房護理師或另一位藥師當場一起清點 */
+  | { purpose: 'wardReturn'; ward: string }
 
 export type { WitnessResult }
 
@@ -34,6 +37,19 @@ export type { WitnessResult }
 export function approveWitness(input: WitnessTarget & { username: string; password: string }): Promise<WitnessResult> {
   return mutate((): WitnessResult => {
     const cred = { username: input.username, password: input.password }
+    if (input.purpose === 'wardReturn') {
+      const u = requireUser('pharmacist')
+      const loc = stockLoc.ward(input.ward)
+      if (!loc) fail(`「${input.ward}」沒有病房常備`)
+      const ctrl = wardExpiryLots(loc!.id, today()).filter((x) => find.drug(x.drugId)?.controlled)
+      if (!ctrl.length) fail(`${input.ward}要收回的藥沒有管制藥，不需要見證`)
+      return grantWitness({
+        purpose: 'wardReturn', refId: wardReturnRef(input.ward), actor: u, ...cred, who: '見證人（病房護理師或另一位藥師）',
+        selfMessage: '不能見證自己的收回，請病房護理師或另一位藥師見證',
+        qualifies: (w) => (hasRole(w, ['nurse', 'pharmacist']) ? null : `${w.name} 不是護理師或藥師，不能見證管制藥收回`),
+        auditAction: '管制藥收回見證', verb: '見證', what: `${input.ward} 效期收回（管制藥：${ctrl.map((x) => `${x.drugName} ${x.lotNo} ${x.qty}`).join('、')}；收回 ${u.name}）`,
+      })
+    }
     if (input.purpose === 'wardCount') {
       const u = requireUser('nurse')
       const ward = input.ward

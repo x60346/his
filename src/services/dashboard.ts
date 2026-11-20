@@ -26,7 +26,7 @@ import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
 import { opdExpiringOf, preAuthCounts, preAuthExpiringCount } from './preauth-work'
-import { recordCounts } from './record-audit-work'
+import { progressMissingCount, recordCounts } from './record-audit-work'
 import { wardExpiryCounts } from './ward-stock-work'
 import { claimDeadlineOf, cutReplyDue, daysUntil, deadlineText, disputeCheck, monthOf, nextMonth } from './claim-rules'
 import { codingCounts } from './coding-work'
@@ -312,6 +312,8 @@ export interface DashboardStats {
   recordIncomplete?: number
   recordOverdue?: number
   recordOverdueAll?: number
+  /** 主治：住院中最近 7 天缺病程紀錄的病人 */
+  progressMissing?: number
   /** 病歷室：門診抽審待審查；醫師：抽審有不符合待回覆 */
   opdReviewPending?: number
   /** 藥師：病房常備已過期、30 天內到期的批號 */
@@ -445,6 +447,7 @@ export function getDashboard(): Promise<DashboardStats> {
           preAuthToFill: preAuthCounts(now(), me.doctorId).toFill,
           codingChanged: codingCounts(now(), me.doctorId).changed,
           ...((r) => ({ recordIncomplete: r.incomplete, recordOverdue: r.overdue }))(recordCounts(today(), me.doctorId)),
+          progressMissing: progressMissingCount(today(), me.doctorId),
           opdReviewToAck: db.opdReviews.filter((r) => r.doctorId === me.doctorId && r.result && !r.ack && Object.values(r.result.items).some((v) => !v)).length,
           ...((c) => ({ drgNear: c.near, drgOver: c.over }))(drgAlertCounts(me.doctorId)),
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),

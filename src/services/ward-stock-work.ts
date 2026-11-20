@@ -14,13 +14,15 @@ export interface WardExpiryLot {
   expired: boolean
   /** 還有幾天到期（過期是負的） */
   daysLeft: number
+  /** 管制藥級別（收回要見證） */
+  controlled?: number
 }
 
 /** 病房常備過期、30 天內到期的批號（有量的） */
 export function wardExpiryLots(locId: string, t: string): WardExpiryLot[] {
   return db.drugLots
     .filter((l) => l.locationId === locId && l.qty > 0 && (isExpired(l.expiry, t) || l.expiry <= addDays(t, WARD_RETURN_DAYS)))
-    .map((l) => ({ lotId: l.id, drugId: l.drugId, drugName: find.drug(l.drugId)?.name ?? l.drugId, lotNo: l.lotNo, expiry: l.expiry, qty: l.qty, expired: isExpired(l.expiry, t), daysLeft: diffDays(t, l.expiry) }))
+    .map((l) => ({ lotId: l.id, drugId: l.drugId, drugName: find.drug(l.drugId)?.name ?? l.drugId, lotNo: l.lotNo, expiry: l.expiry, qty: l.qty, expired: isExpired(l.expiry, t), daysLeft: diffDays(t, l.expiry), ...((c) => (c ? { controlled: c } : {}))(find.drug(l.drugId)?.controlled) }))
     .sort((a, b) => a.expiry.localeCompare(b.expiry))
 }
 
