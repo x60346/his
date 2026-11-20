@@ -2,6 +2,7 @@
 import type { ImplantLot, Procedure, Surgery } from '@/types'
 import { db } from '@/mock/db'
 import { find } from './views'
+import { implantSelfPay } from './preauth-work'
 
 export const lotOf = (id: string) => db.implantLots.find((l) => l.id === id)
 /** 這批已經用掉幾個（所有手術） */
@@ -20,11 +21,12 @@ export function implantRows(s: Surgery) {
 }
 
 /** 住院帳單：做完的手術用掉的植入物（健保點數或自費），依手術結束那天 */
-export function implantFeeItems(s: Surgery): { proc: Procedure; qty: number; date: string }[] {
-  const out: { proc: Procedure; qty: number; date: string }[] = []
+export function implantFeeItems(s: Surgery): { proc: Procedure; qty: number; date: string; selfPay?: boolean }[] {
+  const out: { proc: Procedure; qty: number; date: string; selfPay?: boolean }[] = []
   for (const u of s.implants ?? []) {
     const p = find.procedure(lotOf(u.lotId)?.procId ?? '')
-    if (p) out.push({ proc: p, qty: u.qty, date: s.endAt ?? u.at })
+    // 事前審查改自費：照自費算
+    if (p) out.push({ proc: p, qty: u.qty, date: s.endAt ?? u.at, ...(implantSelfPay(s.id, p.id) ? { selfPay: true } : {}) })
   }
   return out
 }

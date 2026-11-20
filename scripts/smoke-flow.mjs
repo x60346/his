@@ -17093,6 +17093,146 @@ try {
     const page = readFileSync('src/pages/claim/ClaimCutPanel.vue', 'utf8') + readFileSync('src/pages/claim/ClaimReplyPage.vue', 'utf8')
     ok(!/cutStatus|checkCut|cutRate|db\./.test(page), '狀態、上限、核減率由服務層算')
   }
+  // 事前審查：能不能用、逾時、填寫欄位、帳單自費、申報檢核；種子（IVIG 待送審、骨板已核准）；開藥自動建單、不重複；
+  // 主治填寫（別人不行、欄位）；送審（還沒填不行）；補件（要寫補什麼）、再送、核准後能給；不核准停醫囑；自費、緊急先用；逾時；
+  // 特殊材料：主刀申請、重複、登記植入物擋、改自費後可以用
+  console.log('\n[事前審查]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    ok(api.preAuthAllows({ status: 'approved' }) && api.preAuthAllows({ status: 'submitted', selfPay: {} }) && api.preAuthAllows({ status: 'draft', emergency: {} }) && !api.preAuthAllows({ status: 'submitted' }), '能不能用：核准、自費、緊急')
+    ok(api.preAuthOverdue({ status: 'submitted', submittedAt: '2026-03-01 10:00' }, '2026-03-16 10:00') && !api.preAuthOverdue({ status: 'submitted', submittedAt: '2026-03-01 10:00' }, '2026-03-15 10:00') && !api.preAuthOverdue({ status: 'approved', submittedAt: '2026-01-01 10:00' }, '2026-03-16 10:00'), '審查超過 14 天算逾時')
+    const fe = api.checkPreAuthFill({ summary: ' ' })
+    ok(fe.summary && fe.reason, '填寫：病情摘要、理由')
+    const ivig = db().drugs.find((d) => d.id === 'M051')
+    const dl = api.calcIpdChargeLines({ identity: db().identities[0], from: '2026-03-01 10:00', to: '2026-03-03 10:00', beds: [], daily: [], drugs: [{ drug: ivig, qty: 2, date: '2026-03-02' }, { drug: ivig, qty: 1, date: '2026-03-02', selfPay: true }], procedures: [], copay: db().billingSettings.ipdCopay ?? api.IPD_COPAY_DEFAULT }).lines
+    ok(dl.some((l) => l.kind === 'drug' && l.qty === 2) && dl.some((l) => l.kind === 'self' && l.name.includes('自費') && l.qty === 1), '帳單：改自費的照自費算')
+    ok(api.ipdClaimProblems({ day: false, diagnosis: 'x', signed: true, implantMissing: [], preAuth: ['IVIG（PA1）'], daysActual: 1, points: 10 })[0].includes('事前審查'), '申報檢核：用了需事前審查、沒核准的')
+
+    // 種子
+    const s1 = db().preAuths.find((p) => p.id === 'PA-SEED-1')
+    const s2 = db().preAuths.find((p) => p.id === 'PA-SEED-2')
+    ok(s1?.status === 'ready' && s1.orderId === 'IO-IVIG-1' && s2?.status === 'approved' && s2.surgeryId === 'SG-SEED-1', '種子：IVIG 主治填好待送審；明天骨折的鎖定骨板已核准')
+    await as('clerk02')
+    let b = await P.preAuthBoard()
+    ok(b[0].id === s1.id && (await api.dashboardApi.getDashboard()).preAuthToSubmit === 1, '申報組：待送審排前面、首頁待送審 1')
+    // 護理站：核准前不能給（測試輔助：補一劑已到時間的）
+    await as('nurse01')
+    db().mar.push({ id: 'MAR-T-IVIG', orderId: 'IO-IVIG-1', admissionId: s1.admissionId, scheduledAt: dateUtil.addMinutes(nowStr().slice(0, 16), -10), status: 'pending' })
+    const mar = db().mar.find((m) => m.id === 'MAR-T-IVIG')
+    let f = await errOf(() => api.nursingApi.executeMar(mar.id, 'given'))
+    ok(f.includes('事前審查') && f.includes('待送審'), `核准前不能給：「${f}」`)
+    // 開藥自動建單（另一位住院病人）、同一次住院不重複
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== s1.admissionId && !db().preAuths.some((p) => p.admissionId === a.id))
+    const doc = userOf(adm.doctorId)
+    await as(doc)
+    const o1 = await api.ipdApi.addOrder({ admissionId: adm.id, type: 'long', category: 'medication', drugId: 'M051', content: '', dose: 1, freq: 'QD', route: 'IV' })
+    let pa = db().preAuths.find((p) => p.admissionId === adm.id)
+    ok(pa && pa.status === 'draft' && pa.orderId === o1.id && pa.doctorId === adm.doctorId && (await api.dashboardApi.getDashboard()).preAuthToFill >= 1, `開 IVIG 自動建送審單 ${pa?.no}（待主治填寫，首頁）`)
+    await api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'medication', drugId: 'M051', content: '', dose: 1, freq: 'STAT', route: 'IV', allowDuplicate: true })
+    ok(db().preAuths.filter((p) => p.admissionId === adm.id).length === 1, '同一次住院再開不重建')
+    // 填寫
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== adm.doctorId && u.active).username
+    await as(other)
+    ok((await errOf(() => P.fillPreAuth(pa.id, { summary: 'x', reason: 'y' }))).includes('主治'), '別的醫師不能填')
+    await as(doc)
+    f = await fieldsOf(() => P.fillPreAuth(pa.id, { summary: '', reason: '' }))
+    ok(f.summary && f.reason, '要寫病情與理由')
+    await as('clerk02')
+    ok((await errOf(() => P.submitPreAuth(pa.id))).includes('還沒填寫'), '主治還沒填不能送審')
+    await as(doc)
+    let v = await P.fillPreAuth(pa.id, { summary: 'ITP，血小板 8000', reason: '出血風險高，類固醇無效' })
+    ok(v.status === 'ready' && db().auditLogs[0].action === '事前審查填寫', '填好：待送審、稽核')
+    await as('clerk02')
+    v = await P.submitPreAuth(pa.id)
+    ok(v.status === 'submitted' && v.days === 0, '送審：審查中')
+    f = await fieldsOf(() => P.recordPreAuthResult(pa.id, { outcome: 'more' }))
+    ok(f.note, '補件要寫補什麼')
+    v = await P.recordPreAuthResult(pa.id, { outcome: 'more', note: '請附骨髓檢查報告' })
+    ok(v.status === 'more', '補件')
+    await as(doc)
+    f = await fieldsOf(() => P.fillPreAuth(pa.id, { summary: 'ITP，血小板 8000', reason: '出血風險高' }))
+    ok(f.note, '補件要寫補了什麼')
+    v = await P.fillPreAuth(pa.id, { summary: 'ITP，血小板 8000，骨髓檢查巨核細胞增加', reason: '出血風險高', note: '附骨髓檢查報告' })
+    ok(v.status === 'ready' && v.notesText.at(-1).includes('補件'), '補件後：待送審、留紀錄')
+    await as('clerk02')
+    await P.submitPreAuth(pa.id)
+    v = await P.recordPreAuthResult(pa.id, { outcome: 'approved', until: addDaysT(30) })
+    ok(v.status === 'approved' && v.allows && v.resultText.includes('期限'), '核准（期限）：可以用')
+    // 核准後：給藥不再被事前審查擋（種子那筆，測試輔助直接核准）
+    db().preAuths.find((p) => p.id === s1.id).status = 'approved'
+    await as('nurse01')
+    f = await errOf(() => api.nursingApi.executeMar(mar.id, 'given'))
+    ok(!f.includes('事前審查'), `核准後不再擋事前審查（${f ? `其他原因：${f.slice(0, 20)}…` : '已給'}）`)
+    // 不核准：醫囑自動停
+    db().preAuths.find((p) => p.id === s1.id).status = 'submitted'
+    await as('clerk02')
+    f = await fieldsOf(() => P.recordPreAuthResult(s1.id, { outcome: 'rejected' }))
+    ok(f.note, '不核准要理由')
+    v = await P.recordPreAuthResult(s1.id, { outcome: 'rejected', note: 'IgG 未低於給付標準' })
+    const io = db().ipdOrders.find((o) => o.id === 'IO-IVIG-1')
+    ok(v.status === 'rejected' && io.status === 'stopped' && io.stopReason.includes('不核准') && db().auditLogs[0].detail.includes('停止醫囑 1'), '不核准：IVIG 醫囑自動停、稽核')
+    // 自費、緊急（新開一筆：不核准的不算，會重建）
+    await as(userOf(io.doctorId))
+    await api.ipdApi.addOrder({ admissionId: io.admissionId, type: 'long', category: 'medication', drugId: 'M051', content: '', dose: 1, freq: 'QD', route: 'IV' })
+    const pa2 = db().preAuths.find((p) => p.admissionId === io.admissionId && p.status === 'draft')
+    f = await fieldsOf(() => P.selfPayPreAuth(pa2.id, ''))
+    ok(pa2 && f.note, '不核准後重開：新的送審單；自費要寫同意情形')
+    v = await P.selfPayPreAuth(pa2.id, '家屬已簽自費同意書')
+    ok(v.allows && v.selfPayText && db().auditLogs[0].action === '事前審查改自費' && (await errOf(() => P.selfPayPreAuth(pa2.id, 'x'))).includes('記過'), '病人同意自費：可以先用、稽核、不重複')
+    const pa3id = db().preAuths.find((p) => p.admissionId === adm.id).id
+    db().preAuths.find((p) => p.id === pa3id).status = 'submitted'
+    await as(doc)
+    f = await fieldsOf(() => P.emergencyPreAuth(pa3id, ''))
+    v = await P.emergencyPreAuth(pa3id, '顱內出血，不能等審查')
+    ok(f.reason && v.allows && v.emergencyText, '緊急先用：要理由、可以用')
+    // 逾時
+    db().preAuths.find((p) => p.id === pa3id).submittedAt = dateUtil.addMinutes(nowStr().slice(0, 16), -15 * 24 * 60)
+    await as('clerk02')
+    b = await P.preAuthBoard()
+    ok(b[0].id === pa3id && b[0].overdue && b[0].days === 15 && (await api.dashboardApi.getDashboard()).preAuthOverdue === 1, '審查 15 天沒結果：標紅排最前、首頁')
+    // 特殊材料：骨折復位的鎖定骨板
+    const sg1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    await as(userOf(sg1.doctorId))
+    ok((await errOf(() => P.requestImplantPreAuth(sg1.id, 'P062'))).includes('申請過'), '已經申請過不能再申請')
+    ok((await errOf(() => P.requestImplantPreAuth(sg1.id, 'P063'))).includes('不用申請'), '不需要事前審查的品項不用申請')
+    // 拿掉核准（測試輔助）→ 登記骨板擋；改自費後可以
+    const sp = db().preAuths.find((p) => p.id === 'PA-SEED-2')
+    Object.assign(sp, { status: 'submitted' })
+    delete sp.result
+    db().surgeries.find((s) => s.id === sg1.id).status = 'sent'
+    await as('nurse01')
+    const lot = db().implantLots.find((l) => l.procId === 'P062' && !l.recall && l.expiresOn >= T)
+    f = await fieldsOf(() => api.implantApi.useImplant(sg1.id, { lotId: lot.id, qty: 1, site: '右橈骨遠端' }))
+    const fm = Object.values(f).join('') || (await errOf(() => api.implantApi.useImplant(sg1.id, { lotId: lot.id, qty: 1, site: '右橈骨遠端' })))
+    ok(fm.includes('事前審查'), `特殊材料核准前不能登記：「${fm.slice(0, 40)}…」`)
+    await as(userOf(sg1.doctorId))
+    await P.selfPayPreAuth(sp.id, '病人同意自費骨板')
+    await as('nurse01')
+    v = await api.implantApi.useImplant(sg1.id, { lotId: lot.id, qty: 1, site: '右橈骨遠端' })
+    ok(v.implantRows.length === 1, '改自費後可以登記')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/pages/claim/PreAuthPanel.vue', 'utf8') + readFileSync('src/pages/claim/PreAuthDoctorSection.vue', 'utf8')
+    ok(!/preAuthAllows|preAuthOverdue|db\./.test(page), '能不能用、逾時由服務層判斷')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

@@ -6,15 +6,16 @@ import { computed, ref, watch } from 'vue'
 import { Download, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import ClaimCutPanel from './ClaimCutPanel.vue'
+import PreAuthPanel from './PreAuthPanel.vue'
 import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, claimApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { downloadFile } from '@/utils/download'
 
-const kind = ref<'opd' | 'ipd' | 'cuts'>('opd')
+const kind = ref<'opd' | 'ipd' | 'cuts' | 'preauth'>('opd')
 const month = ref<string>()
 watch(kind, () => (month.value = undefined))
-const { data, loading } = useQuery(async () => (kind.value === 'cuts' ? undefined : claimApi.claimBoard(kind.value, month.value)), [kind, month])
+const { data, loading } = useQuery(async () => (kind.value === 'cuts' || kind.value === 'preauth' ? undefined : claimApi.claimBoard(kind.value, month.value)), [kind, month])
 const b = computed(() => (data.value && data.value.kind === kind.value ? data.value : undefined))
 const onlyProblems = ref(false)
 const rows = computed(() => (b.value?.rows ?? []).filter((r) => !onlyProblems.value || r.problems.length))
@@ -49,8 +50,9 @@ async function submitEx() {
     <UPageHeader title="健保申報" description="每月門診、住院申報：檢核、註記排除、送出鎖定、匯出；核減與申復">
       <USelect v-if="b" :model-value="b.month" class="w-40" aria-label="月份" :options="b.months.map((m) => ({ label: `${m.month}${m.submitted ? '（已送）' : ''}`, value: m.month }))" @update:model-value="(v) => (month = String(v))" />
     </UPageHeader>
-    <UTabs v-model="kind" :tabs="[{ key: 'opd', label: '門診（含急診）' }, { key: 'ipd', label: '住院（含日間手術）' }, { key: 'cuts', label: '核減與申復' }]" />
+    <UTabs v-model="kind" :tabs="[{ key: 'opd', label: '門診（含急診）' }, { key: 'ipd', label: '住院（含日間手術）' }, { key: 'cuts', label: '核減與申復' }, { key: 'preauth', label: '事前審查' }]" />
     <ClaimCutPanel v-if="kind === 'cuts'" />
+    <PreAuthPanel v-else-if="kind === 'preauth'" />
     <UQueryState v-else :loading="loading && !b" :ready="!!b">
       <template v-if="b">
         <section class="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">

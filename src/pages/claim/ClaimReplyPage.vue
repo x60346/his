@@ -1,9 +1,10 @@
 <script setup lang="ts">
-// 核減回覆（主治醫師）：我的病人被健保核減的——申復（寫理由）或接受；之後看得到申復結果。
+// 健保審查回覆（主治醫師）：事前審查（填寫、補件、自費、緊急先用）；我的病人被健保核減的——申復（寫理由）或接受，之後看得到申復結果。
 // 誰能回覆、只回覆一次由服務層判斷（claim-cut.replyCut）
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UDialog, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { CLAIM_KIND_LABEL, claimCutApi, type CutItem } from '@/services'
+import PreAuthDoctorSection from './PreAuthDoctorSection.vue'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data, loading } = useQuery(() => claimCutApi.myCuts(), [])
@@ -25,7 +26,9 @@ async function submit() {
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="核減回覆" description="我的病人被健保核減的：申復（寫理由）或接受" />
+    <UPageHeader title="健保審查回覆" description="事前審查的填寫與補件；我的病人被健保核減的：申復（寫理由）或接受" />
+    <PreAuthDoctorSection />
+    <h2 class="font-semibold text-slate-700">核減</h2>
     <UQueryState :loading="loading && !data" :ready="!!data" empty-title="沒有核減">
       <ul v-if="data" class="space-y-2 text-sm">
         <li v-for="c in data" :key="c.id" class="rounded-md border border-slate-200 bg-white px-3 py-2">

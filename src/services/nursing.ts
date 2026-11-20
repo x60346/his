@@ -39,6 +39,7 @@ import type { NewsLevel } from './news-rules'
 import { openPharmQuery } from './pharm-rules'
 import { collectRecord, isLabOrder, newSpecimen, recordFasting, specimenOfOrder, tubeOfOrder } from './specimen-work'
 import { ppeOf } from './iso-rules'
+import { requireDrugPreAuth } from './preauth-work'
 
 export interface WardPatient extends AdmissionView {
   latestVitals?: VitalRecord
@@ -473,6 +474,8 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
       fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
+    // 需健保事前審查的藥：核准前不能給（病人同意自費、醫師寫緊急理由除外）
+    if (status === 'given') requireDrugPreAuth(order)
     // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
     // 核對通過、送到病房才算（只調劑還在藥局核對中，藥也還沒到）
     if (status === 'given' && order.type === 'long' && udStage(m) !== 'verified') {
@@ -508,6 +511,7 @@ export function givePrn(orderId: string, note: string, force?: { reason: string 
     admitted(o.admissionId)
     if (o.status !== 'active' || o.freq !== 'PRN') fail('此醫囑不是有效的 PRN 給藥')
     if (!note.trim()) failField('note', '請註明給藥原因（例：體溫 38.5°C）')
+    requireDrugPreAuth(o)
     const scanned = settleScan(admitted(o.admissionId), o, scan)
     const forced = holdForQuery(o, force)
     const res = residualCheck(o, nurse.id, witness)

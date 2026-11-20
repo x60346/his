@@ -32,6 +32,7 @@ import { renalAlertOf, tdmOf, latestWeight, renalOfPatient } from './renal-work'
 import type { TdmState } from './renal-rules'
 import { openPharmQuery, pharmBlocksUd } from './pharm-rules'
 import { newPharm, settlePharmOnChange } from './pharm-work'
+import { ensureDrugPreAuth } from './preauth-work'
 
 function activeAdmission(admissionId: string) {
   const a = must(find.admission(admissionId), '住院紀錄')
@@ -334,6 +335,8 @@ function createOrder(user: ReturnType<typeof requireUser>, a: ReturnType<typeof 
       }
     }
     db.ipdOrders.push(o)
+    // 需健保事前審查的藥：自動建送審單（主治填寫後由申報組送審）
+    ensureDrugPreAuth(o, o.createdAt)
 
     if (o.category === 'medication') {
       if (o.type === 'long') {

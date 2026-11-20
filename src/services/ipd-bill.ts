@@ -13,6 +13,7 @@ import { certFeeLines, certsOfAdmission } from './certificate-fee'
 import { isolatedDays } from './flag-work'
 import { bloodFeeItems } from './blood-work'
 import { surgeryFeeItems } from './surgery-work'
+import { drugSelfPay } from './preauth-work'
 import { isIcuBed } from './bed-work'
 
 /**
@@ -52,6 +53,8 @@ function bedSegments(a: Admission, from: string, to: string, days: number): IpdB
  */
 function drugsOf(a: Admission): IpdBillInput['drugs'] {
   const out: IpdBillInput['drugs'] = []
+  // 事前審查改自費的藥：這次住院照自費算
+  const push = (x: IpdBillInput['drugs'][number]) => out.push(drugSelfPay(a.id, x.drug.id) ? { ...x, selfPay: true } : x)
   for (const d of db.udDispenses) {
     for (const l of d.lines) {
       if (l.admissionId !== a.id || !l.txnId) continue
@@ -59,14 +62,14 @@ function drugsOf(a: Admission): IpdBillInput['drugs'] {
       if (!drug) continue
       const back = (l.returns ?? []).reduce((n, r) => n + r.qty, 0)
       const txn = db.stockTxns.find((t) => t.id === l.txnId)
-      out.push({ drug, qty: l.qty - back, date: txn?.at ?? d.dispensedAt })
+      push({ drug, qty: l.qty - back, date: txn?.at ?? d.dispensedAt })
     }
   }
   // 病房常備、藥局直送、出院帶藥（單號結尾是住院號）；出院帶藥退回的扣掉
   for (const t of db.stockTxns) {
     if ((t.type !== 'dispense' && t.type !== 'return') || !t.ref?.endsWith(` ${a.admitNo}`)) continue
     const drug = find.drug(t.drugId)
-    if (drug) out.push({ drug, qty: -t.qty, date: t.at })
+    if (drug) push({ drug, qty: -t.qty, date: t.at })
   }
   return out
 }

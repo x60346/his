@@ -253,6 +253,8 @@ const drugBase = [
   // 升壓劑（預混點滴袋，加護病房）：劑量換算流速；放住院藥局（seed 另外開帳）
   { ...drug('M048', 'AC00048100', 'Norepinephrine 4mg/250ml Premix', 'Norepinephrine', '4 mg/250 ml/袋（16 mcg/ml）', 'BAG', '注射', 380, 760, 60, 1, 'QD', 'IV', true), safetyStock: 10, vaso: { unit: 'mcg/kg/min' as const, perMl: 16, bagMl: 250, range: [0.01, 1] as [number, number], weanTo: 0.05 } },
   { ...drug('M049', 'AC00049100', 'Dopamine 400mg/250ml Premix', 'Dopamine', '400 mg/250 ml/袋（1600 mcg/ml）', 'BAG', '注射', 220, 450, 60, 1, 'QD', 'IV', true), safetyStock: 10, vaso: { unit: 'mcg/kg/min' as const, perMl: 1600, bagMl: 250, range: [2, 20] as [number, number], weanTo: 5 } },
+  // 需事前審查的高價藥（示範）：開住院醫囑自動建送審單，核准前不能給
+  { ...drug('M051', 'KC00051100', 'IVIG 2.5g/50ml Inj', 'Human immunoglobulin', '2.5 g/50 ml/vial', 'VIAL', '注射', 5800, 9500, 40, 1, 'QD', 'IV', true), preAuth: true },
   { ...drug('M050', 'AC00050100', 'Vasopressin 20U/100ml Premix', 'Vasopressin', '20 U/100 ml/袋（0.2 U/ml）', 'BAG', '注射', 1500, 2800, 30, 1, 'QD', 'IV', true), safetyStock: 5, vaso: { unit: 'U/min' as const, perMl: 0.2, bagMl: 100, range: [0.01, 0.04] as [number, number], weanTo: 0.01 } },
 ]
 
@@ -311,6 +313,7 @@ const labelInfo: Record<string, [indication: string, warning: string]> = {
   M048: ['升血壓（加護病房點滴）', '由醫護人員依血壓調整；注射處發白、疼痛請告知'],
   M049: ['升血壓、強心（加護病房點滴）', '由醫護人員依血壓調整；心跳很快、胸悶請告知'],
   M050: ['升血壓（加護病房點滴）', '由醫護人員依血壓調整；手腳發冷發白請告知'],
+  M051: ['補充免疫球蛋白（免疫疾病、重症感染）', '輸注時若頭痛、發冷、呼吸不順請立刻告知'],
 }
 
 /**
@@ -380,6 +383,7 @@ const zhOf: Record<string, [nameZh: string, aliases?: string[]]> = {
   M048: ['正腎上腺素點滴', ['Levophed']],
   M049: ['多巴胺點滴', ['Dopamine']],
   M050: ['血管加壓素點滴', ['Pitressin']],
+  M051: ['靜脈注射免疫球蛋白', ['IVIG']],
 }
 
 /** 管制藥品級別：Morphine（注射、錠劑）第二級；Tramadol、Zolpidem、Alprazolam 第四級 */
@@ -517,7 +521,7 @@ const procedureBase: Procedure[] = [
   // 含顯影劑的電腦斷層：檢查前要簽同意書、確認腎功能（點數為展示用近似值）
   { id: 'P061', code: '33072B', name: '電腦斷層（腹部，含顯影劑）', category: '影像', points: 5200, selfPrice: 8500, active: true },
   // 植入物（手術室登記批號使用，住院帳單依使用紀錄帶入；門診、醫囑都不能開）。健保點數 0 的是自費品項（要病人同意）
-  { id: 'P062', code: 'FBP01LOCK', name: '鎖定骨板（橈骨遠端）', category: '處置', points: 12000, selfPrice: 15000, implant: { vendor: '康宏醫材' }, active: true },
+  { id: 'P062', code: 'FBP01LOCK', name: '鎖定骨板（橈骨遠端）', category: '處置', points: 12000, selfPrice: 15000, implant: { vendor: '康宏醫材' }, preAuth: true, active: true },
   { id: 'P063', code: 'FBS01SCRW', name: '皮質骨螺絲', category: '處置', points: 600, selfPrice: 900, implant: { vendor: '康宏醫材' }, active: true },
   { id: 'P064', code: 'SELF05', name: '鈦合金解剖型鎖定骨板（自費）', category: '處置', points: 0, selfPrice: 48000, implant: { vendor: '康宏醫材' }, active: true },
   { id: 'P065', code: 'FHM01MESH', name: '人工網膜（疝氣修補）', category: '處置', points: 3500, selfPrice: 5000, implant: { vendor: '博昇生醫' }, active: true },

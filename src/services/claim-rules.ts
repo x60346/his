@@ -80,11 +80,12 @@ export function opdClaimProblems(x: { diagnosis?: string; diagnosisActive?: bool
 }
 
 /** 住院送件前檢核 */
-export function ipdClaimProblems(x: { day: boolean; diagnosis?: string; signed: boolean; implantMissing: string[]; daysBill?: number; daysActual: number; points: number }): string[] {
+export function ipdClaimProblems(x: { day: boolean; diagnosis?: string; signed: boolean; implantMissing: string[]; preAuth?: string[]; daysBill?: number; daysActual: number; points: number }): string[] {
   const out: string[] = []
   if (!x.diagnosis) out.push(x.day ? '沒有診斷' : '沒有出院主診斷（出院病摘）')
   else if (!x.day && !x.signed) out.push('出院病摘還沒有醫師簽署')
   if (x.implantMissing.length) out.push(`用了植入物但沒有登記批號：${x.implantMissing.join('、')}`)
+  if (x.preAuth?.length) out.push(`用了需事前審查的項目、還沒核准：${x.preAuth.join('、')}`)
   if (x.daysBill !== undefined && x.daysBill !== x.daysActual) out.push(`住院天數不符（帳單 ${x.daysBill} 天、實際 ${x.daysActual} 天）`)
   if (x.points <= 0) out.push('健保點數是 0')
   return out

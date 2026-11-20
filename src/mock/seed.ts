@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, PreAuth, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -3870,6 +3870,35 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 事前審查（示範）----------
+  // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
+  // 明天骨折那台的鎖定骨板：主刀申請、已核准
+  const preAuths: PreAuth[] = []
+  {
+    const pa = (id: string, p: Omit<PreAuth, 'id' | 'no' | 'notes'> & { notes?: PreAuth['notes'] }) => {
+      const d = p.createdAt.slice(0, 10).replace(/-/g, '')
+      const n = (counters[`preauth:${d}`] = (counters[`preauth:${d}`] ?? 0) + 1)
+      preAuths.push({ id, no: `PA${d}${String(n).padStart(3, '0')}`, notes: [], ...p })
+    }
+    const uti = admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.diagnosis.startsWith('N39'))
+    if (uti) {
+      const at = notFuture(addMinutes(nowStr, -90), 30)
+      const doc = users.find((u) => u.doctorId === uti.doctorId)!.id
+      ipdOrders.push({ id: 'IO-IVIG-1', admissionId: uti.id, type: 'long', category: 'medication', drugId: 'M051', content: 'IVIG 2.5g/50ml Inj', dose: 1, freq: 'QD', route: 'IV', startAt: at, status: 'active', doctorId: uti.doctorId, createdAt: at, ackAt: addMinutes(at, 10), ackBy: 'U201' })
+      pa('PA-SEED-1', { kind: 'drug', itemId: 'M051', itemName: 'IVIG 2.5g/50ml Inj', patientId: uti.patientId, admissionId: uti.id, doctorId: uti.doctorId, orderId: 'IO-IVIG-1', status: 'ready', createdAt: at,
+        summary: '泌尿道感染併敗血性休克，IgG 低（350 mg/dL），抗生素治療 72 小時反應不佳', reason: '低丙種球蛋白血症合併重症感染，依給付規定申請 IVIG 0.4 g/kg × 5 天',
+        notes: [{ at: addMinutes(at, 20), by: doc, text: '填寫送審資料' }] })
+    }
+    const s1 = surgeries.find((x) => x.id === 'SG-SEED-1')
+    if (s1) {
+      const doc = users.find((u) => u.doctorId === s1.doctorId)!.id
+      const at = s1.createdAt
+      pa('PA-SEED-2', { kind: 'implant', itemId: 'P062', itemName: '鎖定骨板（橈骨遠端）', patientId: s1.patientId, admissionId: s1.admissionId, doctorId: s1.doctorId, surgeryId: s1.id, status: 'approved', createdAt: at,
+        summary: '右橈骨遠端粉碎性骨折（AO C2），關節面移位 3 mm', reason: '關節內粉碎性骨折，一般骨板無法固定，需鎖定骨板', notes: [{ at: addMinutes(at, 10), by: doc, text: '填寫送審資料' }],
+        submittedAt: addMinutes(at, 30), submittedBy: 'U402', result: { outcome: 'approved', note: '', at: notFuture(addMinutes(at, 20 * 60), 10), by: 'U402', until: addDays(T, 30) } })
+    }
+  }
+
   // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------
   const labWindows: LabWindowSession[] = []
   {
@@ -3972,6 +4001,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     claimSubmissions,
     claimExclusions,
     claimCuts,
+    preAuths,
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,

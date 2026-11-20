@@ -884,6 +884,8 @@ export interface Drug {
    */
   doseUnit?: string
   active: boolean
+  /** 健保要事前審查（例：IVIG）：開住院醫囑自動建送審單，核准前不能給（病人同意自費、或醫師寫緊急理由除外） */
+  preAuth?: boolean
 }
 
 export type ProcedureCategory = '診察' | '檢驗' | '影像' | '處置' | '復健'
@@ -1128,6 +1130,8 @@ export interface Procedure {
   recordCopy?: 'base' | 'page'
   /** 植入物（骨板、骨釘、人工網膜）：手術室登記批號使用，住院帳單依使用紀錄帶入，門診與醫囑都不能開。健保點數 0＝自費品項（病人要先同意） */
   implant?: { vendor: string }
+  /** 健保要事前審查（例：特殊材料）：核准前不能用（病人同意自費、或醫師寫緊急理由除外） */
+  preAuth?: boolean
   /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
   surgery?: { minutes: number; /** 會放植入物（骨板、人工網膜）：器械包要等生物指示劑陰性才能用 */ implant?: boolean }
   /** 急診計費：診察費（取代門診診察費）、觀察床費（每 6 小時）；急診就醫依紀錄自動帶入，門診與醫囑都不能開 */
@@ -2609,6 +2613,40 @@ export interface ImplantUse {
   site: string
   at: string
   by: string
+}
+
+// ---------- 事前審查 ----------
+
+export type PreAuthStatus = 'draft' | 'ready' | 'submitted' | 'more' | 'approved' | 'rejected'
+/**
+ * 健保事前審查：需事前審查的藥（開立住院醫囑時自動建）或特殊材料（主刀在手術申請）。主治填病情摘要與理由 → 申報組送審 →
+ * 結果：核准、不核准（醫囑自動停）、補件（主治補資料後再送）。核准前不能用：病人同意改自費、或醫師寫緊急理由才放行
+ */
+export interface PreAuth {
+  id: string
+  no: string
+  kind: 'drug' | 'implant'
+  /** 藥品 id 或植入物主檔 id */
+  itemId: string
+  itemName: string
+  patientId: string
+  admissionId: string
+  doctorId: string
+  orderId?: string
+  surgeryId?: string
+  status: PreAuthStatus
+  createdAt: string
+  summary?: string
+  reason?: string
+  /** 填寫、補件的紀錄（舊到新） */
+  notes: { at: string; by: string; text: string }[]
+  submittedAt?: string
+  submittedBy?: string
+  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string }
+  /** 病人同意改自費（這次自費，之後核准也不退） */
+  selfPay?: { at: string; by: string; note: string }
+  /** 緊急先用（醫師寫理由；仍要送審、申報照檢核） */
+  emergency?: { at: string; by: string; reason: string }
 }
 
 // ---------- 健保申報 ----------

@@ -7,6 +7,7 @@ import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { checkImplantUse, checkLotInput, IMPLANT_FOR, implantUseProblem, lotLeft, lotState, LOT_STATE_LABEL, type LotState } from './implant-rules'
 import { isSelfPayImplant, lotOf, lotSurgeries, usedOf } from './implant-work'
+import { requireImplantPreAuth } from './preauth-work'
 import { surgeryOf, surgeryView, type SurgeryView } from './surgery-work'
 import { find, nameOf } from './views'
 
@@ -166,6 +167,8 @@ export function useImplant(surgeryId: string, input: { lotId: string; qty: numbe
     const p = find.procedure(l!.procId)
     const why = implantUseProblem({ surgeryProcId: s.procId, implantProcId: l!.procId, selfPay: isSelfPayImplant(p), consent: !!s.selfPayImplant, qty: Number(input.qty) }, l!, usedOf(l!.id), today())
     if (why) failField('lotId', `${p?.name ?? ''} 批號 ${l!.lot}：${why}`)
+    // 需健保事前審查的特殊材料：核准前不能用（自費、緊急除外）
+    requireImplantPreAuth(s.id, l!.procId)
     s.implants = [...(s.implants ?? []), { id: newId('IU'), lotId: l!.id, qty: Number(input.qty), site: input.site.trim(), at: now(), by: u.id }]
     audit('使用植入物', `${audS(s)}：${p?.name ?? ''} 批號 ${l!.lot} × ${input.qty}（${input.site.trim()}）`)
     return surgeryView(s)

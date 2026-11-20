@@ -11,7 +11,7 @@ import PacuPanel from './PacuPanel.vue'
 import PostopDialog from './PostopDialog.vue'
 import PathPanel from './PathPanel.vue'
 import DelayNote from './DelayNote.vue'
-import { ANESTHESIA_LABEL, implantApi, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
+import { ANESTHESIA_LABEL, implantApi, preAuthApi, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -85,6 +85,8 @@ const refOptions = computed(() => (marking.value?.key === 'blood' ? v.value?.blo
 const markAct = useAction(surgeryApi.markPrep, { success: '已記錄' })
 // 自費植入物：病人（或家屬）同意（選填，沒有就不能登記自費品項）
 const consentAct = useAction(implantApi.consentSelfPayImplant, { success: '已記錄病人同意自費植入物' })
+// 需健保事前審查的特殊材料：主刀申請（之後在「健保審查回覆」頁填寫）
+const paAct = useAction(preAuthApi.requestImplantPreAuth, { success: (p) => `已建立事前審查 ${p.no}：請到「健保審查回覆」頁填寫病情與理由` })
 async function submitMark() {
   const m = marking.value
   if (!m) return
@@ -120,6 +122,14 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
           <p v-if="s.team && s.status !== 'cancelled'" class="text-xs text-slate-600">手術團隊：{{ s.teamText }}</p>
           <p v-if="s.implantRows.length" class="text-xs" :class="s.implantRecalled ? 'font-semibold text-red-700' : 'text-slate-600'">植入物：{{ s.implantRows.map((r) => r.text + (r.selfPay ? '（自費）' : '')).join('；') }}<template v-if="s.implantRecalled">——其中一批廠商召回，供應中心會通知主刀</template></p>
+          <div v-for="x in s.status === 'cancelled' ? [] : s.preAuthItems" :key="x.procId" class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="text-slate-600">{{ x.name }} 需健保事前審查：</span>
+            <span v-if="x.preAuth" :class="x.preAuth.allows ? 'text-emerald-700' : 'text-amber-800'">{{ x.preAuth.no }} {{ x.preAuth.statusLabel }}{{ x.preAuth.allows ? '（可以用）' : '（核准前不能用）' }}</span>
+            <template v-else>
+              <span class="text-amber-800">還沒申請</span>
+              <UButton v-if="auth.user?.role === 'doctor' && auth.user.doctorId === s.doctorId && s.status !== 'done'" size="sm" variant="secondary" :loading="paAct.pending.value" @click="paAct.run(s.id, x.procId)">申請事前審查</UButton>
+            </template>
+          </div>
           <div v-if="s.selfPayOption && !['done', 'cancelled'].includes(s.status)" class="flex flex-wrap items-center gap-2 text-xs">
             <span v-if="s.selfPayText" class="text-slate-600">{{ s.selfPayText }}</span>
             <template v-else>

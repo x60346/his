@@ -5,6 +5,7 @@ import { db } from '@/mock/db'
 import { ipdCategories, ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
 import { ipdDays } from './billing'
 import { find } from './views'
+import { preAuthUnapproved } from './preauth-work'
 
 
 export interface ClaimRow extends ClaimItem {
@@ -63,7 +64,7 @@ export function ipdRowOf(a: Admission, item: ClaimItem): ClaimRow {
   const implantMissing = db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done' && find.procedure(s.procId)?.surgery?.implant && !s.implants?.length).map((s) => s.no)
   return {
     ...item,
-    problems: ipdClaimProblems({ day: dayAdm(a), diagnosis: item.diagnosis, signed: !!a.dischargeSummary?.signedAt, implantMissing, ...(c?.ipd ? { daysBill: c.ipd.days } : {}), daysActual: ipdDays(a.admittedAt ?? a.dischargedAt!, a.dischargedAt!), points: item.points }),
+    problems: ipdClaimProblems({ day: dayAdm(a), diagnosis: item.diagnosis, signed: !!a.dischargeSummary?.signedAt, implantMissing, preAuth: preAuthUnapproved(a.id), ...(c?.ipd ? { daysBill: c.ipd.days } : {}), daysActual: ipdDays(a.admittedAt ?? a.dischargedAt!, a.dischargedAt!), points: item.points }),
   }
 }
 

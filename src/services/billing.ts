@@ -97,8 +97,8 @@ export function fixedCharges(identity: Identity, caseType: string, lk: Pick<Bill
 
 /** 急診留觀期間的藥與檢驗處置（留觀住院實際扣帳、做完的）：離院、轉院時跟急診一起在批價結；依扣帳或執行那天的價格 */
 export interface ObsItems {
-  drugs: { drug: Drug; qty: number; date: string }[]
-  procedures: { proc: Procedure; qty: number; date: string }[]
+  drugs: { drug: Drug; qty: number; date: string; /** 事前審查改自費 */ selfPay?: boolean }[]
+  procedures: { proc: Procedure; qty: number; date: string; /** 事前審查改自費 */ selfPay?: boolean }[]
 }
 
 export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup, obs?: ObsItems): ChargeLine[] {
@@ -327,9 +327,9 @@ export interface IpdBillInput {
   /** 每日計費項目（病房費、護理費、住院診察費），依住院天數；加護病床的（icu）依住加護病房的天數，一般病床的（generalBed）扣掉那幾天 */
   daily: Procedure[]
   /** 藥：實際扣帳的量（調劑扣的減退回的，加病房常備給藥扣的），date 用來查當天的藥價 */
-  drugs: { drug: Drug; qty: number; date: string }[]
+  drugs: { drug: Drug; qty: number; date: string; /** 事前審查改自費 */ selfPay?: boolean }[]
   /** 已執行的檢驗、處置、影像 */
-  procedures: { proc: Procedure; qty: number; date: string }[]
+  procedures: { proc: Procedure; qty: number; date: string; /** 事前審查改自費 */ selfPay?: boolean }[]
   copay: IpdCopaySettings
   /** 急診收住院：急診那次就醫的費用（已標「急診：」），健保點數一起算住院部分負擔 */
   erLines?: ChargeLine[]
@@ -365,11 +365,11 @@ export function calcIpdChargeLines(input: IpdBillInput): { lines: ChargeLine[]; 
   for (const x of input.drugs) {
     if (x.qty === 0) continue
     const price = drugPriceOn(x.drug, x.date.slice(0, 10))
-    add(self ? { kind: 'self', name: `${x.drug.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: x.drug.name, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false })
+    add(self || x.selfPay ? { kind: 'self', name: `${x.drug.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: x.drug.name, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false })
   }
   for (const x of input.procedures) {
     const price = procPriceOn(x.proc, x.date.slice(0, 10))
-    add(self || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: x.proc.name, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
+    add(self || x.selfPay || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: x.proc.name, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
   }
   for (let i = lines.length - 1; i >= 0; i--) if ((lines[i].kind === 'drug' || lines[i].kind === 'self') && lines[i].qty <= 0) lines.splice(i, 1)
   lines.push(...(input.erLines ?? []))

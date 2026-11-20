@@ -14,6 +14,8 @@ import { dayFollowUpDue, dayStage } from './day-rules'
 import { biText, expectedInstruments, PACK_SET_LABEL } from './sterile-rules'
 import { implantFeeItems, implantRows, isSelfPayImplant } from './implant-work'
 import { IMPLANT_FOR } from './implant-rules'
+import { implantPreAuthOf } from './preauth-work'
+import { preAuthAllows, PREAUTH_STATUS_LABEL } from './preauth-rules'
 import { delayOverflow, delayTotal, NPO_DELAY_ALERT } from './or-shift-rules'
 import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
@@ -97,6 +99,8 @@ export interface SurgeryView extends Surgery {
   implantRecalled: boolean
   selfPayOption: boolean
   selfPayText?: string
+  /** 這個術式會用到、需健保事前審查的植入物：申請了沒、狀態、能不能用 */
+  preAuthItems: { procId: string; name: string; preAuth?: { id: string; no: string; statusLabel: string; allows: boolean } }[]
 }
 /** 順延的一行：「11-20 09:10 急刀 OR… 插台：09:00 → 11:00（延後 120 分）」；跨日的寫日期 */
 export const delayText = (d: NonNullable<Surgery['delays']>[number]) => `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
@@ -143,6 +147,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     implant: !!find.procedure(s.procId)?.surgery?.implant,
     ...((rows) => ({ implantRows: rows, implantRecalled: rows.some((r) => r.recalled), implantMissing: !!find.procedure(s.procId)?.surgery?.implant && !rows.length && ['sent', 'in-progress'].includes(s.status) }))(implantRows(s)),
     selfPayOption: (IMPLANT_FOR[s.procId] ?? []).some((id) => isSelfPayImplant(find.procedure(id))),
+    preAuthItems: (IMPLANT_FOR[s.procId] ?? []).filter((id) => find.procedure(id)?.preAuth).map((id) => ((p) => ({ procId: id, name: find.procedure(id)!.name, ...(p ? { preAuth: { id: p.id, no: p.no, statusLabel: PREAUTH_STATUS_LABEL[p.status], allows: preAuthAllows(p) } } : {}) }))(implantPreAuthOf(s.id, id))),
     ...(s.selfPayImplant ? { selfPayText: `病人已同意自費植入物・${who(s.selfPayImplant)}${s.selfPayImplant.note ? `（${s.selfPayImplant.note}）` : ''}` } : {}),
     preAnesMissing: !s.preAnes && ['requested', 'scheduled', 'sent'].includes(s.status),
     renalText: renalOfPatient(s.patientId, a?.status === 'admitted' ? a.id : undefined).text || '沒有近期肌酸酐',
@@ -170,8 +175,8 @@ export function surgeryView(s: Surgery): SurgeryView {
 }
 
 /** 住院帳單：做完的手術＝術式＋麻醉費（局部麻醉不另收），依手術結束那天的點數 */
-export function surgeryFeeItems(admissionId: string): { proc: Procedure; qty: number; date: string }[] {
-  const out: { proc: Procedure; qty: number; date: string }[] = []
+export function surgeryFeeItems(admissionId: string): { proc: Procedure; qty: number; date: string; selfPay?: boolean }[] {
+  const out: { proc: Procedure; qty: number; date: string; selfPay?: boolean }[] = []
   for (const s of db.surgeries.filter((x) => x.admissionId === admissionId && x.status === 'done')) {
     const proc = find.procedure(s.procId)
     const date = s.endAt ?? s.createdAt
