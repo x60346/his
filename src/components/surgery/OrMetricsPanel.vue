@@ -35,6 +35,11 @@ const pctText = (x: number | null) => (x === null ? '—' : `${x}%`)
             <div class="tabular text-2xl font-semibold text-slate-800">{{ pctText(m.cancel.pct) }}</div>
             <div class="text-xs text-slate-500">{{ m.cancel.sameDay }}/{{ m.cancel.scheduled }} 台：排了程、手術當天才取消</div>
           </section>
+          <section class="rounded-md border border-slate-200 bg-white p-3">
+            <div class="text-xs text-slate-500">被急刀順延</div>
+            <div class="tabular text-2xl font-semibold text-slate-800">{{ m.delays.count }} 台</div>
+            <div class="text-xs text-slate-500">{{ m.delays.count ? `平均延後 ${m.delays.avg} 分、最多 ${m.delays.max} 分` : '沒有' }}（以被順延那天算）</div>
+          </section>
         </div>
 
         <section class="rounded-md border border-slate-200 bg-white p-3">

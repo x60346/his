@@ -65,6 +65,7 @@ import { priorityOf } from '@/services/lab-queue-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
+import { shiftPlan } from '@/services/or-shift-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
 import { autoVerify, qcFailedCodes } from '@/services/analyzer-rules'
@@ -2199,6 +2200,34 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
           prep: {}, checks: {},
           cancelled: { by: users.find((u) => u.doctorId === a7.doctorId)!.id, at: notFuture(`${T} 09:10`, 5), reason: '病人發燒 38.6°C，延後手術（改排明天）' },
         })
+      }
+    }
+    // 急刀插台順延：糖尿病高血糖那位今天發現足部壞死性筋膜炎，申請次緊急清創（24 小時內），排明天 OR1 08:00（開放前），
+    // 同房 09:00 的骨折手術（SG-SEED-1）照規則往後推；主刀、病房都還沒讀。
+    // 清晨（09:30 前）重建不放：一小時前申請的次緊急，時限要過明天 08:00 才合理
+    if (nowStr >= `${T} 09:30`) {
+      const s1 = surgeries.find((x) => x.id === 'SG-SEED-1')
+      const dm = admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.diagnosis.startsWith('E11') && !surgeries.some((x) => x.admissionId === a.id))
+      if (s1?.schedule && dm) {
+        const created = notFuture(addMinutes(nowStr, -60), 10)
+        const tomorrow = addDays(T, 1)
+        const start = `${tomorrow} 08:00`
+        const n = surgeries.filter((x) => x.no.startsWith(`OR${created.slice(0, 10).replace(/-/g, '')}`)).length + 1
+        const at = notFuture(addMinutes(created, 30), 5)
+        const est = 90
+        surgeries.push({
+          id: 'SG-SEED-8', no: `OR${created.slice(0, 10).replace(/-/g, '')}${String(n).padStart(3, '0')}`, admissionId: dm.id, patientId: dm.patientId, doctorId: dm.doctorId, procId: 'P040', side: 'left', anesthesia: 'spinal', urgency: 'semi',
+          diagnosis: '左足壞死性筋膜炎（糖尿病足）', requestedDate: created.slice(0, 10), estMinutes: est, status: 'scheduled', createdAt: created,
+          schedule: { room: s1.schedule.room, start, by: 'U202', at }, prep: {}, checks: {},
+          // 麻醉科已評估（不然首頁「麻醉前評估待做」會多一台）：糖尿病 ASA 3
+          preAnes: { asa: 3, emergency: false, airway: { mallampati: 2, mouth: 'ok', neck: 'ok' }, difficult: false, npo: { status: 'not', lastIntake: addMinutes(created, -120) }, history: { items: ['endocrine'], note: '糖尿病，血糖控制不佳' }, plan: 'spinal', by: users.find((u) => u.doctorId === 'DR03')!.id, at: notFuture(addMinutes(created, 40), 3) },
+        })
+        const sg8 = surgeries[surgeries.length - 1]
+        for (const m of shiftPlan({ start, est }, surgeries.filter((x) => x.schedule?.room === sg8.schedule!.room && x.status === 'scheduled' && !x.urgency && x.schedule.start.slice(0, 10) === start.slice(0, 10)).map((x) => ({ id: x.id, start: x.schedule!.start, est: x.estMinutes })))) {
+          const x = surgeries.find((y) => y.id === m.id)!
+          x.schedule = { ...x.schedule!, start: m.to }
+          x.delays = [{ id: `DL-SEED-${x.id}`, causeId: sg8.id, causeNo: sg8.no, from: m.from, to: m.to, minutes: m.minutes, by: 'U202', at }]
+        }
       }
     }
     // 手術單號流水號：只算今天開的（前天做完的那台用前天的號）

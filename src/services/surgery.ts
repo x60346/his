@@ -7,7 +7,8 @@ import { addDays, addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
 import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
-import { bumpedByEmergency, surgeryOf, surgeryView, teamClash, type SurgeryView } from './surgery-work'
+import { delayUnread, surgeryOf, surgeryView, teamClash, type SurgeryView } from './surgery-work'
+import { delayOverflow, delayStats, pastDayEnd, shiftPlan } from './or-shift-rules'
 import { cancelStats, firstCaseStats, lateFirstCases, turnoverStats, utilization } from './or-metrics-rules'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
@@ -154,9 +155,12 @@ export interface OrBoard {
   cases: SurgeryView[]
   /** 待排程（不分日期；急刀在前，依等級、申請時間） */
   requested: SurgeryView[]
-  /** 近 30 天急刀時效達成率；擇期被急刀佔用要改期的筆數 */
+  /** 近 30 天急刀時效達成率 */
   emergencyStats: { total: number; ontime: number; pct: number }
-  needsReschedule: number
+  /** 被急刀順延到超過開放時段、還沒改期也沒同意加班的（全院、不分日期） */
+  overflow: SurgeryView[]
+  /** 我還沒讀的順延通知：主刀（醫師）＝自己主刀的；護理師＝病房的 */
+  delayInbox: SurgeryView[]
   /** 這天的首台：排程開始過了 15 分鐘還沒做麻醉前查核（只有看今天才有） */
   lateFirst: { id: string; room: string; start: string; minutes: number; patientName: string; no: string }[]
 }
@@ -173,14 +177,15 @@ export function orBoard(date: string): Promise<OrBoard> {
       requested: db.surgeries.filter((s) => s.status === 'requested' && liveAdm(s))
         .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
       emergencyStats: emergencyRate(db.surgeries.filter((s) => s.createdAt >= `${addDays(today(), -30)} 00:00`), now()),
-      needsReschedule: db.surgeries.filter((s) => bumpedByEmergency(s)).length,
+      overflow: db.surgeries.filter((s) => delayOverflow(s) && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
+      delayInbox: db.surgeries.filter((s) => liveAdm(s) && (u.role === 'doctor' ? s.doctorId === u.doctorId && delayUnread(s, 'surgeon') : u.role === 'nurse' && delayUnread(s, 'ward'))).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
       lateFirst: d === today() ? lateFirstCases(db.surgeries.filter(liveAdm), d, now()).map((x) => ((s) => ({ ...x, patientName: nameOf.patient(s.patientId), no: s.no }))(surgeryOf(x.id)!)) : [],
     }
   })
 }
 
 /** 排程（或改期）：還沒送手術室；同一間房時段不能重疊；在手術房開放時段內、不能排在過去 */
-export function scheduleSurgery(id: string, input: { room: string; start: string }): Promise<SurgeryView> {
+export function scheduleSurgery(id: string, input: { room: string; start: string }): Promise<SurgeryView & { shifted: { no: string; patientName: string; from: string; to: string; minutes: number; overflow: boolean }[] }> {
   return mutate(() => {
     const u = requirePermission('surgery.schedule')
     const s = must(surgeryOf(id), '手術')
@@ -195,13 +200,59 @@ export function scheduleSurgery(id: string, input: { room: string; start: string
     const end = addMinutes(input.start, s.estMinutes)
     // 急刀可以排在開放時段外（夜間、假日）
     if (!s.urgency && (hm < OR_DAY.start || end.slice(11) > OR_DAY.end || end.slice(0, 10) !== input.start.slice(0, 10))) failField('start', `手術房開放 ${OR_DAY.start}–${OR_DAY.end}（預估 ${s.estMinutes} 分鐘，會超過）`)
-    // 急刀只和急刀比（撞到的擇期列「需改期」，不自動移）；擇期和所有的比
-    const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === input.room && x.status !== 'cancelled' && x.status !== 'done' && (!s.urgency || x.urgency) && overlaps(x.schedule.start, x.estMinutes, input.start, s.estMinutes))
-    if (clash) failField('start', `${input.room} 這段時間已排 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起 ${clash.estMinutes} 分鐘）`, 'CONFLICT')
+    // 急刀和急刀、已送到手術室的比（擋）；撞到的擇期（還沒送）自動往後順延。擇期和所有的比
+    const inRoom = db.surgeries.filter((x) => x.id !== s.id && x.schedule?.room === input.room && x.status !== 'cancelled' && x.status !== 'done')
+    const clash = inRoom.find((x) => (!s.urgency || x.urgency || x.status !== 'scheduled') && overlaps(x.schedule!.start, x.estMinutes, input.start, s.estMinutes))
+    if (clash) failField('start', `${input.room} 這段時間已排 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起 ${clash.estMinutes} 分鐘${clash.status !== 'scheduled' ? `，${clash.status === 'sent' ? '已送到手術室' : '手術中'}` : ''}）`, 'CONFLICT')
     const old = s.schedule
     s.schedule = { room: input.room, start: input.start, by: u.id, at: t }
     s.status = 'scheduled'
     audit(old ? '手術改期' : '手術排程', `${audText(s)}：${old ? `${old.room} ${old.start} → ` : ''}${input.room} ${input.start}`)
+    // 急刀插台：同房同天還沒送的擇期照原順序往後推（保留換台間隔），通知主刀與病房；別的急刀不動（推過去撞到就排在它後面）
+    const shifted: { no: string; patientName: string; from: string; to: string; minutes: number; overflow: boolean }[] = []
+    if (s.urgency) {
+      const sameDay = inRoom.filter((x) => x.schedule!.start.slice(0, 10) === input.start.slice(0, 10))
+      const plan = shiftPlan({ start: input.start, est: s.estMinutes }, sameDay.filter((x) => !x.urgency && x.status === 'scheduled').map((x) => ({ id: x.id, start: x.schedule!.start, est: x.estMinutes })), sameDay.filter((x) => x.urgency).map((x) => ({ id: x.id, start: x.schedule!.start, est: x.estMinutes })))
+      for (const m of plan) {
+        const x = surgeryOf(m.id)!
+        x.schedule = { ...x.schedule!, start: m.to }
+        x.delays = [...(x.delays ?? []), { id: newId('DL'), causeId: s.id, causeNo: s.no, from: m.from, to: m.to, minutes: m.minutes, by: u.id, at: t }]
+        // 之前同意的加班不算數（時間又變了）
+        delete x.overtime
+        const over = pastDayEnd(m.to, x.estMinutes)
+        shifted.push({ no: x.no, patientName: nameOf.patient(x.patientId), from: m.from, to: m.to, minutes: m.minutes, overflow: over })
+        audit('急刀順延', `${audText(x)}：${input.room} ${m.from.slice(11)} → ${m.to.slice(11)}（延後 ${m.minutes} 分，急刀 ${s.no}）${over ? '；超過開放時段' : ''}`)
+      }
+    }
+    return { ...surgeryView(s), shifted }
+  })
+}
+
+/** 順延已讀：主刀（醫師，自己主刀的）或病房（護理師）；這台所有還沒讀的一次讀完 */
+export function ackDelay(id: string): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse')
+    const s = must(surgeryOf(id), '手術')
+    const who = u.role === 'doctor' ? 'surgeon' : 'ward'
+    if (who === 'surgeon' && s.doctorId !== u.doctorId) fail('只有主刀可以讀主刀的順延通知', 'FORBIDDEN')
+    const key = who === 'surgeon' ? 'surgeonAck' : 'wardAck'
+    const xs = (s.delays ?? []).filter((d) => !d[key])
+    if (!xs.length) fail('沒有還沒讀的順延通知', 'CONFLICT')
+    const t = now()
+    for (const d of xs) d[key] = { by: u.id, at: t }
+    audit('順延已讀', `${audText(s)}：${who === 'surgeon' ? '主刀' : '病房'}已讀 ${xs.length} 則（現排 ${s.schedule?.room ?? ''} ${s.schedule?.start.slice(5) ?? ''}）`)
+    return surgeryView(s)
+  })
+}
+
+/** 順延到超過開放時段：排程人同意加班（照新時間做，不改期）；要改期就直接重新排程 */
+export function acceptOvertime(id: string): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requirePermission('surgery.schedule')
+    const s = must(surgeryOf(id), '手術')
+    if (!delayOverflow(s)) fail(s.overtime ? '已經同意加班了' : '這台沒有被順延到開放時段外', 'CONFLICT')
+    s.overtime = { by: u.id, at: now() }
+    audit('順延同意加班', `${audText(s)}：${s.schedule!.room} ${s.schedule!.start.slice(5)} 起，超過 ${OR_DAY.end}`)
     return surgeryView(s)
   })
 }
@@ -451,6 +502,8 @@ export interface OrMetrics {
   turnover: ReturnType<typeof turnoverStats>
   utilization: ReturnType<typeof utilization>
   cancel: ReturnType<typeof cancelStats> & { reasons: { no: string; date: string; reason: string; patientName: string }[] }
+  /** 被急刀順延的擇期台 */
+  delays: ReturnType<typeof delayStats>
 }
 /** 最近 N 天（含今天）的手術室效率：首台準時、換台、使用率、當天取消 */
 export function orMetrics(days = 30): Promise<OrMetrics> {
@@ -463,6 +516,7 @@ export function orMetrics(days = 30): Promise<OrMetrics> {
     const c = cancelStats(list, from, to)
     return {
       from, to, firstCase: firstCaseStats(list, from, to, now()), turnover: turnoverStats(list, from, to), utilization: utilization(list, OR_ROOMS, from, to),
+      delays: delayStats(list, from, to),
       cancel: { ...c, reasons: c.reasons.map((r) => ({ ...r, patientName: nameOf.patient(list.find((x) => x.no === r.no)?.patientId ?? '') })) },
     }
   })

@@ -22,7 +22,7 @@ import { prophylaxisOverdue } from './prophylaxis-work'
 import { activeIpdChargeOf, dayToBill, deathToBill, dischargeRxPending, interimSuggestion, ipdBillOf } from './ipd-bill'
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
-import { dayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { dayCounts, delayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -266,6 +266,10 @@ export interface DashboardStats {
   emergencyOverdue?: number
   /** 手術排程：今天首台排程開始過了 15 分鐘還沒做麻醉前查核 */
   orFirstLate?: number
+  /** 急刀插台順延：主刀還沒讀（醫師）、病房還沒讀（護理師）；順延超過開放時段待處理（手術排程） */
+  delaySurgeonUnread?: number
+  delayWardUnread: number
+  delayOverflow?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -379,6 +383,7 @@ export function getDashboard(): Promise<DashboardStats> {
           labAcks: labAckCount(me.doctorId),
           bloodReactions: reactionsToAck(me.doctorId).length,
           opRecordsDue: surgeryCounts(now(), me.doctorId).recordDue,
+          delaySurgeonUnread: delayCounts(me.doctorId).unread,
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport, ...((c) => ({ frozenWaiting: c.waiting, frozenOverdue: c.overdue }))(frozenCounts(now())) } : {}),
@@ -459,13 +464,14 @@ export function getDashboard(): Promise<DashboardStats> {
         }
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
+      delayWardUnread: delayCounts().unread,
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),
       ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
       ...(() => {
         const me = sessionUser()
         const role = sessionRole()
-        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule, orFirstLate: lateFirstCases(db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted'), today(), now()).length } : {}
+        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule, orFirstLate: lateFirstCases(db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted'), today(), now()).length, delayOverflow: delayCounts().overflow } : {}
       })(),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {

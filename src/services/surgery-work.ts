@@ -11,6 +11,7 @@ import { preIncisionOf } from './prophylaxis-work'
 import { PACU_LONG_MINUTES, preAnesSummary } from './anesthesia-rules'
 import { renalOfPatient } from './renal-work'
 import { dayFollowUpDue, dayStage } from './day-rules'
+import { delayOverflow, delayTotal, NPO_DELAY_ALERT } from './or-shift-rules'
 import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
@@ -44,8 +45,17 @@ export interface SurgeryView extends Surgery {
   /** 急刀：等級、時效（期限、等了幾分鐘、狀態） */
   urgencyLabel?: string
   emergency?: ReturnType<typeof emergencyState>
-  /** 擇期手術被急刀佔了同一間房的時段：要改期（說明） */
-  bumpedBy?: string
+  /** 被急刀插台順延：每次的經過（主刀、病房已讀）；累計分鐘；原本的開始時間 */
+  delayRows: { id: string; text: string; surgeonAck?: string; wardAck?: string }[]
+  delayMinutes: number
+  originalStart?: string
+  /** 還沒讀的：主刀、病房護理站 */
+  delayUnread: { surgeon: boolean; ward: boolean }
+  /** 順延到超過開放時段、還沒改期也還沒同意加班（標紅） */
+  delayOverflow: boolean
+  overtimeText?: string
+  /** 累計順延 ≥ 2 小時、病人已在禁食：提醒病房評估補點滴 */
+  npoLong: boolean
   /** 麻醉前評估：摘要、誰評的；還沒評估（沒有就不能做麻醉前查核） */
   preAnesText?: string
   preAnesByName?: string
@@ -73,11 +83,10 @@ export interface SurgeryView extends Surgery {
   /** 收件時少了的 */
   pathMissing?: string
 }
-/** 擇期、已排、還沒送：同一間房有急刀時段重疊＝要改期 */
-export function bumpedByEmergency(s: Surgery): Surgery | undefined {
-  if (s.urgency || s.status !== 'scheduled' || !s.schedule) return undefined
-  return db.surgeries.find((x) => x.id !== s.id && x.urgency && x.schedule?.room === s.schedule!.room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, s.schedule!.start, s.estMinutes))
-}
+/** 順延的一行：「11-20 09:10 急刀 OR… 插台：09:00 → 11:00（延後 120 分）」；跨日的寫日期 */
+export const delayText = (d: NonNullable<Surgery['delays']>[number]) => `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
+/** 還沒讀的順延（主刀、病房）：取消、已經送了的不算 */
+export const delayUnread = (s: Surgery, who: 'surgeon' | 'ward') => (s.status === 'requested' || s.status === 'scheduled') && (s.delays ?? []).some((d) => !d[who === 'surgeon' ? 'surgeonAck' : 'wardAck'])
 
 const mins = (a: string, b: string) => Math.round((parseDate(b).getTime() - parseDate(a).getTime()) / 60000)
 
@@ -97,7 +106,11 @@ export function surgeryView(s: Surgery): SurgeryView {
     sideText: SIDE_LABEL[s.side], anesthesiaText: ANESTHESIA_LABEL[s.anesthesia], statusLabel: SURGERY_STATUS_LABEL[s.status],
     ...(s.schedule ? { scheduleText: `${s.schedule.room} ${s.schedule.start.slice(5)}–${end!.slice(11)}`, scheduleEnd: end } : {}),
     ...(s.urgency ? { urgencyLabel: URGENCY_LABEL[s.urgency], emergency: emergencyState(s, now()) } : {}),
-    ...((b) => (b ? { bumpedBy: `${b.schedule!.room} 被急刀（${URGENCY_LABEL[b.urgency!]}）${b.no} 佔用（${b.schedule!.start.slice(11)} 起），請改期` } : {}))(bumpedByEmergency(s)),
+    delayRows: (s.delays ?? []).map((d) => ({ id: d.id, text: delayText(d), ...(d.surgeonAck ? { surgeonAck: who(d.surgeonAck) } : {}), ...(d.wardAck ? { wardAck: who(d.wardAck) } : {}) })),
+    delayMinutes: delayTotal(s), ...(s.delays?.length ? { originalStart: s.delays[0].from } : {}),
+    delayUnread: { surgeon: delayUnread(s, 'surgeon'), ward: delayUnread(s, 'ward') },
+    delayOverflow: delayOverflow(s), ...(s.overtime ? { overtimeText: `同意加班・${who(s.overtime)}` } : {}),
+    npoLong: s.status === 'scheduled' && delayTotal(s) >= NPO_DELAY_ALERT && !!s.prep.npo && !s.prep.npo.notNeeded,
     ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5)}` } : {}),
     teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
     teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),
@@ -232,5 +245,14 @@ export function dayCounts(t: string): { toCheckIn: number; phase2: number; follo
     toCheckIn: all.filter((a) => stageOf(a) === 'reserved' && surgeryOf(a.day!.surgeryId)!.schedule?.start.slice(0, 10) === d).length,
     phase2: all.filter((a) => stageOf(a) === 'phase2').length,
     followUp: all.filter((a) => dayFollowUpDue(a, d) || (a.day!.followUp && !a.day!.followUp.reached)).length,
+  }
+}
+
+/** 首頁：順延未讀（主刀＝自己主刀的；護理師＝全院病房的）；順延超過開放時段待處理（排程） */
+export function delayCounts(doctorId?: string): { unread: number; overflow: number } {
+  const xs = db.surgeries.filter((s) => ((a) => a?.status === 'admitted' || (!!a?.day && a.status === 'reserved'))(find.admission(s.admissionId)))
+  return {
+    unread: doctorId ? xs.filter((s) => s.doctorId === doctorId && delayUnread(s, 'surgeon')).length : xs.filter((s) => delayUnread(s, 'ward')).length,
+    overflow: xs.filter(delayOverflow).length,
   }
 }

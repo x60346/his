@@ -2372,6 +2372,23 @@ export interface TeamShift {
   /** 同時段已在別台（急刀寫原因放行）：那台的單號與原因 */
   clash?: { with: string; reason: string }
 }
+/**
+ * 被急刀插台順延（同房、還沒送的擇期台照原順序往後推）：原本與新的開始時間；
+ * 主刀、病房護理站各自要點「已讀」
+ */
+export interface SurgeryDelay {
+  id: string
+  /** 插台的急刀（手術 id、單號） */
+  causeId: string
+  causeNo: string
+  from: string
+  to: string
+  minutes: number
+  by: string
+  at: string
+  surgeonAck?: { by: string; at: string }
+  wardAck?: { by: string; at: string }
+}
 export type SurgeryStatus = 'requested' | 'scheduled' | 'sent' | 'in-progress' | 'done' | 'cancelled'
 
 export interface SurgeryPrepMark {
@@ -2514,6 +2531,10 @@ export interface Surgery {
   /** 手術紀錄（主刀或本科醫師） */
   record?: { performed: string; findings: string; bloodLoss: number; complications: string; specimen: string; by: string; at: string }
   cancelled?: { by: string; at: string; reason: string }
+  /** 被急刀順延的紀錄（舊到新） */
+  delays?: SurgeryDelay[]
+  /** 順延到超過開放時段：排程人同意加班（不改期）；之後再被順延要重新同意 */
+  overtime?: { by: string; at: string }
 }
 
 // ---------- 病歷影本申請 ----------

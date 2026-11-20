@@ -6991,7 +6991,7 @@ try {
 
     // 種子
     const sg1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
-    if (sg1) ok(sg1.status === 'scheduled' && sg1.schedule.room === 'OR1' && sg1.schedule.start === `${tomorrow} 09:00` && api.prepMissing(sg1).length === 3, '種子一：骨折明天 09:00 OR1，術前準備還差 3 項')
+    if (sg1) ok(sg1.status === 'scheduled' && sg1.schedule.room === 'OR1' && sg1.schedule.start === `${tomorrow} 10:00` && sg1.delays[0].from === `${tomorrow} 09:00` && api.prepMissing(sg1).length === 3, '種子一：骨折明天 OR1（原 09:00，被次緊急清創順延到 10:00），術前準備還差 3 項')
     const sg2 = db().surgeries.find((s) => s.id === 'SG-SEED-2')
     if (sg2) ok(sg2.status === 'scheduled' && !api.prepMissing(sg2).length && sg2.schedule.start > nowStr(), `種子二：闌尾炎 ${sg2.schedule.start} OR2，術前準備都好了`)
     ok(db().users.find((u) => u.username === 'nurse02').grants.includes('surgery.schedule'), '種子：nurse02 被指定手術排程')
@@ -7557,8 +7557,10 @@ try {
       await L.addLine({ admissionId: b.id, kind: 'pivc', site: '右手背', size: '20G', insertedAt: at, placedBy: 'x' })
       await as('clerk01')
       if (!db().charges.some((c) => c.admissionId === b.id && !c.voided)) await api.ipdChargeApi.payIpd(b.id, { payMethod: 'card', received: 0 })
+      // 出院前還在身上的（之前已經移除的不算）
+      const onBody = db().lines.filter((l) => l.admissionId === b.id && !l.removedAt).map((l) => l.id)
       await api.admissionApi.discharge(b.id, { confirmUnfinished: true })
-      ok(db().lines.filter((l) => l.admissionId === b.id).length && db().lines.filter((l) => l.admissionId === b.id).every((l) => l.removedAt && l.removeReason === '出院'), '出院：管路自動記移除（原因「出院」）')
+      ok(onBody.length && db().lines.filter((l) => onBody.includes(l.id)).every((l) => l.removedAt && l.removeReason === '出院'), '出院：還在身上的管路自動記移除（原因「出院」）')
     }
   }
 
@@ -11701,7 +11703,7 @@ try {
     const cr = b.pending.find((r) => r.id === 'LR-CR-1')
     ok(cr && ['late', 'pending'].includes(cr.calloutState) && cr.values[0].value === '32' && cr.where.includes('ICU'), `種子：今天加護病房血糖 32 還沒通報（${cr?.calloutState}，期限 ${cr?.calloutDue}）`)
     const old = db().labReports.filter((r) => r.values.some((v) => v.critical) && r.reportedAt < T)
-    ok(old.length >= 3 && old.every((r) => r.callout?.readBack) && old.some((r) => r.callout.toRole === 'doctor' && !r.admissionId) && b.rate.ontime === old.length - 1, `種子：過去 ${old.length} 份危急值都通報過（門診給開立醫師）、一份逾時；達成率 ${b.rate.ontime}/${b.rate.total}`)
+    ok(old.length >= 2 && old.every((r) => r.callout?.readBack) && old.some((r) => r.callout.toRole === 'doctor' && !r.admissionId) && b.rate.ontime === old.length - 1, `種子：過去 ${old.length} 份危急值都通報過（門診給開立醫師）、一份逾時；達成率 ${b.rate.ontime}/${b.rate.total}`)
     let dash = await api.dashboardApi.getDashboard()
     ok(dash.calloutPending >= 1, `檢驗科首頁：危急值待通報 ${dash.calloutPending}（逾時 ${dash.calloutLate}）`)
 
@@ -15152,7 +15154,7 @@ try {
     await as('clerk01')
   }
   // 緊急手術（急刀）：三級時限（立即 1h、緊急 6h、次緊急 24h）；申請到入刀房計時；可排在開放時段外；
-  // 急刀只和急刀撞期，撞到的擇期列「需改期」（不自動移）；首頁待入刀房與超時；30 天時效達成率；種子
+  // 急刀只和急刀（與已送到手術室的）撞期，撞到的擇期自動往後順延（詳細在「急刀順延」段）；首頁待入刀房與超時；30 天時效達成率；種子
   console.log('\n[緊急手術（急刀）]')
   {
     resetDb('small')
@@ -15189,7 +15191,7 @@ try {
     ok(b.requested[0].id === er.id && b.requested[0].urgencyLabel === '緊急' && b.requested[0].emergency.state === 'waiting', '待排程：急刀排最前面、標等級與時效')
     ok(b.emergencyStats.total === 1 && b.emergencyStats.pct === 100, '時效達成率（30 天）：1/1')
     let dash = await api.dashboardApi.getDashboard()
-    ok(dash.emergencyWaiting === 1 && dash.emergencyOverdue === 0, '首頁：急刀待入刀房 1（還沒超時）')
+    ok(dash.emergencyWaiting === 2 && dash.emergencyOverdue === 0, '首頁：急刀待入刀房 2（急診闌尾炎、明天的次緊急清創；還沒超時）')
 
     // 申請
     const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.deptTransfers?.some((x) => x.status === 'pending') && !db().surgeries.some((s) => s.admissionId === a.id))
@@ -15212,20 +15214,19 @@ try {
     let v = await S.scheduleSurgery(e1.id, { room: 'OR1', start: `${T} 22:00` })
     ok(v.status === 'scheduled' && v.schedule.start === `${T} 22:00`, '急刀可以排在開放時段外（夜間）')
     v = await S.scheduleSurgery(e1.id, { room: 'OR3', start: `${tomorrow} 09:30` })
-    ok(v.status === 'scheduled' && !v.bumpedBy, '急刀可以排在擇期手術的時段（擇期不擋）')
+    ok(v.status === 'scheduled' && v.shifted.length === 1 && v.shifted[0].no === el.no && v.shifted[0].to === `${tomorrow} 11:00`, '急刀可以排在擇期手術的時段（擇期不擋，自動往後推到急刀後 30 分）')
     b = await S.orBoard(tomorrow)
     const bumped = b.cases.find((c) => c.id === el.id)
-    ok(bumped.bumpedBy?.includes(e1.no) && bumped.bumpedBy.includes('改期') && b.needsReschedule === 1, `撞到的擇期列需改期：「${bumped.bumpedBy}」`)
-    ok(db().surgeries.find((s) => s.id === el.id).schedule.start === `${tomorrow} 09:00`, '擇期不會自動移')
+    ok(bumped.delayMinutes === 120 && bumped.originalStart === `${tomorrow} 09:00` && bumped.delayRows[0].text.includes(e1.no) && !bumped.delayOverflow, `撞到的擇期往後順延：「${bumped.delayRows[0].text}」`)
     f = await errOf(() => S.scheduleSurgery(er.id, { room: 'OR3', start: `${tomorrow} 10:00` }))
     ok(f.includes(e1.no), `急刀和急刀撞期擋下：「${f}」`)
     f = await errOf(() => S.scheduleSurgery(el.id, { room: 'OR3', start: `${tomorrow} 09:45` }))
     ok(f.includes(e1.no), '擇期改期也不能撞急刀')
     await S.scheduleSurgery(el.id, { room: 'OR2', start: `${tomorrow} 09:00` })
-    ok(!(await S.orBoard(tomorrow)).cases.find((c) => c.id === el.id).bumpedBy && (await S.orBoard(tomorrow)).needsReschedule === 0, '改期後不再列需改期')
+    ok((await S.orBoard(tomorrow)).cases.find((c) => c.id === el.id).scheduleText.startsWith('OR2'), '順延的擇期可以再改期（順延紀錄保留）')
 
     // 入刀房計時：送手術室（術前準備完成）→ 時效達成
-    v = await S.scheduleSurgery(e1.id, { room: 'OR1', start: dateUtil.addMinutes(dateUtil.now(), 10) })
+    v = await S.scheduleSurgery(e1.id, { room: 'OR3', start: dateUtil.addMinutes(dateUtil.now(), 10) })
     for (const k of ['consent', 'npo', 'siteMark']) await S.markPrep(e1.id, k)
     await S.markPrep(e1.id, 'blood', { notNeeded: '出血少' })
     await S.markPrep(e1.id, 'abx', { notNeeded: '麻醉誘導時給' })
@@ -15237,7 +15238,7 @@ try {
     // 超時：種子那台改成 7 小時前申請（測試輔助）→ 首頁標紅
     db().surgeries.find((s) => s.id === er.id).createdAt = dateUtil.addMinutes(dateUtil.now(), -7 * 60)
     dash = await api.dashboardApi.getDashboard()
-    ok(dash.emergencyWaiting === 1 && dash.emergencyOverdue === 1, '首頁：急刀超過時限 1（送了的那台不算待入刀房）')
+    ok(dash.emergencyWaiting === 2 && dash.emergencyOverdue === 1, '首頁：急刀超過時限 1（送了的那台不算待入刀房）')
     ok((await S.orBoard(T)).requested.find((x) => x.id === er.id).emergency.state === 'overdue', '手術室待排程標超時')
     await as('clerk01')
     ok((await api.dashboardApi.getDashboard()).emergencyWaiting === undefined, '沒有手術排程權限的看不到這個待辦')
@@ -16289,6 +16290,116 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/components/surgery/DayPanel.vue', 'utf8')
     ok(!/db\.|padssOf|>= 9|PADSS_FRESH/.test(page), '回家條件由服務層判斷')
+  }
+  // 急刀插台順延：同房同天還沒送的擇期照原順序往後推（第一台接急刀後 30 分、其餘保留原間隔最多 30 分、別的急刀不動）；
+  // 已送到手術室的擋；主刀與病房已讀；推到 20:00 以後標紅（改期或同意加班）；禁食太久提醒；效率；種子
+  console.log('\n[急刀順延]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    // 規則
+    const d = '2026-03-02'
+    const c = (id, hm, est) => ({ id, start: `${d} ${hm}`, est })
+    let p = api.shiftPlan({ start: `${d} 09:30`, est: 60 }, [c('A', '09:00', 60), c('B', '10:15', 60), c('C', '13:00', 60), c('D', '07:00', 60)])
+    const to = Object.fromEntries(p.map((m) => [m.id, m.to.slice(11)]))
+    ok(to.A === '11:00' && to.B === '12:15' && to.C === '13:45' && !to.D && p.find((m) => m.id === 'A').minutes === 120, `順延：A 接急刀後 30 分、B 保留原間隔 15 分、C 原間隔 105 分只留 30 分、急刀前做完的 D 不動（${JSON.stringify(to)}）`)
+    p = api.shiftPlan({ start: `${d} 09:30`, est: 60 }, [c('A', '11:30', 60)])
+    ok(p.length === 0, '原本就排在急刀後 30 分以後的不用動')
+    p = api.shiftPlan({ start: `${d} 09:30`, est: 60 }, [c('A', '09:00', 60)], [c('U2', '11:00', 60)])
+    ok(p[0].to === `${d} 12:30`, '推過去撞到別的急刀：排在它後面再加 30 分')
+    ok(api.pastDayEnd(`${d} 19:00`, 60) === false && api.pastDayEnd(`${d} 19:30`, 60) === true && api.pastDayEnd(`${d} 23:30`, 60) === true, '超過開放時段：結束晚於 20:00 或跨日')
+    const st = api.delayStats([{ delays: [{ at: `${d} 08:00`, minutes: 60 }, { at: `${d} 10:00`, minutes: 30 }] }, { delays: [{ at: `${d} 09:00`, minutes: 30 }] }, { delays: [{ at: '2026-02-01 09:00', minutes: 300 }] }, {}], d, d)
+    ok(st.count === 2 && st.avg === 60 && st.max === 90, '效率：期間內被順延 2 台、平均 60 分（累計）、最多 90 分')
+
+    // 種子：明天 OR1 08:00 次緊急清創 → 09:00 的骨折往後推 60 分；主刀、病房都還沒讀
+    const s1 = () => db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    const sg8 = db().surgeries.find((s) => s.id === 'SG-SEED-8')
+    ok(sg8?.urgency === 'semi' && s1().schedule.start === `${addDaysT(1)} 10:00` && s1().delays.length === 1 && s1().delays[0].from === `${addDaysT(1)} 09:00` && s1().delays[0].causeNo === sg8.no && !s1().delays[0].surgeonAck, '種子：次緊急清創插明天 OR1 08:00，骨折 09:00 → 10:00、還沒讀')
+    await as('nurse01')
+    let b = await S.orBoard(T)
+    ok(b.delayInbox.some((x) => x.id === 'SG-SEED-1') && b.overflow.length === 0, '護理師：手術室頁「順延未讀」列出骨折那台（不分日期）')
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.delayWardUnread === 1 && dash.delayOverflow === 0, '首頁：病房順延未讀 1')
+    const surgeon = userOf(s1().doctorId)
+    await as(surgeon)
+    dash = await api.dashboardApi.getDashboard()
+    b = await S.orBoard(T)
+    ok(dash.delaySurgeonUnread === 1 && b.delayInbox.length === 1 && b.delayInbox[0].delayUnread.surgeon, '主刀首頁與手術室頁：順延未讀 1')
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== s1().doctorId && u.active).username
+    await as(other)
+    let f = await errOf(() => S.ackDelay('SG-SEED-1'))
+    ok(f.includes('主刀'), '別的醫師不能讀主刀的通知')
+    await as(surgeon)
+    let v = await S.ackDelay('SG-SEED-1')
+    ok(!v.delayUnread.surgeon && v.delayUnread.ward && v.delayRows[0].surgeonAck && db().auditLogs[0].action === '順延已讀', '主刀已讀（病房還沒讀）、稽核')
+    f = await errOf(() => S.ackDelay('SG-SEED-1'))
+    ok(f.includes('沒有還沒讀'), '讀過不能再讀')
+    await as('nurse01')
+    v = await S.ackDelay('SG-SEED-1')
+    ok(!v.delayUnread.ward && (await api.dashboardApi.getDashboard()).delayWardUnread === 0 && !(await S.orBoard(T)).delayInbox.length, '病房已讀：首頁與清單清掉')
+
+    // 插台：後天 OR3 三台擇期，次緊急 09:30 起 5 小時 → 三台都推，最後一台超過 20:00
+    const D2 = addDaysT(2)
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && !a.deptTransfers?.some((x) => x.status === 'pending'))
+    const input = { admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: D2, estMinutes: 60, diagnosis: '左側腹股溝疝氣' }
+    await as(userOf(adm.doctorId))
+    const e1 = await S.requestSurgery(input)
+    const e2 = await S.requestSurgery(input)
+    const e3 = await S.requestSurgery({ ...input, estMinutes: 180 })
+    const u1 = await S.requestSurgery({ ...input, urgency: 'semi', estMinutes: 300 })
+    await as('nurse01')
+    await S.scheduleSurgery(e1.id, { room: 'OR3', start: `${D2} 09:00` })
+    await S.scheduleSurgery(e2.id, { room: 'OR3', start: `${D2} 10:30` })
+    await S.scheduleSurgery(e3.id, { room: 'OR3', start: `${D2} 16:00` })
+    await S.markPrep(e2.id, 'npo')
+    const n0 = db().auditLogs.length
+    v = await S.scheduleSurgery(u1.id, { room: 'OR3', start: `${D2} 09:30` })
+    const at = (id) => db().surgeries.find((s) => s.id === id).schedule.start.slice(11)
+    ok(v.shifted.length === 3 && at(e1.id) === '15:00' && at(e2.id) === '16:30' && at(e3.id) === '18:00' && v.shifted.find((x) => x.no === e3.no).overflow && !v.shifted.find((x) => x.no === e1.no).overflow, `急刀 09:30–14:30：三台推到 ${at(e1.id)}、${at(e2.id)}、${at(e3.id)}（最後一台到 21:00 超過開放時段）`)
+    ok(db().auditLogs.length - n0 === 4 && db().auditLogs.filter((x, i) => i < 3).every((x) => x.action === '急刀順延'), '稽核：排程一筆＋每台順延一筆')
+    b = await S.orBoard(D2)
+    const c3 = b.cases.find((x) => x.id === e3.id)
+    ok(c3.delayOverflow && b.overflow.some((x) => x.id === e3.id) && (await api.dashboardApi.getDashboard()).delayOverflow === 1, '超過開放時段：標紅、手術室頁與首頁列出')
+    ok(b.cases.find((x) => x.id === e2.id).npoLong && !b.cases.find((x) => x.id === e1.id).npoLong, '已禁食又延 6 小時：提醒評估補點滴（沒勾禁食的不提醒）')
+    await as(userOf(adm.doctorId))
+    f = await errOf(() => S.acceptOvertime(e3.id))
+    ok(f.length > 0, '同意加班要「手術排程」權限')
+    await as('nurse01')
+    f = await errOf(() => S.acceptOvertime(e1.id))
+    ok(f.includes('沒有被順延到開放時段外'), '沒超過開放時段的不用同意')
+    v = await S.acceptOvertime(e3.id)
+    ok(!v.delayOverflow && v.overtimeText?.includes('同意加班') && db().auditLogs[0].action === '順延同意加班' && !(await S.orBoard(D2)).overflow.length, '同意加班：不再標紅')
+    // 已送到手術室的擋（測試輔助：直接把第一台改成已送）
+    db().surgeries.find((s) => s.id === e1.id).status = 'sent'
+    await as(userOf(adm.doctorId))
+    const u2 = await S.requestSurgery({ ...input, urgency: 'urgent', estMinutes: 60, requestedDate: T })
+    await as('nurse01')
+    f = await errOf(() => S.scheduleSurgery(u2.id, { room: 'OR3', start: `${D2} 15:30` }))
+    ok(f.includes(e1.no) && f.includes('已送到手術室'), `急刀不能插到已送到手術室的那台：「${f}」`)
+    db().surgeries.find((s) => s.id === e1.id).status = 'scheduled'
+    // 再插一次：同意的加班作廢（時間又變了）
+    v = await S.scheduleSurgery(u2.id, { room: 'OR3', start: `${D2} 15:30` })
+    const e3n = db().surgeries.find((s) => s.id === e3.id)
+    ok(v.shifted.length === 3 && e3n.delays.length === 2 && !e3n.overtime && (await S.orBoard(D2)).cases.find((x) => x.id === e3.id).delayMinutes === api.delayTotal(e3n), `第二次插台：再推一次、加班要重新同意（累計 ${api.delayTotal(e3n)} 分）`)
+    // 改期：照新時間，不再標紅
+    await S.scheduleSurgery(e3.id, { room: 'OR3', start: `${addDaysT(3)} 09:00` })
+    ok(!(await S.orBoard(addDaysT(3))).cases.find((x) => x.id === e3.id).delayOverflow, '改期到開放時段內：不再標紅（順延紀錄保留）')
+    // 效率：今天被順延的
+    const m = await S.orMetrics(7)
+    ok(m.delays.count === 4 && m.delays.max >= 360, `效率分頁：近 7 天被急刀順延 ${m.delays.count} 台、平均 ${m.delays.avg} 分、最多 ${m.delays.max} 分`)
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/components/surgery/DelayNote.vue', 'utf8') + readFileSync('src/pages/or/OrPage.vue', 'utf8')
+    ok(!/shiftPlan|OR_GAP|NPO_DELAY_ALERT|db\./.test(page), '順延怎麼推、要不要提醒由服務層判斷')
   }
 } catch (e) {
   failed++

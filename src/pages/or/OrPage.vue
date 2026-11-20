@@ -13,10 +13,11 @@ import SpecimenPanel from '@/components/surgery/SpecimenPanel.vue'
 import PathPanel from '@/components/surgery/PathPanel.vue'
 import OrMetricsPanel from '@/components/surgery/OrMetricsPanel.vue'
 import DayPanel from '@/components/surgery/DayPanel.vue'
+import DelayNote from '@/components/surgery/DelayNote.vue'
 
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import PatientFlags from '@/components/PatientFlags.vue'
-import { anesthesiaApi, CHECK_ITEMS, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
+import { anesthesiaApi, CHECK_ITEMS, OR_DAY, OR_ROOMS, surgeryApi, type SurgeryView } from '@/services'
 import type { SurgeryCheckStage } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -42,11 +43,17 @@ function openSched(s: SurgeryView) {
   schedAct.fieldErrors.value = {}
   scheduling.value = s
 }
+/** 從順延清單點一台：切到那天的看板再打開 */
+function openCase(s: SurgeryView) {
+  if (s.schedule) date.value = s.schedule.start.slice(0, 10)
+  caseId.value = s.id
+}
 function reschedule(s: SurgeryView) {
   caseId.value = undefined
   openSched(s)
 }
-const schedAct = useAction(surgeryApi.scheduleSurgery, { success: (s) => `已排程：${s.scheduleText}` })
+const schedAct = useAction(surgeryApi.scheduleSurgery, { success: (s) => `已排程：${s.scheduleText}${s.shifted.length ? `；同房 ${s.shifted.length} 台往後順延${s.shifted.some((x) => x.overflow) ? `（${s.shifted.filter((x) => x.overflow).length} 台超過開放時段，請處理）` : ''}，已通知主刀與病房` : ''}` })
+const ackAct = useAction(surgeryApi.ackDelay, { success: '已讀順延通知' })
 async function submitSched() {
   if (scheduling.value && (await schedAct.run(scheduling.value.id, { room: String(sch.room), start: `${sch.date} ${sch.time}` }))) scheduling.value = undefined
 }
@@ -109,6 +116,22 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
             <li v-for="x in board.lateFirst" :key="x.id"><button type="button" class="text-left text-red-800 underline-offset-2 hover:underline" @click="caseId = x.id">{{ x.room }} {{ x.start.slice(11) }} {{ x.patientName }}（{{ x.no }}）：排程開始已過 {{ x.minutes }} 分鐘，還沒做麻醉前查核</button></li>
           </ul>
         </section>
+        <section v-if="board.overflow.length" class="rounded-md border border-red-300 bg-red-50 p-3 text-sm">
+          <h3 class="font-semibold text-red-800">順延超過開放時段 {{ board.overflow.length }} 台<span class="ml-2 text-xs font-normal text-red-700">急刀插台把這幾台推到 {{ OR_DAY.end }} 以後：改期或同意加班</span></h3>
+          <ul class="mt-1 space-y-0.5">
+            <li v-for="x in board.overflow" :key="x.id"><button type="button" class="text-left text-red-800 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.scheduleText }} {{ x.patientName }}（{{ x.no }}）：原排 {{ x.originalStart?.slice(5) }}，延後 {{ x.delayMinutes }} 分</button></li>
+          </ul>
+        </section>
+        <section v-if="board.delayInbox.length" class="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
+          <h3 class="font-semibold text-amber-900">手術順延未讀 {{ board.delayInbox.length }} 台<span class="ml-2 text-xs font-normal text-slate-600">{{ auth.user?.role === 'doctor' ? '我主刀的' : '病房的病人' }}被急刀插台往後推：確認新時間後按已讀</span></h3>
+          <ul class="mt-1 divide-y divide-amber-100">
+            <li v-for="x in board.delayInbox" :key="x.id" class="flex flex-wrap items-center gap-2 py-1">
+              <button type="button" class="text-left text-amber-900 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.bedNo }} {{ x.patientName }} {{ x.procName }}：原排 {{ x.originalStart?.slice(5) }} → 現排 {{ x.scheduleText }}（延後 {{ x.delayMinutes }} 分）</button>
+              <span v-if="x.npoLong" class="text-xs font-medium text-amber-800">禁食太久，評估補點滴</span>
+              <UButton size="sm" variant="secondary" class="ml-auto" :loading="ackAct.pending.value" @click="ackAct.run(x.id)">已讀</UButton>
+            </li>
+          </ul>
+        </section>
         <section v-if="board.requested.length" class="rounded-md border border-amber-300 bg-amber-50/50 p-3 text-sm">
           <h3 class="mb-2 font-semibold text-amber-900">待排程 {{ board.requested.length }} 台<span class="ml-2 text-xs font-normal text-slate-500">急刀排最前面（依等級、申請時間）</span></h3>
           <ul class="divide-y divide-amber-100">
@@ -146,7 +169,6 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
         </section>
         <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
           <span>急刀時效達成（30 天、已入刀房）：<b class="tabular" :class="board.emergencyStats.pct < 90 ? 'text-red-700' : 'text-emerald-700'">{{ board.emergencyStats.total ? `${board.emergencyStats.ontime}/${board.emergencyStats.total}（${board.emergencyStats.pct}%）` : '—' }}</b></span>
-          <span v-if="board.needsReschedule" class="font-semibold text-red-700">{{ board.needsReschedule }} 台擇期手術被急刀佔用，需改期（不會自動移）</span>
         </div>
         <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))]">
           <section v-for="room in board.rooms" :key="room" class="rounded-md border border-slate-200 bg-white p-3 text-sm">
@@ -157,7 +179,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
                 <span class="tabular text-xs font-semibold text-slate-700">{{ s.schedule!.start.slice(11) }}–{{ s.scheduleEnd!.slice(11) }}</span>
                 <UBadge :tone="tone(s)">{{ s.statusLabel }}</UBadge>
                 <UBadge v-if="s.urgencyLabel" tone="red">急刀・{{ s.urgencyLabel }}</UBadge>
-                <UBadge v-if="s.bumpedBy" tone="red">需改期</UBadge>
+                <UBadge v-if="s.delayMinutes && s.status === 'scheduled'" :tone="s.delayOverflow ? 'red' : 'yellow'">順延 {{ s.delayMinutes }} 分</UBadge>
                 <UBadge v-if="s.preAnesMissing" tone="yellow">麻醉未評估</UBadge>
                 <UBadge v-if="s.teamMissing.length" tone="yellow">團隊未齊</UBadge>
                 <UBadge v-for="z in s.frozenWaiting" :key="z.label" :tone="z.overdue ? 'red' : 'yellow'">冰凍 {{ z.label }} 等 {{ z.minutes }} 分</UBadge>
@@ -167,7 +189,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
               <div class="text-xs text-slate-600">{{ s.procName }}（{{ s.sideText }}）</div>
               <div v-if="s.prepMissing.length && s.status === 'scheduled'" class="text-xs text-amber-800">術前準備還差：{{ s.prepMissing.join('、') }}</div>
               <div v-if="s.emergency" class="tabular text-xs" :class="s.emergency.state === 'overdue' || s.emergency.state === 'late' ? 'font-semibold text-red-700' : 'text-slate-600'">{{ s.emergency.state === 'ontime' || s.emergency.state === 'late' ? `申請到入刀房 ${waitText(s.emergency.minutes)}${s.emergency.state === 'late' ? '（超過時限）' : '（時限內）'}` : `已等 ${waitText(s.emergency.minutes)}・${s.emergency.due.slice(11)} 前要入刀房${s.emergency.state === 'overdue' ? '（已超過）' : ''}` }}</div>
-              <div v-if="s.bumpedBy" class="text-xs font-medium text-red-700">{{ s.bumpedBy }}</div>
+              <div v-if="s.delayMinutes && s.status === 'scheduled'" class="text-xs" :class="s.delayOverflow ? 'font-medium text-red-700' : 'text-amber-800'">原排 {{ s.originalStart?.slice(11) }}，被急刀插台{{ s.delayOverflow ? '，超過開放時段：改期或同意加班' : '' }}</div>
             </button>
           </section>
         </div>
@@ -181,7 +203,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
     <UDialog v-model="schedOpen" :title="`排程：${scheduling?.patientName ?? ''}`" size="sm" @submit="submitSched">
       <div v-if="scheduling" class="space-y-3 text-sm">
         <p class="text-slate-600">{{ scheduling.procName }}（{{ scheduling.sideText }}）・預估 {{ scheduling.estMinutes }} 分・<template v-if="scheduling.emergency">{{ scheduling.emergency.due.slice(11) }} 前要入刀房</template><template v-else>預計 {{ scheduling.requestedDate }}</template></p>
-        <p v-if="scheduling.urgency" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">急刀（{{ scheduling.urgencyLabel }}）：可排在開放時段外；同房的擇期手術不擋，排下去後那台會列「需改期」，由你另外改。</p>
+        <p v-if="scheduling.urgency" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">急刀（{{ scheduling.urgencyLabel }}）：可排在開放時段外；同房這天還沒送的擇期手術會照原順序往後推（第一台接在急刀後 30 分，其餘保留原本的換台間隔），並通知主刀與病房。推到 {{ OR_DAY.end }} 以後的會標紅，由你改期或同意加班。</p>
         <USelect v-model="sch.room" label="手術房" :options="OR_ROOMS" :error="schedAct.fieldErrors.value.room" />
         <div class="grid grid-cols-2 gap-3">
           <UInput v-model="sch.date" type="date" label="日期" />
@@ -215,7 +237,7 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
           <UButton v-if="board?.canAnesthesia && ['requested', 'scheduled', 'sent'].includes(current.status)" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="openPre(current)">{{ current.preAnes ? '修改評估' : '麻醉評估' }}</UButton>
         </div>
         <TeamPanel v-if="current.status !== 'cancelled'" :surgery="current" :can-schedule="!!board?.canSchedule" :is-nurse="isNurse" />
-        <p v-if="current.bumpedBy" class="font-medium text-red-700">{{ current.bumpedBy }}</p>
+        <DelayNote :surgery="current" :can-schedule="!!board?.canSchedule" @reschedule="reschedule(current)" />
         <AnesRecordPanel v-if="['sent', 'in-progress', 'done'].includes(current.status)" :surgery-id="current.id" />
         <SpecimenPanel v-if="['in-progress', 'done'].includes(current.status)" :surgery="current" :is-nurse="isNurse" />
         <PathPanel v-if="current.path" :surgery-id="current.id" />
