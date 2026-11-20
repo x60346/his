@@ -516,6 +516,12 @@ const procedureBase: Procedure[] = [
   { id: 'P060', code: '12083C', name: 'Vancomycin 谷濃度', category: '檢驗', points: 400, selfPrice: 600, active: true },
   // 含顯影劑的電腦斷層：檢查前要簽同意書、確認腎功能（點數為展示用近似值）
   { id: 'P061', code: '33072B', name: '電腦斷層（腹部，含顯影劑）', category: '影像', points: 5200, selfPrice: 8500, active: true },
+  // 植入物（手術室登記批號使用，住院帳單依使用紀錄帶入；門診、醫囑都不能開）。健保點數 0 的是自費品項（要病人同意）
+  { id: 'P062', code: 'FBP01LOCK', name: '鎖定骨板（橈骨遠端）', category: '處置', points: 12000, selfPrice: 15000, implant: { vendor: '康宏醫材' }, active: true },
+  { id: 'P063', code: 'FBS01SCRW', name: '皮質骨螺絲', category: '處置', points: 600, selfPrice: 900, implant: { vendor: '康宏醫材' }, active: true },
+  { id: 'P064', code: 'SELF05', name: '鈦合金解剖型鎖定骨板（自費）', category: '處置', points: 0, selfPrice: 48000, implant: { vendor: '康宏醫材' }, active: true },
+  { id: 'P065', code: 'FHM01MESH', name: '人工網膜（疝氣修補）', category: '處置', points: 3500, selfPrice: 5000, implant: { vendor: '博昇生醫' }, active: true },
+  { id: 'P066', code: 'SELF06', name: '輕量化防沾黏網膜（自費）', category: '處置', points: 0, selfPrice: 28000, implant: { vendor: '博昇生醫' }, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]

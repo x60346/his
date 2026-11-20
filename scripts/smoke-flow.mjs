@@ -150,7 +150,7 @@ try {
   }
   // 完成手術要有麻醉開始與結束（局部麻醉不用）：其他段落測的是完成本身，沒記的直接補（測試輔助）；要測擋的用 surgeryRaw.finishSurgery
   // 完成手術要有檢體或確認「本台無檢體」：其他段落沒登記檢體的自動勾無檢體；要測擋的用 specRaw
-  // 完成手術要掃過器械包（滅菌追溯）：其他段落沒掃的，直接補一包生物指示劑陰性的、綁到這台（測試輔助）；要測擋的用 packRaw
+  // 完成手術要掃過器械包（滅菌追溯）、會放植入物的要登記植入物：其他段落沒做的，直接補一包生物指示劑陰性的、一筆植入物（測試輔助）；要測擋的用 packRaw
   const packRaw = { finishSurgery: api.surgeryApi.finishSurgery }
   const specRaw = {
     finishSurgery: (id, input) => {
@@ -161,6 +161,14 @@ try {
         if (!b) d.sterileBatches.push((b = { id: 'SB-TEST', no: 'S9-TEST-1', sterilizer: 'S1', at: dateUtil.addMinutes(t, -3 * 24 * 60), by: 'U214', bi: { result: 'negative', at: dateUtil.addMinutes(t, -2 * 24 * 60), by: 'U214' } }))
         const n = d.instrumentPacks.length + 1
         d.instrumentPacks.push({ id: `PK-TEST-${n}`, no: `PKT${n}`, set: 'basic', batchId: b.id, expiresOn: dateUtil.addDays(t.slice(0, 10), 20), used: { surgeryId: id, at: t, by: 'U205' } })
+      }
+      // 會放植入物的手術要登記植入物：沒登記的補一筆（測試輔助；要測擋的用 packRaw）
+      const sg = d.surgeries.find((x) => x.id === id)
+      const want = sg && d.procedures.find((p) => p.id === sg.procId)?.surgery?.implant && !sg.implants?.length && api.IMPLANT_FOR[sg.procId]?.[0]
+      if (want) {
+        let l = d.implantLots.find((x) => x.id === `IL-TEST-${want}`)
+        if (!l) d.implantLots.push((l = { id: `IL-TEST-${want}`, procId: want, lot: `TEST-${want}`, expiresOn: dateUtil.addDays(nowStr().slice(0, 10), 365), qty: 999, receivedAt: nowStr().slice(0, 16), receivedBy: 'U214' }))
+        sg.implants = [{ id: `IU-TEST-${id}`, lotId: l.id, qty: 1, site: '測試', at: nowStr().slice(0, 16), by: 'U205' }]
       }
       return packRaw.finishSurgery(id, input)
     },
@@ -16614,6 +16622,126 @@ try {
     const { readFileSync } = await import('node:fs')
     const page = readFileSync('src/pages/nursing/NursingPage.vue', 'utf8')
     ok(page.includes('dayWard') && !/\.day\b|converted/.test(page), '護理站頁只加單位，誰在哪個單位由服務層判斷')
+  }
+  // 植入物批號：術式對應、批的狀態、能不能用（術式、召回、過期、數量、自費同意）、欄位；種子（召回追到兩台、過期、帳單）；
+  // 收貨、登記（擋與通過）、拿掉、完成手術要有植入物、帳單（健保與自費）；廠商召回、通知
+  console.log('\n[植入物批號]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const I = api.implantApi
+    const S = api.surgeryApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    const L = { qty: 5, expiresOn: '2026-12-31' }
+    ok(api.lotState(L, 2, '2026-03-01') === 'available' && api.lotState(L, 5, '2026-03-01') === 'empty' && api.lotState(L, 0, '2027-01-01') === 'expired' && api.lotState({ ...L, recall: {} }, 0, 'x') === 'recalled', '批的狀態：可用、用完、過期、召回')
+    const base = { surgeryProcId: 'P037', implantProcId: 'P062', selfPay: false, consent: false, qty: 1 }
+    ok(!api.implantUseProblem(base, L, 0, '2026-03-01') && api.implantUseProblem({ ...base, implantProcId: 'P065' }, L, 0, 'x')?.includes('不會用到') && api.implantUseProblem({ ...base, qty: 4 }, L, 2, '2026-03-01')?.includes('只剩 3') && api.implantUseProblem({ ...base, selfPay: true }, L, 0, '2026-03-01')?.includes('同意') && !api.implantUseProblem({ ...base, selfPay: true, consent: true }, L, 0, '2026-03-01'), '能不能用：術式對應、數量、自費要同意')
+    const ce = api.checkImplantUse({ qty: 0, site: ' ' })
+    ok(ce.lotId && ce.qty && ce.site, '登記欄位：批、1–20、植入部位')
+
+    // 種子
+    await as('nurse01')
+    let b = await I.implantBoard()
+    const rc = b.recalls[0]
+    ok(b.canManage && b.recalls.length === 1 && rc.lot === 'BS-M2607' && rc.affected.length === 2 && rc.left === 4 && rc.affected.every((a) => !a.notified), `種子：網膜 BS-M2607 召回，昨天兩台用了（${rc.affected.map((a) => a.patientName).join('、')}）、架上 4 個`)
+    ok(b.lots.find((l) => l.lot === 'KH-S2405').state === 'expired' && b.items.find((x) => x.id === 'P064').selfPay && b.items.find((x) => x.id === 'P065').available === 8, '種子：一批骨釘過期；自費骨板；網膜可用 8（召回那批不算）')
+    ok(db().surgeries.filter((s) => s.status === 'done' && s.procId === 'P039' && (s.specimens || s.noSpecimen)).every((s) => s.implants?.length), '種子：做完的疝氣修補都登記了網膜')
+    ok((await api.dashboardApi.getDashboard()).implantRecallOpen === 2, '首頁：植入物召回待通知 2')
+    await as('clerk01')
+    const dayBill = await api.ipdChargeApi.getIpdBill('A-DAY-1')
+    ok(dayBill.bill.lines.some((l) => l.name === '人工網膜（疝氣修補）' && !l.patientPay), '帳單：網膜照健保點數列入')
+    await as(userOf(db().surgeries.find((s) => s.id === 'SG-SEED-1').doctorId))
+    ok((await errOf(() => I.implantBoard())).length > 0 && (await errOf(() => I.receiveLot({ procId: 'P062', lot: 'X', expiresOn: addDaysT(100), qty: 1 }))).length > 0, '醫師看不到植入物庫存、不能收貨')
+    await as('nurse01')
+
+    // 收貨
+    let f = await fieldsOf(() => I.receiveLot({ procId: 'P038', lot: '', expiresOn: addDaysT(-1), qty: 0 }))
+    ok(f.procId && f.lot && f.expiresOn && f.qty, '收貨欄位：不是植入物、批號、過期、數量')
+    const nl = await I.receiveLot({ procId: 'P062', lot: 'kh-2612b', expiresOn: addDaysT(365), qty: 3 })
+    ok(nl.lot === 'KH-2612B' && nl.state === 'available' && db().auditLogs[0].action === '植入物收貨', '收貨：批號轉大寫、稽核')
+    f = await fieldsOf(() => I.receiveLot({ procId: 'P062', lot: 'KH-2612B', expiresOn: addDaysT(365), qty: 1 }))
+    ok(f.lot?.includes('收過'), '同品項同批號不能重複收')
+
+    // 登記：骨折那台（測試輔助：直接改成已送到）
+    const sid = 'SG-SEED-1'
+    db().surgeries.find((s) => s.id === sid).status = 'sent'
+    const opt = await I.implantOptions(sid)
+    ok(opt.options.length && opt.options.every((o) => /骨板|螺絲/.test(o.label)) && !opt.options.some((o) => o.label.includes('KH-S2405')) && !opt.consent, `選單只列這個術式會用到、可用的批（${opt.options.length} 批，過期的不列）`)
+    const lotId = (no) => db().implantLots.find((l) => l.lot === no).id
+    f = await fieldsOf(() => I.useImplant(sid, { lotId: lotId('BS-M2610'), qty: 1, site: '右橈骨' }))
+    ok(f.lotId?.includes('不會用到'), '術式不會用到的擋')
+    f = await fieldsOf(() => I.useImplant(sid, { lotId: lotId('KH-S2405'), qty: 2, site: '右橈骨' }))
+    ok(f.lotId?.includes('過效期'), '過期的擋')
+    f = await fieldsOf(() => I.useImplant(sid, { lotId: lotId('KH-T2610'), qty: 1, site: '右橈骨遠端' }))
+    ok(f.lotId?.includes('同意'), '自費骨板：病人還沒同意擋')
+    f = await fieldsOf(() => I.useImplant(sid, { lotId: lotId('KH-2611A'), qty: 5, site: '右橈骨遠端' }))
+    ok(f.lotId?.includes('只剩 4'), '數量不夠擋')
+    let v = await I.consentSelfPayImplant(sid, '病人選鈦合金骨板，已說明自費 48,000 元')
+    ok(v.selfPayText?.includes('同意') && db().auditLogs[0].action === '自費植入物同意', '病房記錄病人同意自費植入物、稽核')
+    ok((await errOf(() => I.consentSelfPayImplant(sid))).includes('記錄過') && (await errOf(() => I.consentSelfPayImplant('SG-SEED-6'))).includes('沒有自費'), '不能重複記；沒有自費品項的術式不用記')
+    v = await I.useImplant(sid, { lotId: lotId('KH-T2610'), qty: 1, site: '右橈骨遠端' })
+    v = await I.useImplant(sid, { lotId: lotId('KH-S2609'), qty: 6, site: '右橈骨遠端' })
+    ok(v.implantRows.length === 2 && v.implantRows[0].selfPay && db().auditLogs[0].action === '使用植入物', '登記：自費骨板 1、骨釘 6，稽核')
+    v = await I.useImplant(sid, { lotId: lotId('KH-2611A'), qty: 1, site: '誤登' })
+    v = await I.removeImplant(sid, v.implantRows.at(-1).id)
+    ok(v.implantRows.length === 2 && (await I.implantBoard()).lots.find((l) => l.lot === 'KH-2611A').left === 4, '登錯可以拿掉（數量回來）')
+    await as(userOf(db().surgeries.find((s) => s.id === sid).doctorId))
+    ok((await errOf(() => I.useImplant(sid, { lotId: lotId('KH-2611A'), qty: 1, site: 'x' }))).length > 0, '醫師不能登記')
+    await as('nurse01')
+    // 完成手術要有植入物（packRaw：不自動補）——先拿掉全部
+    const s1 = db().surgeries.find((s) => s.id === sid)
+    const keep = s1.implants
+    s1.implants = []
+    await S.recordCheck(sid, 'signIn', api.CHECK_ITEMS.signIn.items)
+    await S.recordCheck(sid, 'timeOut', api.CHECK_ITEMS.timeOut.items)
+    await S.startSurgery(sid, { abxReason: 'x' })
+    const s1b = db().surgeries.find((s) => s.id === sid)
+    s1b.anes = { startAt: s1b.startAt.slice(0, 16), endAt: nowStr().slice(0, 16), entries: [] }
+    const fin = { items: api.CHECK_ITEMS.signOut.items, spongeBefore: 10, spongeAfter: 10, instrumentBefore: 20, instrumentAfter: 20, noSpecimen: true }
+    f = await fieldsOf(() => packRaw.finishSurgery(sid, fin))
+    ok(f.implants?.includes('植入物'), '會放植入物的手術：沒登記不能完成')
+    v = (await S.orBoard(addDaysT(1))).cases.find((x) => x.id === sid)
+    ok(v.implantMissing, '手術室標「植入物未登記」')
+    db().surgeries.find((s) => s.id === sid).implants = keep
+    v = await S.finishSurgery(sid, fin)
+    ok(v.status === 'done' && (await errOf(() => I.removeImplant(sid, keep[0].id))).includes('已完成'), '登記後可以完成；完成後不能改')
+    await as('clerk01')
+    const bill = await api.ipdChargeApi.getIpdBill(s1.admissionId)
+    const ln = (n) => bill.bill.lines.find((l) => l.name.startsWith(n))
+    ok(ln('鈦合金解剖型鎖定骨板')?.patientPay && ln('鈦合金解剖型鎖定骨板').amount === 48000 && ln('皮質骨螺絲')?.qty === 6 && !ln('皮質骨螺絲').patientPay, '帳單：自費骨板 48,000 自付、骨釘 6 個照健保點數')
+    await as('nurse01')
+
+    // 廠商召回
+    f = await fieldsOf(() => I.recallLot(lotId('KH-S2609'), ''))
+    ok(f.reason, '召回要原因')
+    const r2 = await I.recallLot(lotId('KH-S2609'), '廠商通知：螺紋尺寸偏差')
+    ok(r2.affected.length === 1 && r2.affected[0].surgeryId === sid && r2.affected[0].qty === 6 && db().auditLogs[0].action === '植入物召回', '召回追到今天骨折那台（6 個）、稽核')
+    ok((await errOf(() => I.recallLot(lotId('KH-S2609'), 'x'))).includes('已經召回') && (await S.orBoard(addDaysT(1))).cases.find((x) => x.id === sid).implantRecalled && (await api.dashboardApi.getDashboard()).implantRecallOpen === 3, '不能重複召回；手術室標植入物召回；首頁 3 台待通知')
+    f = await fieldsOf(() => I.notifyLotRecall(lotId('KH-S2609'), sid, ''))
+    ok(f.note, '通知要說明')
+    ok((await errOf(() => I.notifyLotRecall(lotId('KH-S2609'), 'SG-SEED-4', '已通知'))).includes('沒有用到'), '沒用到這批的手術不能記')
+    const n = await I.notifyLotRecall(lotId('KH-S2609'), sid, '已電話通知主刀，門診追蹤 X 光')
+    ok(n.affected[0].notified?.includes('X 光') && db().auditLogs[0].action === '植入物召回通知' && (await errOf(() => I.notifyLotRecall(lotId('KH-S2609'), sid, 'x'))).includes('記過'), '記錄通知、稽核、不能重複')
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync('src/components/surgery/ImplantPanel.vue', 'utf8') + readFileSync('src/components/surgery/ImplantStockPanel.vue', 'utf8')
+    ok(!/implantUseProblem|lotState|IMPLANT_FOR|db\./.test(page), '能不能用由服務層判斷')
   }
 } catch (e) {
   failed++

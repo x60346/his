@@ -62,6 +62,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '手術順延未讀', count: s.value.delaySurgeonUnread ?? 0, hint: '我主刀的手術被急刀插台順延：確認新時間（手術室頁上方按已讀）', route: 'or', icon: Scissors, urgent: true },
     ...(s.value.cssdRecallOpen !== undefined ? [
       { roles: ['nurse'], label: '滅菌召回待通知', count: s.value.cssdRecallOpen ?? 0, hint: '生物指示劑陽性的那鍋器械包用在這些手術上：逐台通知主刀與感控（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: true },
+      { roles: ['nurse'], label: '植入物召回待通知', count: s.value.implantRecallOpen ?? 0, hint: '廠商召回的那批植入物用在這些手術上：逐台通知主刀（手術室「植入物」分頁）', route: 'or', icon: ShieldAlert, urgent: true },
       { roles: ['nurse'], label: '器械包待收回', count: s.value.cssdToWithdraw ?? 0, hint: '過期（要重新滅菌）或召回還在架上的器械包（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
       { roles: ['nurse'], label: '生物指示劑待判讀', count: s.value.cssdBiDue ?? 0, hint: '滅菌鍋次培養滿 24 小時：判讀陰性放行、陽性整鍋召回（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
     ] : []),

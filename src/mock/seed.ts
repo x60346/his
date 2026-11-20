@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -3760,6 +3760,32 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 植入物批號（示範，不抽亂數）----------
+  // 骨板、骨釘、自費骨板、網膜（兩批）、自費網膜；一批骨釘已過期還在架上。
+  // 做完的疝氣修補都登記了網膜：昨天兩台用 BS-M2607、今天兩台用 BS-M2610；BS-M2607 今天廠商召回（包裝密封不良），還沒通知主刀
+  const implantLots: ImplantLot[] = []
+  {
+    const lot = (id: string, procId: string, no: string, expiresOn: string, qty: number, rec: number): ImplantLot => {
+      const l: ImplantLot = { id: `IL-SEED-${id}`, procId, lot: no, expiresOn, qty, receivedAt: `${addDays(T, -rec)} 10:00`, receivedBy: 'U214' }
+      implantLots.push(l)
+      return l
+    }
+    lot('1', 'P062', 'KH-2611A', addDays(T, 400), 4, 20)
+    lot('2', 'P063', 'KH-S2609', addDays(T, 600), 40, 20)
+    lot('3', 'P063', 'KH-S2405', addDays(T, -10), 6, 200)
+    lot('4', 'P064', 'KH-T2610', addDays(T, 500), 2, 15)
+    const m1 = lot('5', 'P065', 'BS-M2607', addDays(T, 300), 6, 30)
+    const m2 = lot('6', 'P065', 'BS-M2610', addDays(T, 420), 10, 7)
+    lot('7', 'P066', 'BS-L2609', addDays(T, 380), 3, 25)
+    const side: Record<string, string> = { left: '左側', right: '右側', bilateral: '兩側', na: '' }
+    const hernias = surgeries.filter((x) => x.status === 'done' && x.procId === 'P039' && x.startAt && (x.specimens || x.noSpecimen)).sort((a, b) => a.startAt!.localeCompare(b.startAt!))
+    for (const sg of hernias) {
+      const l = sg.startAt! < `${T} 00:00` ? m1 : m2
+      sg.implants = [{ id: `IU-SEED-${sg.id}`, lotId: l.id, qty: 1, site: `${side[sg.side]}腹股溝`, at: [addMinutes(sg.startAt!, 30), sg.endAt ?? nowStr].sort()[0], by: sg.team?.circulating?.[0]?.userId ?? 'U205' }]
+    }
+    if (hernias.some((x) => x.implants?.[0].lotId === m1.id)) m1.recall = { at: notFuture(`${T} 08:00`, 5), by: 'U214', reason: '廠商通知：該批包裝密封不良，可能影響無菌', notified: [] }
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -3820,6 +3846,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     surgeries,
     sterileBatches,
     instrumentPacks,
+    implantLots,
     lines,
     nutritionScreens,
     nutritionAssessments,

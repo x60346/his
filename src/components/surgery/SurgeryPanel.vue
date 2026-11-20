@@ -11,7 +11,7 @@ import PacuPanel from './PacuPanel.vue'
 import PostopDialog from './PostopDialog.vue'
 import PathPanel from './PathPanel.vue'
 import DelayNote from './DelayNote.vue'
-import { ANESTHESIA_LABEL, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
+import { ANESTHESIA_LABEL, implantApi, SIDE_LABEL, surgeryApi, URGENCY_LABEL, URGENCY_MINUTES, type SurgeryView } from '@/services'
 import type { AnesthesiaType, SurgeryPrepKey, SurgerySide, SurgeryUrgency } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -83,6 +83,8 @@ const needsRef = computed(() => marking.value?.key === 'blood' || marking.value?
 const npoRef = computed(() => marking.value?.key === 'npo')
 const refOptions = computed(() => (marking.value?.key === 'blood' ? v.value?.bloodOptions : marking.value?.key === 'npo' ? v.value?.npoOptions : v.value?.abxOptions)?.map((o) => ({ label: o.text, value: o.id })) ?? [])
 const markAct = useAction(surgeryApi.markPrep, { success: '已記錄' })
+// 自費植入物：病人（或家屬）同意（選填，沒有就不能登記自費品項）
+const consentAct = useAction(implantApi.consentSelfPayImplant, { success: '已記錄病人同意自費植入物' })
 async function submitMark() {
   const m = marking.value
   if (!m) return
@@ -117,6 +119,14 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <p v-if="s.preAnesText" class="text-xs" :class="s.preAnes?.difficult ? 'font-medium text-red-700' : 'text-slate-600'">麻醉前評估：{{ s.preAnesText }}（{{ s.preAnesByName }}）</p>
           <p v-else-if="s.preAnesMissing" class="text-xs text-amber-800">麻醉前評估還沒做（由麻醉醫師在手術室頁評估）</p>
           <p v-if="s.team && s.status !== 'cancelled'" class="text-xs text-slate-600">手術團隊：{{ s.teamText }}</p>
+          <p v-if="s.implantRows.length" class="text-xs" :class="s.implantRecalled ? 'font-semibold text-red-700' : 'text-slate-600'">植入物：{{ s.implantRows.map((r) => r.text + (r.selfPay ? '（自費）' : '')).join('；') }}<template v-if="s.implantRecalled">——其中一批廠商召回，供應中心會通知主刀</template></p>
+          <div v-if="s.selfPayOption && !['done', 'cancelled'].includes(s.status)" class="flex flex-wrap items-center gap-2 text-xs">
+            <span v-if="s.selfPayText" class="text-slate-600">{{ s.selfPayText }}</span>
+            <template v-else>
+              <span class="text-slate-500">這個術式有自費植入物可選（例：鈦合金骨板、防沾黏網膜）：病人同意才能用</span>
+              <UButton v-if="isNurse" size="sm" variant="secondary" :loading="consentAct.pending.value" @click="consentAct.run(s.id)">記錄病人同意自費植入物</UButton>
+            </template>
+          </div>
           <p v-if="s.packRows.length" class="text-xs" :class="s.packRecalled ? 'font-semibold text-red-700' : 'text-slate-600'">器械包：{{ s.packRows.map((p) => `${p.no} ${p.setLabel}（${p.batchNo}）`).join('、') }}<template v-if="s.packRecalled">——其中一鍋生物指示劑陽性已召回，供應中心會通知主刀與感控</template></p>
           <p v-if="s.cancelled" class="text-xs text-slate-500">已取消：{{ s.cancelled.reason }}・{{ s.cancelledByName }}</p>
 

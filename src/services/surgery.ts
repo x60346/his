@@ -373,6 +373,8 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
     const specs = s.specimens ?? []
     if (!specs.length && !input.noSpecimen) fields.noSpecimen = '沒有登記檢體：請確認「本台無檢體」，有檢體請先逐件登記'
     if (specs.length && input.noSpecimen) fields.noSpecimen = `已登記 ${specs.length} 件檢體，不能勾「本台無檢體」`
+    // 植入物：會放植入物的術式至少登記一筆（批號追溯）
+    if (find.procedure(s.procId)?.surgery?.implant && !s.implants?.length) fields.implants = '會放植入物的手術：請在「植入物」登記用了哪一批（批號追溯）'
     // 器械包：至少掃一包（滅菌追溯）
     if (!db.instrumentPacks.some((p) => p.used?.surgeryId === s.id)) fields.packs = '還沒掃器械包：請在「器械包」掃描本台用的包號（滅菌追溯）'
     if (mismatch.length && !reason) fields.mismatchReason = `計數不符（${mismatch.join('；')}）：請寫原因與處理（例：已照 X 光確認無遺留），並告知主刀`

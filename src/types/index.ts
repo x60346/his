@@ -1114,6 +1114,8 @@ export interface Procedure {
   blood?: BloodProduct | 'crossmatch'
   /** 病歷影本計費項目（基本費、每頁）：申請時自動帶入，門診與醫囑都不能開 */
   recordCopy?: 'base' | 'page'
+  /** 植入物（骨板、骨釘、人工網膜）：手術室登記批號使用，住院帳單依使用紀錄帶入，門診與醫囑都不能開。健保點數 0＝自費品項（病人要先同意） */
+  implant?: { vendor: string }
   /** 手術術式：預估時間（分鐘）；做完的手術依手術室紀錄列入住院帳單，門診與醫囑都不能開 */
   surgery?: { minutes: number; /** 會放植入物（骨板、人工網膜）：器械包要等生物指示劑陰性才能用 */ implant?: boolean }
   /** 急診計費：診察費（取代門診診察費）、觀察床費（每 6 小時）；急診就醫依紀錄自動帶入，門診與醫囑都不能開 */
@@ -2531,6 +2533,10 @@ export interface Surgery {
   /** 手術紀錄（主刀或本科醫師） */
   record?: { performed: string; findings: string; bloodLoss: number; complications: string; specimen: string; by: string; at: string }
   cancelled?: { by: string; at: string; reason: string }
+  /** 植入物：用了哪一批、幾個、植入部位（流動護理師登記） */
+  implants?: ImplantUse[]
+  /** 自費植入物：病人（或家屬）已同意（護理師記）；沒有就不能登記自費品項 */
+  selfPayImplant?: { by: string; at: string; note?: string }
   /** 被急刀順延的紀錄（舊到新） */
   delays?: SurgeryDelay[]
   /** 順延到超過開放時段：排程人同意加班（不改期）；之後再被順延要重新同意 */
@@ -2568,6 +2574,29 @@ export interface InstrumentPack {
   expiresOn: string
   used?: { surgeryId: string; at: string; by: string }
   withdrawn?: { at: string; by: string; reason: string }
+}
+
+// ---------- 植入物批號 ----------
+
+/** 植入物的一批（手術室收貨）：品項（主檔 Procedure.implant）、批號、效期、數量；廠商召回整批 */
+export interface ImplantLot {
+  id: string
+  procId: string
+  lot: string
+  expiresOn: string
+  qty: number
+  receivedAt: string
+  receivedBy: string
+  /** 廠商召回：原因；用過的手術逐台記錄已通知主刀 */
+  recall?: { at: string; by: string; reason: string; notified: { surgeryId: string; at: string; by: string; note: string }[] }
+}
+export interface ImplantUse {
+  id: string
+  lotId: string
+  qty: number
+  site: string
+  at: string
+  by: string
 }
 
 // ---------- 病歷影本申請 ----------

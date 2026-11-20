@@ -23,6 +23,7 @@ import { activeIpdChargeOf, dayToBill, deathToBill, dischargeRxPending, interimS
 import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { sterileCounts } from './sterile-work'
+import { implantRecallOpen } from './implant-work'
 import { dayCounts, delayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
@@ -275,6 +276,8 @@ export interface DashboardStats {
   cssdBiDue?: number
   cssdRecallOpen?: number
   cssdToWithdraw?: number
+  /** 植入物召回：用過那批、還沒通知主刀的手術 */
+  implantRecallOpen?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
   adviceToBook: number
   adviceOverdue: number
@@ -470,7 +473,7 @@ export function getDashboard(): Promise<DashboardStats> {
       })(),
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       delayWardUnread: delayCounts().unread,
-      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),
       ...((c) => ({ dayToCheckIn: c.toCheckIn, dayPhase2: c.phase2, dayFollowUp: c.followUp }))(dayCounts(now())),
       ...(({ waiting, overdue, deciding, bed, obsBed, obsOverdue }) => ({ erWaiting: waiting, erOverdue: overdue, erBed: bed, erObsBed: obsBed, ...(isErDoctor(sessionUser()?.doctorId) && sessionRole() === 'doctor' ? { erDeciding: deciding, erObsOverdue: obsOverdue } : {}) }))(erCounts(now())),
