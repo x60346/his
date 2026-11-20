@@ -1074,6 +1074,8 @@ export interface LabCheckin {
   priority?: 'elderly' | 'disabled' | 'mobility'
   /** 哪一個窗口叫的（最後一次叫號的窗口；過號回來重叫可能換窗口） */
   window?: number
+  /** 分流：只交檢體（待採的全是自行收集容器）走檢體窗口；沒有＝抽血 */
+  lane?: 'drop'
 }
 
 /** 抽血窗口開窗紀錄：哪一天、幾號窗口、誰、幾點開、幾點關（一人同時一個窗口、一個窗口同時一人） */
@@ -1449,7 +1451,7 @@ export interface Admission {
    * 疾病分類編碼審查（病歷管理師，出院後）：確認或修改主診斷與次診斷（DRG、申報以這裡為準）；
    * 改了要寫理由，主治已讀（可寫意見）。secondary 沒有＝沿用病摘（舊病摘沒有次診斷時，DRG 退回看病史）
    */
-  coding?: { at: string; by: string; mainDiagnosis: string; secondary?: { icd: string; name: string }[]; changed: boolean; reason?: string; before?: { main: string; secondary: { icd: string; name: string }[] }; ack?: { at: string; by: string; note?: string }; /** 更正前的版本（舊到新）：審查後又改碼（申報後改碼→差額補報） */ revisions?: { at: string; by: string; mainDiagnosis: string; secondary: { icd: string; name: string }[]; reason?: string }[] }
+  coding?: { at: string; by: string; mainDiagnosis: string; secondary?: { icd: string; name: string }[]; changed: boolean; reason?: string; before?: { main: string; secondary: { icd: string; name: string }[]; /** 處置碼有改才記 */ procedures?: { code: string; name: string }[] }; ack?: { at: string; by: string; note?: string }; /** 處置碼 ICD-10-PCS（病歷管理師登錄；有就 DRG 看這個，沒有＝舊編碼，看手術紀錄） */ procedures?: { code: string; name: string }[]; /** 更正前的版本（舊到新）：審查後又改碼（申報後改碼→差額補報） */ revisions?: { at: string; by: string; mainDiagnosis: string; secondary: { icd: string; name: string }[]; procedures?: { code: string; name: string }[]; reason?: string }[] }
 }
 
 /**
@@ -2681,7 +2683,7 @@ export interface PreAuth {
   notes: { at: string; by: string; text: string }[]
   submittedAt?: string
   submittedBy?: string
-  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string }
+  result?: { outcome: 'approved' | 'rejected' | 'more'; note: string; at: string; by: string; until?: string; /** 門診核准量（藥品單位，例：6 支）；沒有＝不限 */ qty?: number }
   /** 病人同意改自費（這次自費，之後核准也不退） */
   selfPay?: { at: string; by: string; note: string }
   /** 緊急先用（醫師寫理由；仍要送審、申報照檢核） */

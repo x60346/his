@@ -36,7 +36,7 @@ async function submit() {
   <div v-if="data?.length" class="space-y-1">
     <div v-for="s in data" :key="s.drugId" :class="['flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-xs', s.valid ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-900']">
       <b>{{ s.drugName }}</b>
-      <template v-if="s.valid">健保事前審查核准（{{ s.preAuth!.no }}，效期到 {{ s.preAuth!.validUntil }}）：可以健保開</template>
+      <template v-if="s.valid">健保事前審查核准（{{ s.preAuth!.no }}，效期到 {{ s.preAuth!.validUntil }}<template v-if="s.preAuth!.qty">，核准 {{ s.preAuth!.qty.approved }} {{ s.preAuth!.qty.unit }}、已開 {{ s.preAuth!.qty.used }}、<b>還剩 {{ s.preAuth!.qty.left }}</b></template>）：可以健保開<span v-if="s.preAuth!.qty && !s.preAuth!.qty.left" class="font-semibold text-red-700">・核准量已用完，請重新申請或自費</span></template>
       <template v-else>
         需健保事前審查：{{ s.preAuth ? `${s.preAuth.no} ${s.preAuth.statusLabel}` : '還沒申請' }}<template v-if="s.preAuth?.status === 'more'">（{{ s.preAuth.resultText }}）</template>
         <span :class="selfPayOf(s.drugId) ? 'text-slate-600' : 'font-semibold text-red-700'">{{ selfPayOf(s.drugId) ? '・這次自費開' : '・核准前只能自費開（勾「自費」）' }}</span>

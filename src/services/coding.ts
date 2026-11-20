@@ -11,6 +11,20 @@ import { find, nameOf } from './views'
 import { CODING_DAYS } from './coding-work'
 import { claimedState, ipdItemOf } from './claim-work'
 import { monthOf } from './claim-rules'
+import { checkPcs, PCS_FOR_PROC, pcsOf, searchPcsCodes, type PcsCode } from './pcs-rules'
+
+/** 依手術紀錄建議的處置碼（做完的手術，依結束時間） */
+const suggestedPcs = (a: Admission) => [...new Set(db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').sort((x, y) => (x.endAt ?? '').localeCompare(y.endAt ?? '')).map((s) => PCS_FOR_PROC[s.procId]).filter(Boolean))].map((c) => ({ code: c, name: pcsOf(c)!.name }))
+/** 現在的處置碼：編碼登錄的；舊編碼（沒有這個欄位）、還沒審查＝手術紀錄建議的 */
+const currentPcs = (a: Admission) => a.coding?.procedures ?? suggestedPcs(a)
+const codesOf = (xs: { code: string }[]) => xs.map((x) => x.code).sort().join()
+/** 輸入的處置碼（沒給＝照現在的）：主檔、不重複、最多 6 個 */
+function pcsInput(a: Admission, list: { code: string }[] | undefined) {
+  if (list === undefined) return currentPcs(a)
+  const r = checkPcs(list)
+  if (!r.ok) failField('procedures', r.message)
+  return (r as { items: { code: string; name: string }[] }).items
+}
 
 
 export interface CodingItem {
@@ -31,6 +45,10 @@ export interface CodingItem {
   noSecondaryField: boolean
   course: string
   surgeries: string[]
+  /** 處置碼（ICD-10-PCS）：現在的（編碼登錄的，沒有＝手術紀錄建議的）、手術紀錄建議的；舊編碼沒有這個欄位 */
+  procedures: { code: string; name: string; or: boolean }[]
+  suggestedProcedures: { code: string; name: string }[]
+  noProcedureField: boolean
   /** 現在（編碼後以編碼為準）的主診斷、次診斷、DRG */
   mainDiagnosis: string
   secondary: { icd: string; name: string }[]
@@ -52,8 +70,9 @@ function item(a: Admission): CodingItem {
     admittedAt: a.admittedAt ?? '', dischargedAt: a.dischargedAt ?? '', dischargeType: a.dischargeType ?? sum?.dischargeType ?? '', day,
     summaryDiagnosis: (day ? a.diagnosis : sum?.diagnosis) ?? '', summarySecondary: sum?.secondaryDiagnoses ?? [], noSecondaryField: !day && !!sum && !sum.secondaryDiagnoses, course: sum?.course ?? '',
     surgeries: db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').map((s) => `${s.no} ${find.procedure(s.procId)?.name ?? ''}${s.record ? `：${s.record.performed}` : ''}`),
+    procedures: currentPcs(a).map((x) => ({ ...x, or: !!pcsOf(x.code)?.or })), suggestedProcedures: suggestedPcs(a), noProcedureField: !!a.coding && !a.coding.procedures,
     mainDiagnosis: mainDiagnosisFrom(a), secondary, drg: drgOfAdmission(a), ...((x) => (x ? { drgExempt: x } : {}))(drgExemptOf(a, now())),
-    ...(a.coding ? { coded: { at: a.coding.at, byName: nameOf.user(a.coding.by), changed: a.coding.changed, ...(a.coding.reason ? { reason: a.coding.reason } : {}), ...(a.coding.before ? { beforeText: `${a.coding.before.main}${a.coding.before.secondary.length ? `；次：${a.coding.before.secondary.map((x) => x.icd).join('、')}` : ''}` } : {}), ...(a.coding.ack ? { ack: `${nameOf.user(a.coding.ack.by)} ${a.coding.ack.at.slice(5)}${a.coding.ack.note ? `：${a.coding.ack.note}` : ''}` } : {}), revisions: (a.coding.revisions ?? []).map((r) => `${r.at.slice(5)} ${nameOf.user(r.by)}：${r.mainDiagnosis}${r.secondary.length ? `；次：${r.secondary.map((x) => x.icd).join('、')}` : ''}`) } } : {}),
+    ...(a.coding ? { coded: { at: a.coding.at, byName: nameOf.user(a.coding.by), changed: a.coding.changed, ...(a.coding.reason ? { reason: a.coding.reason } : {}), ...(a.coding.before ? { beforeText: `${a.coding.before.main}${a.coding.before.secondary.length ? `；次：${a.coding.before.secondary.map((x) => x.icd).join('、')}` : ''}${a.coding.before.procedures ? `；處置：${a.coding.before.procedures.map((x) => x.code).join('、') || '無'}` : ''}` } : {}), ...(a.coding.ack ? { ack: `${nameOf.user(a.coding.ack.by)} ${a.coding.ack.at.slice(5)}${a.coding.ack.note ? `：${a.coding.ack.note}` : ''}` } : {}), revisions: (a.coding.revisions ?? []).map((r) => `${r.at.slice(5)} ${nameOf.user(r.by)}：${r.mainDiagnosis}${r.secondary.length ? `；次：${r.secondary.map((x) => x.icd).join('、')}` : ''}${r.procedures?.length ? `；處置：${r.procedures.map((x) => x.code).join('、')}` : ''}`) } } : {}),
     ...((c) => (c ? { claimed: c } : {}))(a.coding && a.dischargedAt ? claimedState('ipd', a.id, monthOf(a.dischargedAt), ipdItemOf(a), monthOf(today())) : undefined),
     overdue: !a.coding && !!a.dischargedAt && a.dischargedAt.slice(0, 10) < addDays(today(), -CODING_DAYS),
   }
@@ -75,7 +94,7 @@ export function codingQueue(): Promise<{ todo: CodingItem[]; done: CodingItem[];
 }
 
 /** 審查（確認或修改）：主診斷（ICD 主檔的碼）、次診斷；和現在的不同要寫理由。回傳修改前後的 DRG */
-export function confirmCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string; name: string }[]; reason?: string }): Promise<{ item: CodingItem; drgBefore: DrgResult; drgAfter: DrgResult }> {
+export function confirmCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string; name: string }[]; procedures?: { code: string }[]; reason?: string }): Promise<{ item: CodingItem; drgBefore: DrgResult; drgAfter: DrgResult }> {
   return mutate(() => {
     const u = requirePermission('coding')
     const a = must(find.admission(admissionId), '住院紀錄')
@@ -88,11 +107,13 @@ export function confirmCoding(admissionId: string, input: { mainIcd: string; sec
     const drgBefore = drgOfAdmission(a)
     const curMain = mainDiagnosisFrom(a)
     const curSec = a.dischargeSummary?.secondaryDiagnoses ?? []
-    const changed = dxCode(curMain) !== c!.code || [...secondary.map((x) => x.icd)].sort().join() !== [...curSec.map((x) => x.icd)].sort().join()
+    const procedures = pcsInput(a, input.procedures)
+    const curPcs = suggestedPcs(a)
+    const changed = dxCode(curMain) !== c!.code || [...secondary.map((x) => x.icd)].sort().join() !== [...curSec.map((x) => x.icd)].sort().join() || codesOf(procedures) !== codesOf(curPcs)
     if (changed && !input.reason?.trim()) failField('reason', '改了編碼要寫理由（例：病摘寫肺炎，痰培養與影像支持吸入性肺炎）')
-    a.coding = { at: now(), by: u.id, mainDiagnosis: main, secondary, changed, ...(changed ? { reason: input.reason!.trim(), before: { main: curMain, secondary: curSec } } : {}) }
+    a.coding = { at: now(), by: u.id, mainDiagnosis: main, secondary, procedures, changed, ...(changed ? { reason: input.reason!.trim(), before: { main: curMain, secondary: curSec, ...(codesOf(procedures) !== codesOf(curPcs) ? { procedures: curPcs } : {}) } } : {}) }
     const drgAfter = drgOfAdmission(a)
-    audit(changed ? '編碼修改' : '編碼確認', `${a.admitNo} ${nameOf.patient(a.patientId)}：${main}${secondary.length ? `；次：${secondary.map((x) => x.icd).join('、')}` : ''}${changed ? `（原 ${curMain}；${input.reason!.trim()}）；DRG ${drgBefore.code} → ${drgAfter.code}` : ''}`)
+    audit(changed ? '編碼修改' : '編碼確認', `${a.admitNo} ${nameOf.patient(a.patientId)}：${main}${secondary.length ? `；次：${secondary.map((x) => x.icd).join('、')}` : ''}${procedures.length ? `；處置：${procedures.map((x) => x.code).join('、')}` : ''}${changed ? `（原 ${curMain}；${input.reason!.trim()}）；DRG ${drgBefore.code} → ${drgAfter.code}` : ''}`)
     return { item: item(a), drgBefore, drgAfter }
   })
 }
@@ -101,7 +122,7 @@ export function confirmCoding(admissionId: string, input: { mainIcd: string; sec
  * 編碼更正（審查過後又發現要改，例如申報後病歷室複審、核減後改碼）：要寫理由、要和現在的不同；
  * 舊版本留在 revisions，主治要重新讀。那個月已經申報的，差額（DRG 改組）自動列在下一個還沒送的月份補報
  */
-export function recodeCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string; name: string }[]; reason?: string }): Promise<{ item: CodingItem; drgBefore: DrgResult; drgAfter: DrgResult }> {
+export function recodeCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string; name: string }[]; procedures?: { code: string }[]; reason?: string }): Promise<{ item: CodingItem; drgBefore: DrgResult; drgAfter: DrgResult }> {
   return mutate(() => {
     const u = requirePermission('coding')
     const a = must(find.admission(admissionId), '住院紀錄')
@@ -112,14 +133,16 @@ export function recodeCoding(admissionId: string, input: { mainIcd: string; seco
     const main = `${c!.code} ${c!.name}`
     const secondary = checkSecondary(main, input.secondary)
     const oldSec = old!.secondary ?? []
-    if (dxCode(old!.mainDiagnosis) === c!.code && [...secondary.map((x) => x.icd)].sort().join() === [...oldSec.map((x) => x.icd)].sort().join()) fail('和現在的編碼一樣，不用更正', 'CONFLICT')
+    const procedures = pcsInput(a, input.procedures)
+    const oldPcs = currentPcs(a)
+    if (dxCode(old!.mainDiagnosis) === c!.code && [...secondary.map((x) => x.icd)].sort().join() === [...oldSec.map((x) => x.icd)].sort().join() && codesOf(procedures) === codesOf(oldPcs)) fail('和現在的編碼一樣，不用更正', 'CONFLICT')
     if (!input.reason?.trim()) failField('reason', '更正編碼要寫理由（例：複審手術紀錄，實際做的是腹腔鏡手術）')
     const drgBefore = drgOfAdmission(a)
-    const revisions = [...(old!.revisions ?? []), { at: old!.at, by: old!.by, mainDiagnosis: old!.mainDiagnosis, secondary: oldSec, ...(old!.reason ? { reason: old!.reason } : {}) }]
-    a.coding = { at: now(), by: u.id, mainDiagnosis: main, secondary, changed: true, reason: input.reason!.trim(), before: { main: old!.mainDiagnosis, secondary: oldSec }, revisions }
+    const revisions = [...(old!.revisions ?? []), { at: old!.at, by: old!.by, mainDiagnosis: old!.mainDiagnosis, secondary: oldSec, ...(old!.procedures ? { procedures: old!.procedures } : {}), ...(old!.reason ? { reason: old!.reason } : {}) }]
+    a.coding = { at: now(), by: u.id, mainDiagnosis: main, secondary, procedures, changed: true, reason: input.reason!.trim(), before: { main: old!.mainDiagnosis, secondary: oldSec, ...(codesOf(procedures) !== codesOf(oldPcs) ? { procedures: oldPcs } : {}) }, revisions }
     const drgAfter = drgOfAdmission(a)
     const it = item(a)
-    audit('編碼更正', `${a.admitNo} ${nameOf.patient(a.patientId)}：${old!.mainDiagnosis} → ${main}${secondary.length ? `；次：${secondary.map((x) => x.icd).join('、')}` : ''}（${input.reason!.trim()}）；DRG ${drgBefore.code} → ${drgAfter.code}${it.claimed?.delta ? `；已申報 ${it.claimed.month}，補報 ${it.claimed.delta > 0 ? '+' : ''}${it.claimed.delta} 點` : ''}`)
+    audit('編碼更正', `${a.admitNo} ${nameOf.patient(a.patientId)}：${old!.mainDiagnosis} → ${main}${secondary.length ? `；次：${secondary.map((x) => x.icd).join('、')}` : ''}${procedures.length ? `；處置：${procedures.map((x) => x.code).join('、')}` : ''}（${input.reason!.trim()}）；DRG ${drgBefore.code} → ${drgAfter.code}${it.claimed?.delta ? `；已申報 ${it.claimed.month}，補報 ${it.claimed.delta > 0 ? '+' : ''}${it.claimed.delta} 點` : ''}`)
     return { item: it, drgBefore, drgAfter }
   })
 }
@@ -148,11 +171,19 @@ export function ackCoding(admissionId: string, note?: string): Promise<CodingIte
 
 
 /** 試算：照這組編碼會分到哪一組 DRG（不存） */
-export function previewCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string }[] }): Promise<DrgResult> {
+export function previewCoding(admissionId: string, input: { mainIcd: string; secondary: { icd: string }[]; procedures?: { code: string }[] }): Promise<DrgResult> {
   return query(() => {
     requirePermission('coding')
     const a = must(find.admission(admissionId), '住院紀錄')
     const c = db.icdCodes.find((k) => k.code === input.mainIcd)
-    return drgOfAdmission({ ...a, coding: { at: '', by: '', mainDiagnosis: c ? `${c.code} ${c.name}` : mainDiagnosisFrom(a), secondary: (input.secondary ?? []).map((x) => ({ icd: x.icd, name: '' })), changed: false } })
+    return drgOfAdmission({ ...a, coding: { at: '', by: '', mainDiagnosis: c ? `${c.code} ${c.name}` : mainDiagnosisFrom(a), secondary: (input.secondary ?? []).map((x) => ({ icd: x.icd, name: '' })), procedures: input.procedures ? input.procedures.filter((x) => pcsOf(x.code)).map((x) => ({ code: x.code, name: pcsOf(x.code)!.name })) : currentPcs(a), changed: false } })
+  })
+}
+
+/** 處置碼主檔搜尋（代碼開頭或名稱） */
+export function searchPcs(kw: string): Promise<PcsCode[]> {
+  return query(() => {
+    requirePermission('coding')
+    return searchPcsCodes(kw ?? '').slice(0, 20)
   })
 }

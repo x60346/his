@@ -4,7 +4,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USearchSelect, UTabs } from '@/components/ui'
 import SecondaryDxEditor from '@/components/SecondaryDxEditor.vue'
-import { codingApi, masterApi, type CodingItem } from '@/services'
+import { codingApi, masterApi, type CodingItem, type PcsCode } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { IcdCode } from '@/types'
 
@@ -16,16 +16,19 @@ const cur = ref<CodingItem>()
 /** 更正（審查過的再改）：一定要寫理由；已申報的差額列補報 */
 const recode = computed(() => !!cur.value?.coded)
 const open = computed({ get: () => !!cur.value, set: (x) => !x && (cur.value = undefined) })
-const f = reactive({ mainIcd: '', mainLabel: '', secondary: [] as { icd: string; name: string }[], reason: '' })
+const f = reactive({ mainIcd: '', mainLabel: '', secondary: [] as { icd: string; name: string }[], procedures: [] as { code: string; name: string; or: boolean }[], reason: '' })
 function openCode(x: CodingItem) {
   const code = x.mainDiagnosis.match(/^[A-Z][0-9][0-9A-Z.]*/)?.[0] ?? ''
-  Object.assign(f, { mainIcd: code, mainLabel: x.mainDiagnosis, secondary: x.secondary.map((s) => ({ ...s })), reason: '' })
+  Object.assign(f, { mainIcd: code, mainLabel: x.mainDiagnosis, secondary: x.secondary.map((s) => ({ ...s })), procedures: x.procedures.map((p) => ({ ...p })), reason: '' })
   act.fieldErrors.value = {}
   reAct.fieldErrors.value = {}
   cur.value = x
 }
 // 試算：照現在畫面上的編碼會分到哪一組
-const { data: preview } = useQuery(async () => (cur.value && f.mainIcd ? codingApi.previewCoding(cur.value.admissionId, { mainIcd: f.mainIcd, secondary: f.secondary }) : undefined), [() => cur.value?.admissionId, () => f.mainIcd, () => f.secondary.map((x) => x.icd).join()])
+const { data: preview } = useQuery(async () => (cur.value && f.mainIcd ? codingApi.previewCoding(cur.value.admissionId, { mainIcd: f.mainIcd, secondary: f.secondary, procedures: f.procedures }) : undefined), [() => cur.value?.admissionId, () => f.mainIcd, () => f.secondary.map((x) => x.icd).join(), () => f.procedures.map((x) => x.code).join()])
+function addPcs(c: PcsCode) {
+  if (!f.procedures.some((p) => p.code === c.code)) f.procedures.push({ code: c.code, name: c.name, or: c.or })
+}
 watch(cur, () => (preview.value = undefined))
 const drgText = (r: { item: CodingItem; drgBefore: { code: string }; drgAfter: { code: string } }) => (!r.item.drgExempt && r.drgBefore.code !== r.drgAfter.code ? `（DRG ${r.drgBefore.code} → ${r.drgAfter.code}）` : '')
 const act = useAction(codingApi.confirmCoding, { success: (r) => (r.item.coded?.changed ? `已修改編碼${drgText(r)}，已通知主治` : '已確認編碼') })
@@ -33,7 +36,7 @@ const reAct = useAction(codingApi.recodeCoding, { success: (r) => `已更正編�
 const errs = computed(() => (recode.value ? reAct.fieldErrors.value : act.fieldErrors.value))
 async function submit() {
   if (!cur.value) return
-  const input = { mainIcd: f.mainIcd, secondary: f.secondary, reason: f.reason }
+  const input = { mainIcd: f.mainIcd, secondary: f.secondary, procedures: f.procedures.map((p) => ({ code: p.code })), reason: f.reason }
   if (await (recode.value ? reAct.run(cur.value.admissionId, input) : act.run(cur.value.admissionId, input))) cur.value = undefined
 }
 </script>
@@ -55,6 +58,7 @@ async function submit() {
           </div>
           <div class="text-xs text-slate-700">主診斷：{{ x.mainDiagnosis || '—' }}<template v-if="x.secondary.length">；次診斷：{{ x.secondary.map((s) => `${s.icd} ${s.name}`).join('、') }}</template><span v-else-if="x.noSecondaryField" class="text-slate-400">（舊病摘沒有次診斷欄位）</span></div>
           <div v-if="x.surgeries.length" class="text-xs text-slate-600">手術：{{ x.surgeries.join('；') }}</div>
+          <div v-if="x.procedures.length || x.coded" class="text-xs text-slate-600">處置碼：<template v-if="x.procedures.length">{{ x.procedures.map((p) => p.code).join('、') }}</template><template v-else>無</template><span v-if="!x.coded || x.noProcedureField" class="text-slate-400">（{{ x.coded ? '舊編碼沒有處置碼欄位，依手術紀錄' : '依手術紀錄建議' }}）</span></div>
           <div v-if="x.drgExempt" class="text-xs text-slate-500">不適用 DRG：{{ x.drgExempt }}（照實申報）</div>
           <div v-else class="text-xs text-slate-500">DRG <b>{{ x.drg.code }}</b> {{ x.drg.name }}（{{ x.drg.basis }}）</div>
           <div v-if="x.coded" class="text-xs" :class="x.coded.changed ? 'text-amber-800' : 'text-emerald-700'">
@@ -80,6 +84,18 @@ async function submit() {
           <p v-if="errs.mainIcd" class="text-xs text-red-600">{{ errs.mainIcd }}</p>
         </div>
         <SecondaryDxEditor v-model="f.secondary" :error="errs.secondaryDiagnoses" />
+        <div>
+          <div class="text-sm font-medium text-slate-700">處置碼（ICD-10-PCS）<span class="text-xs font-normal text-slate-500">（最多 6 個；手術室處置才影響 DRG）</span></div>
+          <p v-if="!f.procedures.length" class="text-xs text-slate-400">沒有處置碼<template v-if="cur.suggestedProcedures.length">（手術紀錄建議：{{ cur.suggestedProcedures.map((p) => p.code).join('、') }}）</template></p>
+          <ul class="my-1 space-y-1">
+            <li v-for="(p, i) in f.procedures" :key="p.code" class="flex items-center gap-2 rounded border border-slate-200 px-2 py-0.5 text-xs">
+              <b class="tabular">{{ p.code }}</b>{{ p.name }}<UBadge :tone="p.or ? 'purple' : 'gray'">{{ p.or ? '手術室' : '非手術室' }}</UBadge>
+              <button type="button" class="ml-auto text-red-600" @click="f.procedures.splice(i, 1)">移除</button>
+            </li>
+          </ul>
+          <USearchSelect placeholder="加處置碼：輸入 PCS 代碼或名稱" :search="(kw) => codingApi.searchPcs(kw)" :item-key="(c: PcsCode) => c.code" :item-label="(c: PcsCode) => `${c.code}　${c.name}${c.or ? '' : '（非手術室）'}`" @select="addPcs" />
+          <p v-if="errs.procedures" class="text-xs text-red-600">{{ errs.procedures }}</p>
+        </div>
         <p v-if="cur.drgExempt" class="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600">不適用 DRG：{{ cur.drgExempt }}（照實申報，編碼不影響給付）</p>
         <p v-else-if="preview" class="rounded border border-slate-200 px-2 py-1 text-xs">照這組編碼：DRG <b>{{ preview.code }}</b> {{ preview.name }}（定額 {{ preview.points.toLocaleString('zh-TW') }}）<template v-if="preview.code !== cur.drg.code"> ← 原本 {{ cur.drg.code }}（{{ cur.drg.points.toLocaleString('zh-TW') }}）</template></p>
         <UInput v-model="f.reason" :label="recode ? '更正理由（必填）' : '修改理由（有改編碼才要寫）'" :error="errs.reason" />

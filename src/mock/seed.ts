@@ -61,13 +61,13 @@ import { effectiveTiming, marTimes, timingApplies } from '@/services/drug-rules'
 import { makeIdNo } from '@/utils/validators'
 import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
-import { priorityOf } from '@/services/lab-queue-rules'
+import { laneOf, priorityOf } from '@/services/lab-queue-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
 import { ipdCategories, ipdClaimPoints, linePoints } from '@/services/claim-rules'
-import { doneProcsFrom, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom, secondaryFrom } from '@/services/drg-rules'
+import { drgProcsOf, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom, secondaryFrom } from '@/services/drg-rules'
 import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
@@ -3368,7 +3368,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const clamp = (t: string) => (t > nowStr ? nowStr : t)
       const pt = patients.find((p) => p.id === x.v.patientId)!
       labCheckins.push({
-        id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601',
+        // 第 3 位只有尿液（自行收集容器）：分流到檢體窗口
+        id: `LC-SEED-${i + 1}`, no: i + 1, patientId: x.v.patientId, date: T, at, by: 'U601', ...(laneOf(plan[i].map((p) => procMap.get(p)?.tube ?? 'red'), SELF_COLLECT_TUBES) === 'drop' ? { lane: 'drop' as const } : {}),
         ...(i ? { calls: [clamp(addMinutes(at, 1))], servedAt: clamp(addMinutes(at, i === 1 ? 3 : 2)) } : { priority: priorityOf(ageOf(pt.birthDate, T), 'mobility') }),
       })
       const keys = plan[i].map((p) => `E:${x.e.id}:${p}`)
@@ -3393,7 +3394,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         const labs = (e?.procedures ?? []).filter((p) => procMap.get(p.procId)?.labItems && !p.notDone)
         if (!e || !c || !labs.length || labCheckins.some((x) => x.patientId === v.patientId)) return
         const at = upTo(addMinutes(c.paidAt, 5))
-        labCheckins.push({ id: `LC-SEED-N${labCheckins.length + 1}`, no: 0, patientId: v.patientId, date: T, at, by: 'U601', calls: [upTo(addMinutes(at, 1))], servedAt: upTo(addMinutes(at, 2)) })
+        labCheckins.push({ id: `LC-SEED-N${labCheckins.length + 1}`, no: 0, patientId: v.patientId, date: T, at, by: 'U601', calls: [upTo(addMinutes(at, 1))], servedAt: upTo(addMinutes(at, 2)), ...(laneOf(labs.map((p) => procMap.get(p.procId)!.tube ?? 'red'), SELF_COLLECT_TUBES) === 'drop' ? { lane: 'drop' as const } : {}) })
         for (const tube of [...new Set(labs.map((p) => procMap.get(p.procId)!.tube ?? 'red'))]) {
           const self = SELF_COLLECT_TUBES.includes(tube)
           const rcv = upTo(addMinutes(at, 20))
@@ -3856,7 +3857,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: ((a.coding?.mainDiagnosis ?? (day ? a.diagnosis : a.dischargeSummary?.diagnosis)) ?? '').trim(),
         ...((lp) => {
           const pt = patients.find((p) => p.id === a.patientId)
-          const g = groupDrg({ mainDiagnosis: mainDiagnosisFrom(a), doneProcs: doneProcsFrom(surgeries, a.id, (id) => procMap.get(id)?.name ?? id), history: historyFrom(encounters, admissions, a.patientId, a.id), secondary: secondaryFrom(a), age: pt ? ageOf(pt.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0 })
+          const g = groupDrg({ mainDiagnosis: mainDiagnosisFrom(a), doneProcs: drgProcsOf(a, surgeries, (id) => procMap.get(id)?.name ?? id), history: historyFrom(encounters, admissions, a.patientId, a.id), secondary: secondaryFrom(a), age: pt ? ageOf(pt.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0 })
           const ex = drgExempt({ day, days: ipdDays(a.admittedAt ?? a.reservedAt, a.dischargedAt!), dischargeType: a.dischargeType ?? a.dischargeSummary?.dischargeType })
           return { ...lp, ...ipdClaimPoints(lp, g, ex) }
         })(linePoints(c.lines)), categories: ipdCategories(c.lines, (n) => procedureBy(n)), days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
@@ -3942,7 +3943,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         kind: 'drug', itemId: 'M052', itemName: 'Teriparatide 20mcg Pen', patientId: v.patientId, ...(prev ? { encounterId: prev.id } : {}), doctorId: v.doctorId, status: 'approved', createdAt: at,
         summary: '停經後骨質疏鬆，骨密度 T 值 −3.3，已有兩處脊椎壓迫性骨折', reason: '使用雙磷酸鹽一年以上仍新發骨折，符合給付規定',
         notes: [{ at: `${d0} 11:10`, by: doc, text: '填寫送審資料' }], submittedAt: addDays(d0, 1) < ok.slice(0, 10) ? `${addDays(d0, 1)} 10:00` : `${d0} 14:00`, submittedBy: 'U402',
-        result: { outcome: 'approved', note: '核准 18 個月療程，先給 6 個月', at: ok < `${d0} 16:00` ? `${d0} 16:00` : ok, by: 'U402', until: addDays(T, 160) } })
+        result: { outcome: 'approved', note: '核准 18 個月療程，先給 6 個月', at: ok < `${d0} 16:00` ? `${d0} 16:00` : ok, by: 'U402', until: addDays(T, 160), qty: 6 } })
     }
   }
 

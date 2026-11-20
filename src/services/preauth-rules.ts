@@ -17,6 +17,12 @@ export function opdPreAuthUntil(p: Pick<PreAuth, 'status' | 'result'>): string |
 /** 門診這天能不能健保開：核准而且在期限內 */
 export const opdPreAuthValid = (p: Pick<PreAuth, 'status' | 'result'>, date: string): boolean => ((u) => !!u && date <= u)(opdPreAuthUntil(p))
 
+/** 門診核准量還剩多少（沒寫核准量＝undefined 不限）：used＝效期內已經健保開的量 */
+export const opdPreAuthLeft = (p: Pick<PreAuth, 'result'>, used: number): number | undefined => (p.result?.qty !== undefined ? Math.max(0, p.result.qty - used) : undefined)
+
+/** 這次要開的量：慢箋算整張（每次調劑同量 × 可調劑次數） */
+export const opdRxQty = (qty: number, refillTimes: number) => qty * (refillTimes >= 2 ? refillTimes : 1)
+
 /** 門診擋下時的說明 */
 export function opdPreAuthBlockText(drugName: string, p: Pick<PreAuth, 'no' | 'status' | 'result'> | undefined, date: string): string {
   const why = !p ? '還沒申請' : p.status === 'approved' && !opdPreAuthValid(p, date) ? `${p.no} 核准已過期（${opdPreAuthUntil(p)}）：請重新申請` : `${p.no} ${PREAUTH_STATUS_LABEL[p.status]}`

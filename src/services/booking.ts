@@ -14,6 +14,7 @@ import { fixedCharges, type CopayReferred } from './billing'
 import { checkInProblem } from './queue-rules'
 import { referralInProblem, type ReferralInInput } from './referral-rules'
 import { buildReferralIn } from './referral-work'
+import { requireRefillPreAuth } from './preauth-work'
 import { refillState, supersededBy, supplyDays, type RefillFill, type RefillState } from './refill-rules'
 
 export interface VisitQuery {
@@ -337,6 +338,7 @@ export function registerRefill(encounterId: string): Promise<VisitView> {
     const t = today()
     const st = refillStateOf(e, t)
     if (!st.canRegister) fail(`無法登記領藥：${st.reason}`, 'CONFLICT')
+    requireRefillPreAuth(e, t)
     const first = must(find.visit(e.visitId), '掛號紀錄')
     const v: Visit = {
       id: newId('V'), date: t, sessionId: '', deptId: e.deptId, doctorId: e.doctorId, patientId: p.id, seqNo: 0,

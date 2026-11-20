@@ -86,3 +86,31 @@ export const windowOfUser = <T extends W>(ws: T[], userId: string, date: string)
 export const windowHolder = <T extends W>(ws: T[], window: number, date: string): T | undefined => ws.find((w) => w.date === date && w.window === window && !w.closedAt)
 /** 叫號沒開窗時自動開：最小的空窗口 */
 export const firstFreeWindow = (ws: W[], date: string): number | undefined => LAB_WINDOWS.find((n) => !windowHolder(ws, n, date))
+
+// ── 分流：只交檢體（待採的全是病人自行收集的容器：尿液、痰液）的病人走 3 號「檢體窗口」，不跟抽血的排同一條 ──
+// 檢體窗口開著：抽血窗口只叫抽血的，檢體窗口先叫交檢體的、沒有才幫忙叫抽血的；檢體窗口沒開：全部照原本一條隊伍。
+// 優先（75 歲以上等）的連續計數只算抽血的
+
+export type QueueLane = 'blood' | 'drop'
+export const QUEUE_LANE_LABEL: Record<QueueLane, string> = { blood: '抽血', drop: '交檢體' }
+/** 檢體窗口 */
+export const LAB_DROP_WINDOW = 3
+export const LAB_WINDOW_LABEL: Record<number, string> = { [LAB_DROP_WINDOW]: '檢體窗口' }
+/** 報到時分流：待採檢的容器全是自行收集的＝交檢體 */
+export const laneOf = (tubes: string[], selfCollect: string[]): QueueLane => (tubes.length && tubes.every((t) => selfCollect.includes(t)) ? 'drop' : 'blood')
+const laneOfC = (c: { lane?: QueueLane }): QueueLane => c.lane ?? 'blood'
+
+/** 這個窗口下一位：見上方分流規則 */
+export function pickNextFor<T extends C & { lane?: QueueLane }>(window: number, waiting: T[], streak: number, dropOpen: boolean): T | undefined {
+  if (!dropOpen) return pickNext(waiting, streak)
+  const w = [...waiting].sort((a, b) => queueOrder(a) - queueOrder(b))
+  const blood = w.filter((c) => laneOfC(c) === 'blood')
+  if (window === LAB_DROP_WINDOW) return w.find((c) => laneOfC(c) === 'drop') ?? pickNext(blood, streak)
+  // 抽血的都叫完了：抽血窗口也幫忙叫交檢體的
+  return pickNext(blood, streak) ?? w.find((c) => laneOfC(c) === 'drop')
+}
+/** 看板的叫號順序：檢體窗口開著時分兩條（抽血照優先規則、交檢體照號碼）；沒開就一條 */
+export function laneOrders<T extends C & { lane?: QueueLane }>(waiting: T[], streak: number, dropOpen: boolean): { blood: T[]; drop: T[] } {
+  if (!dropOpen) return { blood: callOrder(waiting, streak), drop: [] }
+  return { blood: callOrder(waiting.filter((c) => laneOfC(c) === 'blood'), streak), drop: [...waiting].filter((c) => laneOfC(c) === 'drop').sort((a, b) => queueOrder(a) - queueOrder(b)) }
+}

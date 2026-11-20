@@ -1,6 +1,8 @@
 // DRG 診斷關聯群（純函式，示範用的簡化分組器）：分組表、分組（主手術 → 主診斷 → 有無合併症或 65 歲以上）、
 // 不適用 DRG 的情況、給付（下限以下照實際、上下限之間定額、上限以上定額＋超出 80%）、住院中預估提示。
 // 服務層（drg.ts、claim-work 住院申報）、種子、畫面、測試都用這一份。點數、權重是展示用近似值（配合這套展示的點數水準，不是實際支付標準）
+import { drgProcsFromPcs } from './pcs-rules'
+
 export interface DrgGroup {
   code: string
   name: string
@@ -113,3 +115,7 @@ export const historyFrom = (encs: Enc[], adms: Adm[], patientId: string, exceptA
 /** 這次住院做完的手術（依結束時間）；planned＝住院中預估，排了還沒做的也算（取消的不算） */
 export const doneProcsFrom = (sgs: Sg[], admissionId: string, nameOf: (procId: string) => string, planned = false) =>
   sgs.filter((s) => s.admissionId === admissionId && (planned ? s.status !== 'cancelled' : s.status === 'done')).sort((x, y) => (x.endAt ?? '').localeCompare(y.endAt ?? '')).map((s) => ({ id: s.procId, name: nameOf(s.procId) }))
+
+/** DRG 分組用的手術：編碼審查登錄了處置碼（ICD-10-PCS）就看處置碼（手術室處置才算）；沒有（舊編碼、還沒審查）看手術紀錄 */
+export const drgProcsOf = (a: { id: string; coding?: { procedures?: { code: string; name: string }[] } }, sgs: Sg[], nameOf: (procId: string) => string, planned = false) =>
+  a.coding?.procedures ? drgProcsFromPcs(a.coding.procedures) : doneProcsFrom(sgs, a.id, nameOf, planned)

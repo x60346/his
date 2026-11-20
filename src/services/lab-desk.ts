@@ -10,8 +10,8 @@ import { chunksByVolume, needsFasting, nextBarcode, opdSpecimenOf, recordFasting
 import { pendingLabWork } from './lab-work'
 import { find, nameOf } from './views'
 import { ageOf } from '@/utils/date'
-import { firstFreeWindow, LAB_WINDOWS, windowHolder, windowOfUser } from './lab-queue-rules'
-import { callOrder, maskName, pickNext, priorityOf, QUEUE_PRIORITY_AGE, QUEUE_PRIORITY_LABEL } from './lab-queue-rules'
+import { firstFreeWindow, LAB_WINDOWS, windowHolder, windowOfUser, LAB_DROP_WINDOW, LAB_WINDOW_LABEL, laneOf, laneOrders, pickNextFor, QUEUE_LANE_LABEL } from './lab-queue-rules'
+import { maskName, priorityOf, QUEUE_PRIORITY_AGE, QUEUE_PRIORITY_LABEL } from './lab-queue-rules'
 import { avgWait, callsSinceReturn, queueOrder, queueStage, returnOrder, waitingList, QUEUE_MAX_CALLS, QUEUE_STAGE_LABEL, type QueueStage } from './lab-queue-rules'
 
 /** 這位病人還沒採檢的門診檢驗（沒有檢體、或檢體被退件的） */
@@ -58,13 +58,17 @@ export interface DeskPatient {
   /** 報到時會自動優先（75 歲以上） */
   autoPriority: boolean
   priorityLabel?: string
+  /** 分流：交檢體（走檢體窗口） */
+  laneLabel?: string
 }
 
 /** 叫號看板：目前叫到的號、等候中（依順序）、過號的、今天平均等候分鐘 */
 export interface DeskQueue {
   current?: { no: number; patientId: string; patientName: string; calls: number; calledAt: string }
   /** 依接下來的叫號順序（優先排在一般前面，但連續兩位優先後輪一位一般） */
-  waiting: { no: number; patientId: string; patientName: string; at: string; returned: boolean; priorityLabel?: string }[]
+  waiting: { no: number; patientId: string; patientName: string; at: string; returned: boolean; priorityLabel?: string; /** 交檢體（檢體窗口開著時排在抽血的後面、另一條） */ drop: boolean }[]
+  /** 檢體窗口（3 號）開著：交檢體的分流 */
+  dropOpen: boolean
   /** 目前連續叫了幾位優先 */
   streak: number
   skipped: { no: number; patientId: string; patientName: string; skippedAt: string }[]
@@ -72,7 +76,7 @@ export interface DeskQueue {
   maxCalls: number
   /** 我開著的窗口；各窗口誰開著、正在叫幾號、今天採了幾位 */
   myWindow?: number
-  windows: { window: number; userName?: string; mine: boolean; current?: { no: number; patientName: string }; served: number }[]
+  windows: { window: number; label?: string; userName?: string; mine: boolean; current?: { no: number; patientName: string }; served: number }[]
 }
 
 function deskPatient(patientId: string, d: string): DeskPatient {
@@ -84,7 +88,7 @@ function deskPatient(patientId: string, d: string): DeskPatient {
     toPrint: groupByTube(items.map((w) => ({ tube: tubeOf(w.procId), w }))).map((g) => ({ tube: g.tube, tubeLabel: TUBE_LABEL[g.tube], selfCollect: SELF_COLLECT_TUBES.includes(g.tube), tests: g.items.map((x) => x.w.procName) })),
     specimens: specimens.map(spView),
     recollect: specimens.some((s) => s.rejected) && items.length > 0,
-    ...((c) => (c ? { queue: queueStage(c), queueLabel: QUEUE_STAGE_LABEL[queueStage(c)], ...(c.priority ? { priorityLabel: QUEUE_PRIORITY_LABEL[c.priority] } : {}) } : {}))(db.labCheckins.find((c) => c.patientId === patientId && c.date === d)),
+    ...((c) => (c ? { queue: queueStage(c), queueLabel: QUEUE_STAGE_LABEL[queueStage(c)], ...(c.priority ? { priorityLabel: QUEUE_PRIORITY_LABEL[c.priority] } : {}), ...(c.lane ? { laneLabel: QUEUE_LANE_LABEL[c.lane] } : {}) } : {}))(db.labCheckins.find((c) => c.patientId === patientId && c.date === d)),
     autoPriority: !!p && ageOf(p.birthDate, d) >= QUEUE_PRIORITY_AGE,
   }
 }
@@ -105,16 +109,19 @@ function deskQueue(userId?: string): DeskQueue {
     windows: LAB_WINDOWS.map((n) => {
       const h = windowHolder(db.labWindows, n, d)
       const c = cs.filter((x) => queueStage(x) === 'called' && x.window === n).at(-1)
-      return { window: n, ...(h ? { userName: nameOf.user(h.userId) } : {}), mine: n === mine, ...(c ? { current: { no: c.no, patientName: nameOf.patient(c.patientId) } } : {}), served: cs.filter((x) => x.servedAt && x.window === n).length }
+      return { window: n, ...(LAB_WINDOW_LABEL[n] ? { label: LAB_WINDOW_LABEL[n] } : {}), ...(h ? { userName: nameOf.user(h.userId) } : {}), mine: n === mine, ...(c ? { current: { no: c.no, patientName: nameOf.patient(c.patientId) } } : {}), served: cs.filter((x) => x.servedAt && x.window === n).length }
     }),
     ...(cur ? { current: { no: cur.no, patientId: cur.patientId, patientName: nameOf.patient(cur.patientId), calls: callsSinceReturn(cur), calledAt: cur.calls!.at(-1)! } } : {}),
-    waiting: callOrder(waitingList(cs), streakNow()).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), at: c.returnedAt ?? c.at, returned: !!c.returnedAt, ...(c.priority ? { priorityLabel: QUEUE_PRIORITY_LABEL[c.priority] } : {}) })),
+    waiting: ((o) => [...o.blood, ...o.drop])(laneOrders(waitingList(cs), streakNow(), dropOpenNow())).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), at: c.returnedAt ?? c.at, returned: !!c.returnedAt, ...(c.priority ? { priorityLabel: QUEUE_PRIORITY_LABEL[c.priority] } : {}), drop: c.lane === 'drop' })),
+    dropOpen: dropOpenNow(),
     streak: streakNow(),
     skipped: cs.filter((c) => queueStage(c) === 'skipped').sort((a, b) => a.no - b.no).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), skippedAt: c.skippedAt! })),
     ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),
     maxCalls: QUEUE_MAX_CALLS,
   }
 }
+/** 檢體窗口開著嗎 */
+const dropOpenNow = () => !!windowHolder(db.labWindows, LAB_DROP_WINDOW, todayOf())
 const checkinOf = (patientId: string) => must(todays().find((c) => c.patientId === patientId), '今天的報到（請先報到取號）')
 
 /** 抽血櫃台：今天報到的（依號碼）＋已批價還沒報到的＋叫號看板 */
@@ -178,12 +185,13 @@ export function callNextLab(): Promise<LabCheckin> {
     const cs = todays()
     const cur = calledOf(cs, w)
     if (cur) fail(`${w} 號窗口叫到的 ${cur.no} 號（${nameOf.patient(cur.patientId)}）還沒處理：開始採檢、重叫或過號`, 'CONFLICT')
-    const next = pickNext(waitingList(cs), streakNow())
+    const next = pickNextFor(w, waitingList(cs), streakNow(), dropOpenNow())
     if (!next) fail('沒有等候中的病人', 'CONFLICT')
     ;(next!.calls ??= []).push(now())
     next!.window = w
-    db.counters[streakKey()] = next!.priority ? streakNow() + 1 : 0
-    audit('抽血叫號', `${next!.no} 號 ${nameOf.patient(next!.patientId)} → ${w} 號窗口${next!.priority ? `（優先：${QUEUE_PRIORITY_LABEL[next!.priority]}）` : ''}`)
+    // 優先的連續計數只算抽血的（交檢體的不影響）
+    if (next!.lane !== 'drop') db.counters[streakKey()] = next!.priority ? streakNow() + 1 : 0
+    audit('抽血叫號', `${next!.no} 號 ${nameOf.patient(next!.patientId)} → ${w} 號窗口${next!.lane === 'drop' ? '（交檢體）' : ''}${next!.priority ? `（優先：${QUEUE_PRIORITY_LABEL[next!.priority]}）` : ''}`)
     return next!
   })
 }
@@ -250,9 +258,10 @@ export function checkInLab(patientId: string, opts: { priority?: 'disabled' | 'm
     const no = (db.counters[`labdesk:${d}`] = (db.counters[`labdesk:${d}`] ?? 0) + 1)
     const p = must(find.patient(patientId), '病患')
     const pr = priorityOf(ageOf(p.birthDate, d), opts.priority)
-    const c: LabCheckin = { id: newId('LC'), no, patientId, date: d, at: now(), by: u.id, ...(pr ? { priority: pr } : {}) }
+    const lane = laneOf(toCollect(patientId).map((w) => tubeOf(w.procId)), SELF_COLLECT_TUBES)
+    const c: LabCheckin = { id: newId('LC'), no, patientId, date: d, at: now(), by: u.id, ...(pr ? { priority: pr } : {}), ...(lane === 'drop' ? { lane } : {}) }
     db.labCheckins.push(c)
-    audit('抽血櫃台報到', `${nameOf.patient(patientId)}：${no} 號${pr ? `（優先：${QUEUE_PRIORITY_LABEL[pr]}）` : ''}`)
+    audit('抽血櫃台報到', `${nameOf.patient(patientId)}：${no} 號${pr ? `（優先：${QUEUE_PRIORITY_LABEL[pr]}）` : ''}${lane === 'drop' ? '（交檢體）' : ''}`)
     return c
   })
 }
@@ -280,6 +289,8 @@ export interface QueueDisplay {
   /** 各窗口正在叫的（最近叫的在前） */
   calling: { no: number; name: string; window: number }[]
   next: { no: number; name: string; priority: boolean }[]
+  /** 檢體窗口開著：交檢體的另外一條（接下來五位） */
+  nextDrop?: { no: number; name: string }[]
   waitingCount: number
   avgWait?: number
 }
@@ -287,13 +298,15 @@ export function labQueueDisplay(): Promise<QueueDisplay> {
   return query(() => {
     const cs = todays()
     const cur = cs.filter((c) => queueStage(c) === 'called').sort((a, b) => a.calls!.at(-1)!.localeCompare(b.calls!.at(-1)!)).at(-1)
-    const order = callOrder(waitingList(cs), streakNow())
+    const lo = laneOrders(waitingList(cs), streakNow(), dropOpenNow())
+    const order = lo.blood
     return {
       date: todayOf(),
       ...(cur ? { current: { no: cur.no, name: maskName(nameOf.patient(cur.patientId)), ...(cur.window ? { window: cur.window } : {}) } } : {}),
       calling: cs.filter((c) => queueStage(c) === 'called' && c.window).sort((a, b) => b.calls!.at(-1)!.localeCompare(a.calls!.at(-1)!)).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), window: c.window! })),
       next: order.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), priority: !!c.priority })),
-      waitingCount: order.length,
+      ...(dropOpenNow() ? { nextDrop: lo.drop.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)) })) } : {}),
+      waitingCount: order.length + lo.drop.length,
       ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),
     }
   }, { public: true })

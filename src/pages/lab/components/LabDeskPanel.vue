@@ -53,7 +53,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
     <!-- 窗口：誰開著、正在叫幾號、今天採了幾位 -->
     <div class="flex flex-wrap items-center gap-2 text-sm">
       <div v-for="w in data.queue.windows" :key="w.window" :class="['flex min-w-[11rem] items-center gap-2 rounded-md border px-3 py-1.5', w.mine ? 'border-brand-400 bg-brand-50' : 'border-slate-200 bg-white']">
-        <b class="tabular text-slate-800">{{ w.window }} 號窗口</b>
+        <b class="tabular text-slate-800">{{ w.window }} 號窗口</b><span v-if="w.label" class="rounded bg-amber-100 px-1 text-xs text-amber-800">{{ w.label }}</span>
         <span v-if="w.userName" class="text-xs text-slate-600">{{ w.userName }}{{ w.mine ? '（我）' : '' }}・{{ w.current ? `叫 ${w.current.no} 號` : '空著' }}・已採 {{ w.served }}</span>
         <span v-else class="text-xs text-slate-400">沒開</span>
         <UButton v-if="!w.userName && !data.queue.myWindow" size="sm" variant="secondary" class="ml-auto" :loading="openWin.pending.value" @click="openWin.run(w.window)">開窗</UButton>
@@ -82,9 +82,10 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
         </div>
         <p v-if="data.queue.current" class="text-xs text-slate-500">病人來了就在下方按「印條碼」開始採檢；叫了 {{ data.queue.maxCalls }} 次沒來請過號</p>
         <p v-if="data.queue.waiting.length" class="flex flex-wrap items-center gap-1 text-xs text-slate-600">接下來：
-          <span v-for="w in data.queue.waiting" :key="w.no" :class="['rounded px-1', w.priorityLabel ? 'bg-violet-100 text-violet-800' : 'bg-slate-100']">{{ w.no }} 號{{ w.priorityLabel ? `（優先・${w.priorityLabel}）` : '' }}{{ w.returned ? '（過號回來）' : '' }}</span>
+          <span v-for="w in data.queue.waiting" :key="w.no" :class="['rounded px-1', w.priorityLabel ? 'bg-violet-100 text-violet-800' : w.drop ? 'bg-amber-100 text-amber-800' : 'bg-slate-100']">{{ w.no }} 號{{ w.drop ? '（交檢體）' : '' }}{{ w.priorityLabel ? `（優先・${w.priorityLabel}）` : '' }}{{ w.returned ? '（過號回來）' : '' }}</span>
         </p>
         <p v-if="data.queue.waiting.some((w) => w.priorityLabel)" class="text-xs text-slate-400">優先排在一般前面；連續叫兩位優先後輪一位一般</p>
+        <p v-if="data.queue.waiting.some((w) => w.drop)" class="text-xs text-slate-400">{{ data.queue.dropOpen ? '只交檢體（尿液、痰液）的走 3 號檢體窗口；抽血窗口抽血的叫完才幫忙叫' : '3 號檢體窗口沒開：交檢體的和抽血的排同一條' }}</p>
         <p v-if="data.queue.skipped.length" class="flex flex-wrap items-center gap-2 text-xs text-red-700">過號：
           <span v-for="s in data.queue.skipped" :key="s.no" class="inline-flex items-center gap-1">{{ s.no }} 號 {{ s.patientName }}
             <UButton size="sm" variant="secondary" :icon="Undo2" :loading="back.pending.value" @click="back.run(s.patientId)">回來了</UButton></span>
@@ -122,6 +123,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
                 <span class="tabular rounded bg-slate-800 px-1.5 text-xs font-bold text-white">{{ p.checkin?.no }} 號</span>
                 <b>{{ p.patientName }}</b><span class="text-xs text-slate-500">{{ p.chartNo }}・報到 {{ p.checkin?.at.slice(11) }}</span>
                 <UBadge v-if="p.queue" :tone="QTONE[p.queue]">{{ p.queueLabel }}</UBadge>
+                <UBadge v-if="p.laneLabel" tone="yellow">{{ p.laneLabel }}</UBadge>
                 <UBadge v-if="p.priorityLabel" tone="purple">優先・{{ p.priorityLabel }}</UBadge>
                 <select v-else-if="p.queue && p.queue !== 'served'" class="form-control w-28 py-0.5 text-xs" aria-label="改為優先" @change="(ev) => { const v = (ev.target as HTMLSelectElement).value; if (v) setPrio.run(p.patientId, v as 'disabled' | 'mobility') }">
                   <option value="">設為優先…</option><option value="disabled">身心障礙</option><option value="mobility">行動不便</option>

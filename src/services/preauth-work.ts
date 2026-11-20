@@ -2,7 +2,7 @@
 import type { Encounter, IpdOrder, PreAuth } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { fail } from './http'
-import { opdPreAuthBlockText, opdPreAuthValid, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
+import { opdPreAuthBlockText, opdPreAuthLeft, opdPreAuthUntil, opdPreAuthValid, opdRxQty, preAuthAllows, preAuthBlockText, preAuthOverdue } from './preauth-rules'
 import { find } from './views'
 
 const live = (p: PreAuth) => p.status !== 'rejected'
@@ -44,14 +44,42 @@ export function opdDrugPreAuthOf(patientId: string, drugId: string, date: string
   return xs.find((p) => opdPreAuthValid(p, date)) ?? xs.find((p) => p.status !== 'approved')
 }
 
-/** 門診完成看診前：需事前審查的藥用健保開（沒勾自費、不是自費身分）要有效期內的核准 */
-export function requireOpdDrugPreAuth(e: Pick<Encounter, 'patientId' | 'date' | 'medications'>, selfPayVisit: boolean) {
+/**
+ * 門診核准後已經健保開了多少（這個病人這個藥、核准日到效期內完成的看診與慢箋領藥，不算自費的、不算 exceptEncounterId）。
+ * 慢箋原處方算整張（每次調劑同量 × 可調劑次數），之後的領藥不再重算
+ */
+export function opdPreAuthUsed(p: PreAuth, exceptEncounterId?: string): number {
+  const from = p.result?.at.slice(0, 10) ?? ''
+  const until = opdPreAuthUntil(p) ?? ''
+  return db.encounters
+    .filter((e) => e.patientId === p.patientId && e.status === 'completed' && e.id !== exceptEncounterId && e.date >= from && e.date <= until && !find.visit(e.visitId)?.refillOf)
+    .reduce((n, e) => n + e.medications.filter((m) => m.drugId === p.itemId && !m.selfPay).reduce((k, m) => k + opdRxQty(m.qty, e.refillTimes), 0), 0)
+}
+
+/** 門診完成看診前：需事前審查的藥用健保開（沒勾自費、不是自費身分）要有效期內的核准，而且不超過核准量（慢箋算整張） */
+export function requireOpdDrugPreAuth(e: Pick<Encounter, 'id' | 'patientId' | 'date' | 'medications' | 'refillTimes'>, selfPayVisit: boolean) {
   if (selfPayVisit) return
-  for (const m of e.medications.filter((x) => !x.selfPay)) {
-    const d = find.drug(m.drugId)
+  for (const id of [...new Set(e.medications.filter((x) => !x.selfPay).map((x) => x.drugId))]) {
+    const d = find.drug(id)
     if (!d?.preAuth) continue
     const p = opdDrugPreAuthOf(e.patientId, d.id, e.date)
     if (!p || !opdPreAuthValid(p, e.date)) fail(opdPreAuthBlockText(d.name, p, e.date), 'CONFLICT')
+    const want = e.medications.filter((m) => m.drugId === id && !m.selfPay).reduce((n, m) => n + opdRxQty(m.qty, e.refillTimes), 0)
+    const left = opdPreAuthLeft(p!, opdPreAuthUsed(p!, e.id))
+    if (left !== undefined && want > left) fail(`${d.name} 超過事前審查核准量（${p!.no} 核准 ${p!.result!.qty} ${d.unit}、還剩 ${left}，這次${e.refillTimes >= 2 ? `慢箋共` : ''} ${want}）：請減量、改自費，或重新申請`, 'CONFLICT')
+  }
+}
+
+/** 慢箋領藥登記前：原處方裡健保開的需事前審查的藥，領藥這天核准還要在效期內 */
+export function requireRefillPreAuth(e: Pick<Encounter, 'patientId' | 'medications'>, date: string) {
+  for (const id of [...new Set(e.medications.filter((x) => !x.selfPay).map((x) => x.drugId))]) {
+    const d = find.drug(id)
+    if (!d?.preAuth) continue
+    const p = opdDrugPreAuthOf(e.patientId, d.id, date)
+    if (p && opdPreAuthValid(p, date)) continue
+    // 找最近一張過期的核准（說得出哪天到期）
+    const old = db.preAuths.filter((x) => x.kind === 'drug' && !x.admissionId && x.patientId === e.patientId && x.itemId === d.id && x.status === 'approved').map(opdPreAuthUntil).filter((u): u is string => !!u).sort().at(-1)
+    fail(`無法登記領藥：${d.name} 需健保事前審查，${old ? `核准已過期（${old}）` : '沒有有效的核准'}：請回診，由醫師重新申請或改自費`, 'CONFLICT')
   }
 }
 

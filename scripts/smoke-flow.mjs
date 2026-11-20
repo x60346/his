@@ -17801,6 +17801,168 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     } else ok(true, '（今天沒有第三位候診，略過過期與自費）')
     ok((await load('/src/services/preauth-work.ts')).preAuthUnapproved(db().admissions[0].id).every((x) => !x.includes('Teriparatide')), '門診的送審單不影響住院申報檢核')
   }
+  // 門診事前審查核准量與慢箋：效期內累計已健保開的量（慢箋算整張、自費不算）不能超過核准量；慢箋領藥時核准要還在效期
+  console.log('\n[事前審查核准量]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const work = await load('/src/services/preauth-work.ts')
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.opdPreAuthLeft({ result: { qty: 6 } }, 4) === 2 && api.opdPreAuthLeft({ result: { qty: 6 } }, 9) === 0 && api.opdPreAuthLeft({ result: {} }, 9) === undefined && api.opdRxQty(1, 3) === 3 && api.opdRxQty(2, 0) === 2, '規則：還剩多少（沒寫核准量不限）、慢箋算整張')
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    ok(seedPa?.result.qty === 6, '種子：核准 6 支')
+    const DOC = seedPa.doctorId
+    const docName = db().users.find((u) => u.doctorId === DOC).username
+    const todays = db().visits.filter((x) => x.date === T && x.doctorId === DOC && x.status === 'registered' && !x.refillOf && !x.er)
+    const v1 = todays.find((x) => x.patientId === seedPa.patientId)
+    const v2 = todays.find((x) => x.patientId !== seedPa.patientId && !db().preAuths.some((p) => p.patientId === x.patientId))
+    const med = (qty, selfPay = false) => ({ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty, selfPay })
+    const draftOf = (meds, refillTimes = 0) => ({ subjective: '骨鬆追蹤', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: meds, procedures: [], refillTimes, admissionRequested: false })
+    await as(docName)
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    let st = await P.opdPreAuthStates(e1.id, ['M052'])
+    ok(st[0].valid && st[0].preAuth.qty.approved === 6 && st[0].preAuth.qty.used === 0 && st[0].preAuth.qty.left === 6 && st[0].preAuth.qty.unit === 'PEN', '看診時看得到：核准 6、已開 0、還剩 6')
+    const msg = await errOf(() => api.opdApi.completeEncounter(e1.id, draftOf([med(7)])))
+    ok(msg.includes('核准量') && msg.includes('還剩 6'), `超過核准量：擋下「${msg}」`)
+    await api.opdApi.completeEncounter(e1.id, draftOf([med(2)]))
+    await as('clerk02')
+    const pv = (await P.preAuthBoard()).find((x) => x.id === seedPa.id)
+    ok(pv.qty.used === 2 && pv.qty.left === 4 && pv.resultText.includes('核准量 6'), '開 2 支後：已開 2、還剩 4（申報組看得到）')
+    ok(work.opdPreAuthUsed(db().preAuths.find((p) => p.id === seedPa.id), e1.id) === 0, '計算時可以排除這次看診（修改時不重算自己）')
+    // 第二位：申請 → 核准量 4 → 慢箋 3 次 × 2 支＝6 超過；2 次 × 2＝4 剛好
+    await as(docName)
+    const e2 = await api.opdApi.startConsult(v2.id, { allowNotCheckedIn: true, allowParallel: true })
+    const pa = await P.requestOpdDrugPreAuth(e2.id, 'M052')
+    await P.fillPreAuth(pa.id, { summary: 'T 值 −3.0', reason: '雙磷酸鹽後仍骨折' })
+    await as('clerk02')
+    await P.submitPreAuth(pa.id)
+    ok((await fieldsOf(() => P.recordPreAuthResult(pa.id, { outcome: 'approved', qty: 1.5 }))).qty && (await fieldsOf(() => P.recordPreAuthResult(pa.id, { outcome: 'approved', qty: 0 }))).qty, '核准量要正整數')
+    await P.recordPreAuthResult(pa.id, { outcome: 'approved', qty: 4 })
+    db().visits.find((x) => x.id === v2.id).caseType = '04'
+    await as(docName)
+    const m2 = await errOf(() => api.opdApi.completeEncounter(e2.id, draftOf([med(2)], 3)))
+    ok(m2.includes('慢箋共 6') && m2.includes('還剩 4'), `慢箋算整張：3 次 × 2 支＝6 超過 4 →「${m2}」`)
+    await api.opdApi.completeEncounter(e2.id, draftOf([med(2)], 2))
+    const e2done = db().encounters.find((x) => x.id === e2.id)
+    ok(e2done.status === 'completed' && work.opdPreAuthUsed(db().preAuths.find((p) => p.id === pa.id)) === 4, '慢箋 2 次 × 2 支＝4：剛好用完')
+    // 慢箋領藥：核准還在效期 → 放行；過期 → 擋
+    ok(!(await errOf(() => work.requireRefillPreAuth(e2done, addDaysT(30)))), '慢箋領藥：效期內放行')
+    const p2 = db().preAuths.find((p) => p.id === pa.id)
+    p2.result.until = addDaysT(10)
+    const m3 = await errOf(() => work.requireRefillPreAuth(e2done, addDaysT(28)))
+    ok(m3.includes('無法登記領藥') && m3.includes('過期') && m3.includes('回診'), `慢箋領藥：核准過期擋下「${m3}」`)
+    ok(!(await errOf(() => work.requireRefillPreAuth({ ...e2done, medications: e2done.medications.map((m) => ({ ...m, selfPay: true })) }, addDaysT(28)))), '原處方是自費開的：不檢查')
+    const { readFileSync } = await import('node:fs')
+    const bk = readFileSync('src/services/booking.ts', 'utf8')
+    ok(bk.indexOf('requireRefillPreAuth(e, t)') > bk.indexOf('if (!st.canRegister)'), '登記慢箋領藥時檢查（在領藥時間檢查之後）')
+    // 用完再開 → 擋；自費不算進用量
+    const v3 = todays.find((x) => x !== v1 && x !== v2)
+    if (v3) {
+      db().preAuths.push({ ...JSON.parse(JSON.stringify(p2)), id: 'PA-T-Q', no: 'PA-T-Q', patientId: v3.patientId, result: { ...p2.result, until: addDaysT(100), qty: 1 } })
+      const e3 = await api.opdApi.startConsult(v3.id, { allowNotCheckedIn: true, allowParallel: true })
+      await api.opdApi.completeEncounter(e3.id, draftOf([med(1), med(3, true)]))
+      ok(work.opdPreAuthUsed(db().preAuths.find((p) => p.id === 'PA-T-Q')) === 1, '同一張處方自費的那列不算進用量')
+    } else ok(true, '（今天沒有第三位候診，略過）')
+  }
+  // 處置碼 ICD-10-PCS：主檔、檢查；編碼審查登錄（依手術紀錄預帶、改了要理由、試算 DRG）；DRG 看手術室處置；更正也能改處置碼；舊編碼看手術紀錄
+  console.log('\n[處置碼 ICD-10-PCS]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.codingApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(!api.checkPcs([{ code: 'XXX' }]).ok && api.checkPcs([{ code: '0DTJ4ZZ' }, { code: '0dtj4zz' }]).message.includes('重複') && !api.checkPcs(Array.from({ length: 7 }, () => ({ code: '0DTJ4ZZ' }))).ok && api.checkPcs([{ code: '0dtj4zz' }]).items[0].name === '腹腔鏡闌尾切除', '檢查：主檔、不重複（大小寫）、最多 6 個、名稱照主檔')
+    const dp = api.drgProcsFromPcs([{ code: '5A1955Z', name: 'x' }, { code: '0FT44ZZ', name: '腹腔鏡膽囊切除' }, { code: '0DTJ4ZZ', name: '腹腔鏡闌尾切除' }])
+    ok(dp.length === 2 && dp[0].id === 'PCS:0FT44ZZ' && dp[1].id === 'P038', 'DRG 用的手術：非手術室處置不算；對不到術式的當其他手術')
+    await as('clerk02')
+    ok((await errOf(() => C.searchPcs('0DT'))).includes('疾病分類'), '搜尋要「疾病分類」權限')
+    await as('clerk01')
+    ok((await C.searchPcs('0DT')).length === 2 && (await C.searchPcs('呼吸器')).length === 2, '搜尋：代碼開頭、名稱')
+    const q = await C.codingQueue()
+    const it = q.todo.find((x) => !x.drgExempt) ?? q.todo[0]
+    const a = db().admissions.find((x) => x.id === it.admissionId)
+    const code = it.mainDiagnosis.match(/^[A-Z][0-9][0-9A-Z.]*/)?.[0]
+    const mainIcd = db().icdCodes.some((c) => c.code === code && c.active !== false) ? code : 'J18.9'
+    const pvS = await C.previewCoding(a.id, { mainIcd, secondary: [], procedures: [{ code: '0DTJ4ZZ' }] })
+    const pvN = await C.previewCoding(a.id, { mainIcd, secondary: [], procedures: [{ code: '5A1955Z' }] })
+    const pvO = await C.previewCoding(a.id, { mainIcd, secondary: [], procedures: [{ code: '0FT44ZZ' }] })
+    ok(pvS.code.startsWith('D167') && !pvN.code.startsWith('D167') && pvN.code !== 'D999S' && pvO.code === 'D999S', `試算：闌尾切除 ${pvS.code}、只有呼吸器（非手術室）${pvN.code}、膽囊切除（不在分組表）${pvO.code}`)
+    ok((await fieldsOf(() => C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [{ code: 'NOPE' }] }))).procedures?.includes('不在主檔'), '處置碼不在主檔：擋')
+    ok((await fieldsOf(() => C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [...it.suggestedProcedures, { code: '5A1955Z' }] }))).reason, '加了處置碼＝修改，要寫理由')
+    const r = await C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [...it.suggestedProcedures, { code: '5A1955Z' }], reason: '補登呼吸器使用' })
+    const a2 = db().admissions.find((x) => x.id === a.id)
+    ok(a2.coding.procedures.some((p) => p.code === '5A1955Z') && a2.coding.before.procedures && r.item.procedures.find((p) => p.code === '5A1955Z').or === false && db().auditLogs[0].detail.includes('處置：'), '登錄：處置碼存在編碼、修改前留著、標非手術室、稽核')
+    ok(r.drgAfter.code === r.drgBefore.code, '只加非手術室處置：DRG 不變')
+    // 更正：只改處置碼也算更正
+    const r2 = await C.recodeCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [{ code: '0DTJ4ZZ' }], reason: '複審手術紀錄：有做腹腔鏡闌尾切除' })
+    ok(r2.drgAfter.code.startsWith('D167') && a2.coding.revisions.at(-1).procedures.some((p) => p.code === '5A1955Z'), `更正處置碼：DRG ${r2.drgBefore.code} → ${r2.drgAfter.code}、舊的處置碼留在更正前`)
+    ok((await errOf(() => C.recodeCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [{ code: '0DTJ4ZZ' }], reason: 'x' }))).includes('不用更正'), '處置碼也一樣：不用更正')
+    // 有手術的住院：依手術紀錄預帶；舊編碼（沒有處置碼欄位）DRG 看手術紀錄
+    const sg = db().surgeries.find((s) => s.status === 'done' && api.PCS_FOR_PROC[s.procId] && db().admissions.find((x) => x.id === s.admissionId)?.status === 'discharged')
+    if (sg) {
+      const ad = db().admissions.find((x) => x.id === sg.admissionId)
+      const view = (await C.codingQueue()).todo.concat((await C.codingQueue()).done).find((x) => x.admissionId === ad.id)
+      ok(view.suggestedProcedures.some((p) => p.code === api.PCS_FOR_PROC[sg.procId]), `手術紀錄 ${sg.procId} → 建議處置碼 ${api.PCS_FOR_PROC[sg.procId]}`)
+      if (ad.coding) ok(view.noProcedureField === !ad.coding.procedures, '舊編碼標「沒有處置碼欄位」')
+    } else ok(true, '（沒有做完手術、已出院的，略過預帶）')
+    const { readFileSync } = await import('node:fs')
+    ok(!/PCS_CODES|groupDrg/.test(readFileSync('src/pages/claim/CodingPage.vue', 'utf8')), '頁面不自己查主檔、不自己分組')
+  }
+  // 抽血窗口分流：只交檢體（尿液、痰液）的分到 3 號檢體窗口；檢體窗口開著時抽血窗口只叫抽血的（叫完才幫忙）；沒開照一條；優先的計數只算抽血
+  console.log('\n[抽血窗口分流]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.labDeskApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const SC = ['urine', 'sputum']
+    ok(api.laneOf(['urine'], SC) === 'drop' && api.laneOf(['urine', 'sputum'], SC) === 'drop' && api.laneOf(['urine', 'red'], SC) === 'blood' && api.laneOf([], SC) === 'blood', '分流：全是自行收集容器才走交檢體')
+    const W = (no, extra = {}) => ({ no, at: 'x', ...extra })
+    const ws = [W(1), W(2, { lane: 'drop' }), W(3), W(4, { lane: 'drop' })]
+    ok(api.pickNextFor(1, ws, 0, true).no === 1 && api.pickNextFor(3, ws, 0, true).no === 2 && api.pickNextFor(3, ws, 0, false).no === 1, '檢體窗口開著：抽血窗口叫抽血的、檢體窗口叫交檢體的；沒開照號碼')
+    ok(api.pickNextFor(1, [W(2, { lane: 'drop' })], 0, true).no === 2 && api.pickNextFor(3, [W(1), W(5, { priority: 'elderly' })], 0, true).no === 5, '抽血的叫完：抽血窗口幫忙叫交檢體；沒有交檢體：檢體窗口叫抽血的（照優先）')
+    const lo = api.laneOrders(ws, 0, true)
+    ok(lo.blood.map((x) => x.no).join() === '1,3' && lo.drop.map((x) => x.no).join() === '2,4' && api.laneOrders(ws, 0, false).drop.length === 0, '看板：開著分兩條、沒開一條')
+    const s3 = db().labCheckins.find((c) => c.id === 'LC-SEED-3')
+    ok(s3?.lane === 'drop' && !db().labCheckins.find((c) => c.id === 'LC-SEED-1').lane, '種子：只有尿液那位分到交檢體')
+    // 測試輔助：直接加幾位等候中的（不用真的開檢驗）
+    const pts = db().patients.filter((p) => !db().labCheckins.some((c) => c.patientId === p.id && c.date === T)).slice(0, 3)
+    const base = Math.max(...db().labCheckins.map((c) => c.no)) + 1
+    const now = dateUtil.now()
+    db().labCheckins.push({ id: 'LC-T-D1', no: base, patientId: pts[0].id, date: T, at: now, by: 'U601', lane: 'drop' }, { id: 'LC-T-B1', no: base + 1, patientId: pts[1].id, date: T, at: now, by: 'U601' }, { id: 'LC-T-D2', no: base + 2, patientId: pts[2].id, date: T, at: now, by: 'U601', lane: 'drop' })
+    // lab02 關 2 號、改開 3 號檢體窗口
+    await as('lab02')
+    const cur2 = db().labCheckins.find((c) => c.date === T && c.window === 2 && c.calls?.length && !c.servedAt && !c.skippedAt)
+    if (cur2) await D.skipLab(cur2.patientId)
+    if (db().labWindows.some((w) => w.date === T && w.userId === 'U602' && !w.closedAt)) await D.closeLabWindow()
+    await D.openLabWindow(3)
+    let desk = await D.labDesk()
+    ok(desk.queue.dropOpen && desk.queue.windows.find((w) => w.window === 3).label === '檢體窗口' && desk.queue.waiting.filter((w) => w.drop).map((w) => w.no).join() === `${base},${base + 2}` && desk.queue.waiting.findIndex((w) => w.drop) > desk.queue.waiting.findIndex((w) => !w.drop), '看板：檢體窗口開著，交檢體的另一條（排在抽血的後面）')
+    const disp = await D.labQueueDisplay()
+    ok(disp.nextDrop?.map((x) => x.no).join() === `${base},${base + 2}` && disp.next.every((x) => ![base, base + 2].includes(x.no)) && disp.waitingCount === desk.queue.waiting.length, '候診螢幕：交檢體另外列、等候人數兩條合計')
+    const c3 = await D.callNextLab()
+    ok(c3.no === base && c3.window === 3 && db().auditLogs[0].detail.includes('交檢體'), `3 號檢體窗口叫到交檢體的 ${c3.no} 號`)
+    await as('lab01')
+    const cur1 = db().labCheckins.find((c) => c.date === T && c.window === 1 && c.calls?.length && !c.servedAt && !c.skippedAt)
+    if (cur1) await D.skipLab(cur1.patientId)
+    const c1 = await D.callNextLab()
+    ok(c1.lane !== 'drop' && c1.window === 1, `1 號抽血窗口叫抽血的（${c1.no} 號），不叫交檢體的`)
+    await D.skipLab(c1.patientId)
+    // 抽血的都叫完 → 1 號窗口幫忙叫交檢體；優先計數不動
+    for (const c of db().labCheckins.filter((x) => x.date === T && !x.lane && !x.servedAt && !x.skippedAt && !x.calls?.length)) c.skippedAt = now
+    const streak1 = db().counters[`labqueue-streak:${T}`] ?? 0
+    const c1b = await D.callNextLab()
+    ok(c1b.no === base + 2 && (db().counters[`labqueue-streak:${T}`] ?? 0) === streak1, '抽血的叫完：抽血窗口幫忙叫交檢體的；優先的連續計數不受影響')
+    // 關掉檢體窗口：交檢體的回到一條
+    await as('lab02')
+    await D.skipLab(c3.patientId)
+    await D.closeLabWindow()
+    desk = await D.labDesk()
+    ok(!desk.queue.dropOpen && !(await D.labQueueDisplay()).nextDrop, '檢體窗口關了：照一條排、候診螢幕不分')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

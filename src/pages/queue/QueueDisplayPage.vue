@@ -38,6 +38,13 @@ onBeforeUnmount(() => window.clearInterval(timer))
             <span v-if="n.priority" class="rounded bg-violet-500 px-2 py-0.5 text-lg">優先</span>
           </li>
         </ol>
+        <template v-if="data.nextDrop">
+          <h3 class="mb-2 mt-6 text-xl text-amber-300">只交檢體（尿液、痰液）→ 3 號檢體窗口</h3>
+          <p v-if="!data.nextDrop.length" class="text-lg text-slate-500">目前沒有</p>
+          <ol v-else class="space-y-2">
+            <li v-for="n in data.nextDrop" :key="n.no" class="flex items-center gap-4 text-2xl"><span class="tabular w-24 font-bold">{{ n.no }}</span><span>{{ n.name }}</span></li>
+          </ol>
+        </template>
         <div class="mt-auto space-y-1 pt-6 text-xl text-slate-300">
           <p>等候 <b class="tabular text-white">{{ data.waitingCount }}</b> 位</p>
           <p>今天平均等候 <b class="tabular text-white">{{ data.avgWait ?? '—' }}</b> 分鐘</p>
