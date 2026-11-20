@@ -16,7 +16,7 @@ import { implantFeeItems, implantRows, isSelfPayImplant } from './implant-work'
 import { IMPLANT_FOR } from './implant-rules'
 import { implantPreAuthOf } from './preauth-work'
 import { preAuthAllows, PREAUTH_STATUS_LABEL } from './preauth-rules'
-import { delayOverflow, delayTotal, NPO_DELAY_ALERT } from './or-shift-rules'
+import { delayOverflow, delayTotal, NPO_DELAY_ALERT, pullBackOf } from './or-shift-rules'
 import { FROZEN_MINUTES, frozenState, pathCritical, pathStage, PATH_RECEIVE_HOURS, PATH_STAGE_LABEL, specimenText } from './pathology-rules'
 
 export const surgeryOf = (id: string) => db.surgeries.find((s) => s.id === id)
@@ -61,6 +61,8 @@ export interface SurgeryView extends Surgery {
   overtimeText?: string
   /** 累計順延 ≥ 2 小時、病人已在禁食：提醒病房評估補點滴 */
   npoLong: boolean
+  /** 可以拉回原時間（插台的急刀已取消或改期）：回到幾點、為什麼 */
+  pullBack?: { to: string; why: string }
   /** 麻醉前評估：摘要、誰評的；還沒評估（沒有就不能做麻醉前查核） */
   preAnesText?: string
   preAnesByName?: string
@@ -103,7 +105,9 @@ export interface SurgeryView extends Surgery {
   preAuthItems: { procId: string; name: string; preAuth?: { id: string; no: string; statusLabel: string; allows: boolean } }[]
 }
 /** 順延的一行：「11-20 09:10 急刀 OR… 插台：09:00 → 11:00（延後 120 分）」；跨日的寫日期 */
-export const delayText = (d: NonNullable<Surgery['delays']>[number]) => `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
+export const delayText = (d: NonNullable<Surgery['delays']>[number]) => d.pullBack
+  ? `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 取消或改期，拉回：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（提前 ${-d.minutes} 分）`
+  : `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
 /** 還沒讀的順延（主刀、病房）：取消、已經送了的不算 */
 export const delayUnread = (s: Surgery, who: 'surgeon' | 'ward') => (s.status === 'requested' || s.status === 'scheduled') && (s.delays ?? []).some((d) => !d[who === 'surgeon' ? 'surgeonAck' : 'wardAck'])
 
@@ -130,6 +134,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     delayUnread: { surgeon: delayUnread(s, 'surgeon'), ward: delayUnread(s, 'ward') },
     delayOverflow: delayOverflow(s), ...(s.overtime ? { overtimeText: `同意加班・${who(s.overtime)}` } : {}),
     npoLong: s.status === 'scheduled' && delayTotal(s) >= NPO_DELAY_ALERT && !!s.prep.npo && !s.prep.npo.notNeeded,
+    ...((d) => (d ? { pullBack: { to: d.from, why: `急刀 ${d.causeNo} ${surgeryOf(d.causeId)?.status === 'cancelled' ? '已取消' : '已改期'}` } } : {}))(pullBackOf(s, surgeryOf)),
     ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5)}` } : {}),
     teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
     teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),

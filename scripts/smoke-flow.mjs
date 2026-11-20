@@ -17319,6 +17319,83 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(!/worstMri|implantCardDue|db\./.test(readFileSync('src/components/ImplantRecordPanel.vue', 'utf8')), 'MRI 等級、要不要印卡由服務層算')
   }
+  // 急刀拉回：可以拉回的條件（急刀取消、改期；這台沒再改過；已拉回的不再列）；取消後清單與首頁；拉回（權限、撞到別台擋、
+  // 順序拉回、記一筆拉回與再通知、加班作廢、淨順延 0）；改期也能拉回；手動改過的不列；原時間過了擋；統計不扣拉回
+  console.log('\n[急刀拉回]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = api.surgeryApi
+    const userOf = (doctorId) => db().users.find((u) => u.doctorId === doctorId).username
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const d = { causeId: 'U', causeRoom: 'OR1', causeStart: '2026-03-02 09:00', to: '2026-03-02 11:00', from: '2026-03-02 09:00' }
+    const cs = (st, room = 'OR1', start = '2026-03-02 09:00') => () => ({ status: st, schedule: { room, start } })
+    const s0 = { status: 'scheduled', schedule: { start: '2026-03-02 11:00' }, delays: [d] }
+    ok(api.pullBackOf(s0, cs('cancelled')) === d && api.pullBackOf(s0, cs('scheduled', 'OR2')) === d && api.pullBackOf(s0, cs('scheduled', 'OR1', '2026-03-02 13:00')) === d && !api.pullBackOf(s0, cs('scheduled')), '可以拉回：急刀取消、換房、改時間；還在原位不行')
+    ok(!api.pullBackOf({ ...s0, schedule: { start: '2026-03-02 14:00' } }, cs('cancelled')) && !api.pullBackOf({ ...s0, delays: [d, { ...d, pullBack: true }] }, cs('cancelled')) && !api.pullBackOf({ ...s0, status: 'sent' }, cs('cancelled')) && !api.pullBackOf({ ...s0, delays: [{ ...d, causeStart: undefined }] }, cs('scheduled', 'OR2')), '之後改過時間、已拉回、已送、舊紀錄（沒記急刀位置）只看取消')
+
+    const D2 = addDaysT(2)
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && !a.deptTransfers?.some((x) => x.status === 'pending'))
+    const input = { admissionId: adm.id, procId: 'P039', side: 'left', anesthesia: 'general', requestedDate: D2, estMinutes: 60, diagnosis: '左側腹股溝疝氣' }
+    const doc = userOf(adm.doctorId)
+    await as(doc)
+    const e1 = await S.requestSurgery(input)
+    const e2 = await S.requestSurgery(input)
+    const u1 = await S.requestSurgery({ ...input, urgency: 'semi' })
+    await as('nurse01')
+    await S.scheduleSurgery(e1.id, { room: 'OR3', start: `${D2} 09:00` })
+    await S.scheduleSurgery(e2.id, { room: 'OR3', start: `${D2} 10:30` })
+    await S.scheduleSurgery(u1.id, { room: 'OR3', start: `${D2} 09:30` })
+    const at = (id) => db().surgeries.find((s) => s.id === id).schedule.start.slice(11)
+    ok(at(e1.id) === '11:00' && at(e2.id) === '12:30' && !(await S.orBoard(D2)).pullBack.length, '急刀插台：兩台推到 11:00、12:30；急刀還在，不能拉回')
+    await as(doc)
+    await S.cancelSurgery(u1.id, '病人改轉院')
+    await as('nurse01')
+    let b = await S.orBoard(D2)
+    const p1 = b.pullBack.find((x) => x.id === e1.id)
+    ok(b.pullBack.length === 2 && p1.pullBack.to === `${D2} 09:00` && p1.pullBack.why.includes('已取消') && (await api.dashboardApi.getDashboard()).orPullBack === 2, '急刀取消：兩台列「可以拉回」、首頁 2')
+    await as(doc)
+    ok((await errOf(() => S.pullBackSurgery(e1.id))).length > 0, '醫師不能拉回（要手術排程權限）')
+    await as('nurse01')
+    let f = await errOf(() => S.pullBackSurgery(e2.id))
+    ok(f.includes(e1.no), `先拉後面那台：原時間撞到還沒拉回的前一台「${f.slice(0, 30)}…」`)
+    db().surgeries.find((s) => s.id === e1.id).overtime = { by: 'U202', at: nowStr() }
+    let v = await S.pullBackSurgery(e1.id)
+    const s1 = db().surgeries.find((s) => s.id === e1.id)
+    ok(v.schedule.start === `${D2} 09:00` && s1.delays.length === 2 && s1.delays[1].pullBack && s1.delays[1].minutes === -120 && v.delayMinutes === 0 && !s1.overtime && v.delayUnread.surgeon && v.delayUnread.ward && v.delayRows[1].text.includes('拉回') && db().auditLogs[0].action === '手術拉回', '拉回 09:00：另記一筆拉回（順延紀錄保留、淨 0 分）、再通知主刀與病房、加班作廢、稽核')
+    v = await S.pullBackSurgery(e2.id)
+    ok(v.schedule.start === `${D2} 10:30` && !(await S.orBoard(D2)).pullBack.length, '再拉後面那台：回 10:30，清單清空')
+    ok((await errOf(() => S.pullBackSurgery(e1.id))).includes('不能拉回'), '拉回過的不能再拉')
+    // 改期也能拉回；手動改過的不列
+    const D3 = addDaysT(3)
+    await as(doc)
+    const e3 = await S.requestSurgery({ ...input, requestedDate: D3 })
+    const e4 = await S.requestSurgery({ ...input, requestedDate: D3 })
+    const u2 = await S.requestSurgery({ ...input, urgency: 'semi' })
+    await as('nurse01')
+    await S.scheduleSurgery(e3.id, { room: 'OR2', start: `${D3} 09:00` })
+    await S.scheduleSurgery(e4.id, { room: 'OR2', start: `${D3} 10:30` })
+    await S.scheduleSurgery(u2.id, { room: 'OR2', start: `${D3} 08:30` })
+    ok(db().surgeries.find((s) => s.id === e4.id).delays?.length === 1, '第二組：兩台都被推')
+    await S.scheduleSurgery(e4.id, { room: 'OR2', start: `${D3} 15:00` })
+    await S.scheduleSurgery(u2.id, { room: 'OR1', start: `${D3} 08:30` })
+    b = await S.orBoard(D3)
+    ok(b.pullBack.some((x) => x.id === e3.id && x.pullBack.why.includes('已改期')) && !b.pullBack.some((x) => x.id === e4.id), '急刀改到別間：被推的可以拉回；之後手動改過時間的不列')
+    // 原時間過了
+    db().surgeries.find((s) => s.id === e3.id).delays.at(-1).from = dateUtil.addMinutes(nowStr().slice(0, 16), -60)
+    ok((await errOf(() => S.pullBackSurgery(e3.id))).includes('已經過了'), '原時間已經過了：擋（請改期）')
+    const m = await S.orMetrics(7)
+    ok(m.delays.max >= 120, `效率統計不扣拉回（最多 ${m.delays.max} 分）`)
+    const { readFileSync } = await import('node:fs')
+    ok(!/pullBackOf|db\./.test(readFileSync('src/pages/or/OrPage.vue', 'utf8') + readFileSync('src/components/surgery/DelayNote.vue', 'utf8')), '能不能拉回由服務層判斷')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

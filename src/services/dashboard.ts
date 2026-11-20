@@ -24,8 +24,9 @@ import { pendingReplyVisits } from './referral-work'
 import { bloodLabCounts, reactionsToAck, transfusionTodoCount } from './blood-work'
 import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
+import { pullBackOf } from './or-shift-rules'
 import { preAuthCounts } from './preauth-work'
-import { dayCounts, delayCounts, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
+import { dayCounts, delayCounts, surgeryOf, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
 import { attendingLineAlerts, lineTodosOf, painStateOf } from './line-work'
@@ -275,6 +276,8 @@ export interface DashboardStats {
   /** 最近 7 天手術放了植入物、還沒印植入物卡的病人 */
   implantCardDue: number
   delayOverflow?: number
+  /** 可以拉回原時間的（插台的急刀已取消或改期） */
+  orPullBack?: number
   /** 供應中心：生物指示劑該判讀、召回用過的還沒通知、要收回的器械包 */
   cssdBiDue?: number
   cssdRecallOpen?: number
@@ -494,7 +497,7 @@ export function getDashboard(): Promise<DashboardStats> {
       ...(() => {
         const me = sessionUser()
         const role = sessionRole()
-        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule, orFirstLate: lateFirstCases(db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted'), today(), now()).length, delayOverflow: delayCounts().overflow } : {}
+        return me && role && permissionsOf({ ...me, role }).includes('surgery.schedule') ? { surgeryToSchedule: surgeryCounts(now()).toSchedule, orFirstLate: lateFirstCases(db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted'), today(), now()).length, delayOverflow: delayCounts().overflow, orPullBack: db.surgeries.filter((s) => db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted' && pullBackOf(s, surgeryOf)).length } : {}
       })(),
       ...(db.stockLocations.filter(stockLoc.isWork).length > 1
         ? {

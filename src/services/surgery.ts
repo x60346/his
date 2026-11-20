@@ -8,7 +8,7 @@ import { audit, fail, failField, failFields, fieldErrors, must, mutate, permissi
 import { ANESTHESIA_LABEL, CHECK_ITEMS, checkSurgeryInput, countsProblem, emergencyRate, OR_DAY, OR_ROOMS, overlaps, PREP_ITEMS, prepMissing, SIDE_LABEL, TEAM_LABEL, TEAM_ORDER, teamMissing, teamNow, URGENCY_LABEL, URGENCY_MINUTES, URGENCY_ORDER } from './surgery-rules'
 import { dietOf } from './nutrition-rules'
 import { delayUnread, surgeryOf, surgeryView, teamClash, type SurgeryView } from './surgery-work'
-import { delayOverflow, delayStats, pastDayEnd, shiftPlan } from './or-shift-rules'
+import { delayOverflow, delayStats, pastDayEnd, pullBackOf, shiftPlan } from './or-shift-rules'
 import { cancelStats, firstCaseStats, lateFirstCases, turnoverStats, utilization } from './or-metrics-rules'
 import { careRoleOf, requireCare } from './care-team'
 import { isAntibiotic } from './abx-work'
@@ -162,6 +162,8 @@ export interface OrBoard {
   overflow: SurgeryView[]
   /** 我還沒讀的順延通知：主刀（醫師）＝自己主刀的；護理師＝病房的 */
   delayInbox: SurgeryView[]
+  /** 可以拉回原時間的（插台的急刀已取消或改期） */
+  pullBack: SurgeryView[]
   /** 這天的首台：排程開始過了 15 分鐘還沒做麻醉前查核（只有看今天才有） */
   lateFirst: { id: string; room: string; start: string; minutes: number; patientName: string; no: string }[]
 }
@@ -179,6 +181,7 @@ export function orBoard(date: string): Promise<OrBoard> {
         .sort((x, y) => (x.urgency ? URGENCY_ORDER[x.urgency] : 9) - (y.urgency ? URGENCY_ORDER[y.urgency] : 9) || (x.urgency ? x.createdAt.localeCompare(y.createdAt) : x.requestedDate.localeCompare(y.requestedDate))).map(surgeryView),
       emergencyStats: emergencyRate(db.surgeries.filter((s) => s.createdAt >= `${addDays(today(), -30)} 00:00`), now()),
       overflow: db.surgeries.filter((s) => delayOverflow(s) && liveAdm(s)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
+      pullBack: db.surgeries.filter((s) => liveAdm(s) && pullBackOf(s, surgeryOf)).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
       delayInbox: db.surgeries.filter((s) => liveAdm(s) && (u.role === 'doctor' ? s.doctorId === u.doctorId && delayUnread(s, 'surgeon') : u.role === 'nurse' && delayUnread(s, 'ward'))).sort((x, y) => x.schedule!.start.localeCompare(y.schedule!.start)).map(surgeryView),
       lateFirst: d === today() ? lateFirstCases(db.surgeries.filter(liveAdm), d, now()).map((x) => ((s) => ({ ...x, patientName: nameOf.patient(s.patientId), no: s.no }))(surgeryOf(x.id)!)) : [],
     }
@@ -217,7 +220,7 @@ export function scheduleSurgery(id: string, input: { room: string; start: string
       for (const m of plan) {
         const x = surgeryOf(m.id)!
         x.schedule = { ...x.schedule!, start: m.to }
-        x.delays = [...(x.delays ?? []), { id: newId('DL'), causeId: s.id, causeNo: s.no, from: m.from, to: m.to, minutes: m.minutes, by: u.id, at: t }]
+        x.delays = [...(x.delays ?? []), { id: newId('DL'), causeId: s.id, causeNo: s.no, causeRoom: input.room, causeStart: input.start, from: m.from, to: m.to, minutes: m.minutes, by: u.id, at: t }]
         // 之前同意的加班不算數（時間又變了）
         delete x.overtime
         const over = pastDayEnd(m.to, x.estMinutes)
@@ -242,6 +245,30 @@ export function ackDelay(id: string): Promise<SurgeryView> {
     const t = now()
     for (const d of xs) d[key] = { by: u.id, at: t }
     audit('順延已讀', `${audText(s)}：${who === 'surgeon' ? '主刀' : '病房'}已讀 ${xs.length} 則（現排 ${s.schedule?.room ?? ''} ${s.schedule?.start.slice(5) ?? ''}）`)
+    return surgeryView(s)
+  })
+}
+
+/**
+ * 拉回原時間（排程人）：插台的急刀已取消或改期、這台之後沒再改過。原時間撞到別台、已經過了都擋；
+ * 原本的順延紀錄保留，另記一筆「拉回」（主刀、病房要再讀），同意過的加班作廢
+ */
+export function pullBackSurgery(id: string): Promise<SurgeryView> {
+  return mutate(() => {
+    const u = requirePermission('surgery.schedule')
+    const s = must(surgeryOf(id), '手術')
+    const d = pullBackOf(s, surgeryOf)
+    if (!d) fail('這台不能拉回（插台的急刀還在原位，或這台之後改過時間）', 'CONFLICT')
+    const t = now()
+    if (d!.from < t) fail(`原時間 ${d!.from.slice(5)} 已經過了，請改期`, 'CONFLICT')
+    const room = s.schedule!.room
+    const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, d!.from, s.estMinutes))
+    if (clash) fail(`原時間 ${room} ${d!.from.slice(11)} 已經排了 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起）`, 'CONFLICT')
+    const back = { id: newId('DL'), causeId: d!.causeId, causeNo: d!.causeNo, from: s.schedule!.start, to: d!.from, minutes: -d!.minutes, pullBack: true, by: u.id, at: t }
+    s.schedule = { ...s.schedule!, start: d!.from }
+    s.delays = [...s.delays!, back]
+    delete s.overtime
+    audit('手術拉回', `${audText(s)}：${room} ${back.from.slice(11)} → ${back.to.slice(11)}（急刀 ${d!.causeNo} ${surgeryOf(d!.causeId)?.status === 'cancelled' ? '取消' : '改期'}）`)
     return surgeryView(s)
   })
 }

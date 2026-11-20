@@ -52,10 +52,27 @@ export const delayOverflow = (s: S): boolean => s.status === 'scheduled' && !!s.
 /** 累計順延分鐘 */
 export const delayTotal = (s: Pick<Surgery, 'delays'>): number => (s.delays ?? []).reduce((n, d) => n + d.minutes, 0)
 
+/**
+ * 可以拉回：這台還沒送、現在的時間就是最後一次順延後的時間（之後沒再改過），而那台急刀已經取消、
+ * 或不在插台時的房間與時間了。回傳要拉回的那筆順延
+ */
+export function pullBackOf<D extends { causeId: string; causeRoom?: string; causeStart?: string; to: string; pullBack?: boolean }>(
+  s: { status: string; schedule?: { start: string }; delays?: D[] },
+  cause: (id: string) => { status: string; schedule?: { room: string; start: string } } | undefined,
+): D | undefined {
+  const d = s.delays?.at(-1)
+  if (!d || d.pullBack || s.status !== 'scheduled' || s.schedule?.start !== d.to) return undefined
+  const c = cause(d.causeId)
+  if (!c) return undefined
+  const gone = c.status === 'cancelled' || (!!d.causeStart && (c.schedule?.room !== d.causeRoom || c.schedule?.start !== d.causeStart))
+  return gone ? d : undefined
+}
+
 /** 效率：區間內（以第一次被順延那天算）被急刀順延的擇期台數（取消的也算）、平均與最多延後分鐘 */
 export function delayStats(list: Pick<Surgery, 'delays'>[], from: string, to: string): { count: number; avg: number | null; max: number } {
   const xs = list.filter((s) => s.delays?.length && ((d) => d >= from && d <= to)(s.delays[0].at.slice(0, 10)))
-  const ms = xs.map(delayTotal)
+  // 拉回的不扣（統計的是被順延了多少）
+  const ms = xs.map((s) => s.delays!.filter((d) => d.minutes > 0).reduce((n, d) => n + d.minutes, 0))
   return {
     count: xs.length, avg: xs.length ? Math.round(ms.reduce((a, b) => a + b, 0) / xs.length) : null, max: ms.length ? Math.max(...ms) : 0,
   }

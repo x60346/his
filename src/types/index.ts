@@ -2403,6 +2403,11 @@ export interface SurgeryDelay {
   /** 插台的急刀（手術 id、單號） */
   causeId: string
   causeNo: string
+  /** 插台時那台急刀排在哪裡（之後它改期或取消了，這台就可以拉回） */
+  causeRoom?: string
+  causeStart?: string
+  /** 拉回（急刀取消或改期後回到原時間）：minutes 是負的 */
+  pullBack?: boolean
   from: string
   to: string
   minutes: number

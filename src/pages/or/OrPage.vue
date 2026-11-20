@@ -58,6 +58,7 @@ function reschedule(s: SurgeryView) {
 }
 const schedAct = useAction(surgeryApi.scheduleSurgery, { success: (s) => `已排程：${s.scheduleText}${s.shifted.length ? `；同房 ${s.shifted.length} 台往後順延${s.shifted.some((x) => x.overflow) ? `（${s.shifted.filter((x) => x.overflow).length} 台超過開放時段，請處理）` : ''}，已通知主刀與病房` : ''}` })
 const ackAct = useAction(surgeryApi.ackDelay, { success: '已讀順延通知' })
+const pullAct = useAction(surgeryApi.pullBackSurgery, { success: (s) => `已拉回 ${s.scheduleText}，已通知主刀與病房` })
 async function submitSched() {
   if (scheduling.value && (await schedAct.run(scheduling.value.id, { room: String(sch.room), start: `${sch.date} ${sch.time}` }))) scheduling.value = undefined
 }
@@ -132,11 +133,20 @@ const byRoom = (room: string) => (board.value?.cases ?? []).filter((c) => c.sche
             <li v-for="x in board.overflow" :key="x.id"><button type="button" class="text-left text-red-800 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.scheduleText }} {{ x.patientName }}（{{ x.no }}）：原排 {{ x.originalStart?.slice(5) }}，延後 {{ x.delayMinutes }} 分</button></li>
           </ul>
         </section>
+        <section v-if="board.canSchedule && board.pullBack.length" class="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm">
+          <h3 class="font-semibold text-emerald-900">可以拉回原時間 {{ board.pullBack.length }} 台<span class="ml-2 text-xs font-normal text-slate-600">插台的急刀已取消或改期：一鍵拉回（原時間撞到別台會擋），會再通知主刀與病房</span></h3>
+          <ul class="mt-1 divide-y divide-emerald-100">
+            <li v-for="x in board.pullBack" :key="x.id" class="flex flex-wrap items-center gap-2 py-1">
+              <button type="button" class="text-left text-emerald-900 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.patientName }} {{ x.procName }}：現排 {{ x.scheduleText }} → 原時間 {{ x.pullBack!.to.slice(5) }}（{{ x.pullBack!.why }}）</button>
+              <UButton size="sm" class="ml-auto" :loading="pullAct.pending.value" @click="pullAct.run(x.id)">拉回</UButton>
+            </li>
+          </ul>
+        </section>
         <section v-if="board.delayInbox.length" class="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
-          <h3 class="font-semibold text-amber-900">手術順延未讀 {{ board.delayInbox.length }} 台<span class="ml-2 text-xs font-normal text-slate-600">{{ auth.user?.role === 'doctor' ? '我主刀的' : '病房的病人' }}被急刀插台往後推：確認新時間後按已讀</span></h3>
+          <h3 class="font-semibold text-amber-900">手術順延未讀 {{ board.delayInbox.length }} 台<span class="ml-2 text-xs font-normal text-slate-600">{{ auth.user?.role === 'doctor' ? '我主刀的' : '病房的病人' }}被急刀插台往後推（或急刀取消後拉回）：確認新時間後按已讀</span></h3>
           <ul class="mt-1 divide-y divide-amber-100">
             <li v-for="x in board.delayInbox" :key="x.id" class="flex flex-wrap items-center gap-2 py-1">
-              <button type="button" class="text-left text-amber-900 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.bedNo }} {{ x.patientName }} {{ x.procName }}：原排 {{ x.originalStart?.slice(5) }} → 現排 {{ x.scheduleText }}（延後 {{ x.delayMinutes }} 分）</button>
+              <button type="button" class="text-left text-amber-900 underline-offset-2 hover:underline" @click="openCase(x)">{{ x.bedNo }} {{ x.patientName }} {{ x.procName }}{{ x.delayMinutes ? `：原排 ${x.originalStart?.slice(5)} → 現排 ${x.scheduleText}（延後 ${x.delayMinutes} 分）` : `：已拉回原時間 ${x.scheduleText}` }}</button>
               <span v-if="x.npoLong" class="text-xs font-medium text-amber-800">禁食太久，評估補點滴</span>
               <UButton size="sm" variant="secondary" class="ml-auto" :loading="ackAct.pending.value" @click="ackAct.run(x.id)">已讀</UButton>
             </li>

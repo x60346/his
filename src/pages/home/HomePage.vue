@@ -57,6 +57,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '急診留觀超過 48 小時', count: s.value.erObsOverdue ?? 0, hint: '留觀太久：請決定離院、收住院或轉院（急診看板「結束留觀」）', route: 'er', icon: Siren, urgent: true },
     { roles: ['clerk', 'nurse'], label: '急診收住院待床', count: s.value.erBed, hint: '急診醫師決定收住院、還沒報到：住院中心優先安排床位', route: 'admission', icon: Siren, urgent: true },
     ...(s.value.orFirstLate !== undefined ? [{ roles: ['nurse'], label: '首台延誤', count: s.value.orFirstLate ?? 0, hint: '今天各房第一台：排程開始過了 15 分鐘還沒做麻醉前查核（手術室頁）', route: 'or', icon: Scissors, urgent: true }] : []),
+    ...(s.value.orPullBack !== undefined ? [{ roles: ['nurse'], label: '手術可以拉回', count: s.value.orPullBack ?? 0, hint: '插台的急刀已取消或改期：被推後的手術可以拉回原時間（手術室頁）', route: 'or', icon: Scissors, urgent: false }] : []),
     ...(s.value.delayOverflow !== undefined ? [{ roles: ['nurse'], label: '順延超過開放時段', count: s.value.delayOverflow ?? 0, hint: '被急刀插台順延到 20:00 以後：改期或同意加班（手術室頁）', route: 'or', icon: Scissors, urgent: true }] : []),
     { roles: ['nurse'], label: '植入物卡待印', count: s.value.implantCardDue, hint: '最近 7 天手術放了植入物的病人：出院（日間手術回家）前印植入物卡給病人（病患資料「植入物」分頁）', route: 'patients', icon: Scissors, urgent: false },
     { roles: ['nurse'], label: '手術順延未讀', count: s.value.delayWardUnread, hint: '病房的病人手術被急刀插台順延：確認新時間、禁食太久要評估補點滴（手術室頁上方，或病人「手術」分頁按已讀）', route: 'or', icon: Scissors, urgent: true },
