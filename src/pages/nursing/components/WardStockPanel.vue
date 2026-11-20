@@ -59,6 +59,11 @@ const md = (s: string) => s.slice(5, 16).replace('-', '/')
           <UBadge :tone="view.shift.counted ? 'green' : 'yellow'">{{ view.shift.date.slice(5).replace('-', '/') }} {{ view.shift.shift }}{{ view.shift.counted ? '已點班' : '尚未點班' }}</UBadge>
           <span v-if="view.lastCount" class="text-xs text-slate-500">上次：{{ md(view.lastCount.at) }} {{ view.lastCount.shift }} {{ view.lastCount.byName }}{{ view.lastCount.diffs ? `（差異 ${view.lastCount.diffs} 項）` : '（帳實相符）' }}{{ view.lastCount.witnessName ? `・見證 ${view.lastCount.witnessName}` : '' }}</span>
         </div>
+        <!-- 效期：過期的不能給病人（系統扣帳也不會扣過期批號），請藥局收回；30 天內到期的藥局會收回換新 -->
+        <div v-if="view.expiryLots.length" class="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+          <b>效期：</b><span v-for="x in view.expiryLots" :key="x.lotId" :class="['mr-3', x.expired ? 'font-semibold text-red-700' : '']">{{ x.drugName }} {{ x.lotNo }}（{{ x.expiry }}{{ x.expired ? '，已過期，請勿使用' : `，剩 ${x.daysLeft} 天` }}）{{ x.qty }}</span>
+          <span class="text-slate-500">— 藥局會收回</span>
+        </div>
         <div class="overflow-x-auto rounded-md border border-slate-200">
           <table class="tabular w-full text-sm">
             <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500">

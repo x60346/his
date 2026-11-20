@@ -4,6 +4,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USearchSelect, UTabs } from '@/components/ui'
 import SecondaryDxEditor from '@/components/SecondaryDxEditor.vue'
+import RecordAuditPanel from './RecordAuditPanel.vue'
+import OpdReviewPanel from './OpdReviewPanel.vue'
 import { codingApi, decodePcs, masterApi, type CodingItem, type PcsCode } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import type { IcdCode } from '@/types'
@@ -45,8 +47,10 @@ async function submit() {
 <template>
   <div class="space-y-4">
     <UPageHeader title="編碼審查" description="出院後確認或修改主診斷與次診斷（DRG、健保申報以審查後的為準）" />
-    <UTabs v-model="mode" :tabs="[{ key: 'todo', label: '待審查', count: data?.todo.length || undefined }, { key: 'done', label: '審查過（近 90 天出院）' }]" />
-    <UQueryState :loading="loading && !data" :ready="!!list.length" :empty-title="mode === 'todo' ? '沒有待審查的' : '近 90 天沒有審查過的'">
+    <UTabs v-model="mode" :tabs="[{ key: 'todo', label: '待審查', count: data?.todo.length || undefined }, { key: 'done', label: '審查過（近 90 天出院）' }, { key: 'record', label: '病歷完整性' }, { key: 'review', label: '門診病歷抽審' }]" />
+    <RecordAuditPanel v-if="mode === 'record'" />
+    <OpdReviewPanel v-else-if="mode === 'review'" />
+    <UQueryState v-else :loading="loading && !data" :ready="!!list.length" :empty-title="mode === 'todo' ? '沒有待審查的' : '近 90 天沒有審查過的'">
       <ul class="space-y-2 text-sm">
         <li v-for="x in list" :key="x.admissionId" :class="['rounded-md border bg-white px-3 py-2', x.overdue ? 'border-red-300' : 'border-slate-200']">
           <div class="flex flex-wrap items-center gap-2">

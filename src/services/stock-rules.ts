@@ -128,5 +128,8 @@ export function locationNameProblem(name: string): string | null {
   return null
 }
 
+/** 病房常備：幾天內到期就收回（病房用量少，留在病房容易放到過期） */
+export const WARD_RETURN_DAYS = 30
+
 /** 批號是否已過期（效期當天還能用） */
 export const isExpired = (expiry: string, today: string) => expiry < today

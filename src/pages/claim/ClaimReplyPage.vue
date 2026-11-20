@@ -6,6 +6,8 @@ import { UBadge, UButton, UDialog, UPageHeader, UQueryState, USelect, UTextarea 
 import { CLAIM_KIND_LABEL, claimCutApi, CUT_STATUS_TONE as TONE, type CutItem } from '@/services'
 import PreAuthDoctorSection from './PreAuthDoctorSection.vue'
 import CodingDoctorSection from './CodingDoctorSection.vue'
+import RecordDoctorSection from './RecordDoctorSection.vue'
+import OpdReviewDoctorSection from './OpdReviewDoctorSection.vue'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data, loading } = useQuery(() => claimCutApi.myCuts(), [])
@@ -26,9 +28,11 @@ async function submit() {
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="健保審查回覆" description="事前審查的填寫與補件；病歷室修改的編碼；我的病人被健保核減的：申復（寫理由）或接受" />
+    <UPageHeader title="健保審查回覆" description="事前審查的填寫與補件；病歷室修改的編碼；出院病歷待完成；門診病歷抽審；我的病人被健保核減的：申復（寫理由）或接受" />
     <PreAuthDoctorSection />
     <CodingDoctorSection />
+    <RecordDoctorSection />
+    <OpdReviewDoctorSection />
     <h2 class="font-semibold text-slate-700">核減</h2>
     <UQueryState :loading="loading && !data" :ready="!!data" empty-title="沒有核減">
       <ul v-if="data" class="space-y-2 text-sm">

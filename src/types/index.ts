@@ -2756,6 +2756,25 @@ export interface ClaimExclusion {
 }
 
 /** 核減（健保署審查結果）：哪一筆、哪一項、幾點、理由；主治回覆申復或接受；申復結果補付或維持 */
+/**
+ * 門診病歷品質抽審（病歷室）：每月從每位醫師上個月完成的門診病歷抽幾份，逐項審查（符合／不符合），
+ * 有不符合的醫師要看過回覆（改善說明）
+ */
+export interface OpdRecordReview {
+  id: string
+  /** 抽的是哪個月份的病歷 */
+  month: string
+  encounterId: string
+  doctorId: string
+  patientId: string
+  sampledAt: string
+  sampledBy: string
+  /** 審查結果（還沒審＝undefined）：每項 true＝符合 */
+  result?: { items: Record<string, boolean>; note: string; at: string; by: string }
+  /** 醫師看過（有不符合的才要）：改善說明 */
+  ack?: { at: string; by: string; note: string }
+}
+
 export interface ClaimCut {
   id: string
   submissionId: string

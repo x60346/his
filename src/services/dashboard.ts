@@ -26,6 +26,8 @@ import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
 import { opdExpiringOf, preAuthCounts, preAuthExpiringCount } from './preauth-work'
+import { recordCounts } from './record-audit-work'
+import { wardExpiryCounts } from './ward-stock-work'
 import { claimDeadlineOf, cutReplyDue, daysUntil, deadlineText, disputeCheck, monthOf, nextMonth } from './claim-rules'
 import { codingCounts } from './coding-work'
 import { drgAlertCounts } from './drg-work'
@@ -306,6 +308,16 @@ export interface DashboardStats {
   preAuthToFill?: number
   /** 疾病分類：主治編碼修改未讀；病歷管理師待審查、出院超過 7 天還沒審查 */
   codingChanged?: number
+  /** 主治：出院病歷還沒完成、逾期（出院 14 天）；病歷室：全院逾期 */
+  recordIncomplete?: number
+  recordOverdue?: number
+  recordOverdueAll?: number
+  /** 病歷室：門診抽審待審查；醫師：抽審有不符合待回覆 */
+  opdReviewPending?: number
+  /** 藥師：病房常備已過期、30 天內到期的批號 */
+  wardExpired?: number
+  wardExpirySoon?: number
+  opdReviewToAck?: number
   codingDue?: number
   codingOverdue?: number
   /** DRG：我主治的住院，點數接近上限（80% 以上）、超過上限 */
@@ -391,7 +403,7 @@ export function getDashboard(): Promise<DashboardStats> {
       ...((r) => (r === 'clerk' || (r === 'doctor' && isRadiologist(sessionUser()?.doctorId)) ? { examToSchedule: pendingImagingWork().filter((w) => w.awaitingExam && !examOfKey(w.key)).length, examToday: db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled).length, examNeedsReschedule: db.imagingExams.filter((e) => !e.cancelled && !e.arrivedAt && (downtimeClash(db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from), e) || outOfHours(e.start, e.minutes, examDayOf(db.examHours, db.examClosures, e.room, e.start.slice(0, 10))))).length } : {}))(sessionRole()),
       ...(sessionRole() === 'radtech' ? ((xs) => ({ examArrived: xs.filter((e) => e.arrivedAt).length, examWaiting: xs.filter((e) => !e.arrivedAt).length }))(db.imagingExams.filter((e) => e.start.slice(0, 10) === today() && !e.doneAt && !e.cancelled)) : {}),
       udExtra: db.mar.filter((m) => m.scheduledAt.slice(0, 10) <= today() && !!udCandidate(m)).length,
-      ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length } })() : {}),
+      ...(sessionRole() === 'pharmacist' ? (() => { const p = pharmPending(); const ad = db.adrReports.filter((r) => !r.assessment); const we = wardExpiryCounts(today()); return { pharmReview: p.length, pharmReviewStat: p.filter((o) => o.type === 'stat').length, adrPending: ad.length, adrUrgent: ad.filter((r) => r.serious).length, wardExpired: we.expired, wardExpirySoon: we.soon } })() : {}),
       udReturns: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).sent.marIds.length > 0).length,
       udVerify: db.udDispenses.reduce((n, u) => n + u.boxes.filter((b) => b.status === 'prepared').length, 0),
       udSendBack: db.udDispenses.flatMap((u) => u.lines).filter((l) => pendingReturn(l).waiting.marIds.length > 0).length,
@@ -432,6 +444,8 @@ export function getDashboard(): Promise<DashboardStats> {
           preAuthExpiring: preAuthExpiringCount(today(), me.doctorId),
           preAuthToFill: preAuthCounts(now(), me.doctorId).toFill,
           codingChanged: codingCounts(now(), me.doctorId).changed,
+          ...((r) => ({ recordIncomplete: r.incomplete, recordOverdue: r.overdue }))(recordCounts(today(), me.doctorId)),
+          opdReviewToAck: db.opdReviews.filter((r) => r.doctorId === me.doctorId && r.result && !r.ack && Object.values(r.result.items).some((v) => !v)).length,
           ...((c) => ({ drgNear: c.near, drgOver: c.over }))(drgAlertCounts(me.doctorId)),
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
@@ -515,7 +529,7 @@ export function getDashboard(): Promise<DashboardStats> {
       surgeryPrepDue: surgeryCounts(now()).prepDue,
       delayWardUnread: delayCounts().unread,
       implantCardDue: implantCardDueCount(today()),
-      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('coding') ? ((c) => ({ codingDue: c.due, codingOverdue: c.overdue }))(codingCounts(now())) : {}))(sessionUser(), sessionRole()),
+      ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('coding') ? ((c) => ({ codingDue: c.due, codingOverdue: c.overdue, recordOverdueAll: recordCounts(today()).overdue, opdReviewPending: db.opdReviews.filter((r) => !r.result).length }))(codingCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('nhi.claim') ? { claimCutsAppealed: db.claimCuts.filter((c) => c.reply?.action === 'appeal' && !c.result).length, ...claimSubmitDue(today()), claimDisputes: db.claimCuts.filter((c) => (c.dispute && !c.dispute.result) || disputeCheck(c, today()).ok).length, ...((c) => ({ preAuthToSubmit: c.toSubmit, preAuthOverdue: c.overdue }))(preAuthCounts(now())), preAuthExpiringAll: db.preAuths.filter((p) => opdExpiringOf(p, today())).length } : {}))(sessionUser(), sessionRole()),
       ...((me, role) => (me && role && permissionsOf({ ...me, role }).includes('cssd') ? ((c) => ({ cssdBiDue: c.biDue, cssdRecallOpen: c.recallOpen, cssdToWithdraw: c.toWithdraw, implantRecallOpen: implantRecallOpen() }))(sterileCounts(now())) : {}))(sessionUser(), sessionRole()),
       ...((c) => ({ pacuIn: c.in, pacuLong: c.long, pacuToReceive: c.out }))(pacuCounts(now())),

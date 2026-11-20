@@ -11,6 +11,7 @@ import type { Drug } from '@/types'
 const { data: wards, loading } = useQuery(() => wardStockApi.listWardStocks())
 const pars = reactive<Record<string, number | undefined>>({})
 const key = (w: string, d: string) => `${w}|${d}`
+const ret = useAction(wardStockApi.returnWardExpiry, { success: (r) => `已收回 ${r.lots} 批、${r.qty} 個到住院藥局（${r.no}）：照報廢流程處理` })
 const save = useAction(wardStockApi.saveWardStockItem, { success: (r) => (r ? `已設定基準量 ${r.par}` : '已移除常備品項') })
 async function onSave(w: WardStockView, drugId: string) {
   const v = pars[key(w.ward, drugId)]
@@ -56,6 +57,10 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
             <UButton v-if="pars[key(w.ward, r.drugId)] !== undefined && pars[key(w.ward, r.drugId)] !== r.par" size="sm" variant="secondary" :loading="save.pending.value" @click="onSave(w, r.drugId)">儲存</UButton>
           </li>
         </ul>
+        <div v-if="w.expiryLots.length" class="border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          <div class="mb-1 flex items-center gap-2"><b>效期（過期、30 天內到期）</b><UButton size="sm" variant="secondary" class="ml-auto" :loading="ret.pending.value" @click="ret.run(w.ward, w.expiryLots.map((x) => x.lotId))">全部收回到住院藥局</UButton></div>
+          <div v-for="x in w.expiryLots" :key="x.lotId" :class="x.expired ? 'font-semibold text-red-700' : ''">{{ x.drugName }} {{ x.lotNo }}・{{ x.expiry }}{{ x.expired ? '（已過期）' : `（剩 ${x.daysLeft} 天）` }}・{{ x.qty }}</div>
+        </div>
         <div class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
           <template v-if="adding === w.ward">
             <div class="flex flex-wrap items-end gap-2">

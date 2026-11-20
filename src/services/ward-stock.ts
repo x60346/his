@@ -9,6 +9,7 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { postStock } from './stock-ledger'
 import { shiftInstanceOf, shiftOf } from './nursing-rules'
 import { allocateFefo, usableQty } from './stock-rules'
+import { wardExpiryLots, type WardExpiryLot } from './ward-stock-work'
 import { find, nameOf, stockLoc } from './views'
 import { consumeWitness, WITNESS_MIN, witnessFor } from './witness-core'
 
@@ -43,6 +44,8 @@ export interface WardStockRow {
 }
 
 export interface WardStockView {
+  /** 效期：過期、30 天內到期的批號（藥師要收回；護理站看到過期的不能用） */
+  expiryLots: WardExpiryLot[]
   ward: string
   locationId: string
   locationName: string
@@ -66,10 +69,34 @@ function wardView(ward: string): WardStockView {
   const cur = currentShift(t)
   const last = db.wardCounts.filter((c) => c.ward === ward).sort((a, b) => b.at.localeCompare(a.at))[0]
   return {
+    expiryLots: wardExpiryLots(loc.id, t.slice(0, 10)),
     ward, locationId: loc.id, locationName: loc.name, rows, needsWitness: rows.some((r) => r.controlled),
     shift: { ...cur, counted: db.wardCounts.some((c) => c.ward === ward && c.shift === cur.shift && c.date === cur.date) },
     ...(last ? { lastCount: { at: last.at, byName: nameOf.user(last.countedBy), shift: last.shift, diffs: last.lines.filter((l) => l.counted !== l.book).length, ...(last.witnessBy ? { witnessName: nameOf.user(last.witnessBy) } : {}) } } : {}),
   }
+}
+
+/**
+ * 收回病房常備的過期、近效期藥（藥師）：選的批號整批從病房轉回住院藥局（同批號、同效期），藥局再照報廢流程處理；
+ * 收回後病房低於基準量的照常補充（補的是效期較新的）
+ */
+export function returnWardExpiry(ward: string, lotIds: string[]): Promise<{ no: string; lots: number; qty: number }> {
+  return mutate(() => {
+    const u = requireUser('pharmacist')
+    const loc = wardLoc(ward)
+    const t = now()
+    const can = wardExpiryLots(loc.id, t.slice(0, 10))
+    const picks = [...new Set(lotIds ?? [])].map((id) => can.find((x) => x.lotId === id) ?? fail('只能收回這個病房過期或 30 天內到期的批號', 'CONFLICT'))
+    if (!picks.length) fail('請選要收回的批號')
+    const dst = stockLoc.ipd()
+    const no = `WX${t.slice(0, 10).replace(/-/g, '')}-${String(nextCounter(`wardexp:${t.slice(0, 10)}`)).padStart(2, '0')}`
+    for (const x of picks) {
+      postStock({ kind: 'out', type: 'transfer-out', drugId: x.drugId, locationId: loc.id, qty: x.qty, lotId: x.lotId, includeExpired: true, ref: no, reason: `病房效期收回 ${ward}` }, u.id, t)
+      postStock({ kind: 'in', type: 'transfer-in', drugId: x.drugId, locationId: dst, qty: x.qty, lot: { lotNo: x.lotNo, expiry: x.expiry }, ref: no }, u.id, t)
+    }
+    audit('病房效期收回', `${no} ${ward}：${picks.map((x) => `${x.drugName} ${x.lotNo}（${x.expiry}${x.expired ? '，已過期' : ''}）${x.qty}`).join('、')}`)
+    return { no, lots: picks.length, qty: picks.reduce((n, x) => n + x.qty, 0) }
+  })
 }
 
 /** 這個病房的常備：品項、基準量、帳上與可用、本班點過沒 */

@@ -18448,6 +18448,112 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     d = await api.dashboardApi.getDashboard()
     ok(!d.preAuthExpiringAll && !(await P.preAuthBoard()).find((x) => x.id === seedPa.id).expiring, '續約核准後：不再提醒')
   }
+  // 住院病歷完整性：缺什麼（病摘簽署、手術紀錄、死亡證明書自然死、會診回覆）、完成時間、期限 14 天、逾期、準時完成率；主治與病歷室；首頁
+  console.log('\n[住院病歷完整性]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const R = api.recordAuditApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const base = { day: false, dischargedAt: '2026-11-01 10:00', summary: { signedAt: '2026-11-02 09:00' }, surgeries: [], consults: [] }
+    ok(!api.recordGaps(base).length && api.recordCompletedAt(base) === '2026-11-02 09:00' && api.recordDue(base.dischargedAt) === '2026-11-15', '完整：完成時間＝最後補齊的、期限出院 + 14 天')
+    const g = api.recordGaps({ ...base, summary: {}, surgeries: [{ no: 'OR1' }, { no: 'OR2', recordAt: 'x' }], death: { manner: 'natural' }, consults: [{ dept: '心臟內科' }, { dept: '外科', cancelled: true }] })
+    ok(g.join('；') === '出院病摘未簽署；手術紀錄未完成：OR1；死亡證明書未開立；會診未回覆：心臟內科', `缺：${g.join('；')}`)
+    ok(!api.recordGaps({ ...base, death: { manner: 'accident' } }).length && !api.recordGaps({ ...base, day: true, summary: undefined }).length && api.recordGaps({ ...base, summary: undefined })[0] === '出院病摘未寫', '非自然死不用開（檢察官相驗）；日間手術不用病摘；沒寫病摘')
+    ok(api.recordOverdue({ ...base, summary: {} }, '2026-11-16') && !api.recordOverdue({ ...base, summary: {} }, '2026-11-15') && api.recordOnTime(base) && !api.recordOnTime({ ...base, summary: { signedAt: '2026-11-20 09:00' } }), '逾期（期限當天還不算）、準時完成')
+    ok(api.recordOnTimeRate([base, { ...base, summary: { signedAt: '2026-11-20 09:00' } }, { ...base, dischargedAt: '2026-11-10 10:00', summary: {} }], '2026-11-20') === 50 && api.recordOnTimeRate([], '2026-11-20') === null, '準時完成率：已到期或已完成的才算（還沒到期、還沒完成的不算）')
+    // 測試輔助：一位出院超過 14 天、病摘還沒簽
+    const a = db().admissions.find((x) => x.status === 'discharged' && x.dischargeSummary?.signedAt && !x.day && x.dischargedAt < `${addDaysT(-15)} 23:59`)
+    delete a.dischargeSummary.signedAt
+    const doc = db().users.find((u) => u.doctorId === a.doctorId).username
+    await as(doc)
+    const mine = await R.myIncompleteRecords()
+    const d = await api.dashboardApi.getDashboard()
+    ok(mine[0].admissionId === a.id && mine[0].overdue && mine[0].gaps.includes('出院病摘未簽署') && d.recordIncomplete >= 1 && d.recordOverdue >= 1, '主治：病歷待完成（逾期在前）、首頁')
+    ok((await errOf(() => R.recordAudit())).includes('疾病分類'), '全院清單要「疾病分類」權限')
+    await as('clerk01')
+    const au = await R.recordAudit()
+    const m = au.months.find((x) => x.month === a.dischargedAt.slice(0, 7))
+    ok(au.incomplete[0].admissionId === a.id && au.byDoctor[0].overdue >= 1 && m.incomplete >= 1 && m.rate !== null && m.rate < 100 && au.months.length === 6, `病歷室：清單逾期在前、各主治、${m.month} 準時完成率 ${m.rate}%`)
+    ok((await api.dashboardApi.getDashboard()).recordOverdueAll >= 1, '病歷室首頁：全院逾期')
+    // 補簽 → 完成（但不準時）
+    db().admissions.find((x) => x.id === a.id).dischargeSummary.signedAt = dateUtil.now()
+    ok(!(await R.recordAudit()).incomplete.some((x) => x.admissionId === a.id), '補簽後：不在待完成清單')
+  }
+  // 門診病歷抽審：抽樣（固定、每位醫師 2 份、不抽急診與慢箋、月份結束後、只抽一次）→ 逐項審查（全選、不符合要意見）→ 醫師回覆 → 平均分數
+  console.log('\n[門診病歷抽審]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const O = api.opdReviewApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const xs = [{ id: 'E1', doctorId: 'A' }, { id: 'E2', doctorId: 'A' }, { id: 'E3', doctorId: 'A' }, { id: 'E4', doctorId: 'B' }]
+    const s1 = api.sampleEncounters(xs, 2)
+    ok(s1.filter((x) => x.doctorId === 'A').length === 2 && s1.filter((x) => x.doctorId === 'B').length === 1 && api.sampleEncounters([...xs].reverse(), 2).map((x) => x.id).sort().join() === s1.map((x) => x.id).sort().join(), '抽樣：每位醫師最多 2 份、順序不影響結果（固定）')
+    const all = Object.fromEntries(api.OPD_REVIEW_ITEMS.map((i) => [i.key, true]))
+    ok(api.opdReviewScore(all) === 100 && api.opdReviewScore({ ...all, plan: false }) === 83 && api.opdReviewFails({ ...all, icd: false })[0].includes('診斷碼') && api.checkOpdReview({ subjective: true }).includes('還有 5 項'), '分數、不符合項目、每項都要選')
+    const cur = T.slice(0, 7)
+    const M = dateUtil.addDays(`${cur}-01`, -1).slice(0, 7)
+    await as('clerk01')
+    ok((await errOf(() => O.sampleOpdReviews(cur))).includes('月份結束後'), '這個月不能抽')
+    let b = await O.sampleOpdReviews(M)
+    const docs = new Set(db().encounters.filter((e) => e.status === 'completed' && e.date.startsWith(M) && ((v) => v && !v.er && !v.refillOf)(db().visits.find((v) => v.id === e.visitId))).map((e) => e.doctorId))
+    ok(b.sampled && b.reviews.length > 0 && b.byDoctor.length === docs.size && b.byDoctor.every((d) => d.count <= 2) && b.reviews.every((r) => !db().visits.find((v) => v.id === db().encounters.find((e) => e.id === r.encounterId).visitId).er) && db().auditLogs[0].action === '門診病歷抽審', `抽 ${b.reviews.length} 份（${b.byDoctor.length} 位醫師，每位最多 2 份，不抽急診、慢箋）`)
+    ok((await errOf(() => O.sampleOpdReviews(M))).includes('抽過'), '同一個月只抽一次')
+    ok((await api.dashboardApi.getDashboard()).opdReviewPending === b.reviews.length, '病歷室首頁：待抽審')
+    const r = b.reviews[0]
+    ok((await fieldsOf(() => O.saveOpdReview(r.id, { items: { subjective: true } }))).items, '每一項都要選')
+    ok((await fieldsOf(() => O.saveOpdReview(r.id, { items: { ...all, objective: false } }))).note, '有不符合要寫意見')
+    const sv = await O.saveOpdReview(r.id, { items: { ...all, objective: false }, note: '沒有記載血壓' })
+    ok(sv.score === 83 && sv.fails.length === 1 && sv.needAck, '審查：83 分、不符合 1 項、等醫師回覆')
+    const r2 = b.reviews.find((x) => x.doctorId !== r.doctorId) ?? b.reviews[1]
+    if (r2) await O.saveOpdReview(r2.id, { items: all })
+    b = await O.opdReviewBoard(M)
+    ok(b.byDoctor.find((d) => d.doctorName === r.doctorName).avg === 83 && b.reviews.at(-1).result, '各醫師平均分數；審過的排後面')
+    const docU = db().users.find((u) => u.doctorId === r.doctorId).username
+    await as(docU)
+    ok((await api.dashboardApi.getDashboard()).opdReviewToAck === 1 && (await O.myOpdReviews())[0].id === r.id, '醫師首頁：抽審待回覆')
+    ok((await fieldsOf(() => O.ackOpdReview(r.id, ' '))).note, '要寫改善說明')
+    await O.ackOpdReview(r.id, '之後會記載生命徵象')
+    ok(!(await O.myOpdReviews()).find((x) => x.id === r.id).needAck && (await errOf(() => O.ackOpdReview(r.id, 'x'))).includes('回覆'), '回覆後：不用再回、不能重複')
+    if (r2 && r2.doctorId !== r.doctorId) {
+      ok((await errOf(() => O.ackOpdReview(r2.id, 'x'))).includes('被抽審的醫師'), '別的醫師不能回覆')
+    } else ok(true, '（只有一位醫師，略過）')
+    await as('clerk01')
+    ok((await errOf(() => O.saveOpdReview(r.id, { items: all }))).includes('回覆'), '醫師回覆後不能再改審查')
+  }
+  // 病房常備效期：過期、30 天內到期的批號列出；護理站看得到；藥師收回到住院藥局（同批號同效期）；首頁
+  console.log('\n[病房常備效期]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const W = api.wardStockApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const ward = db().stockLocations.find((l) => l.kind === 'ward' && l.active)
+    const lots = db().drugLots.filter((l) => l.locationId === ward.id && l.qty > 0)
+    const [l1, l2] = lots.filter((l, i, arr) => arr.findIndex((x) => x.lotNo === l.lotNo) === i)
+    // 測試輔助：改效期（同批號的全部一起改，各地點效期一致）
+    for (const x of db().drugLots.filter((l) => l.lotNo === l1.lotNo)) x.expiry = addDaysT(-2)
+    for (const x of db().drugLots.filter((l) => l.lotNo === l2.lotNo)) x.expiry = addDaysT(10)
+    await as('nurse01')
+    const v = await W.getWardStock(ward.ward)
+    const e1 = v.expiryLots.find((x) => x.lotId === l1.id)
+    const e2 = v.expiryLots.find((x) => x.lotId === l2.id)
+    ok(e1?.expired && e1.daysLeft === -2 && e2 && !e2.expired && e2.daysLeft === 10 && v.expiryLots[0].lotId === l1.id, '護理站：過期（−2 天）、10 天內到期都列出（效期早的在前）')
+    ok((await errOf(() => W.returnWardExpiry(ward.ward, [l1.id]))).includes('藥師'), '收回要藥師')
+    await as('ph01')
+    ok((await api.dashboardApi.getDashboard()).wardExpired >= 1, '藥師首頁：病房常備效期待收回')
+    ok((await errOf(() => W.returnWardExpiry(ward.ward, [lots.find((l) => l.lotNo !== l1.lotNo && l.lotNo !== l2.lotNo)?.id ?? 'x']))).includes('只能收回'), '效期還長的不能收回')
+    const ipd = db().stockLocations.find((l) => l.dispensesIpd && l.active)
+    const before = db().drugLots.filter((l) => l.locationId === ipd.id && l.lotNo === l1.lotNo && l.drugId === l1.drugId).reduce((n, l) => n + l.qty, 0)
+    const q1 = l1.qty
+    const r = await W.returnWardExpiry(ward.ward, [l1.id, l2.id])
+    const after = db().drugLots.filter((l) => l.locationId === ipd.id && l.lotNo === l1.lotNo && l.drugId === l1.drugId).reduce((n, l) => n + l.qty, 0)
+    ok(r.lots === 2 && r.no.startsWith('WX') && db().drugLots.find((l) => l.id === l1.id).qty === 0 && after === before + q1 && db().auditLogs[0].action === '病房效期收回' && db().auditLogs[0].detail.includes('已過期'), `收回 ${r.lots} 批到住院藥局（${r.no}）：病房歸零、藥局同批號加回、稽核`)
+    const wd = await W.getWardStock(ward.ward)
+    ok(!wd.expiryLots.some((x) => x.lotId === l1.id || x.lotId === l2.id) && wd.expiryLots.every((x) => !x.expired), '收回後：這個病房這兩批不再列、沒有過期的（別的病房同批號還要各自收回）')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)
