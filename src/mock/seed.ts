@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -265,6 +265,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U403', username: 'clerk03', password: '1234', name: '呂佳蓉', roles: ['clerk'], active: true },
     // 醫檢師：登打檢驗結果、發報告
     { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true, grants: ['lab.limits', 'pathology'] },
+    { id: 'U602', username: 'lab02', password: '1234', name: '鄭宇翔', roles: ['lab'], active: true },
     { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
     { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true },
   ]
@@ -3794,6 +3795,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (hernias.some((x) => x.implants?.[0].lotId === m1.id)) m1.recall = { at: notFuture(`${T} 08:00`, 5), by: 'U214', reason: '廠商通知：該批包裝密封不良，可能影響無菌', notified: [] }
   }
 
+  // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------
+  const labWindows: LabWindowSession[] = []
+  {
+    const open = notFuture(`${T} 07:30`, 30)
+    labWindows.push({ id: 'LW-SEED-1', date: T, window: 1, userId: 'U601', openedAt: open }, { id: 'LW-SEED-2', date: T, window: 2, userId: 'U602', openedAt: open })
+    labCheckins.filter((c) => c.date === T && c.calls?.length).sort((a, b) => a.at.localeCompare(b.at)).forEach((c, i) => (c.window = (i % 2) + 1))
+  }
+
   return {
     schema: 0, // 由 db.ts 填入目前的 SCHEMA_VERSION，版本號只定義在一個地方
     seededAt: T,
@@ -3884,6 +3893,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     qcRuns,
     imagingExams,
     labCheckins,
+    labWindows,
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,

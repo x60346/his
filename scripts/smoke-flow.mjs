@@ -16796,6 +16796,72 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(!/instrumentItemsProblem|expectedInstruments/.test(readFileSync('src/pages/or/OrPage.vue', 'utf8')), '哪件不符由服務層判斷')
   }
+  // 抽血多窗口：開窗（一人一窗、一窗一人）、各窗口叫號（共用一條隊伍、不會兩窗口叫到同一位）、重叫過號只限叫的窗口、
+  // 關窗（叫到的沒處理不能關）、沒開窗叫號自動開空窗口、都滿擋；看板與候診螢幕帶窗口號；種子
+  console.log('\n[抽血多窗口]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const L = api.labDeskApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const ws = [{ date: T, window: 1, userId: 'A' }, { date: T, window: 2, userId: 'B', closedAt: 'x' }]
+    ok(api.windowOfUser(ws, 'A', T).window === 1 && !api.windowOfUser(ws, 'B', T) && api.windowHolder(ws, 1, T).userId === 'A' && api.firstFreeWindow(ws, T) === 2, '規則：誰開哪個窗口、關了的不算、最小的空窗口')
+    // 種子
+    await as('lab01')
+    let d = await L.labDesk()
+    ok(d.queue.myWindow === 1 && d.queue.windows.find((w) => w.window === 2).userName && !d.queue.windows.find((w) => w.window === 3).userName && d.queue.windows.reduce((n, w) => n + w.served, 0) === db().labCheckins.filter((c) => c.date === T && c.servedAt).length, `種子：lab01 開 1 號、lab02 開 2 號、3 號沒開；已採的分給兩個窗口（${d.queue.windows.map((w) => w.served).join('、')}）`)
+    // 多報到兩位（測試輔助）
+    const base = Math.max(0, ...db().labCheckins.filter((c) => c.date === T).map((c) => c.no))
+    const free = db().patients.filter((p) => !db().labCheckins.some((c) => c.patientId === p.id && c.date === T)).slice(0, 2)
+    free.forEach((p, i) => db().labCheckins.push({ id: `LC-W${i}`, no: base + 1 + i, patientId: p.id, date: T, at: nowStr().slice(0, 16), by: 'U601' }))
+    const c1 = await L.callNextLab()
+    ok(c1.window === 1 && db().auditLogs[0].detail.includes('1 號窗口'), `1 號窗口叫 ${c1.no} 號、稽核帶窗口`)
+    let f = await errOf(() => L.callNextLab())
+    ok(f.includes('1 號窗口叫到的'), '自己窗口叫到的還沒處理不能叫下一位')
+    await as('lab02')
+    const c2 = await L.callNextLab()
+    ok(c2.window === 2 && c2.patientId !== c1.patientId, `2 號窗口同時叫 ${c2.no} 號（共用隊伍、不會叫到同一位）`)
+    f = await errOf(() => L.recallLab(c1.patientId))
+    ok(f.includes('1 號窗口叫的'), '別的窗口叫的不能重叫')
+    f = await errOf(() => L.skipLab(c1.patientId))
+    ok(f.includes('1 號窗口叫的'), '別的窗口叫的不能過號')
+    const disp = await L.labQueueDisplay()
+    ok(disp.calling.length === 2 && disp.current.no === c2.no && disp.current.window === 2 && disp.calling.some((x) => x.no === c1.no && x.window === 1), '候診螢幕：最近叫的帶窗口號，各窗口叫的都列')
+    d = await L.labDesk()
+    ok(d.queue.current.no === c2.no && d.queue.windows.find((w) => w.window === 1).current.no === c1.no, '看板：我的窗口叫的、各窗口在叫幾號')
+    // 開窗、關窗
+    f = await errOf(() => L.openLabWindow(3))
+    ok(f.includes('已經開了 2 號'), '一人同時只能開一個窗口')
+    f = await errOf(() => L.closeLabWindow())
+    ok(f.includes('還沒處理'), '叫到的還沒處理不能關窗')
+    await L.skipLab(c2.patientId)
+    const cl = await L.closeLabWindow()
+    ok(cl.window === 2 && db().auditLogs[0].action === '關抽血窗口', '過號後可以關窗、稽核')
+    f = await errOf(() => L.openLabWindow(1))
+    ok(f.includes('1 號窗口') && f.includes('開著'), '別人開著的窗口不能開')
+    ok((await errOf(() => L.openLabWindow(4))).includes('1、2、3'), '只有 1–3 號')
+    await L.openLabWindow(3)
+    ok((await L.labDesk()).queue.myWindow === 3, '改開 3 號')
+    await L.closeLabWindow()
+    // 沒開窗叫號：自動開最小的空窗口；都滿擋（測試輔助：別人佔 2、3 號）
+    await L.returnLab(c2.patientId)
+    const c3 = await L.callNextLab()
+    ok(c3.window === 2 && db().auditLogs.some((x) => x.action === '開抽血窗口' && x.detail.includes('自動')), '沒開窗叫號：自動開 2 號窗口')
+    await L.skipLab(c3.patientId)
+    await L.closeLabWindow()
+    db().labWindows.push({ id: 'LW-T2', date: T, window: 2, userId: 'U999', openedAt: nowStr() }, { id: 'LW-T3', date: T, window: 3, userId: 'U998', openedAt: nowStr() })
+    f = await errOf(() => L.callNextLab())
+    ok(f.includes('窗口都有人'), '三個窗口都有人：擋')
+    const { readFileSync } = await import('node:fs')
+    ok(!/firstFreeWindow|windowHolder|db\./.test(readFileSync('src/pages/lab/components/LabDeskPanel.vue', 'utf8')), '窗口規則由服務層判斷')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

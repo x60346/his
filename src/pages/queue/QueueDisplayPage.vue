@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 抽血候診螢幕（掛在候診區，不用登入）：目前叫號、接下來五位、等候人數、今天平均等候分鐘。
+// 抽血候診螢幕（掛在候診區，不用登入）：目前叫號（帶窗口號，其他窗口在叫的也列）、接下來五位、等候人數、今天平均等候分鐘。
 // 只顯示號碼與遮過的姓名（王○明）；櫃台叫號後自動更新（多分頁同步）。資料在服務層 lab-desk.labQueueDisplay
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { labDeskApi } from '@/services'
@@ -23,8 +23,11 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <section class="flex flex-col items-center justify-center rounded-2xl bg-slate-800 p-8" aria-live="polite">
         <span class="text-2xl text-slate-300">請下列號碼到抽血櫃台</span>
         <span class="tabular my-4 text-[9rem] font-bold leading-none text-amber-300">{{ data.current ? data.current.no : '—' }}</span>
-        <span v-if="data.current" class="text-4xl">{{ data.current.name }}</span>
+        <span v-if="data.current" class="text-4xl">{{ data.current.name }}<template v-if="data.current.window">　請到 <b class="text-amber-300">{{ data.current.window }} 號窗口</b></template></span>
         <span v-else class="text-2xl text-slate-400">請稍候</span>
+        <ul v-if="data.calling.length > 1" class="mt-6 space-y-1 text-2xl text-slate-300">
+          <li v-for="c in data.calling.slice(1)" :key="c.no" class="tabular">{{ c.no }} 號 {{ c.name }} → {{ c.window }} 號窗口</li>
+        </ul>
       </section>
       <section class="flex flex-col rounded-2xl bg-slate-800 p-6">
         <h2 class="mb-4 text-2xl text-slate-300">接下來</h2>

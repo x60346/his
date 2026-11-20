@@ -4,12 +4,13 @@
 import type { LabCheckin, Specimen } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
-import { audit, fail, must, mutate, query, requireUser } from './http'
+import { audit, fail, must, mutate, query, requireUser, type Actor } from './http'
 import { fastingText, groupByTube, SELF_COLLECT_TUBES, specimenStage, SPECIMEN_STAGE_LABEL, TUBE_LABEL } from './specimen-rules'
 import { chunksByVolume, needsFasting, nextBarcode, opdSpecimenOf, recordFasting } from './specimen-work'
 import { pendingLabWork } from './lab-work'
 import { find, nameOf } from './views'
 import { ageOf } from '@/utils/date'
+import { firstFreeWindow, LAB_WINDOWS, windowHolder, windowOfUser } from './lab-queue-rules'
 import { callOrder, maskName, pickNext, priorityOf, QUEUE_PRIORITY_AGE, QUEUE_PRIORITY_LABEL } from './lab-queue-rules'
 import { avgWait, callsSinceReturn, queueOrder, queueStage, returnOrder, waitingList, QUEUE_MAX_CALLS, QUEUE_STAGE_LABEL, type QueueStage } from './lab-queue-rules'
 
@@ -69,6 +70,9 @@ export interface DeskQueue {
   skipped: { no: number; patientId: string; patientName: string; skippedAt: string }[]
   avgWait?: number
   maxCalls: number
+  /** 我開著的窗口；各窗口誰開著、正在叫幾號、今天採了幾位 */
+  myWindow?: number
+  windows: { window: number; userName?: string; mine: boolean; current?: { no: number; patientName: string }; served: number }[]
 }
 
 function deskPatient(patientId: string, d: string): DeskPatient {
@@ -89,10 +93,20 @@ const todays = () => db.labCheckins.filter((c) => c.date === todayOf())
 /** 今天目前連續叫了幾位優先（叫一般就歸零） */
 const streakKey = () => `labqueue-streak:${todayOf()}`
 const streakNow = () => db.counters[streakKey()] ?? 0
-function deskQueue(): DeskQueue {
+const calledOf = (cs: LabCheckin[], w?: number) => cs.filter((c) => queueStage(c) === 'called' && (w === undefined || c.window === undefined || c.window === w)).sort((a, b) => a.calls!.at(-1)!.localeCompare(b.calls!.at(-1)!)).at(-1)
+function deskQueue(userId?: string): DeskQueue {
   const cs = todays()
-  const cur = cs.filter((c) => queueStage(c) === 'called').sort((a, b) => a.calls!.at(-1)!.localeCompare(b.calls!.at(-1)!)).at(-1)
+  const d = todayOf()
+  const mine = userId ? windowOfUser(db.labWindows, userId, d)?.window : undefined
+  // 我有開窗：看我這個窗口叫的；沒開窗：最近叫的
+  const cur = calledOf(cs, mine)
   return {
+    ...(mine ? { myWindow: mine } : {}),
+    windows: LAB_WINDOWS.map((n) => {
+      const h = windowHolder(db.labWindows, n, d)
+      const c = cs.filter((x) => queueStage(x) === 'called' && x.window === n).at(-1)
+      return { window: n, ...(h ? { userName: nameOf.user(h.userId) } : {}), mine: n === mine, ...(c ? { current: { no: c.no, patientName: nameOf.patient(c.patientId) } } : {}), served: cs.filter((x) => x.servedAt && x.window === n).length }
+    }),
     ...(cur ? { current: { no: cur.no, patientId: cur.patientId, patientName: nameOf.patient(cur.patientId), calls: callsSinceReturn(cur), calledAt: cur.calls!.at(-1)! } } : {}),
     waiting: callOrder(waitingList(cs), streakNow()).map((c) => ({ no: c.no, patientId: c.patientId, patientName: nameOf.patient(c.patientId), at: c.returnedAt ?? c.at, returned: !!c.returnedAt, ...(c.priority ? { priorityLabel: QUEUE_PRIORITY_LABEL[c.priority] } : {}) })),
     streak: streakNow(),
@@ -106,40 +120,90 @@ const checkinOf = (patientId: string) => must(todays().find((c) => c.patientId =
 /** 抽血櫃台：今天報到的（依號碼）＋已批價還沒報到的＋叫號看板 */
 export function labDesk(): Promise<{ date: string; checkedIn: DeskPatient[]; notCheckedIn: DeskPatient[]; queue: DeskQueue }> {
   return query(() => {
-    requireUser('lab')
+    const u = requireUser('lab')
     const d = todayOf()
     const checkedIn = db.labCheckins.filter((c) => c.date === d).sort((a, b) => a.no - b.no).map((c) => deskPatient(c.patientId, d))
     const waitingIds = [...new Set(pendingLabWork().filter((w) => w.source === 'opd' && !w.er && !opdSpecimenOf(w.key)).map((w) => w.patientId))].filter((id) => !checkedIn.some((x) => x.patientId === id))
-    return { date: d, checkedIn, notCheckedIn: waitingIds.map((id) => deskPatient(id, d)), queue: deskQueue() }
+    return { date: d, checkedIn, notCheckedIn: waitingIds.map((id) => deskPatient(id, d)), queue: deskQueue(u.id) }
   })
 }
 
-/** 叫下一位：目前叫到的還沒處理（開始採檢或過號）不能叫下一位；等候中依順序叫第一位 */
+/** 我的窗口；還沒開窗就自動開最小的空窗口（都有人就擋） */
+function ensureWindow(u: Actor): number {
+  const d = todayOf()
+  const w = windowOfUser(db.labWindows, u.id, d)
+  if (w) return w.window
+  const n = firstFreeWindow(db.labWindows, d)
+  if (!n) fail(`${LAB_WINDOWS.length} 個窗口都有人開著，請等其他人關窗`, 'CONFLICT')
+  db.labWindows.push({ id: newId('LW'), date: d, window: n!, userId: u.id, openedAt: now() })
+  audit('開抽血窗口', `${n} 號窗口（叫號時自動開）`)
+  return n!
+}
+
+/** 開窗：幾號窗口（一人同時一個窗口、一個窗口同時一人） */
+export function openLabWindow(window: number): Promise<{ window: number }> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const d = todayOf()
+    if (!LAB_WINDOWS.includes(Number(window))) fail(`窗口是 ${LAB_WINDOWS.join('、')} 號`, 'BAD_REQUEST')
+    const mine = windowOfUser(db.labWindows, u.id, d)
+    if (mine) fail(`你已經開了 ${mine.window} 號窗口：要換窗口請先關窗`, 'CONFLICT')
+    const h = windowHolder(db.labWindows, Number(window), d)
+    if (h) fail(`${window} 號窗口 ${nameOf.user(h.userId)} 開著`, 'CONFLICT')
+    db.labWindows.push({ id: newId('LW'), date: d, window: Number(window), userId: u.id, openedAt: now() })
+    audit('開抽血窗口', `${window} 號窗口`)
+    return { window: Number(window) }
+  })
+}
+
+/** 關窗：叫到的病人還沒處理（開始採檢或過號）不能關 */
+export function closeLabWindow(): Promise<{ window: number }> {
+  return mutate(() => {
+    const u = requireUser('lab')
+    const w = windowOfUser(db.labWindows, u.id, todayOf())
+    if (!w) fail('你現在沒有開窗', 'CONFLICT')
+    const cur = todays().find((c) => queueStage(c) === 'called' && c.window === w!.window)
+    if (cur) fail(`${w!.window} 號窗口叫到的 ${cur.no} 號還沒處理：開始採檢或過號後再關窗`, 'CONFLICT')
+    w!.closedAt = now()
+    audit('關抽血窗口', `${w!.window} 號窗口`)
+    return { window: w!.window }
+  })
+}
+
+/** 叫下一位（我的窗口；沒開窗自動開）：我這個窗口叫到的還沒處理不能叫下一位；等候中（各窗口共用一條）依順序叫第一位 */
 export function callNextLab(): Promise<LabCheckin> {
   return mutate(() => {
-    requireUser('lab')
+    const u = requireUser('lab')
+    const w = ensureWindow(u)
     const cs = todays()
-    const cur = cs.find((c) => queueStage(c) === 'called')
-    if (cur) fail(`目前叫到的 ${cur.no} 號（${nameOf.patient(cur.patientId)}）還沒處理：開始採檢、重叫或過號`, 'CONFLICT')
+    const cur = calledOf(cs, w)
+    if (cur) fail(`${w} 號窗口叫到的 ${cur.no} 號（${nameOf.patient(cur.patientId)}）還沒處理：開始採檢、重叫或過號`, 'CONFLICT')
     const next = pickNext(waitingList(cs), streakNow())
     if (!next) fail('沒有等候中的病人', 'CONFLICT')
     ;(next!.calls ??= []).push(now())
+    next!.window = w
     db.counters[streakKey()] = next!.priority ? streakNow() + 1 : 0
-    audit('抽血叫號', `${next!.no} 號 ${nameOf.patient(next!.patientId)}${next!.priority ? `（優先：${QUEUE_PRIORITY_LABEL[next!.priority]}）` : ''}`)
+    audit('抽血叫號', `${next!.no} 號 ${nameOf.patient(next!.patientId)} → ${w} 號窗口${next!.priority ? `（優先：${QUEUE_PRIORITY_LABEL[next!.priority]}）` : ''}`)
     return next!
   })
+}
+/** 重叫、過號：只有叫這位的窗口能做 */
+function ownCall(u: Actor, c: LabCheckin) {
+  const mine = windowOfUser(db.labWindows, u.id, todayOf())?.window
+  if (c.window && mine && c.window !== mine) fail(`${c.no} 號是 ${c.window} 號窗口叫的`, 'CONFLICT')
 }
 
 /** 重叫（病人還沒來）：同一號最多叫 3 次，之後請過號 */
 export function recallLab(patientId: string): Promise<LabCheckin> {
   return mutate(() => {
-    requireUser('lab')
+    const u = requireUser('lab')
     const c = checkinOf(patientId)
     if (queueStage(c) !== 'called') fail('這位病人現在沒有在叫號', 'CONFLICT')
+    ownCall(u, c)
     const n = callsSinceReturn(c)
     if (n >= QUEUE_MAX_CALLS) fail(`已經叫了 ${QUEUE_MAX_CALLS} 次，請過號`, 'CONFLICT')
     c.calls!.push(now())
-    audit('抽血叫號', `${c.no} 號 ${nameOf.patient(c.patientId)}（第 ${n + 1} 次）`)
+    audit('抽血叫號', `${c.no} 號 ${nameOf.patient(c.patientId)}${c.window ? ` → ${c.window} 號窗口` : ''}（第 ${n + 1} 次）`)
     return c
   })
 }
@@ -147,9 +211,10 @@ export function recallLab(patientId: string): Promise<LabCheckin> {
 /** 過號：叫了沒來（叫號中的才能過號）；病人回來再按「回來了」重新排隊 */
 export function skipLab(patientId: string): Promise<LabCheckin> {
   return mutate(() => {
-    requireUser('lab')
+    const u = requireUser('lab')
     const c = checkinOf(patientId)
     if (queueStage(c) !== 'called') fail('叫號中的病人才能過號', 'CONFLICT')
+    ownCall(u, c)
     c.skippedAt = now()
     delete c.returnedAt
     delete c.callsAtReturn
@@ -210,7 +275,10 @@ export function setLabPriority(patientId: string, priority: 'disabled' | 'mobili
 /** 候診螢幕（不用登入，公開在候診區）：只給號碼與遮過的姓名——目前叫號、接下來五位、等候人數、今天平均等候 */
 export interface QueueDisplay {
   date: string
-  current?: { no: number; name: string }
+  /** 最近叫的一位（帶窗口號） */
+  current?: { no: number; name: string; window?: number }
+  /** 各窗口正在叫的（最近叫的在前） */
+  calling: { no: number; name: string; window: number }[]
   next: { no: number; name: string; priority: boolean }[]
   waitingCount: number
   avgWait?: number
@@ -222,7 +290,8 @@ export function labQueueDisplay(): Promise<QueueDisplay> {
     const order = callOrder(waitingList(cs), streakNow())
     return {
       date: todayOf(),
-      ...(cur ? { current: { no: cur.no, name: maskName(nameOf.patient(cur.patientId)) } } : {}),
+      ...(cur ? { current: { no: cur.no, name: maskName(nameOf.patient(cur.patientId)), ...(cur.window ? { window: cur.window } : {}) } } : {}),
+      calling: cs.filter((c) => queueStage(c) === 'called' && c.window).sort((a, b) => b.calls!.at(-1)!.localeCompare(a.calls!.at(-1)!)).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), window: c.window! })),
       next: order.slice(0, 5).map((c) => ({ no: c.no, name: maskName(nameOf.patient(c.patientId)), priority: !!c.priority })),
       waitingCount: order.length,
       ...((m) => (m !== undefined ? { avgWait: m } : {}))(avgWait(cs)),

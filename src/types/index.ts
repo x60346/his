@@ -1066,6 +1066,18 @@ export interface LabCheckin {
   order?: number
   /** 優先（75 歲以上自動、身心障礙、行動不便）：排在一般前面，但連續叫兩位優先後要叫一位一般 */
   priority?: 'elderly' | 'disabled' | 'mobility'
+  /** 哪一個窗口叫的（最後一次叫號的窗口；過號回來重叫可能換窗口） */
+  window?: number
+}
+
+/** 抽血窗口開窗紀錄：哪一天、幾號窗口、誰、幾點開、幾點關（一人同時一個窗口、一個窗口同時一人） */
+export interface LabWindowSession {
+  id: string
+  date: string
+  window: number
+  userId: string
+  openedAt: string
+  closedAt?: string
 }
 
 /** 檢驗時限設定（分鐘；沒有＝預設） */

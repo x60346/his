@@ -26,7 +26,10 @@ async function onScan() {
 }
 const doPrint = () => window.print()
 // 叫號
-const callNext = useAction(labDeskApi.callNextLab, { success: (c) => `叫號：${c.no} 號` })
+const callNext = useAction(labDeskApi.callNextLab, { success: (c) => `叫號：${c.no} 號 → ${c.window} 號窗口` })
+// 多窗口：開窗（一人一個窗口）、關窗；沒開窗按「叫下一位」會自動開最小的空窗口
+const openWin = useAction(labDeskApi.openLabWindow, { success: (r) => `已開 ${r.window} 號窗口` })
+const closeWin = useAction(labDeskApi.closeLabWindow, { success: (r) => `已關 ${r.window} 號窗口` })
 const recall = useAction(labDeskApi.recallLab, { success: (c) => `重叫 ${c.no} 號` })
 const skip = useAction(labDeskApi.skipLab, { success: (c) => `${c.no} 號過號` })
 const back = useAction(labDeskApi.returnLab, { success: (c) => `${c.no} 號回來了，重新排隊` })
@@ -47,10 +50,20 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
 <template>
   <UQueryState :loading="loading && !data" :ready="!!data">
     <div v-if="data" class="space-y-4">
+    <!-- 窗口：誰開著、正在叫幾號、今天採了幾位 -->
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <div v-for="w in data.queue.windows" :key="w.window" :class="['flex min-w-[11rem] items-center gap-2 rounded-md border px-3 py-1.5', w.mine ? 'border-brand-400 bg-brand-50' : 'border-slate-200 bg-white']">
+        <b class="tabular text-slate-800">{{ w.window }} 號窗口</b>
+        <span v-if="w.userName" class="text-xs text-slate-600">{{ w.userName }}{{ w.mine ? '（我）' : '' }}・{{ w.current ? `叫 ${w.current.no} 號` : '空著' }}・已採 {{ w.served }}</span>
+        <span v-else class="text-xs text-slate-400">沒開</span>
+        <UButton v-if="!w.userName && !data.queue.myWindow" size="sm" variant="secondary" class="ml-auto" :loading="openWin.pending.value" @click="openWin.run(w.window)">開窗</UButton>
+        <UButton v-if="w.mine" size="sm" variant="ghost" class="ml-auto" :loading="closeWin.pending.value" @click="closeWin.run()">關窗</UButton>
+      </div>
+    </div>
     <!-- 叫號看板 -->
     <div class="flex flex-wrap items-stretch gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
       <div class="flex min-w-[9rem] flex-col items-center justify-center rounded bg-slate-800 px-4 py-2 text-white">
-        <span class="text-xs text-slate-300">目前叫號</span>
+        <span class="text-xs text-slate-300">{{ data.queue.myWindow ? `${data.queue.myWindow} 號窗口叫號` : '目前叫號' }}</span>
         <span class="tabular text-3xl font-bold">{{ data.queue.current ? data.queue.current.no : '—' }}</span>
         <span v-if="data.queue.current" class="text-xs">{{ data.queue.current.patientName }}・第 {{ data.queue.current.calls }} 次</span>
       </div>

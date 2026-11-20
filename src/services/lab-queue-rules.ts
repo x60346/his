@@ -1,6 +1,6 @@
 // 門診抽血叫號（純函式，畫面、服務層、種子、測試共用）：報到拿號 → 櫃台「叫下一位」→ 病人來了開始採檢（印條碼）；
 // 叫了沒來可以重叫（最多 3 次）或過號；過號的病人回來，插在目前叫號的下兩位之後（不用從頭排）。叫到號才能採檢
-import type { LabCheckin } from '@/types'
+import type { LabCheckin, LabWindowSession } from '@/types'
 import { parseDate } from '@/utils/date'
 
 const minutesBetween = (a: string, b: string) => Math.round((parseDate(b).getTime() - parseDate(a).getTime()) / 60000)
@@ -75,3 +75,14 @@ export function callOrder<T extends C>(waiting: T[], streak: number): T[] {
 }
 /** 候診螢幕的姓名遮罩：王小明 → 王○明、陳一 → 陳○、歐陽小明 → 歐○○明 */
 export const maskName = (name: string) => (name.length <= 1 ? name : name.length === 2 ? `${name[0]}○` : `${name[0]}${'○'.repeat(name.length - 2)}${name.at(-1)}`)
+
+// ── 多窗口：固定 3 個窗口，共用一條隊伍；醫檢師開窗（一人同時一個窗口、一個窗口同時一人），叫號帶窗口號 ──
+
+export const LAB_WINDOWS = [1, 2, 3]
+type W = Pick<LabWindowSession, 'date' | 'window' | 'userId' | 'closedAt'>
+/** 這個人今天開著的窗口 */
+export const windowOfUser = <T extends W>(ws: T[], userId: string, date: string): T | undefined => ws.find((w) => w.date === date && w.userId === userId && !w.closedAt)
+/** 這個窗口今天現在誰開著 */
+export const windowHolder = <T extends W>(ws: T[], window: number, date: string): T | undefined => ws.find((w) => w.date === date && w.window === window && !w.closedAt)
+/** 叫號沒開窗時自動開：最小的空窗口 */
+export const firstFreeWindow = (ws: W[], date: string): number | undefined => LAB_WINDOWS.find((n) => !windowHolder(ws, n, date))
