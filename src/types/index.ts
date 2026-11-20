@@ -2611,6 +2611,78 @@ export interface ImplantUse {
   by: string
 }
 
+// ---------- 健保申報 ----------
+
+export type ClaimKind = 'opd' | 'ipd'
+/** 住院申報的費用類別 */
+export type ClaimCategory = 'consult' | 'ward' | 'drug' | 'procedure' | 'surgery' | 'implant' | 'lab' | 'blood' | 'er' | 'other'
+
+/**
+ * 申報的一筆：門診＝一次就醫（visitId），住院＝一次住院（admissionId）。點數直接用收據／住院帳單上的健保點數，
+ * 申請點數＝健保點數 − 部分負擔。補報：之前的月份送出後才改的（補收、作廢），差額列在下一個還沒送的月份
+ */
+export interface ClaimItem {
+  refId: string
+  patientId: string
+  doctorId: string
+  deptId: string
+  /** 門診＝就醫日；住院＝出院日 */
+  date: string
+  /** 案件類別：門診照掛號（01、04、E1…）；住院 IPD、日間手術 DAY */
+  caseType: string
+  /** 主診斷「代碼 名稱」 */
+  diagnosis: string
+  points: number
+  copay: number
+  claim: number
+  /** 住院：各費用類別的點數、住院天數 */
+  categories?: Partial<Record<ClaimCategory, number>>
+  days?: number
+  /** 補報：原本是哪個月的（點數是差額，可能是負的） */
+  supplementOf?: string
+}
+
+/** 一個月的申報（送出後鎖定）：送出當時的每一筆、註記排除的 */
+export interface ClaimSubmission {
+  id: string
+  kind: ClaimKind
+  month: string
+  submittedAt: string
+  submittedBy: string
+  items: ClaimItem[]
+  excluded: { refId: string; patientId: string; date: string; reason: string; by: string; at: string }[]
+}
+
+/** 送出前註記排除（這筆不申報：例自費改健保還在處理）；送出時一起鎖進申報 */
+export interface ClaimExclusion {
+  id: string
+  kind: ClaimKind
+  month: string
+  refId: string
+  reason: string
+  by: string
+  at: string
+}
+
+/** 核減（健保署審查結果）：哪一筆、哪一項、幾點、理由；主治回覆申復或接受；申復結果補付或維持 */
+export interface ClaimCut {
+  id: string
+  submissionId: string
+  kind: ClaimKind
+  month: string
+  refId: string
+  patientId: string
+  doctorId: string
+  item: string
+  points: number
+  code: string
+  reason: string
+  at: string
+  by: string
+  reply?: { action: 'appeal' | 'accept'; text: string; by: string; at: string }
+  result?: { outcome: 'paid' | 'upheld'; points: number; by: string; at: string }
+}
+
 // ---------- 病歷影本申請 ----------
 
 /** 影本可以申請的項目：門診病歷（一次看診）、出院病摘、檢驗報告、影像報告 */

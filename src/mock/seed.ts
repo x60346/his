@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -66,6 +66,7 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
+import { linePoints } from '@/services/claim-rules'
 import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
@@ -258,7 +259,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U302', username: 'ph02', password: '1234', name: '林雅婷', roles: ['pharmacist'], active: true },
     { id: 'U401', username: 'clerk01', password: '1234', name: '馬文琪', roles: ['clerk'], active: true },
     // 櫃台組長：可核准優免（「專案減免」要主管核准：clerk01 結帳時請 clerk02 輸入帳密）
-    { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount'] },
+    { id: 'U402', username: 'clerk02', password: '1234', name: '鄭淑芬', roles: ['clerk'], active: true, grants: ['charge.approveDiscount', 'nhi.claim'] },
     // 小診所常見：跟診護理兼櫃台掛號批價（多角色，登入時選、右上角切換）
     { id: 'U501', username: 'staff01', password: '1234', name: '陳小芬', roles: ['nurse', 'clerk'], active: true },
     // 長期沒登入的櫃台（示範「密碼過期太久鎖帳號」：130 天前設定的密碼，90 天到期、過期 40 天 > 寬限 30 天）
@@ -3795,6 +3796,46 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (hernias.some((x) => x.implants?.[0].lotId === m1.id)) m1.recall = { at: notFuture(`${T} 08:00`, 5), by: 'U214', reason: '廠商通知：該批包裝密封不良，可能影響無菌', notified: [] }
   }
 
+  // ---------- 健保申報（示範）----------
+  // 前前個月以前的門診都已送出（櫃台組長 clerk02 兼申報，次月 5 日）；之後那個月最後一位的病人回來加做 GPT（次月 8 日補收）→ 上個月的申報出現一筆「補報」。
+  // 上個月還沒送：第一位就醫的病歷沒有主診斷（送件前檢核要處理）。住院、核減見後面
+  const claimSubmissions: ClaimSubmission[] = []
+  const claimExclusions: ClaimExclusion[] = []
+  const claimCuts: ClaimCut[] = []
+  const cm0 = T.slice(0, 7)
+  const cm1 = addDays(`${cm0}-01`, -1).slice(0, 7)
+  const cm2 = addDays(`${cm1}-01`, -1).slice(0, 7)
+  {
+    const selfPay = new Set(codes.identities.filter((i) => i.selfPay).map((i) => i.code))
+    const opdItem = (v: Visit): ClaimItem | undefined => {
+      const cs = charges.filter((c) => c.visitId === v.id && !c.voided && !c.admissionId && !c.copyRequestId)
+      if (!cs.length || selfPay.has(v.identityCode)) return undefined
+      const e = v.refillOf ? encounters.find((x) => x.id === v.refillOf) : encounters.find((x) => x.visitId === v.id)
+      const d = e?.diagnoses.find((x) => x.primary) ?? e?.diagnoses[0]
+      return { refId: v.id, patientId: v.patientId, doctorId: v.doctorId, deptId: v.deptId, date: v.date, caseType: v.caseType, diagnosis: d ? `${d.icd} ${d.name}` : '', ...linePoints(cs.flatMap((c) => c.lines)) }
+    }
+    const byDate = (a: Visit, b: Visit) => a.date.localeCompare(b.date) || a.seqNo - b.seqNo
+    // 前前個月以前的都送過（每月 5 日）
+    for (const m of [...new Set(visits.map((v) => v.date.slice(0, 7)))].filter((m) => m <= cm2).sort()) {
+      const nm = addDays(`${m}-28`, 8).slice(0, 7)
+      claimSubmissions.push({ id: `CS-SEED-OPD-${m}`, kind: 'opd', month: m, submittedAt: `${nm}-05 09:00`, submittedBy: 'U402', items: visits.filter((v) => v.date.startsWith(m) && opdItem(v)).sort(byDate).map((v) => opdItem(v)!), excluded: [] })
+    }
+    const m2v = visits.filter((v) => v.date.startsWith(cm2) && opdItem(v)).sort(byDate)
+    if (m2v.length) {
+      const v = m2v.at(-1)!
+      const main = charges.find((c) => c.visitId === v.id && !c.voided)!
+      const gpt = procMap.get('P009')!
+      const at = `${cm1}-08 10:30`
+      charges.push({
+        id: 'CH-SEED-SUP', visitId: v.id, supplementOf: main.id, patientId: v.patientId, lines: [{ kind: 'procedure', name: gpt.name, qty: 1, unitPrice: gpt.points, amount: gpt.points, patientPay: false }],
+        nhiPoints: gpt.points, patientTotal: 0, payMethod: 'cash', received: 0, change: 0, receiptNo: `R${at.slice(0, 10).replace(/-/g, '')}${String(next(`receipt:${at.slice(0, 10)}`)).padStart(4, '0')}`, cashierId: 'U401', paidAt: at, voided: false,
+      })
+    }
+    const m1v = visits.filter((v) => v.date.startsWith(cm1) && opdItem(v) && !v.refillOf).sort(byDate)[0]
+    const e1 = m1v && encounters.find((x) => x.visitId === m1v.id)
+    if (e1) e1.diagnoses = []
+  }
+
   // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------
   const labWindows: LabWindowSession[] = []
   {
@@ -3894,6 +3935,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     imagingExams,
     labCheckins,
     labWindows,
+    claimSubmissions,
+    claimExclusions,
+    claimCuts,
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,

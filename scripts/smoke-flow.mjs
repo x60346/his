@@ -16862,6 +16862,90 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(!/firstFreeWindow|windowHolder|db\./.test(readFileSync('src/pages/lab/components/LabDeskPanel.vue', 'utf8')), '窗口規則由服務層判斷')
   }
+  // 健保申報（門診）：月份、點數（健保點數 − 部分負擔）、補報差額與月份、檢核、CSV；種子（前前月已送、上月補報與沒主診斷）；
+  // 權限、預設月份、還沒結束不能送、註記排除（原因、補報不能排除、取消）、送出鎖定與稽核、送出後的補報、匯出
+  console.log('\n[健保申報門診]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.claimApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    // 規則
+    ok(api.nextMonth('2026-12') === '2027-01' && api.nextMonth('2026-03') === '2026-04' && api.canSubmitMonth('2026-10', '2026-11-01') && !api.canSubmitMonth('2026-11', '2026-11-30'), '月份：下個月、月份結束才能送')
+    const lp = api.linePoints([{ kind: 'reg', amount: 150, patientPay: true }, { kind: 'consult', amount: 352, patientPay: false }, { kind: 'drug', amount: 22.5, patientPay: false }, { kind: 'copay-basic', amount: 80, patientPay: true }, { kind: 'self', amount: 500, patientPay: true }])
+    ok(lp.points === 374.5 && lp.copay === 80 && lp.claim === 295, '點數：健保的列合計、部分負擔、申請點數（掛號費、自費不算）')
+    ok(api.supplementDelta({ claim: 600 }, [{ claim: 500 }, { claim: 50 }]) === 50 && api.supplementDelta(undefined, [{ claim: 500 }]) === -500, '補報差額：和送過的合計比；作廢的是負的')
+    const done = (m) => ['2026-09', '2026-10'].includes(m)
+    ok(api.supplementMonth('2026-09', done, '2026-11') === '2026-11' && api.supplementMonth('2026-09', (m) => m === '2026-09', '2026-11') === '2026-10' && api.supplementMonth('2026-11', () => false, '2026-11') === undefined, '補報列在之後第一個還沒送的月份')
+    const pr = api.opdClaimProblems({ points: 0, duplicateOf: '11-02 第 3 號' })
+    ok(pr.length === 3 && pr[0].includes('主診斷') && api.opdClaimProblems({ diagnosis: 'J06.9', diagnosisActive: false, points: 10 })[0].includes('停用') && !api.opdClaimProblems({ diagnosis: 'J06.9', points: 10 }).length, '檢核：沒主診斷、點數 0、重複就醫、診斷碼停用')
+    const csv = api.claimCsv('opd', [{ date: '2026-10-01', caseType: '01', chartNo: '1', patientName: '王"明', doctorName: 'X', diagnosis: 'J06.9 上呼吸道感染, 急性', points: 1, copay: 0, claim: 1 }])
+    ok(csv.split('\n').length === 2 && csv.includes('"王""明"') && csv.includes('"J06.9 上呼吸道感染, 急性"'), 'CSV：表頭＋每筆一列、逗號與引號跳脫')
+
+    // 種子
+    const M0 = T.slice(0, 7)
+    const M1 = dateUtil.addDays(`${M0}-01`, -1).slice(0, 7)
+    const M2 = dateUtil.addDays(`${M1}-01`, -1).slice(0, 7)
+    await as('clerk01')
+    ok((await errOf(() => C.claimBoard('opd'))).includes('健保申報'), '沒有「健保申報」權限看不到')
+    await as('clerk02')
+    let b = await C.claimBoard('opd')
+    const sup = b.rows.find((r) => r.supplementOf)
+    const gpt = db().procedures.find((p) => p.id === 'P009').points
+    ok(b.month === M1 && !b.submitted && b.totals.problems === 1 && !b.canSubmit && b.whyNot.includes('檢核'), `預設上個月（${M1}）：還沒送、1 筆檢核有問題、不能送`)
+    ok(b.rows.find((r) => r.problems.length).problems[0] === '沒有主診斷' && sup?.supplementOf === M2 && sup.claim === gpt && sup.points === gpt, `種子：一筆沒有主診斷；${M2} 送出後補收的 GPT 列補報 ${sup?.claim} 點`)
+    const b2 = await C.claimBoard('opd', M2)
+    const sub = db().claimSubmissions.find((s) => s.month === M2 && s.kind === 'opd')
+    ok(b2.submitted && !b2.canSubmit && b2.whyNot === '已經送出' && b2.rows.length === sub.items.length && b2.months.find((m) => m.month === M2).submitted, `${M2}：已送出（${b2.rows.length} 筆），照送出那份`)
+    ok((await C.claimBoard('opd', M0)).whyNot.includes('月份還沒結束'), '這個月還沒結束：不能送')
+    ok(b.totals.claim === b.rows.filter((r) => !r.excluded).reduce((n, r) => n + r.claim, 0) && b.totals.byCase.reduce((n, c) => n + c.count, 0) === b.totals.count, '合計與案件類別小計')
+    // 註記排除
+    const bad = b.rows.find((r) => r.problems.length)
+    let f = await fieldsOf(() => C.excludeClaim('opd', M1, bad.refId, ''))
+    ok(f.reason, '排除要寫原因')
+    ok((await errOf(() => C.excludeClaim('opd', M1, sup.refId, '不報'))).includes('補報'), '補報的差額不能排除')
+    b = await C.excludeClaim('opd', M1, bad.refId, '醫師補寫病歷中，下月補報')
+    ok(b.rows.find((r) => r.refId === bad.refId).excluded && b.canSubmit && b.totals.excluded === 1 && db().auditLogs[0].action === '申報註記排除', '註記排除：不算、可以送、稽核')
+    b = await C.unexcludeClaim('opd', M1, bad.refId)
+    ok(!b.canSubmit, '取消排除：又不能送')
+    // 改資料也可以：補上主診斷（測試輔助）→ 檢核過
+    const enc = db().encounters.find((e) => e.visitId === bad.refId)
+    enc.diagnoses = [{ icd: 'J06.9', name: '急性上呼吸道感染', primary: true }]
+    b = await C.claimBoard('opd', M1)
+    ok(!b.totals.problems && b.canSubmit, '補上主診斷後檢核過')
+    enc.diagnoses = []
+    await C.excludeClaim('opd', M1, bad.refId, '醫師補寫病歷中')
+    // 送出
+    b = await C.submitClaim('opd', M1)
+    const s1 = db().claimSubmissions.find((s) => s.month === M1 && s.kind === 'opd')
+    ok(b.submitted && s1.items.length === b.totals.count && s1.items.some((x) => x.supplementOf === M2) && s1.excluded[0].refId === bad.refId && s1.excluded[0].patientId && !db().claimExclusions.length && db().auditLogs[0].action === '健保申報送出', `送出 ${M1}：${s1.items.length} 筆（含補報）、排除 1 筆，稽核`)
+    ok((await errOf(() => C.submitClaim('opd', M1))).includes('已經送出') && (await errOf(() => C.excludeClaim('opd', M1, bad.refId, 'x'))).includes('已經送出'), '送出後不能再送、不能再排除')
+    // 送出後才改：上個月一位又補收（測試輔助）→ 這個月補報；排除的那筆不補報；已補過的不重複
+    const v1 = db().visits.find((v) => v.id === s1.items.find((x) => !x.supplementOf).refId)
+    db().charges.push({ id: 'CH-T-SUP', visitId: v1.id, supplementOf: 'x', patientId: v1.patientId, lines: [{ kind: 'procedure', name: 'GPT', qty: 1, unitPrice: 50, amount: 50, patientPay: false }], nhiPoints: 50, patientTotal: 0, payMethod: 'cash', received: 0, change: 0, receiptNo: 'RT', cashierId: 'U401', paidAt: nowStr(), voided: false })
+    const b0 = await C.claimBoard('opd', M0)
+    const sups = b0.rows.filter((r) => r.supplementOf)
+    ok(sups.length === 1 && sups[0].refId === v1.id && sups[0].claim === 50 && sups[0].supplementOf === M1, `這個月的補報：只有剛補收的那筆（+50），${M2} 的已經補過、排除的不補`)
+    const ex = await C.claimCsvOf('opd', M1)
+    ok(ex.filename.includes(M1) && ex.csv.split('\n').length === s1.items.length + 1 && ex.csv.startsWith('就醫日,案件'), `匯出：${ex.filename}（${s1.items.length} 筆）`)
+    const { readFileSync } = await import('node:fs')
+    ok(!/linePoints|opdClaimProblems|supplementDelta|db\./.test(readFileSync('src/pages/claim/ClaimPage.vue', 'utf8')), '點數與檢核由服務層算')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)
