@@ -85,6 +85,15 @@ function exportXlsx() {
               </tbody>
             </table>
           </UCard>
+          <UCard :title="`DRG 盈虧（本月出院${r.drg.exempt ? `；不適用 DRG ${r.drg.exempt} 筆` : ''}）`" :padded="false">
+            <table class="w-full text-sm">
+              <thead class="whitespace-nowrap bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-1.5 text-left">DRG</th><th class="px-3 py-1.5 text-right">筆數</th><th class="px-3 py-1.5 text-right">實際點數</th><th class="px-3 py-1.5 text-right">給付點數</th><th class="px-3 py-1.5 text-right">盈虧</th></tr></thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="d in r.drg.rows" :key="d.code"><td class="px-3 py-1.5"><b class="tabular">{{ d.code }}</b> <span class="text-xs text-slate-600">{{ d.name }}</span></td><td class="tabular px-3 py-1.5 text-right">{{ d.count }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.actual.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right">{{ d.pay.toLocaleString('zh-TW') }}</td><td class="tabular px-3 py-1.5 text-right" :class="d.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ d.diff >= 0 ? '+' : '' }}{{ d.diff.toLocaleString('zh-TW') }}</td></tr>
+                <tr v-if="!r.drg.rows.length"><td colspan="5" class="px-3 py-4 text-center text-slate-400">—</td></tr>
+              </tbody>
+            </table>
+          </UCard>
         </div>
       </template>
     </UQueryState>

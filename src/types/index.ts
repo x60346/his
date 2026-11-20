@@ -2707,6 +2707,10 @@ export interface ClaimItem {
   days?: number
   /** 補報：原本是哪個月的（點數是差額，可能是負的） */
   supplementOf?: string
+  /** 住院 DRG：分組、定額、給付規則與給付點數、盈虧（給付 − 實際）；申請點數＝給付 − 部分負擔 */
+  drg?: { code: string; name: string; points: number; pay: number; rule: 'lower' | 'fixed' | 'outlier'; diff: number }
+  /** 不適用 DRG（照實申報）的原因 */
+  drgExempt?: string
 }
 
 /** 一個月的申報（送出後鎖定）：送出當時的每一筆、註記排除的 */

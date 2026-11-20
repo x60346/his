@@ -10,6 +10,7 @@ import { nameOf } from './views'
 import { isObsBed } from './bed-work'
 import { givenAbxDoses } from './abx-metrics-work'
 import { perThousand } from './abx-metrics-rules'
+import { ipdItemOf } from './claim-work'
 
 const SEEN = new Set(['consulted', 'charged', 'dispensed'])
 
@@ -108,8 +109,26 @@ export interface ManagementReport {
   opdByDept: { deptName: string; visits: number; first: number; share: number }[]
   opdByDoctor: { doctorName: string; deptName: string; visits: number }[]
   ipdByDept: { deptName: string; admissions: number; discharges: number; patientDays: number }[]
+  /** DRG 盈虧（這個月出院、已結帳、適用 DRG 的）：每組幾筆、實際點數、給付點數、盈虧，賠最多的在前；不適用幾筆 */
+  drg: { rows: { code: string; name: string; count: number; actual: number; pay: number; diff: number }[]; exempt: number }
   /** 近 12 個月（含本月，舊的在前） */
   trend: { month: string; hasData: boolean; opdVisits: number | null; collected: number | null; occupancy: number | null }[]
+}
+
+/** 這段期間出院、已結帳的住院：依 DRG 分組合計盈虧（和住院申報同一份算法） */
+function drgByGroup(from: string, to: string): ManagementReport['drg'] {
+  const items = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && a.dischargedAt.slice(0, 10) >= from && a.dischargedAt.slice(0, 10) <= to).map(ipdItemOf).filter((x) => !!x)
+  const m = new Map<string, { code: string; name: string; count: number; actual: number; pay: number; diff: number }>()
+  for (const it of items) {
+    if (!it.drg) continue
+    const r = m.get(it.drg.code) ?? { code: it.drg.code, name: it.drg.name, count: 0, actual: 0, pay: 0, diff: 0 }
+    r.count++
+    r.actual += Math.round(it.points)
+    r.pay += it.drg.pay
+    r.diff += it.drg.diff
+    m.set(it.drg.code, r)
+  }
+  return { rows: [...m.values()].sort((a, b) => a.diff - b.diff), exempt: items.filter((x) => x.drgExempt).length }
 }
 
 /** 月報：月份 YYYY-MM，不能是未來 */
@@ -154,6 +173,7 @@ export function managementReport(month: string): Promise<ManagementReport> {
       opdByDept: [...dept.values()].sort((a, b) => b.visits - a.visits),
       opdByDoctor: [...doc.values()].sort((a, b) => b.visits - a.visits),
       ipdByDept: [...ipd.values()].sort((a, b) => b.patientDays - a.patientDays),
+      drg: drgByGroup(from, to),
       trend,
     }
   })

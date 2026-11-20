@@ -66,7 +66,8 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
-import { ipdCategories, linePoints } from '@/services/claim-rules'
+import { ipdCategories, ipdClaimPoints, linePoints } from '@/services/claim-rules'
+import { doneProcsFrom, drgExempt, groupDrg, historyFrom, mainDiagnosisFrom } from '@/services/drg-rules'
 import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
@@ -3842,7 +3843,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const day = !!a.day && !a.day.converted
       return {
         refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: ((day ? a.diagnosis : a.dischargeSummary?.diagnosis) ?? '').trim(),
-        ...linePoints(c.lines), categories: ipdCategories(c.lines, (n) => procedureBy(n)), days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
+        ...((lp) => {
+          const pt = patients.find((p) => p.id === a.patientId)
+          const g = groupDrg({ mainDiagnosis: mainDiagnosisFrom(a), doneProcs: doneProcsFrom(surgeries, a.id, (id) => procMap.get(id)?.name ?? id), history: historyFrom(encounters, admissions, a.patientId, a.id), age: pt ? ageOf(pt.birthDate, (a.admittedAt ?? a.reservedAt).slice(0, 10)) : 0 })
+          const ex = drgExempt({ day, days: ipdDays(a.admittedAt ?? a.reservedAt, a.dischargedAt!), dischargeType: a.dischargeType ?? a.dischargeSummary?.dischargeType })
+          return { ...lp, ...ipdClaimPoints(lp, g, ex) }
+        })(linePoints(c.lines)), categories: ipdCategories(c.lines, (n) => procedureBy(n)), days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
       }
     }
     const procedureBy = (n: string) => [...procMap.values()].find((p) => p.name === n)

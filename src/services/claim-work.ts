@@ -2,10 +2,11 @@
 // API 在 claim.ts、規則在 claim-rules
 import type { Admission, ClaimItem, ClaimKind, Visit } from '@/types'
 import { db } from '@/mock/db'
-import { ipdCategories, ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
+import { ipdCategories, ipdClaimPoints, ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
 import { ipdDays } from './billing'
 import { find } from './views'
 import { preAuthUnapproved } from './preauth-work'
+import { drgExemptOf, drgOfAdmission } from './drg-work'
 
 
 export interface ClaimRow extends ClaimItem {
@@ -55,7 +56,7 @@ export function ipdItemOf(a: Admission): ClaimItem | undefined {
   const diag = day ? a.diagnosis : a.dischargeSummary?.diagnosis
   return {
     refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: diag?.trim() ?? '',
-    ...lp, categories, days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
+    ...lp, ...ipdClaimPoints(lp, drgOfAdmission(a), drgExemptOf(a, a.dischargedAt)), categories, days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
   }
 }
 

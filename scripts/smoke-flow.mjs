@@ -17396,6 +17396,101 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(!/pullBackOf|db\./.test(readFileSync('src/pages/or/OrPage.vue', 'utf8') + readFileSync('src/components/surgery/DelayNote.vue', 'utf8')), '能不能拉回由服務層判斷')
   }
+  // DRG 分組：代碼、分組（手術優先、主診斷、合併症或 65 歲、其他內外科）、不適用、給付三段、提示；
+  // 服務：住院中預估（排了的手術也算）、日間手術與死亡不適用、權限
+  console.log('\n[DRG分組]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const D = api.drgApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const G = (main, procs, history, age) => api.groupDrg({ mainDiagnosis: main, doneProcs: procs.map((id) => ({ id, name: id })), history, age })
+    ok(api.dxCode('J18.9 肺炎') === 'J18.9' && api.dxCode(' 肺炎') === '' && api.DRG_TABLE.length === 14, '診斷代碼、分組表 14 組')
+    ok(G('J18.9 肺炎', [], [], 70).code === 'D089A' && G('J18.9 肺炎', [], [], 40).code === 'D089B' && G('J18.9 肺炎', [], ['E11.9'], 40).code === 'D089A' && G('J18.9 肺炎', [], ['E11.9'], 40).cc[0] === '糖尿病', '主診斷：肺炎依 65 歲或合併症（糖尿病）分 A／B')
+    ok(G('E11.65 糖尿病', [], ['E11.9'], 40).cc.length === 0, '和主診斷同一類的不算合併症')
+    ok(G('S52.5 骨折', ['P037'], [], 30).code === 'D225B' && G('J18.9 肺炎', ['P039'], [], 80).code === 'D162' && G('J18.9', ['P999'], [], 30).code === 'D999S' && G('Z99 其他', [], [], 30).code === 'D999M' && G('', [], [], 30).basis.includes('沒有主診斷'), '手術優先（主手術）；不在表的歸其他外科／其他內科')
+    ok(api.drgExempt({ day: true, days: 1 }) === '日間手術' && api.drgExempt({ day: false, days: 31 }).includes('30 天') && api.drgExempt({ day: false, days: 3, dischargeType: '死亡' }) === '死亡出院' && api.drgExempt({ day: false, days: 3, dischargeType: '轉院' }) === '轉院' && api.drgExempt({ day: false, days: 3, dischargeType: '自動出院' }) === '自動出院' && !api.drgExempt({ day: false, days: 30, dischargeType: '改善出院' }), '不適用：日間手術、超過 30 天、死亡、轉院、自動出院')
+    const g = { points: 30000, lower: 15000, upper: 48000 }
+    const p1 = api.drgPay(10000, g), p2 = api.drgPay(20000, g), p3 = api.drgPay(58000, g)
+    ok(p1.pay === 10000 && p1.rule === 'lower' && p1.diff === 0 && p2.pay === 30000 && p2.diff === 10000 && p3.pay === 38000 && p3.rule === 'outlier' && p3.diff === -20000, '給付：下限以下照實際、上下限之間定額（盈）、上限以上定額＋超出 80%（虧）')
+    ok(api.drgAlert(40000, g).level === 'near' && api.drgAlert(40000, g).pct === 83 && api.drgAlert(50000, g).level === 'over' && api.drgAlert(10000, g).level === 'ok', '提示：上限 80% 以上接近、超過')
+    // 服務
+    await as('nurse01')
+    const pn = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && !db().surgeries.some((s) => s.admissionId === a.id && s.status !== 'cancelled') && !db().preAuths.some((p) => p.admissionId === a.id))
+    let e = await D.drgEstimate(pn.id)
+    ok(e.group.code && e.group.basis.includes('主診斷') && e.actual > 0 && !e.exempt && e.pay > 0, `住院中預估（沒有手術，依主診斷）：${pn.diagnosis} → ${e.group.code}（${e.group.basis}），目前 ${e.actual} 點、上限的 ${e.alert.pct}%`)
+    const s1 = db().surgeries.find((s) => s.id === 'SG-SEED-1')
+    e = await D.drgEstimate(s1.admissionId)
+    ok(e.group.code.startsWith('D225') && e.group.basis.includes('開放性復位'), `排了還沒做的手術也算進預估：${e.group.code}`)
+    e = await D.drgEstimate('A-DAY-1')
+    ok(e.exempt === '日間手術', '日間手術：不適用 DRG')
+    const death = db().admissions.find((a) => a.id === 'A-DEATH-1')
+    if (death) ok((await D.drgEstimate(death.id)).exempt === '死亡出院', '死亡出院：不適用 DRG')
+    await as('lab01')
+    ok((await errOf(() => D.drgEstimate(pn.id))).length > 0, '醫檢師看不到')
+    const { readFileSync } = await import('node:fs')
+    ok(!/groupDrg|drgPay|drgAlert|db\./.test(readFileSync('src/components/DrgStrip.vue', 'utf8')), '分組、給付、提示由服務層算')
+  }
+  // DRG 申報：住院申報每筆的 DRG、申請點數＝給付 − 部分負擔、不適用的照實；合計盈虧；CSV；經營月報同一份
+  console.log('\n[DRG申報]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    await as('clerk02')
+    let b = await api.claimApi.claimBoard('ipd')
+    const months = b.months.map((m) => m.month)
+    let rows = []
+    let M
+    for (const m of months) {
+      const x = await api.claimApi.claimBoard('ipd', m)
+      if (x.rows.some((r) => r.drg)) { rows = x.rows; b = x; M = m; break }
+    }
+    const r = rows.find((x) => x.drg)
+    ok(r && r.claim === api.claimOf(r.drg.pay, r.copay) && r.drg.diff === r.drg.pay - Math.round(r.points), `${M} 住院：${r?.drg.code} 給付 ${r?.drg.pay}（${api.DRG_PAY_RULE_LABEL[r?.drg.rule]}）、申請點數＝給付 − 部分負擔`)
+    ok(b.totals.drg.count === rows.filter((x) => x.drg && !x.supplementOf).length && b.totals.drg.diff === rows.filter((x) => !x.supplementOf).reduce((n, x) => n + (x.drg?.diff ?? 0), 0), `合計：DRG ${b.totals.drg.count} 筆、盈虧 ${b.totals.drg.diff}`)
+    // 不適用：日間手術（先結帳）
+    await as('clerk01')
+    await api.ipdChargeApi.payIpd('A-DAY-1', { payMethod: 'card', received: 0 })
+    await as('clerk02')
+    const b0 = await api.claimApi.claimBoard('ipd', T.slice(0, 7))
+    const day = b0.rows.find((x) => x.refId === 'A-DAY-1')
+    ok(day.drgExempt === '日間手術' && !day.drg && day.claim === api.claimOf(day.points, day.copay) && b0.totals.drg.exempt >= 1, '日間手術不適用 DRG：照實申報、合計算不適用')
+    const csv = (await api.claimApi.claimCsvOf('ipd', M)).csv
+    ok(csv.split('\n')[0].includes('DRG 給付') && csv.split('\n')[0].includes('不適用 DRG'), 'CSV 多 DRG 欄')
+    await as('admin')
+    const mr = await api.managementApi.managementReport(M)
+    ok(mr.drg.rows.reduce((n, x) => n + x.count, 0) === b.totals.drg.count && mr.drg.rows.reduce((n, x) => n + x.diff, 0) === b.totals.drg.diff && (mr.drg.rows.length < 2 || mr.drg.rows[0].diff <= mr.drg.rows[1].diff), '經營月報 DRG 盈虧：和申報同一份，賠最多的在前')
+  }
+  // DRG 提示：住院點數超過上限，主治首頁與預估標示（只提示、不擋醫囑）
+  console.log('\n[DRG提示]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const pn = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && !db().surgeries.some((s) => s.admissionId === a.id && s.status !== 'cancelled') && !db().preAuths.some((p) => p.admissionId === a.id))
+    const doc = db().users.find((u) => u.doctorId === pn.doctorId).username
+    await as(doc)
+    const d0 = await api.dashboardApi.getDashboard()
+    let e = await api.drgApi.drgEstimate(pn.id)
+    // 測試輔助：一次補 5 筆做完的含顯影劑電腦斷層（每筆 5200 點），直到超過上限
+    let n = 0
+    let e2 = e
+    while (e2.alert.level !== 'over' && n < 60) {
+      for (let i = 0; i < 5; i++, n++) db().ipdOrders.push({ id: `IO-T-CT${n}`, admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P061', content: '電腦斷層', startAt: nowStr().slice(0, 16), stopAt: nowStr().slice(0, 16), status: 'done', doctorId: pn.doctorId, createdAt: nowStr().slice(0, 16) })
+      e2 = await api.drgApi.drgEstimate(pn.id)
+    }
+    ok(e2.actual === e.actual + n * 5200 && e2.alert.level === 'over' && e2.payRule === 'outlier' && e2.diff < 0, `超過上限：${e2.actual} 點（上限的 ${e2.alert.pct}%）、給付 ${e2.pay}，虧 ${-e2.diff}`)
+    const d1 = await api.dashboardApi.getDashboard()
+    ok(d1.drgOver === (d0.drgOver ?? 0) + (e.alert.level === 'over' ? 0 : 1), '主治首頁：住院點數超過 DRG 上限')
+    const o = await api.ipdApi.addOrder({ admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P003', content: '', dose: 1, freq: 'STAT' })
+    ok(!!o.id, '只提示：超過上限照常開醫囑')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

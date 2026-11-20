@@ -7,7 +7,7 @@ import { Download, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs } from '@/components/ui'
 import ClaimCutPanel from './ClaimCutPanel.vue'
 import PreAuthPanel from './PreAuthPanel.vue'
-import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, claimApi } from '@/services'
+import { CLAIM_CATEGORIES, CLAIM_CATEGORY_LABEL, claimApi, DRG_PAY_RULE_LABEL } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { downloadFile } from '@/utils/download'
@@ -59,6 +59,7 @@ async function submitEx() {
           <div><div class="text-xs text-slate-500">{{ b.month }} 申報</div><div class="tabular text-2xl font-semibold text-slate-800">{{ fmt(b.totals.claim) }} 點</div></div>
           <div class="text-xs text-slate-600">
             {{ b.totals.count }} 筆・健保點數 {{ fmt(b.totals.points) }}・部分負擔 {{ fmt(b.totals.copay) }}<template v-if="b.totals.supplement">・補報 {{ b.totals.supplement }} 筆</template><template v-if="b.totals.excluded">・排除 {{ b.totals.excluded }} 筆</template>
+            <div v-if="b.totals.drg" class="mt-0.5">DRG {{ b.totals.drg.count }} 筆，盈虧合計 <b :class="b.totals.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ b.totals.drg.diff >= 0 ? '+' : '' }}{{ fmt(b.totals.drg.diff) }}</b> 點<template v-if="b.totals.drg.exempt">・不適用 DRG {{ b.totals.drg.exempt }} 筆</template></div>
             <div class="mt-0.5 flex flex-wrap gap-2">
               <span v-for="c in b.totals.byCase" :key="c.caseType" class="rounded bg-slate-100 px-1.5">{{ c.label }}：{{ c.count }} 筆 {{ fmt(c.claim) }} 點</span>
             </div>
@@ -103,7 +104,9 @@ async function submitEx() {
                 </tr>
                 <tr v-if="r.problems.length && !r.excluded" class="bg-red-50/50"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700">檢核：{{ r.problems.join('；') }}</td></tr>
                 <tr v-if="r.excluded"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-slate-500">已排除：{{ r.excluded.reason }}（{{ r.excluded.byName }}）</td></tr>
-                <tr v-if="b.kind === 'ipd' && r.categories && !r.excluded"><td colspan="10" class="px-2 pb-1.5 text-xs text-slate-500">{{ CLAIM_CATEGORIES.filter((c) => r.categories?.[c]).map((c) => `${CLAIM_CATEGORY_LABEL[c]} ${fmt(r.categories![c]!)}`).join('・') }}</td></tr>
+                <tr v-if="b.kind === 'ipd' && r.categories && !r.excluded"><td colspan="10" class="px-2 pb-1.5 text-xs text-slate-500">{{ CLAIM_CATEGORIES.filter((c) => r.categories?.[c]).map((c) => `${CLAIM_CATEGORY_LABEL[c]} ${fmt(r.categories![c]!)}`).join('・') }}
+                  <div v-if="r.drg" class="text-slate-700">DRG <b>{{ r.drg.code }}</b> {{ r.drg.name }}・定額 {{ fmt(r.drg.points) }}・給付 {{ fmt(r.drg.pay) }}（{{ DRG_PAY_RULE_LABEL[r.drg.rule] }}）・<span :class="r.drg.diff < 0 ? 'text-red-700' : 'text-emerald-700'">{{ r.drg.diff >= 0 ? '盈' : '虧' }} {{ fmt(Math.abs(r.drg.diff)) }}</span></div>
+                  <div v-else-if="r.drgExempt" class="text-slate-600">不適用 DRG：{{ r.drgExempt }}（照實申報）</div></td></tr>
               </template>
               <tr v-if="!rows.length"><td colspan="10" class="px-2 py-4 text-center text-slate-400">這個月沒有要申報的</td></tr>
             </tbody>

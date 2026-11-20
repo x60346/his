@@ -7,6 +7,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowRightLeft, Droplet, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
+import DrgStrip from '@/components/DrgStrip.vue'
 import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
@@ -442,6 +443,7 @@ async function submitNote() {
         </template>
       </div>
 
+      <DrgStrip v-if="adm.obsStage !== 'open'" :admission-id="adm.id" />
       <UCard :padded="false">
         <div class="flex items-center px-4 pt-1">
           <UTabs v-model="tab" :tabs="tabs" />

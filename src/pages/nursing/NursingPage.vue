@@ -10,6 +10,7 @@ import { AlertTriangle, ListChecks } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
+import DrgStrip from '@/components/DrgStrip.vue'
 import AfterDischargePanel from '@/components/AfterDischargePanel.vue'
 import WristbandDialog from '@/components/WristbandDialog.vue'
 import ScanStatsPanel from './components/ScanStatsPanel.vue'
@@ -304,6 +305,7 @@ const wardTotals = computed(() => ({
           <!-- 家屬常問「到今天多少錢」：護理站看得到、可印明細，繳費在櫃台 -->
           <!-- 留觀中不顯示住院費用：留觀結束才算（離院在批價、收住院併入住院帳單） -->
           <IpdFeeStrip v-if="adm.obsStage !== 'open'" :admission-id="adm.id" />
+          <DrgStrip v-if="adm.obsStage !== 'open'" :admission-id="adm.id" />
           <p v-else class="rounded-md bg-sky-50 px-3 py-1.5 text-xs text-sky-800">急診留觀：費用等急診醫師結束留觀後再算（離院在批價結、收住院併入住院帳單）</p>
           <!-- 醫師約好的出院後回診（有約才顯示）：出院衛教時提醒病人 -->
           <AfterDischargePanel :admission-id="adm.id" class="bg-white" />

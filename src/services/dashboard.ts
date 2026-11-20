@@ -26,6 +26,7 @@ import { sterileCounts } from './sterile-work'
 import { implantCardDueCount, implantRecallOpen } from './implant-work'
 import { pullBackOf } from './or-shift-rules'
 import { preAuthCounts } from './preauth-work'
+import { drgAlertCounts } from './drg-work'
 import { dayCounts, delayCounts, surgeryOf, frozenCounts, pacuCounts, pathCounts, postopCounts, preAnesCounts, surgeryCounts } from './surgery-work'
 import { erCounts, isErDoctor } from './er-work'
 import { erBillMode } from './er-rules'
@@ -289,6 +290,9 @@ export interface DashboardStats {
   claimCutsAppealed?: number
   /** 事前審查：主治待填寫（含補件）；申報組待送審、審查中超過 14 天 */
   preAuthToFill?: number
+  /** DRG：我主治的住院，點數接近上限（80% 以上）、超過上限 */
+  drgNear?: number
+  drgOver?: number
   preAuthToSubmit?: number
   preAuthOverdue?: number
   /** 醫師建議回診：該掛了（建議日前後一週）、過期（過了一週還沒處理） */
@@ -407,6 +411,7 @@ export function getDashboard(): Promise<DashboardStats> {
           delaySurgeonUnread: delayCounts(me.doctorId).unread,
           claimCutsToReply: db.claimCuts.filter((c) => c.doctorId === me.doctorId && !c.reply).length,
           preAuthToFill: preAuthCounts(now(), me.doctorId).toFill,
+          ...((c) => ({ drgNear: c.near, drgOver: c.over }))(drgAlertCounts(me.doctorId)),
           ...((c) => ({ postopDue: c.due, postopLate: c.late }))(postopCounts(now(), me.doctorId)),
           pathAckDue: pathCounts(now(), me.doctorId).ackDue,
           ...(permissionsOf({ ...me, role: 'doctor' }).includes('pathology') ? { pathToReport: pathCounts(now()).toReport, ...((c) => ({ frozenWaiting: c.waiting, frozenOverdue: c.overdue }))(frozenCounts(now())) } : {}),

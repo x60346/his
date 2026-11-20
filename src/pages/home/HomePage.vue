@@ -68,6 +68,7 @@ const todos = computed<Todo[]>(() => {
       { roles: ['nurse'], label: '器械包待收回', count: s.value.cssdToWithdraw ?? 0, hint: '過期（要重新滅菌）或召回還在架上的器械包（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
       { roles: ['nurse'], label: '生物指示劑待判讀', count: s.value.cssdBiDue ?? 0, hint: '滅菌鍋次培養滿 24 小時：判讀陰性放行、陽性整鍋召回（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
     ] : []),
+    { roles: ['doctor'], label: '住院點數接近 DRG 上限', count: (s.value.drgNear ?? 0) + (s.value.drgOver ?? 0), hint: s.value.drgOver ? `其中 ${s.value.drgOver} 位已超過上限（超出部分只給付 80%）：住院醫囑頁上方看預估 DRG` : '我主治的住院病人，目前健保點數已到 DRG 上限的 80%（住院醫囑頁上方看預估 DRG；只提示、不擋醫囑）', route: 'ipd', icon: ShieldAlert, urgent: !!s.value.drgOver },
     { roles: ['doctor'], label: '事前審查待填寫', count: s.value.preAuthToFill ?? 0, hint: '需健保事前審查的藥或特殊材料：填病情摘要與理由，或補件（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
     ...(s.value.preAuthToSubmit !== undefined ? [{ roles: ['clerk', 'admin'], label: '事前審查待送審', count: s.value.preAuthToSubmit ?? 0, hint: s.value.preAuthOverdue ? `另有 ${s.value.preAuthOverdue} 件審查超過 14 天沒結果` : '主治已填好的送審單：送審（健保申報「事前審查」）', route: 'claims', icon: ShieldAlert, urgent: !!s.value.preAuthOverdue }] : []),
     { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },

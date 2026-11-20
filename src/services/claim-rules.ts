@@ -1,6 +1,7 @@
 // 健保申報（純函式）：月份、申請點數、補報差額、送件前檢核、核減率、CSV。
 // 服務層（claim.ts）、申報頁、種子、測試都用這一份
 import type { ChargeLine, ClaimCategory, ClaimItem, ClaimKind, Procedure } from '@/types'
+import { drgPay } from './drg-rules'
 
 export const CLAIM_KIND_LABEL: Record<ClaimKind, string> = { opd: '門診（含急診）', ipd: '住院（含日間手術）' }
 export const CLAIM_CATEGORY_LABEL: Record<ClaimCategory, string> = {
@@ -19,6 +20,16 @@ export const canSubmitMonth = (month: string, today: string) => month < monthOf(
 
 /** 申請點數＝健保點數 − 部分負擔（不會小於 0） */
 export const claimOf = (points: number, copay: number) => Math.max(0, Math.round(points - copay))
+
+/**
+ * 住院申報點數：適用 DRG 的，申請點數＝DRG 給付 − 部分負擔；不適用的照實（健保點數 − 部分負擔）。
+ * 服務層與種子都用這一份
+ */
+export function ipdClaimPoints(lp: { points: number; copay: number; claim: number }, drg: { code: string; name: string; points: number; lower: number; upper: number } | undefined, exempt: string | undefined): Pick<ClaimItem, 'claim' | 'drg' | 'drgExempt'> {
+  if (exempt || !drg) return { claim: lp.claim, ...(exempt ? { drgExempt: exempt } : {}) }
+  const p = drgPay(lp.points, drg)
+  return { claim: claimOf(p.pay, lp.copay), drg: { code: drg.code, name: drg.name, points: drg.points, pay: p.pay, rule: p.rule, diff: p.diff } }
+}
 
 /** 一張（或幾張）收據的健保點數（不是病人自付的列）、部分負擔（copay 開頭的列）、申請點數 */
 export function linePoints(lines: Pick<ChargeLine, 'kind' | 'amount' | 'patientPay'>[]): { points: number; copay: number; claim: number } {
@@ -97,9 +108,9 @@ export const cutRate = (cut: number, claimed: number) => (claimed > 0 ? Math.rou
 /** 匯出 CSV（每筆一列）：住院多各費用類別欄 */
 export function claimCsv(kind: ClaimKind, rows: (ClaimItem & { patientName: string; chartNo: string; doctorName: string })[]): string {
   const cats = kind === 'ipd' ? CLAIM_CATEGORIES : []
-  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', '申請點數', '補報']
+  const head = ['就醫日', '案件', '病歷號', '病人', '醫師', '主診斷', ...(kind === 'ipd' ? ['天數'] : []), ...cats.map((c) => CLAIM_CATEGORY_LABEL[c]), '健保點數', '部分負擔', ...(kind === 'ipd' ? ['DRG', 'DRG 定額', 'DRG 給付', '盈虧', '不適用 DRG'] : []), '申請點數', '補報']
   const esc = (v: unknown) => ((s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s))(String(v ?? ''))
-  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, r.claim, r.supplementOf ?? ''].map(esc).join(','))
+  const lines = rows.map((r) => [r.date, r.caseType, r.chartNo, r.patientName, r.doctorName, r.diagnosis, ...(kind === 'ipd' ? [r.days ?? ''] : []), ...cats.map((c) => r.categories?.[c] ?? 0), r.points, r.copay, ...(kind === 'ipd' ? [r.drg?.code ?? '', r.drg?.points ?? '', r.drg?.pay ?? '', r.drg?.diff ?? '', r.drgExempt ?? ''] : []), r.claim, r.supplementOf ?? ''].map(esc).join(','))
   return [head.join(','), ...lines].join('\n')
 }
 
