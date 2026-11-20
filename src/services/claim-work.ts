@@ -1,12 +1,11 @@
 // 健保申報的內部工具（index 不匯出、不會被包成 API）：從收據算出每一筆現在的申報內容與檢核、送出過的合計、補報。
 // API 在 claim.ts、規則在 claim-rules
-import type { Admission, ChargeLine, ClaimCategory, ClaimItem, ClaimKind, Visit } from '@/types'
+import type { Admission, ClaimItem, ClaimKind, Visit } from '@/types'
 import { db } from '@/mock/db'
-import { ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
+import { ipdCategories, ipdClaimProblems, linePoints, monthOf, opdClaimProblems, supplementDelta, supplementMonth } from './claim-rules'
 import { ipdDays } from './billing'
 import { find } from './views'
 
-const sum = (xs: number[]) => Math.round(xs.reduce((a, b) => a + b, 0) * 100) / 100
 
 export interface ClaimRow extends ClaimItem {
   problems: string[]
@@ -40,23 +39,6 @@ export function opdRowOf(v: Visit, item: ClaimItem): ClaimRow {
 
 // ---------- 住院 ----------
 
-/** 住院帳單的一列屬於哪一類（看主檔：檢驗影像、手術麻醉、植入物、輸血；病房費；藥；急診段） */
-function categoryOf(l: ChargeLine): ClaimCategory {
-  if (l.kind === 'ward') return 'ward'
-  if (l.kind === 'drug') return 'drug'
-  if (l.kind === 'consult') return 'consult'
-  const p = db.procedures.find((x) => x.name === l.name)
-  if (!p) return l.name.includes('急診') ? 'er' : 'other'
-  if (p.dailyFee) return p.name.includes('診察') ? 'consult' : 'ward'
-  if (p.er) return 'er'
-  if (p.surgery || p.anesthesiaFee) return 'surgery'
-  if (p.implant) return 'implant'
-  if (p.blood) return 'blood'
-  if (p.category === '檢驗' || p.category === '影像') return 'lab'
-  if (p.category === '診察') return 'consult'
-  return 'procedure'
-}
-
 const ipdCharge = (a: Admission) => db.charges.find((c) => c.admissionId === a.id && !c.voided)
 const dayAdm = (a: Admission) => !!a.day && !a.day.converted
 
@@ -66,9 +48,7 @@ export function ipdItemOf(a: Admission): ClaimItem | undefined {
   if (!c || a.status !== 'discharged' || !a.dischargedAt) return undefined
   const p = find.patient(a.patientId)
   if (db.identities.find((i) => i.code === p?.defaultIdentity)?.selfPay) return undefined
-  const nhi = c.lines.filter((l) => !l.patientPay)
-  const categories: Partial<Record<ClaimCategory, number>> = {}
-  for (const l of nhi) categories[categoryOf(l)] = sum([categories[categoryOf(l)] ?? 0, l.amount])
+  const categories = ipdCategories(c.lines, (n) => db.procedures.find((x) => x.name === n))
   const lp = linePoints(c.lines)
   const day = dayAdm(a)
   const diag = day ? a.diagnosis : a.dischargeSummary?.diagnosis

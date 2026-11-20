@@ -1,6 +1,6 @@
 // 健保申報（純函式）：月份、申請點數、補報差額、送件前檢核、核減率、CSV。
 // 服務層（claim.ts）、申報頁、種子、測試都用這一份
-import type { ChargeLine, ClaimCategory, ClaimItem, ClaimKind } from '@/types'
+import type { ChargeLine, ClaimCategory, ClaimItem, ClaimKind, Procedure } from '@/types'
 
 export const CLAIM_KIND_LABEL: Record<ClaimKind, string> = { opd: '門診（含急診）', ipd: '住院（含日間手術）' }
 export const CLAIM_CATEGORY_LABEL: Record<ClaimCategory, string> = {
@@ -26,6 +26,32 @@ export function linePoints(lines: Pick<ChargeLine, 'kind' | 'amount' | 'patientP
   const points = r(lines.filter((l) => !l.patientPay).reduce((n, l) => n + l.amount, 0))
   const copay = r(lines.filter((l) => l.kind.startsWith('copay')).reduce((n, l) => n + l.amount, 0))
   return { points, copay, claim: claimOf(points, copay) }
+}
+
+/** 住院帳單的一列屬於哪一類（看主檔：檢驗影像、手術麻醉、植入物、輸血；病房費；藥；急診段） */
+export function lineCategory(l: Pick<ChargeLine, 'kind' | 'name'>, p: Procedure | undefined): ClaimCategory {
+  // 每日計費（病房費、護理費、住院診察費）帳單上都是 ward：診察費另歸診察
+  if (l.kind === 'ward') return l.name.includes('診察') ? 'consult' : 'ward'
+  if (l.kind === 'drug') return 'drug'
+  if (l.kind === 'consult') return 'consult'
+  if (!p) return l.name.includes('急診') ? 'er' : 'other'
+  if (p.dailyFee) return p.name.includes('診察') ? 'consult' : 'ward'
+  if (p.er) return 'er'
+  if (p.surgery || p.anesthesiaFee) return 'surgery'
+  if (p.implant) return 'implant'
+  if (p.blood) return 'blood'
+  if (p.category === '檢驗' || p.category === '影像') return 'lab'
+  if (p.category === '診察') return 'consult'
+  return 'procedure'
+}
+/** 住院帳單健保點數依類別加總 */
+export function ipdCategories(lines: Pick<ChargeLine, 'kind' | 'name' | 'amount' | 'patientPay'>[], procByName: (name: string) => Procedure | undefined): Partial<Record<ClaimCategory, number>> {
+  const out: Partial<Record<ClaimCategory, number>> = {}
+  for (const l of lines.filter((x) => !x.patientPay)) {
+    const c = lineCategory(l, procByName(l.name))
+    out[c] = Math.round(((out[c] ?? 0) + l.amount) * 100) / 100
+  }
+  return out
 }
 
 /**

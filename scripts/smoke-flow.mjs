@@ -16946,6 +16946,73 @@ try {
     const { readFileSync } = await import('node:fs')
     ok(!/linePoints|opdClaimProblems|supplementDelta|db\./.test(readFileSync('src/pages/claim/ClaimPage.vue', 'utf8')), '點數與檢核由服務層算')
   }
+  // 健保申報（住院）：費用分類、檢核（出院診斷、簽署、植入物批號、天數、點數）；種子（以前的已送、上個月可以送）；
+  // 類別加總＝健保點數、日間手術（不用病摘、植入物與手術歸類）、檢核問題（測試輔助製造）、送出、CSV 類別欄
+  console.log('\n[健保申報住院]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const C = api.claimApi
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const P = (id) => db().procedures.find((p) => p.id === id)
+    ok(api.lineCategory({ kind: 'ward', name: '病房費' }, undefined) === 'ward' && api.lineCategory({ kind: 'ward', name: '住院診察費' }, undefined) === 'consult' && api.lineCategory({ kind: 'procedure', name: 'x' }, P('P037')) === 'surgery' && api.lineCategory({ kind: 'procedure', name: 'x' }, P('P065')) === 'implant' && api.lineCategory({ kind: 'procedure', name: 'x' }, P('P032')) === 'blood' && api.lineCategory({ kind: 'procedure', name: 'x' }, P('P061')) === 'lab' && api.lineCategory({ kind: 'drug', name: 'x' }, undefined) === 'drug', '費用分類：病房、住院診察費歸診察、手術麻醉、特材、輸血、檢驗檢查、藥品')
+    const base = { day: false, diagnosis: 'J18.9', signed: true, implantMissing: [], daysBill: 5, daysActual: 5, points: 100 }
+    ok(!api.ipdClaimProblems(base).length && api.ipdClaimProblems({ ...base, diagnosis: '' })[0].includes('出院主診斷') && api.ipdClaimProblems({ ...base, signed: false })[0].includes('簽署') && api.ipdClaimProblems({ ...base, implantMissing: ['OR1'] })[0].includes('批號') && api.ipdClaimProblems({ ...base, daysBill: 4 })[0].includes('天數') && !api.ipdClaimProblems({ ...base, day: true, signed: false }).length, '檢核：出院主診斷、簽署（日間手術不用）、植入物批號、天數')
+
+    const M0 = T.slice(0, 7)
+    const M1 = dateUtil.addDays(`${M0}-01`, -1).slice(0, 7)
+    await as('clerk02')
+    let b = await C.claimBoard('ipd')
+    ok(b.months.filter((m) => m.month < M1).every((m) => m.submitted), '種子：上上個月以前出院的都已送')
+    // 示範出院日隨建立時間不同：上個月沒有出院的話，把最近一個已送的月份退回（測試輔助），當作要送的月份
+    if (b.month === M0) {
+      const last = db().claimSubmissions.filter((x) => x.kind === 'ipd').sort((x, y) => y.month.localeCompare(x.month))[0]
+      db().claimSubmissions = db().claimSubmissions.filter((x) => x !== last)
+      b = await C.claimBoard('ipd')
+    }
+    const MT = b.month
+    ok(MT < M0 && !b.submitted && b.canSubmit && b.rows.length >= 1, `預設最近一個已結束、還沒送的月份（${MT}）：${b.rows.length} 筆可以送`)
+    ok(b.rows.every((r) => r.caseType === 'IPD' && r.days >= 1 && Math.abs(Object.values(r.categories).reduce((n, x) => n + x, 0) - r.points) < 0.01 && r.categories.ward > 0), '每筆：天數、各類別加總＝健保點數、有病房費')
+    await as('clerk01')
+    await api.ipdChargeApi.payIpd('A-DAY-1', { payMethod: 'card', received: 0 })
+    await as('clerk02')
+    let b0 = await C.claimBoard('ipd', M0)
+    const day = b0.rows.find((r) => r.refId === 'A-DAY-1')
+    ok(day && day.caseType === 'DAY' && day.caseLabel === '日間手術' && day.categories.implant > 0 && day.categories.surgery > 0 && !day.categories.ward && !day.problems.length, '這個月：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘）')
+    // 檢核（測試輔助製造問題）
+    const r1 = b.rows[0]
+    const a1 = db().admissions.find((a) => a.id === r1.refId)
+    const signed = a1.dischargeSummary.signedAt
+    delete a1.dischargeSummary.signedAt
+    b = await C.claimBoard('ipd', MT)
+    ok(b.rows.find((r) => r.refId === r1.refId).problems[0].includes('簽署') && !b.canSubmit, '出院病摘沒簽署：檢核擋送出')
+    a1.dischargeSummary.signedAt = signed
+    const ch = db().charges.find((c) => c.admissionId === r1.refId && !c.voided)
+    ch.ipd.days += 1
+    b = await C.claimBoard('ipd', MT)
+    ok(b.rows.find((r) => r.refId === r1.refId).problems.some((p) => p.includes('天數')), '帳單天數和實際不符')
+    ch.ipd.days -= 1
+    const sg = db().surgeries.find((s) => s.id === 'SG-DAY-1')
+    const keep = sg.implants
+    sg.implants = []
+    b0 = await C.claimBoard('ipd', M0)
+    ok(b0.rows.find((r) => r.refId === 'A-DAY-1').problems.some((p) => p.includes('批號')), '用了植入物沒登記批號')
+    sg.implants = keep
+    // 送出、匯出
+    b = await C.submitClaim('ipd', MT)
+    ok(b.submitted && db().claimSubmissions.find((s) => s.kind === 'ipd' && s.month === MT).items.every((x) => x.categories && x.days), `送出 ${MT} 住院：${b.totals.count} 筆、申請 ${b.totals.claim} 點`)
+    const ex = await C.claimCsvOf('ipd', MT)
+    ok(ex.csv.split('\n')[0].includes('天數') && ex.csv.split('\n')[0].includes('特材（植入物）') && ex.filename.includes('住院'), '匯出：住院多天數與各類別欄')
+    ok(!(await C.claimBoard('opd', M1)).submitted, '門診和住院分開送')
+    ok((await errOf(() => C.claimBoard('xx'))).includes('類別'), '類別不對擋')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

@@ -66,7 +66,7 @@ import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
 import { ABX_REASON_LABEL } from '@/services/abx-rules'
 import { shiftPlan } from '@/services/or-shift-rules'
-import { linePoints } from '@/services/claim-rules'
+import { ipdCategories, linePoints } from '@/services/claim-rules'
 import { biDueAt, expiresOnOf, PACK_CONTENTS, PACK_SETS } from '@/services/sterile-rules'
 import { homeMedsFromOpd } from '@/services/medrec-rules'
 import { QC_ANALYTES } from '@/services/qc-rules'
@@ -3834,6 +3834,23 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const m1v = visits.filter((v) => v.date.startsWith(cm1) && opdItem(v) && !v.refillOf).sort(byDate)[0]
     const e1 = m1v && encounters.find((x) => x.visitId === m1v.id)
     if (e1) e1.diagnoses = []
+    // 住院：前前個月以前出院的都送過；上個月的還沒送（沒有檢核問題，可以直接送）
+    const ipdItem = (a: Admission): ClaimItem | undefined => {
+      const c = charges.find((x) => x.admissionId === a.id && !x.voided)
+      if (!c || a.status !== 'discharged' || !a.dischargedAt) return undefined
+      if (selfPay.has(patients.find((p) => p.id === a.patientId)?.defaultIdentity ?? '')) return undefined
+      const day = !!a.day && !a.day.converted
+      return {
+        refId: a.id, patientId: a.patientId, doctorId: a.doctorId, deptId: a.deptId, date: a.dischargedAt.slice(0, 10), caseType: day ? 'DAY' : 'IPD', diagnosis: ((day ? a.diagnosis : a.dischargeSummary?.diagnosis) ?? '').trim(),
+        ...linePoints(c.lines), categories: ipdCategories(c.lines, (n) => procedureBy(n)), days: c.ipd?.days ?? ipdDays(a.admittedAt ?? a.dischargedAt, a.dischargedAt),
+      }
+    }
+    const procedureBy = (n: string) => [...procMap.values()].find((p) => p.name === n)
+    const disc = admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && ipdItem(a))
+    for (const m of [...new Set(disc.map((a) => a.dischargedAt!.slice(0, 7)))].filter((m) => m <= cm2).sort()) {
+      const nm = addDays(`${m}-28`, 8).slice(0, 7)
+      claimSubmissions.push({ id: `CS-SEED-IPD-${m}`, kind: 'ipd', month: m, submittedAt: `${nm}-05 09:30`, submittedBy: 'U402', items: disc.filter((a) => a.dischargedAt!.startsWith(m)).sort((x, y) => x.dischargedAt!.localeCompare(y.dischargedAt!)).map((a) => ipdItem(a)!), excluded: [] })
+    }
   }
 
   // ---------- 抽血窗口（示範）：今天 lab01 開 1 號、lab02 開 2 號；已採檢的照報到順序分給兩個窗口 ----------
