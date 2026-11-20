@@ -52,7 +52,7 @@ export function managementXlsx(r: ManagementReport): Uint8Array {
     { name: '門診科別', rows: [['科別', '人次', '初診', '占比 %'], ...r.opdByDept.map((d) => [d.deptName, d.visits, d.first, d.share])], bold: [0], freeze: 1 },
     { name: '門診醫師', rows: [['醫師', '科別', '人次'], ...r.opdByDoctor.map((d) => [d.doctorName, d.deptName, d.visits])], bold: [0], freeze: 1 },
     { name: '住院科別', rows: [['科別', '入院', '出院', '住院人日'], ...r.ipdByDept.map((d) => [d.deptName, d.admissions, d.discharges, d.patientDays])], bold: [0], freeze: 1 },
-    { name: '近12個月', rows: [['月份', '門診人次', '實收', '佔床率 %', 'CMI'], ...r.trend.map((x) => [x.month, cell(x.opdVisits), cell(x.collected), cell(x.occupancy), cell(x.cmi)])], bold: [0], freeze: 1 },
+    { name: '近12個月', rows: [['月份', '門診人次', '實收', '佔床率 %', 'CMI', '淨核減率 %', '退件率 %'], ...r.trend.map((x) => [x.month, cell(x.opdVisits), cell(x.collected), cell(x.occupancy), cell(x.cmi), cell(x.cutRate), cell(x.rejectRate)])], bold: [0], freeze: 1 },
     { name: 'DRG', rows: [['DRG', '名稱', '權重', '筆數', '實際點數', '給付點數', '盈虧', '平均住院日'], ...r.drg.rows.map((d) => [d.code, d.name, d.weight, d.count, d.actual, d.pay, d.diff, d.alos]), [], [`不適用 DRG：${r.drg.exempt} 筆`]], bold: [0], freeze: 1 },
   ])
 }

@@ -141,7 +141,7 @@ export interface ManagementReport {
   /** DRG 盈虧（這個月出院、已結帳、適用 DRG 的）：每組幾筆、實際點數、給付點數、盈虧，賠最多的在前；不適用幾筆 */
   drg: { rows: { code: string; name: string; weight: number; count: number; actual: number; pay: number; diff: number; alos: number }[]; exempt: number }
   /** 近 12 個月（含本月，舊的在前） */
-  trend: { month: string; hasData: boolean; opdVisits: number | null; collected: number | null; occupancy: number | null; cmi: number | null }[]
+  trend: { month: string; hasData: boolean; opdVisits: number | null; collected: number | null; occupancy: number | null; cmi: number | null; /** 健保申報（沒送的月份 null） */ cutRate: number | null; rejectRate: number | null }[]
 }
 
 /** 這段期間出院、已結帳的住院：依 DRG 分組合計盈虧（和住院申報同一份算法） */
@@ -196,7 +196,7 @@ export function managementReport(month: string): Promise<ManagementReport> {
     const trend = Array.from({ length: 12 }, (_, i) => {
       const m = shiftMonth(month, i - 11)
       const x = i === 11 ? current : metricsOf(m, t)
-      return { month: m, hasData: x.hasData, opdVisits: x.opdVisits, collected: x.collected, occupancy: x.occupancy, cmi: x.cmi }
+      return { month: m, hasData: x.hasData, opdVisits: x.opdVisits, collected: x.collected, occupancy: x.occupancy, cmi: x.cmi, cutRate: x.cutRate, rejectRate: x.rejectRate }
     })
     return {
       month, from, to, partial, beds: wardBeds(), current,

@@ -257,3 +257,33 @@ export function parseRejectFile(text: string): RejectFileLine[] {
   })
   return out
 }
+
+// ---------- 核定通知（核減）：每行「病歷號,日期,核減項目,點數,理由代碼,審查意見」 ----------
+
+export interface CutFileLine {
+  line: number
+  chartNo: string
+  date: string
+  item: string
+  points: number
+  code: string
+  reason: string
+  error?: string
+}
+export function parseCutFile(text: string): CutFileLine[] {
+  const out: CutFileLine[] = []
+  ;(text ?? '').split(/\r?\n/).forEach((raw, i) => {
+    const s = raw.trim()
+    if (!s || s.startsWith('#') || (i === 0 && s.includes('病歷號'))) return
+    const sep = s.includes('\t') ? '\t' : ','
+    const parts = s.split(sep)
+    const [chartNo = '', date = '', item = '', pts = '', code = ''] = parts.slice(0, 5).map((x) => x.trim())
+    const x: CutFileLine = { line: i + 1, chartNo, date, item, points: Number(pts), code, reason: parts.slice(5).join(sep).trim() }
+    if (!chartNo || !date || !item || !pts || !code) x.error = '欄位不足（要：病歷號,日期,項目,點數,理由代碼,審查意見）'
+    else if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)) x.error = `日期格式不對（${date}，要 YYYY-MM-DD）`
+    else if (!Number.isFinite(x.points) || x.points <= 0) x.error = `點數不對（${pts}）`
+    else if (!CUT_REASONS.some((r) => r.code === code)) x.error = `理由代碼 ${code} 不認得`
+    out.push(x)
+  })
+  return out
+}

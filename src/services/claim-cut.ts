@@ -1,10 +1,10 @@
 // 核減與申復：申報組輸入健保署的核減（送出過的月份、哪一筆、哪一項、幾點、理由代碼）→ 主治醫師首頁「核減待回覆」，
 // 決定申復（寫理由）或接受 → 申復結果回來，申報組記補付（幾點）或維持核減 → 每月申報、核減、補付點數與核減率。規則在 claim-rules
-import type { ClaimCut, ClaimKind } from '@/types'
+import type { ClaimCut, ClaimKind, ClaimSubmission } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser } from './http'
-import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, CUT_STATUS_LABEL, cutRate, cutStatus, disputeCheck, disputeLeft, type CutStatus } from './claim-rules'
+import { checkCut, CLAIM_KIND_LABEL, CUT_REASONS, parseCutFile, CUT_STATUS_LABEL, cutRate, cutStatus, disputeCheck, disputeLeft, type CutStatus } from './claim-rules'
 import { today } from '@/utils/date'
 import { find, nameOf } from './views'
 
@@ -183,5 +183,60 @@ export function recordDisputeResult(id: string, input: { outcome: 'paid' | 'reje
     c.dispute!.result = { outcome: input.outcome, points: n, note: input.note?.trim() ?? '', by: u.id, at: now() }
     audit('爭議審議結果', `${c.month} ${nameOf.patient(c.patientId)} ${c.item}：${input.outcome === 'paid' ? `補付 ${n} 點` : `駁回（${input.note!.trim()}）`}`)
     return cutItem(c)
+  })
+}
+
+// ---------- 核定通知整批匯入 ----------
+
+export interface CutFilePreview {
+  lines: { line: number; chartNo: string; date: string; item: string; points: number; codeLabel: string; reason: string; refId?: string; patientName?: string; left?: number; error?: string }[]
+  ok: number
+  bad: number
+  points: number
+}
+/** 每一行對到送出申報的哪一筆（病歷號＋日期），檢查點數（同一筆多行時累計：不超過還能核減的） */
+function resolveCutFile(s: ClaimSubmission, text: string): CutFilePreview {
+  const used = new Map<string, number>()
+  const lines = parseCutFile(text).map((x): CutFilePreview['lines'][number] => {
+    const base = { line: x.line, chartNo: x.chartNo, date: x.date, item: x.item, points: x.points, codeLabel: x.error ? '' : `${x.code} ${CUT_REASONS.find((r) => r.code === x.code)?.label ?? ''}`, reason: x.reason }
+    if (x.error) return { ...base, error: x.error }
+    const hits = s.items.filter((i) => i.date === x.date && !i.supplementOf && find.patient(i.patientId)?.chartNo === x.chartNo)
+    if (!hits.length) return { ...base, error: `這個月送出的申報裡找不到 ${x.chartNo} ${x.date}` }
+    if (hits.length > 1) return { ...base, error: '同一天有兩筆以上，請到畫面上逐筆輸入' }
+    const it = hits[0]
+    if (s.rejects?.some((r) => r.refId === it.refId)) return { ...base, refId: it.refId, patientName: nameOf.patient(it.patientId), error: '這筆被退件了，不能核減' }
+    const left = it.claim - cutPoints(s.id, it.refId) - (used.get(it.refId) ?? 0)
+    const e = checkCut({ item: x.item, points: x.points, code: x.code }, left)
+    const more = { refId: it.refId, patientName: nameOf.patient(it.patientId), left }
+    if (Object.keys(e).length) return { ...base, ...more, error: Object.values(e)[0] }
+    used.set(it.refId, (used.get(it.refId) ?? 0) + x.points)
+    return { ...base, ...more }
+  })
+  const ok = lines.filter((l) => !l.error)
+  return { lines, ok: ok.length, bad: lines.length - ok.length, points: ok.reduce((n, l) => n + l.points, 0) }
+}
+
+/** 預覽核定通知（不存） */
+export function previewCutFile(submissionId: string, text: string): Promise<CutFilePreview> {
+  return query(() => {
+    requirePermission('nhi.claim')
+    return resolveCutFile(must(subOf(submissionId), '送出的申報'), text)
+  })
+}
+
+/** 匯入核定通知：沒問題的行各建一筆核減（主治首頁待回覆），有問題的略過；一行都不能建就擋 */
+export function importCutFile(submissionId: string, text: string): Promise<{ created: number; skipped: number; points: number }> {
+  return mutate(() => {
+    const u = requirePermission('nhi.claim')
+    const s = must(subOf(submissionId), '送出的申報')
+    const pv = resolveCutFile(s, text)
+    if (!pv.ok) fail(pv.lines.length ? '沒有可以輸入的核減（每一行都有問題，請看預覽）' : '檔案是空的', 'CONFLICT')
+    const t = now()
+    for (const l of pv.lines.filter((x) => !x.error)) {
+      const it = s.items.find((x) => x.refId === l.refId)!
+      db.claimCuts.push({ id: newId('CC'), submissionId: s.id, kind: s.kind, month: s.month, refId: it.refId, patientId: it.patientId, doctorId: it.doctorId, item: l.item, points: l.points, code: l.codeLabel.split(' ')[0], reason: l.reason, at: t, by: u.id })
+    }
+    audit('健保核減匯入', `${s.month} ${CLAIM_KIND_LABEL[s.kind]}：${pv.ok} 筆、${pv.points} 點${pv.bad ? `；略過 ${pv.bad} 行` : ''}`)
+    return { created: pv.ok, skipped: pv.bad, points: pv.points }
   })
 }

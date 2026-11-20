@@ -5,7 +5,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { CLAIM_KIND_LABEL, claimCutApi, CUT_REASONS, CUT_STATUS_TONE as TONE, type CutItem } from '@/services'
+import { CLAIM_KIND_LABEL, claimCutApi, CUT_REASONS, CUT_STATUS_TONE as TONE, type CutFilePreview, type CutItem } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const { data: v, loading } = useQuery(() => claimCutApi.cutBoard(), [])
@@ -35,6 +35,24 @@ function openRes(c: CutItem) {
 const resAct = useAction(claimCutApi.recordCutResult, { success: (c) => `已記錄：${c.resultText}` })
 async function submitRes() {
   if (resFor.value && (await resAct.run(resFor.value.id, { outcome: rf.outcome as 'paid' | 'upheld', points: Number(rf.points) }))) resFor.value = undefined
+}
+
+// 核定通知整批匯入：選送出的申報 → 貼上 → 預覽 → 只匯入沒問題的行
+const fOpen = ref(false)
+const ff = reactive({ submissionId: '' as string | number | undefined, text: '' })
+const fPv = ref<CutFilePreview>()
+function openFile() {
+  Object.assign(ff, { submissionId: v.value?.submissions[0]?.id ?? '', text: '' })
+  fPv.value = undefined
+  fOpen.value = true
+}
+const fPvAct = useAction(claimCutApi.previewCutFile)
+async function previewFile() {
+  fPv.value = (await fPvAct.run(String(ff.submissionId ?? ''), ff.text)) ?? undefined
+}
+const fImpAct = useAction(claimCutApi.importCutFile, { success: (r) => `已輸入核減 ${r.created} 筆、${fmt(r.points)} 點，已通知主治${r.skipped ? `；略過 ${r.skipped} 行` : ''}` })
+async function importFile() {
+  if (await fImpAct.run(String(ff.submissionId ?? ''), ff.text)) fOpen.value = false
 }
 
 // 爭議審議：申請（理由，預帶主治的申復理由）、記結果（補付幾點或駁回）
@@ -83,7 +101,8 @@ async function submitDr() {
 
       <div class="flex items-center gap-2">
         <h3 class="font-semibold text-slate-700">核減</h3>
-        <UButton v-if="v.canManage && v.submissions.length" size="sm" class="ml-auto" :icon="Plus" @click="openAdd">輸入核減</UButton>
+        <UButton v-if="v.canManage && v.submissions.length" size="sm" variant="secondary" class="ml-auto" @click="openFile">匯入核定通知</UButton>
+        <UButton v-if="v.canManage && v.submissions.length" size="sm" :icon="Plus" @click="openAdd">輸入核減</UButton>
       </div>
       <p v-if="!v.cuts.length" class="text-slate-400">沒有核減</p>
       <ul class="space-y-2">
@@ -133,6 +152,28 @@ async function submitDr() {
       <template #footer>
         <UButton variant="secondary" @click="resFor = undefined">取消</UButton>
         <UButton type="submit" :loading="resAct.pending.value">記錄</UButton>
+      </template>
+    </UDialog>
+    <UDialog v-model="fOpen" title="匯入核定通知（核減）" size="lg">
+      <div class="space-y-3 text-sm">
+        <USelect v-model="ff.submissionId" label="送出的申報" :options="(v?.submissions ?? []).map((s) => ({ label: s.label, value: s.id }))" @update:model-value="fPv = undefined" />
+        <p class="text-xs text-slate-500">每行：病歷號,日期（住院是出院日）,核減項目,點數,理由代碼,審查意見。理由代碼：{{ CUT_REASONS.map((r) => r.code + ' ' + r.label).join('；') }}</p>
+        <UTextarea v-model="ff.text" label="核定通知（貼上）" :rows="6" placeholder="100004,2026-09-03,膝關節 X 光,220,0213,30 天內重複檢查" />
+        <table v-if="fPv" class="w-full text-xs">
+          <thead class="text-slate-500"><tr><th class="text-left">行</th><th class="text-left">病歷號</th><th class="text-left">日期</th><th class="text-left">項目</th><th class="pr-3 text-right">點數</th><th class="text-left">對到</th><th class="text-left">結果</th></tr></thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr v-for="l in fPv.lines" :key="l.line" :class="l.error ? 'text-red-700' : ''">
+              <td class="tabular">{{ l.line }}</td><td class="tabular">{{ l.chartNo }}</td><td class="tabular">{{ l.date }}</td><td>{{ l.item }}<div class="text-slate-400">{{ l.codeLabel }}</div></td><td class="tabular pr-3 text-right">{{ fmt(l.points || 0) }}</td>
+              <td>{{ l.patientName ? `${l.patientName}（還能核減 ${fmt(l.left ?? 0)}）` : '—' }}</td><td>{{ l.error ?? '可以輸入' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="fPv" class="text-xs">可以輸入 <b>{{ fPv.ok }}</b> 筆、{{ fmt(fPv.points) }} 點<template v-if="fPv.bad">；有問題 <b class="text-red-700">{{ fPv.bad }}</b> 行（匯入時略過）</template></p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="fOpen = false">取消</UButton>
+        <UButton variant="secondary" :loading="fPvAct.pending.value" @click="previewFile">預覽</UButton>
+        <UButton :disabled="!fPv?.ok" :loading="fImpAct.pending.value" @click="importFile">匯入 {{ fPv?.ok ?? 0 }} 筆</UButton>
       </template>
     </UDialog>
     <UDialog v-model="dispOpen" :title="`爭議審議：${dispFor?.patientName ?? ''} ${dispFor?.item ?? ''}`" size="md" @submit="submitDisp">

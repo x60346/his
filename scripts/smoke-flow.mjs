@@ -18257,6 +18257,77 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await errOf(() => C.importRejectFile('opd', S0.month, text))).includes('沒有可以記的') && (await C.previewRejectFile('opd', S0.month, text)).lines[0].error === '已經記過退件', '再匯一次：都記過了 → 擋')
     ok((await errOf(() => C.importRejectFile('opd', S0.month, '病歷號,日期,代碼,說明'))).includes('空的'), '只有標題：檔案是空的')
   }
+  // 申報指標近 12 個月：趨勢裡有淨核減率、退件率（和當月指標同一個數）；Excel 近 12 個月也有
+  console.log('\n[申報指標趨勢]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const M = db().claimSubmissions.filter((s) => s.kind === 'opd').map((s) => s.month).sort().at(-1)
+    await as('admin')
+    const r = await api.managementApi.managementReport(M)
+    const last = r.trend.at(-1)
+    ok(last.month === M && last.cutRate === r.current.cutRate && last.rejectRate === r.current.rejectRate, `${M}：趨勢最後一個月的核減率 ${last.cutRate}%、退件率 ${last.rejectRate}% 和指標一致`)
+    ok(r.trend.filter((x) => !db().claimSubmissions.some((s) => s.month === x.month)).every((x) => x.cutRate === null && x.rejectRate === null), '沒送的月份：null（圖上是 0、提示寫沒有資料）')
+    ok(Buffer.from(api.managementXlsx(r)).toString('utf8').includes('淨核減率 %'), 'Excel 近 12 個月多兩欄')
+  }
+  // 核定通知整批匯入核減：解析；預覽（對到、同一筆累計上限、退件的不行、找不到、代碼錯）不存；只建沒問題的、通知主治、稽核；全錯擋
+  console.log('\n[核定通知匯入]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const K = api.claimCutApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const p = api.parseCutFile(['病歷號,日期,項目,點數,代碼,意見', '100001,2026-10-01,胸部 X 光,120,0213,重複檢查, 無新理由', '100001,2026-10-01,x,abc,0213,', '100001,2026-10-01,x,10,9999,', '100001,2026-10-01,x'].join('\n'))
+    ok(p.length === 4 && p[0].points === 120 && p[0].reason === '重複檢查, 無新理由' && p[1].error.includes('點數') && p[2].error.includes('理由代碼') && p[3].error.includes('欄位'), '解析：點數、意見可有逗號；點數、代碼、欄位錯誤')
+    const S0 = db().claimSubmissions.filter((s) => s.kind === 'opd').sort((a, b) => b.month.localeCompare(a.month))[0]
+    const cn = (id) => db().patients.find((x) => x.id === id).chartNo
+    const left = (x) => x.claim - db().claimCuts.filter((c) => c.submissionId === S0.id && c.refId === x.refId).reduce((n, c) => n + c.points, 0)
+    const uniq = S0.items.filter((x) => !x.supplementOf && S0.items.filter((y) => y.date === x.date && y.patientId === x.patientId).length === 1 && left(x) >= 20)
+    const [a1, a2] = uniq
+    await as('clerk02')
+    await api.claimApi.rejectClaimItem('opd', S0.month, a2.refId, { code: 'R01' })
+    const L1 = left(a1)
+    const text = [`${cn(a1.patientId)},${a1.date},一般門診診察費（部分）,10,0501,病歷記載不完整`, `${cn(a1.patientId)},${a1.date},另一項,${L1},0213,超過`, `${cn(a2.patientId)},${a2.date},x,5,0213,`, `999999,${a1.date},x,5,0213,`, `${cn(a1.patientId)},${a1.date},x,5,0999,`].join('\n')
+    const n0 = db().claimCuts.length
+    const pv = await K.previewCutFile(S0.id, text)
+    ok(pv.ok === 1 && pv.points === 10 && pv.lines[0].left === L1 && pv.lines[1].error.includes(`最多還能核減 ${L1 - 10}`) && pv.lines[2].error.includes('退件') && pv.lines[3].error.includes('找不到') && pv.lines[4].error.includes('代碼') && db().claimCuts.length === n0, '預覽（不存）：同一筆累計扣上限、退件的不能核減、找不到、代碼錯')
+    const before = db().claimCuts.length
+    const r = await K.importCutFile(S0.id, text)
+    const c = db().claimCuts.at(-1)
+    ok(r.created === 1 && r.skipped === 4 && db().claimCuts.length === before + 1 && c.refId === a1.refId && c.points === 10 && c.code === '0501' && c.reason === '病歷記載不完整' && db().auditLogs[0].action === '健保核減匯入', '匯入：建 1 筆核減（代碼、意見）、略過 4 行、稽核')
+    const doc = db().users.find((u) => u.doctorId === a1.doctorId).username
+    await as(doc)
+    ok((await K.myCuts()).some((x) => x.id === c.id && x.status === 'reply'), '主治：待回覆')
+    await as('clerk02')
+    ok((await errOf(() => K.importCutFile(S0.id, `999999,${a1.date},x,5,0213,`))).includes('沒有可以輸入') && (await errOf(() => K.importCutFile(S0.id, ''))).includes('空的'), '全部有問題、空的：擋')
+  }
+  // 事前審查每月上限：看實際調劑那天的月份（慢箋每次領藥算在那個月）；看診與慢箋領藥都檢查；先報總核准量、再報每月
+  console.log('\n[事前審查每月上限]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const P = api.preAuthApi
+    const work = await load('/src/services/preauth-work.ts')
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const seedPa = db().preAuths.find((p) => p.id === 'PA-SEED-3')
+    ok(seedPa.result.monthlyQty === 2, '種子：每月最多 2 支')
+    const docName = db().users.find((u) => u.doctorId === seedPa.doctorId).username
+    const v1 = db().visits.find((x) => x.date === T && x.patientId === seedPa.patientId && x.status === 'registered')
+    const draftOf = (qty) => ({ subjective: 's', objective: '', assessment: '', plan: '', vitals: {}, diagnoses: [{ icd: 'M81.0', name: '停經後骨質疏鬆', primary: true }], medications: [{ drugId: 'M052', dose: 20, freq: 'QD', route: 'SC', days: 28, qty, selfPay: false }], procedures: [], refillTimes: 0, admissionRequested: false })
+    await as(docName)
+    const e1 = await api.opdApi.startConsult(v1.id, { allowNotCheckedIn: true, allowParallel: true })
+    const m = await errOf(() => api.opdApi.completeEncounter(e1.id, draftOf(3)))
+    ok(m.includes('每月上限') && m.includes('每月最多 2') && m.includes('這次 3'), `一次開 3 支：擋下「${m}」`)
+    const m7 = await errOf(() => api.opdApi.completeEncounter(e1.id, draftOf(7)))
+    ok(m7.includes('核准量') && !m7.includes('每月'), '超過總核准量的先報總核准量')
+    await api.opdApi.completeEncounter(e1.id, draftOf(2))
+    ok(work.opdMonthQty(seedPa.patientId, 'M052', T.slice(0, 7)) === 2, '這個月已調劑 2 支')
+    const mr = await errOf(() => work.requireRefillPreAuth({ patientId: seedPa.patientId, medications: [{ drugId: 'M052', qty: 1, selfPay: false }] }, T))
+    ok(mr.includes('無法登記領藥') && mr.includes('每月上限') && mr.includes('已調劑 2'), `同月再領：擋下「${mr}」`)
+    ok(!(await errOf(() => work.requireRefillPreAuth({ patientId: seedPa.patientId, medications: [{ drugId: 'M052', qty: 1, selfPay: false }] }, `${api.nextMonth(T.slice(0, 7))}-05`))), '下個月領：可以')
+    await as('clerk02')
+    ok((await P.preAuthBoard()).find((x) => x.id === seedPa.id).resultText.includes('每月最多 2'), '申報組看得到每月上限')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)
