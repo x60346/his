@@ -71,7 +71,7 @@ const md = (d?: string) => (d ? d.slice(5).replace('-', '/') : '')
       <UEmpty v-if="!selected" :icon="Truck" title="請選擇一家供應商" description="看聯絡資料與以前的進價（每種藥最近一次，和其他供應商比較）" />
       <div v-else class="space-y-3">
         <header class="flex flex-wrap items-start gap-2">
-          <div class="min-w-0 flex-1">
+          <div class="min-w-0 flex-[1_1_10rem]">
             <h2 class="flex items-center gap-2 text-lg font-bold text-slate-800">{{ selected.name }}<UBadge v-if="!selected.active">停用</UBadge></h2>
             <p class="tabular text-sm text-slate-600">
               <template v-if="selected.taxId">統編 {{ selected.taxId }}</template>

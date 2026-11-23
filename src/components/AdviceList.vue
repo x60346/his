@@ -47,7 +47,7 @@ async function onDecline(note: string) {
             <UBadge v-else tone="green">{{ a.statusLabel }}</UBadge>
             <b>{{ a.patientName }}</b><span class="text-xs text-slate-500">{{ a.chartNo }}</span>
             <span class="inline-flex items-center gap-1 text-xs text-slate-600"><Phone class="h-3 w-3" />{{ a.phone }}</span>
-            <span class="min-w-0 flex-1">建議 <b class="tabular">{{ md(a.targetDate) }}</b> 前後回診 {{ a.deptName }}{{ a.doctorName ? `（指定 ${a.doctorName}）` : '' }}：{{ a.reason }}</span>
+            <span class="min-w-0 flex-[1_1_10rem]">建議 <b class="tabular">{{ md(a.targetDate) }}</b> 前後回診 {{ a.deptName }}{{ a.doctorName ? `（指定 ${a.doctorName}）` : '' }}：{{ a.reason }}</span>
             <span class="text-xs text-slate-500">{{ a.adviserName }} {{ md(a.at.slice(0, 10)) }} 建議</span>
           </div>
           <p v-if="a.laterVisit" class="text-xs text-blue-800">病人之後在這一科已有掛號：{{ md(a.laterVisit.date) }} {{ a.laterVisit.doctorName }}（可能自己掛了）</p>

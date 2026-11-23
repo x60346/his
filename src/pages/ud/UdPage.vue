@@ -130,7 +130,7 @@ function openSheet(id: string) {
           <ul class="divide-y divide-slate-100">
             <li v-for="i in w.issues" :key="`${i.dispenseId}|${i.admissionId}`" class="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
               <span class="tabular w-24 text-xs font-semibold text-brand-700">{{ i.ward.split(' ')[0] }} {{ i.bedNo }}</span>
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-[1_1_10rem]">
                 <div class="font-medium text-slate-800">{{ i.patientName }}・<UBadge tone="red">{{ i.cause }}</UBadge> {{ i.note }}</div>
                 <div class="text-xs text-slate-500">{{ i.no }}・{{ i.items.join('、') }}・{{ i.reportedByName }} {{ i.reportedAt.slice(5, 16).replace('-', '/') }} 回報</div>
               </div>
@@ -221,7 +221,7 @@ function openSheet(id: string) {
             </div>
             <ul class="divide-y divide-slate-100">
               <li v-for="l in b.lines" :key="l.lineId" class="flex flex-wrap items-center gap-3 px-4 py-1.5 text-sm">
-                <span class="min-w-0 flex-1">
+                <span class="min-w-0 flex-[1_1_10rem]">
                   <span class="font-medium text-slate-800">{{ l.drugName }}</span><UBadge v-if="l.highAlert" tone="purple" class="ml-1">高警訊</UBadge>
                   <span class="block text-xs text-slate-500">每次 {{ l.dose }} {{ l.doseUnit }}・{{ l.freqLabel }}・{{ l.route }}・{{ l.times.map((t) => t.slice(6)).join('、') }}</span>
                 </span>
@@ -245,7 +245,7 @@ function openSheet(id: string) {
           <ul v-else class="divide-y divide-slate-100">
             <li v-for="r in w.returns" :key="r.lineId" class="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
               <span class="tabular w-14 font-semibold text-brand-700">{{ r.bedNo || '—' }}</span>
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-[1_1_10rem]">
                 <div class="font-medium text-slate-800">{{ r.patientName }}・{{ r.drugName }}</div>
                 <div class="text-xs text-slate-500">{{ r.no }}・{{ r.causes }}・{{ r.sentByName }} {{ r.sentAt?.slice(5, 16).replace('-', '/') }} 送回</div>
               </div>
@@ -260,7 +260,7 @@ function openSheet(id: string) {
           <ul class="mt-2 divide-y divide-slate-100">
             <li v-for="r in w.awaitingWard" :key="r.lineId" class="flex flex-wrap gap-3 py-1.5">
               <span class="tabular w-24 text-xs text-slate-500">{{ r.ward.split(' ')[0] }} {{ r.bedNo }}</span>
-              <span class="min-w-0 flex-1">{{ r.patientName }}<UBadge v-if="r.discharged" tone="gray" class="ml-1">已出院</UBadge>・{{ r.drugName }}<span class="ml-1 text-xs text-slate-500">{{ r.causes }}</span></span>
+              <span class="min-w-0 flex-[1_1_10rem]">{{ r.patientName }}<UBadge v-if="r.discharged" tone="gray" class="ml-1">已出院</UBadge>・{{ r.drugName }}<span class="ml-1 text-xs text-slate-500">{{ r.causes }}</span></span>
               <span class="tabular">{{ r.expected }} {{ r.unit }}</span>
             </li>
           </ul>

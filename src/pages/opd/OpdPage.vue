@@ -560,13 +560,13 @@ const lastOpen = ref(true)
       <!-- 檢驗危急值（或更正過）還沒確認：紅條提醒，點了到「檢驗報告」分頁按已知悉 -->
       <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
         <FlaskConical class="h-4 w-4 shrink-0" />
-        <span class="min-w-0 flex-1"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
       </div>
       <!-- 影像重要發現（或補充過）還沒確認 -->
       <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
         <ScanLine class="h-4 w-4 shrink-0" />
-        <span class="min-w-0 flex-1"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
       </div>
       <!-- 預約回診：已約的下次門診；按鈕開預約對話框 -->
@@ -585,7 +585,7 @@ const lastOpen = ref(true)
       <!-- 這次看診的門診會診 -->
       <div v-if="visitConsults?.length || canConsult" class="flex flex-wrap items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <span class="pt-0.5 text-xs font-semibold text-slate-600">門診會診</span>
-        <div class="min-w-0 flex-1 space-y-1">
+        <div class="min-w-0 flex-[1_1_10rem] space-y-1">
           <div v-for="c in visitConsults" :key="c.id">
             <UBadge :tone="CONSULT_STATUS[c.status].tone">{{ CONSULT_STATUS[c.status].label }}</UBadge>
             <span class="ml-1 text-slate-700">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }}</span>

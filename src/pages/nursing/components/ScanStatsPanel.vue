@@ -43,7 +43,7 @@ const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '�
             <li v-for="(x, i) in [...st.skips, ...st.specimens.skips].sort((a, b) => b.at.localeCompare(a.at))" :key="i" class="flex flex-wrap items-center gap-x-3 px-3 py-1.5">
               <span class="tabular w-12">{{ x.at.slice(11) }}</span>
               <span class="w-32">{{ x.bedNo }} {{ x.patientName }}</span>
-              <span class="min-w-0 flex-1 truncate">{{ x.content }}</span>
+              <span class="min-w-0 flex-[1_1_10rem] truncate">{{ x.content }}</span>
               <UBadge tone="yellow">{{ x.reason }}</UBadge>
               <span v-if="x.note" class="text-xs text-slate-500">{{ x.note }}</span>
               <span class="text-xs text-slate-500">{{ x.nurseName }}</span>
@@ -58,7 +58,7 @@ const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '�
             <li v-for="(x, i) in st.mismatches" :key="i" class="flex flex-wrap items-center gap-x-3 px-3 py-1.5">
               <span class="tabular w-12">{{ x.at.slice(11) }}</span>
               <span class="w-32">{{ x.bedNo }} {{ x.patientName }}</span>
-              <span class="min-w-0 flex-1 truncate">{{ x.content }}</span>
+              <span class="min-w-0 flex-[1_1_10rem] truncate">{{ x.content }}</span>
               <UBadge tone="red">{{ x.kind === 'patient' ? '病人不符' : x.kind === 'specimen' ? '檢體不符' : '藥品不符' }}</UBadge>
               <span class="w-full text-xs text-red-700">{{ x.message }}（{{ x.nurseName }}）
                 <span v-if="x.reported" class="ml-1 text-slate-500">已通報</span>

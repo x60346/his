@@ -49,7 +49,7 @@ async function onScrapApproved(token: string) {
       <UEmpty v-if="!rows?.length" :icon="PackageX" title="待報廢區是空的" description="藥局退回藥庫時，藥庫簽收可以把過期、破損的批號放到這裡" class="py-8" />
       <ul v-else class="divide-y divide-slate-100">
         <li v-for="r in rows" :key="r.lotId" class="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
-          <div class="min-w-0 flex-1">
+          <div class="min-w-0 flex-[1_1_10rem]">
             <div class="font-medium text-slate-800">{{ r.drugName }}・批號 {{ r.lotNo }}<UBadge v-if="r.expired" tone="red" class="ml-1">已過期</UBadge></div>
             <div class="text-xs text-slate-500">效期 {{ r.expiry }}・{{ r.locationName }}<template v-if="r.ref">・{{ r.ref }} {{ md(r.at) }} {{ r.reason }}</template></div>
           </div>

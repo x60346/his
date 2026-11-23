@@ -64,7 +64,7 @@ const print = () => window.print()
           <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm">
             <li v-for="i in work.toAssess" :key="i.admissionId" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
               <UBadge tone="red">{{ i.score }} 分</UBadge>
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-[1_1_10rem]">
                 <div><b class="text-slate-800">{{ i.patientName }}</b> <span class="text-xs text-slate-500">{{ i.chartNo }}・{{ i.ward }} {{ i.bedNo }}・{{ i.deptName }} {{ i.doctorName }}</span><UBadge v-if="i.reassess" tone="gray" class="ml-1">重評</UBadge></div>
                 <div class="text-xs text-slate-500">{{ i.diagnosis }}・目前飲食：{{ i.diet ?? '沒有飲食醫囑' }}・篩檢 {{ i.screenedAt.slice(5) }}</div>
               </div>

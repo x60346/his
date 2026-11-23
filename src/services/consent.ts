@@ -5,12 +5,14 @@ import type { Consent } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
-import { checkConsentInput, CONSENT_KIND_LABEL, CONSENT_LINE_KINDS, examConsentOk, transfusionConsentOk, unusedLineConsent } from './consent-rules'
+import { checkConsentInput, checkScanPages, CONSENT_KIND_LABEL, CONSENT_LINE_KINDS, examConsentOk, transfusionConsentOk, unusedLineConsent } from './consent-rules'
 import { lineKind } from './line-rules'
 import type { LineKind } from '@/types'
 import { imagingOf } from './imaging-work'
 import { find, nameOf } from './views'
 import { surgeryOf } from './surgery-work'
+import { BEDSIDE_KINDS, bedsideKind, bedsideTitle, unusedBedsideConsent } from './bedside-rules'
+import type { BedsideKind } from '@/types'
 
 export interface ConsentView extends Consent {
   kindLabel: string
@@ -19,11 +21,17 @@ export interface ConsentView extends Consent {
   surgeryNo?: string
   /** 侵入性處置同意書已經用來放置管路（不能撤回） */
   lineUsed?: boolean
+  /** 床邊處置同意書已經執行了（不能撤回） */
+  bedsideUsed?: boolean
+  /** 有沒有紙本掃描影像（示範種子只有紀錄） */
+  hasScanImage?: boolean
 }
 const view = (c: Consent): ConsentView => ({
   ...c, kindLabel: CONSENT_KIND_LABEL[c.kind], patientName: nameOf.patient(c.patientId), explainedByName: nameOf.user(c.explainedBy),
   ...((s) => (s ? { surgeryNo: s.no } : {}))(c.surgeryId ? surgeryOf(c.surgeryId) : undefined),
   ...(c.lineKind && db.lines.some((l) => l.consentId === c.id) ? { lineUsed: true } : {}),
+  ...(c.bedsideKind && db.bedsideProcedures.some((p) => p.consentId === c.id) ? { bedsideUsed: true } : {}),
+  ...(db.consentScans.some((s) => s.consentId === c.id) ? { hasScanImage: true } : {}),
 })
 
 /** 病人的同意書（新到舊）；給 surgeryId 只看那台 */
@@ -38,7 +46,7 @@ export function listConsents(patientId: string, surgeryId?: string): Promise<Con
  * 記錄簽署（說明的醫師記）：種類、項目、說明重點、簽署人（不是本人寫原因）。
  * 手術、麻醉同意書要綁一台還沒完成的手術（同一台同一種只能有一張有效的）
  */
-export function recordConsent(input: { patientId: string; kind: Consent['kind']; title: string; explanation: string; signerName: string; relation: string; reason?: string; surgeryId?: string; admissionId?: string; examId?: string; lineKind?: LineKind }): Promise<ConsentView> {
+export function recordConsent(input: { patientId: string; kind: Consent['kind']; title: string; explanation: string; signerName: string; relation: string; reason?: string; surgeryId?: string; admissionId?: string; examId?: string; lineKind?: LineKind; bedsideKind?: BedsideKind; side?: 'left' | 'right' }): Promise<ConsentView> {
   return mutate(() => {
     const u = requireUser('doctor')
     must(find.patient(input.patientId), '病患')
@@ -75,9 +83,23 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
       line = input.lineKind
       admissionId = a!.id
     }
+    // 床邊處置（腰椎穿刺、胸腔穿刺…）：綁住院中的那次住院；有側別的要選側；同一種（同側）還沒用掉的只能一張
+    let bedside: BedsideKind | undefined
+    let bedsideSide: 'left' | 'right' | undefined
+    if (input.kind === 'procedure' && input.bedsideKind && !line) {
+      const m = BEDSIDE_KINDS.find((k) => k.kind === input.bedsideKind)
+      if (!m) failField('bedsideKind', '請選處置')
+      if (m!.sided && input.side !== 'left' && input.side !== 'right') failField('side', `${m!.label}要選左側或右側`)
+      const a = db.admissions.find((x) => x.patientId === input.patientId && x.status === 'admitted')
+      if (!a) failField('bedsideKind', '床邊處置同意書要病人住院中')
+      bedsideSide = m!.sided ? input.side : undefined
+      if (unusedBedsideConsent(db.consents, db.bedsideProcedures, a!.id, m!.kind, bedsideSide)) fail(`已經有一張還沒用的${bedsideTitle(m!.kind, bedsideSide)}同意書`, 'CONFLICT')
+      bedside = m!.kind
+      admissionId = a!.id
+    }
     // 檢查：綁一筆還沒做完的影像檢查排程
     let examId: string | undefined
-    if (input.kind === 'procedure' && input.examId && !line) {
+    if (input.kind === 'procedure' && input.examId && !line && !bedside) {
       const e = db.imagingExams.find((x) => x.id === input.examId && x.patientId === input.patientId)
       if (!e || e.cancelled || e.doneAt) failField('examId', '要選這位病人還沒做的檢查')
       if (db.consents.some((c) => c.examId === e!.id && !c.revoked)) fail('這筆檢查已經有有效的同意書', 'CONFLICT')
@@ -87,7 +109,7 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
     const t = now()
     const d = t.slice(0, 10).replace(/-/g, '')
     const c: Consent = {
-      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}), ...(examId ? { examId } : {}), ...(line ? { lineKind: line } : {}), ...(input.kind === 'surgery' && surgerySide ? { side: surgerySide } : {}),
+      id: newId('CN'), no: `CN${d}${String(nextCounter(`consent:${d}`)).padStart(3, '0')}`, kind: input.kind, patientId: input.patientId, ...(admissionId ? { admissionId } : {}), ...(surgeryId ? { surgeryId } : {}), ...(examId ? { examId } : {}), ...(line ? { lineKind: line } : {}), ...(bedside ? { bedsideKind: bedside, ...(bedsideSide ? { side: bedsideSide } : {}) } : {}), ...(input.kind === 'surgery' && surgerySide ? { side: surgerySide } : {}),
       title: input.title.trim(), explainedBy: u.id, explanation: input.explanation.trim(),
       signer: { name: input.signerName.trim(), relation: input.relation, ...(input.relation !== '本人' ? { reason: input.reason!.trim() } : {}) }, signedAt: t, recordedBy: u.id,
     }
@@ -98,13 +120,14 @@ export function recordConsent(input: { patientId: string; kind: Consent['kind'];
 }
 
 /** 可以記錄同意書的對象：住院中那次住院（有沒有輸血同意書）、還沒做完、要同意書的影像檢查（有沒有） */
-export function consentTargets(patientId: string): Promise<{ admission?: { id: string; admitNo: string; transfusion: boolean; lines: { kind: LineKind; label: string; has: boolean }[] }; exams: { id: string; name: string; start: string; has: boolean }[] }> {
+export function consentTargets(patientId: string): Promise<{ admission?: { id: string; admitNo: string; transfusion: boolean; lines: { kind: LineKind; label: string; has: boolean }[]; bedside: { kind: BedsideKind; label: string; sided: boolean; ready: ('left' | 'right' | 'any')[] }[] }; exams: { id: string; name: string; start: string; has: boolean }[] }> {
   return query(() => {
     requireUser('doctor', 'nurse')
     const a = db.admissions.find((x) => x.patientId === patientId && x.status === 'admitted')
     const exams = db.imagingExams.filter((e) => e.patientId === patientId && !e.cancelled && !e.doneAt && (imagingOf(e.procId)?.prep ?? []).some((p) => p.id === 'consent'))
     return {
-      ...(a ? { admission: { id: a.id, admitNo: a.admitNo, transfusion: transfusionConsentOk(db.consents, a.id), lines: CONSENT_LINE_KINDS.map((k) => ({ kind: k, label: lineKind(k).label, has: !!unusedLineConsent(db.consents, db.lines, a.id, k) })) } } : {}),
+      ...(a ? { admission: { id: a.id, admitNo: a.admitNo, transfusion: transfusionConsentOk(db.consents, a.id), lines: CONSENT_LINE_KINDS.map((k) => ({ kind: k, label: lineKind(k).label, has: !!unusedLineConsent(db.consents, db.lines, a.id, k) })),
+        bedside: BEDSIDE_KINDS.map((m) => ({ kind: m.kind, label: m.label, sided: m.sided, ready: (m.sided ? (['left', 'right'] as const) : (['any'] as const)).filter((s) => unusedBedsideConsent(db.consents, db.bedsideProcedures, a.id, m.kind, s === 'any' ? undefined : s)) })) } } : {}),
       exams: exams.map((e) => ({ id: e.id, name: find.procedure(e.procId)?.name ?? e.procId, start: e.start, has: examConsentOk(db.consents, e.id) })),
     }
   })
@@ -120,6 +143,7 @@ export function revokeConsent(id: string, reason: string): Promise<ConsentView> 
     const s = c.surgeryId ? surgeryOf(c.surgeryId) : undefined
     if (s && (s.status === 'in-progress' || s.status === 'done')) fail('手術已經開始或完成，不能撤回這張同意書', 'CONFLICT')
     if (db.lines.some((l) => l.consentId === c.id)) fail('已經依這張同意書放置管路了，不能撤回', 'CONFLICT')
+    if (db.bedsideProcedures.some((p) => p.consentId === c.id)) fail(`已經依這張同意書執行${bedsideKind(c.bedsideKind!).label}了，不能撤回`, 'CONFLICT')
     c.revoked = { at: now(), by: u.id, reason: reason.trim() }
     if (s && s.prep.consent && (s.status === 'requested' || s.status === 'scheduled')) delete s.prep.consent
     audit('同意書撤回', `${c.no} ${CONSENT_KIND_LABEL[c.kind]}：${nameOf.patient(c.patientId)}（${reason.trim()}）${s ? `；${s.no} 術前準備同意書取消` : ''}`)
@@ -127,3 +151,28 @@ export function revokeConsent(id: string, reason: string): Promise<ConsentView> 
   })
 }
 
+
+/** 附上紙本掃描（醫師、護理師）：1–3 頁 JPEG／PNG；已經有的就換掉（重新掃描，稽核記一筆） */
+export function attachConsentScan(id: string, pages: string[]): Promise<ConsentView> {
+  return mutate(() => {
+    const u = requireUser('doctor', 'nurse')
+    const c = must(db.consents.find((x) => x.id === id), '同意書')
+    const err = checkScanPages(pages ?? [])
+    if (err) failField('pages', err)
+    const again = !!c.scan
+    db.consentScans = db.consentScans.filter((s) => s.consentId !== c.id)
+    db.consentScans.push({ consentId: c.id, pages: [...pages] })
+    c.scan = { at: now(), by: u.id, pages: pages.length }
+    audit(again ? '同意書重新掃描' : '同意書掃描', `${c.no} ${CONSENT_KIND_LABEL[c.kind]}：${nameOf.patient(c.patientId)}（${pages.length} 頁）`)
+    return view(c)
+  })
+}
+
+/** 看紙本掃描影像：沒有影像（示範種子只有掃描紀錄）回空陣列 */
+export function consentScanOf(id: string): Promise<{ pages: string[]; scan?: Consent['scan'] & { byName: string } }> {
+  return query(() => {
+    requireUser('doctor', 'nurse')
+    const c = must(db.consents.find((x) => x.id === id), '同意書')
+    return { pages: db.consentScans.find((s) => s.consentId === c.id)?.pages ?? [], ...(c.scan ? { scan: { ...c.scan, byName: nameOf.user(c.scan.by) } } : {}) }
+  })
+}

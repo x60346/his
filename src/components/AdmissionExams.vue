@@ -49,7 +49,7 @@ const ackMet = useAction(examApi.ackMetforminAlert, { success: '已處理 Metfor
         </li>
       </ul>
       <div v-for="m in v.metforminAlerts" :key="m.id" class="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert">
-        <span class="min-w-0 flex-1">{{ m.procName }} {{ m.doneAt?.slice(5) }} 做完：{{ m.metforminAlertText }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]">{{ m.procName }} {{ m.doneAt?.slice(5) }} 做完：{{ m.metforminAlertText }}</span>
         <UButton v-if="isDoctor" size="sm" :loading="ackMet.pending.value" @click="ackMet.run(m.id)">已處理</UButton>
       </div>
       <p v-if="v.unscheduled.length" class="text-xs text-slate-600">等檢查室排程：{{ v.unscheduled.join('、') }}</p>

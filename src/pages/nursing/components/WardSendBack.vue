@@ -36,7 +36,7 @@ async function onSend() {
       <li v-for="r in rows" :key="r.lineId" class="flex flex-wrap items-center gap-3 px-3 py-1.5 text-sm">
         <UCheckbox v-model="picked[r.lineId]" :aria-label="`送回 ${r.patientName} ${r.drugName}`" />
         <span class="tabular w-12 text-xs font-semibold text-slate-600">{{ r.bedNo }}</span>
-        <span class="min-w-0 flex-1">
+        <span class="min-w-0 flex-[1_1_10rem]">
           <span class="font-medium text-slate-800">{{ r.patientName }}</span><UBadge v-if="r.discharged" tone="gray" class="ml-1">已出院</UBadge>・{{ r.drugName }}
           <span class="block text-xs text-slate-500">{{ r.causes }}</span>
         </span>

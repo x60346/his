@@ -59,7 +59,7 @@ async function onReport() {
       <li v-for="b in c.boxes" :key="b.admissionId" class="flex flex-wrap items-center gap-3 px-3 py-1.5 text-sm">
         <UCheckbox v-model="picked[key(c, b.admissionId)]" :aria-label="`點收 ${b.bedNo} ${b.patientName}`" />
         <span class="tabular w-12 text-xs font-semibold text-slate-600">{{ b.bedNo }}</span>
-        <span class="min-w-0 flex-1">
+        <span class="min-w-0 flex-[1_1_10rem]">
           <span class="font-medium text-slate-800">{{ b.patientName }}</span>
           <span class="block text-xs text-slate-500">{{ b.items.join('、') || '（這次不發藥：床邊已有）' }}・{{ b.verifiedByName }} 核對</span>
         </span>

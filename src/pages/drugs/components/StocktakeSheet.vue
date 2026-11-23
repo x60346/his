@@ -131,7 +131,7 @@ const diffText = (n?: number) => (n === undefined ? '' : n > 0 ? `+${n}` : Strin
   <UQueryState :loading="loading && !s" :ready="!!s">
     <div v-if="s" class="print-area space-y-3">
       <header class="no-print flex flex-wrap items-start gap-2">
-        <div class="min-w-0 flex-1">
+        <div class="min-w-0 flex-[1_1_10rem]">
           <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ s.no }}<UBadge :tone="statusView[s.status].tone">{{ statusView[s.status].label }}</UBadge></h2>
           <p class="text-xs text-slate-500">{{ s.locationName }}・{{ s.scopeText }}・{{ s.createdByName }} {{ s.createdAt.slice(5, 16).replace('-', '/') }} 建立</p>
           <p v-if="s.submittedByName" class="text-xs text-slate-500">{{ s.submittedByName }} {{ s.submittedAt!.slice(5, 16).replace('-', '/') }} 送出</p>

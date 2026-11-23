@@ -37,7 +37,7 @@ async function onRefill(w: (typeof needs.value)[number]) {
       </div>
       <ul class="space-y-1 text-sm">
         <li v-for="r in w.rows" :key="r.drugId" class="flex flex-wrap items-center gap-2">
-          <span class="min-w-0 flex-1">{{ r.drugName }} <span class="text-xs text-slate-500">現有 {{ r.usable }}／基準 {{ r.par }} {{ r.unit }}</span></span>
+          <span class="min-w-0 flex-[1_1_10rem]">{{ r.drugName }} <span class="text-xs text-slate-500">現有 {{ r.usable }}／基準 {{ r.par }} {{ r.unit }}</span></span>
           <input v-model.number="qty[`${w.ward}|${r.drugId}`]" type="number" min="0" step="1" class="form-control w-20 text-right" :aria-label="`${w.locationName} ${r.drugName} 補充數量`" />
           <span v-if="err(w.ward, r.drugId)" class="w-full text-right text-xs text-red-600">{{ err(w.ward, r.drugId) }}</span>
         </li>

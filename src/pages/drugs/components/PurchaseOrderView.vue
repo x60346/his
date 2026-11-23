@@ -125,7 +125,7 @@ const md = (t?: string) => (t ? t.slice(5, 16).replace('-', '/') : '')
   <UQueryState :loading="!!orderId && loading && !po" :ready="!orderId || !!po">
     <div class="space-y-3">
       <header class="flex flex-wrap items-start gap-2">
-        <div class="min-w-0 flex-1">
+        <div class="min-w-0 flex-[1_1_10rem]">
           <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">
             {{ po?.no ?? '新採購單' }}<UBadge v-if="po" :tone="PURCHASE_STATUS[po.status].tone">{{ PURCHASE_STATUS[po.status].label }}</UBadge>
           </h2>

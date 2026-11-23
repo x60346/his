@@ -23,7 +23,7 @@ const total = computed(() => (list.value?.length ?? 0) + (imgs.value?.length ?? 
     </template>
     <ul class="divide-y divide-slate-100">
       <li v-for="r in list ?? []" :key="r.id" class="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
-        <span class="min-w-0 flex-1">
+        <span class="min-w-0 flex-[1_1_10rem]">
           <span class="font-medium text-slate-800">{{ r.patientName }}</span> <span class="tabular text-xs text-slate-500">{{ r.chartNo }}・{{ r.source === 'ipd' ? '住院' : '門診' }}</span>
           <UBadge v-if="r.hasCritical" tone="red" class="ml-1">危急值</UBadge>
           <UBadge v-if="r.corrections?.length" tone="yellow" class="ml-1">已更正</UBadge>
@@ -40,7 +40,7 @@ const total = computed(() => (list.value?.length ?? 0) + (imgs.value?.length ?? 
         <UButton size="sm" variant="danger" :loading="ack.pending.value" @click="ack.run(r.id)">已知悉</UButton>
       </li>
       <li v-for="r in imgs ?? []" :key="r.id" class="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
-        <span class="min-w-0 flex-1">
+        <span class="min-w-0 flex-[1_1_10rem]">
           <span class="font-medium text-slate-800">{{ r.patientName }}</span> <span class="tabular text-xs text-slate-500">{{ r.chartNo }}・{{ r.source === 'ipd' ? '住院' : '門診' }}</span>
           <UBadge v-if="r.significant" tone="red" class="ml-1">重要發現</UBadge>
           <UBadge v-if="r.addenda?.length" tone="yellow" class="ml-1">已補充</UBadge>

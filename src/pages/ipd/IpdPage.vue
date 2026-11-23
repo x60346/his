@@ -13,6 +13,7 @@ import PatientBanner from '@/components/PatientBanner.vue'
 import RiskBadges from '@/components/RiskBadges.vue'
 import PatientFlagsPanel from '@/components/PatientFlagsPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
+import BedsidePanel from '@/components/BedsidePanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
 import DischargePlanPanel from '@/components/DischargePlanPanel.vue'
 import PcaPanel from '@/components/PcaPanel.vue'
@@ -229,6 +230,7 @@ const tabs = computed(() => [
   { key: 'surgery', label: '手術' },
   { key: 'flags', label: '隔離與 DNR' },
   { key: 'lines', label: '管路' },
+  { key: 'bedside', label: '床邊處置' },
   { key: 'safety', label: '譫妄與約束' },
   { key: 'plan', label: '出院準備' },
   { key: 'pca', label: 'PCA' },
@@ -397,22 +399,22 @@ async function submitNote() {
       </PatientBanner>
       <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <FlaskConical class="h-4 w-4 shrink-0" />
-        <span class="min-w-0 flex-1"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
       </div>
       <div v-if="bloodReactions" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <Droplet class="h-4 w-4 shrink-0" />
-        <span class="min-w-0 flex-1"><b>輸血反應待確認：</b>{{ bloodReactions }} 筆，已停止輸血，請寫處置</span>
+        <span class="min-w-0 flex-[1_1_10rem]"><b>輸血反應待確認：</b>{{ bloodReactions }} 筆，已停止輸血，請寫處置</span>
         <UButton size="sm" variant="danger" @click="tab = 'blood'">查看</UButton>
       </div>
       <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <ScanLine class="h-4 w-4 shrink-0" />
-        <span class="min-w-0 flex-1"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
         <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
       </div>
       <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <ArrowRightLeft class="h-4 w-4" />
-        <span class="min-w-0 flex-1">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5) }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
+        <span class="min-w-0 flex-[1_1_10rem]">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5) }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
         <UButton v-if="!isAdmin" size="sm" variant="secondary" :loading="cancelTransfer.pending.value" @click="onCancelTransfer">撤回申請</UButton>
       </div>
       <div v-else-if="transfer?.status === 'declined'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
@@ -423,7 +425,7 @@ async function submitNote() {
         <div class="text-xs font-semibold text-slate-600">會診</div>
         <div v-for="c in consults.filter((x) => x.status !== 'cancelled')" :key="c.id" class="flex flex-wrap items-start gap-2">
           <UBadge :tone="c.status === 'answered' ? 'green' : c.urgent ? 'red' : 'yellow'">{{ c.status === 'answered' ? '已回覆' : c.urgent ? '急・待回覆' : '待回覆' }}</UBadge>
-          <div class="min-w-0 flex-1">
+          <div class="min-w-0 flex-[1_1_10rem]">
             <div class="text-slate-800">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }} <span class="text-xs text-slate-400">{{ c.requestedAt.slice(5) }}</span></div>
             <div v-if="c.status === 'answered'" class="text-xs text-slate-700">
               {{ c.answeredByName }} {{ c.answeredAt?.slice(5) }}：{{ c.findings }}／<b>建議</b> {{ c.recommendation }}
@@ -457,16 +459,16 @@ async function submitNote() {
 
         <!-- 會診醫師開了醫囑：本科醫師看過按「已閱」才消失（首頁待辦也有） -->
         <div v-for="o in abxRejected" :key="`abxr-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert">
-          <span class="min-w-0 flex-1"><b>抗生素審核未通過：</b>{{ o.content }}（{{ o.abxInfo!.text.split('・')[0] }}）—{{ lastReject(o)?.byName }}：{{ lastReject(o)?.text }}。請停藥、改藥，或寫說明申覆。</span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>抗生素審核未通過：</b>{{ o.content }}（{{ o.abxInfo!.text.split('・')[0] }}）—{{ lastReject(o)?.byName }}：{{ lastReject(o)?.text }}。請停藥、改藥，或寫說明申覆。</span>
           <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'appeal' }">申覆</UButton>
           <UButton v-if="!isAdmin" size="sm" variant="danger" @click="onStop(o)">停止</UButton>
         </div>
         <div v-for="o in abxExtend" :key="`abxe-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
-          <span class="min-w-0 flex-1"><b>抗生素核准天數{{ o.abxInfo!.extend === 'over' ? '已超過' : '快到了' }}：</b>{{ o.content }}，{{ o.abxInfo!.text }}。要續用請申請；不用了請停止。</span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>抗生素核准天數{{ o.abxInfo!.extend === 'over' ? '已超過' : '快到了' }}：</b>{{ o.content }}，{{ o.abxInfo!.text }}。要續用請申請；不用了請停止。</span>
           <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'extend' }">申請續用</UButton>
         </div>
         <div v-for="o in pharmQueried" :key="`pq-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
-          <span class="min-w-0 flex-1"><b>藥師疑義（{{ o.pharmQuery!.byName }} {{ o.pharmQuery!.at.slice(5) }}）：</b>{{ o.content }}—{{ o.pharmQuery!.text }}。回覆前暫停給藥。</span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>藥師疑義（{{ o.pharmQuery!.byName }} {{ o.pharmQuery!.at.slice(5) }}）：</b>{{ o.content }}—{{ o.pharmQuery!.text }}。回覆前暫停給藥。</span>
           <template v-if="!isAdmin">
             <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改</UButton>
             <UButton size="sm" variant="danger" @click="onStop(o)">停止</UButton>
@@ -474,14 +476,14 @@ async function submitNote() {
           </template>
         </div>
         <div v-for="o in tdmBad" :key="`tdm-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert">
-          <span class="min-w-0 flex-1"><b>Vancomycin {{ o.tdm!.status === 'high' ? '谷濃度過高' : '谷濃度過低' }}：</b>{{ o.content }}，{{ o.tdm!.text }}<template v-if="o.renalAlert">；{{ o.renalAlert }}</template>。修改劑量或頻率後要再抽一次。</span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>Vancomycin {{ o.tdm!.status === 'high' ? '谷濃度過高' : '谷濃度過低' }}：</b>{{ o.content }}，{{ o.tdm!.text }}<template v-if="o.renalAlert">；{{ o.renalAlert }}</template>。修改劑量或頻率後要再抽一次。</span>
           <template v-if="!isAdmin">
             <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改</UButton>
             <UButton size="sm" variant="danger" @click="onStop(o)">停止</UButton>
           </template>
         </div>
         <div v-for="x in abxAdvice" :key="`abxa-${x.advice.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900" role="status">
-          <span class="min-w-0 flex-1"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5) }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5) }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
           <template v-if="!isAdmin">
             <UButton size="sm" variant="danger" @click="onStop(x.order)">停止</UButton>
             <UButton v-if="canRevise(x.order)" size="sm" variant="secondary" @click="revising = x.order">修改</UButton>
@@ -489,7 +491,7 @@ async function submitNote() {
           </template>
         </div>
         <div v-if="consultUnseen.length" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-sm text-purple-900">
-          <span class="min-w-0 flex-1">會診醫師新開了 <b>{{ consultUnseen.length }}</b> 筆醫囑：{{ consultUnseen.map((o) => `${o.content}（${o.consultLabel?.replace('會診：', '')}）`).join('、') }}</span>
+          <span class="min-w-0 flex-[1_1_10rem]">會診醫師新開了 <b>{{ consultUnseen.length }}</b> 筆醫囑：{{ consultUnseen.map((o) => `${o.content}（${o.consultLabel?.replace('會診：', '')}）`).join('、') }}</span>
           <UButton size="sm" variant="secondary" :loading="ackConsult.pending.value" @click="adm && ackConsult.run(adm.id)">已閱</UButton>
         </div>
         <!-- 醫囑 -->
@@ -552,6 +554,7 @@ async function submitNote() {
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
+        <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" />
         <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
         <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
         <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />

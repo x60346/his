@@ -48,6 +48,7 @@ import * as recordAudit from './record-audit'
 import * as opdReview from './opd-review'
 import * as consent from './consent'
 import * as line from './line'
+import * as bedside from './bedside'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
 import * as delirium from './delirium'
@@ -144,6 +145,7 @@ export const opdReviewApi = overNetwork(opdReview)
 export const consentApi = overNetwork(consent)
 export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
+export const bedsideApi = overNetwork(bedside)
 export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)
 export const deliriumApi = overNetwork(delirium)
@@ -275,6 +277,7 @@ export * from './pcs-rules'
 export * from './record-audit-rules'
 export * from './opd-review-rules'
 export * from './consent-rules'
+export * from './bedside-rules'
 export * from './day-rules'
 export * from './line-rules'
 export * from './nutrition-rules'
@@ -362,6 +365,7 @@ export type { CutBoard, CutFilePreview, CutItem, CutMonth } from './claim-cut'
 export type { RecordAudit, RecordItem } from './record-audit'
 export type { OpdReviewBoard, OpdReviewView } from './opd-review'
 export type { ConsentView } from './consent'
+export type { BedsideView } from './bedside'
 export type { PreAuthView } from './preauth'
 export type { DrgEstimate } from './drg'
 export type { CodingItem } from './coding'

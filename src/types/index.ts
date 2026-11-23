@@ -1128,6 +1128,8 @@ export interface Procedure {
   icu?: boolean
   /** 急救計費項目（心肺復甦術）：急救紀錄開始 CPR 時自動開，醫囑不能另外開 */
   codeBlue?: boolean
+  /** 床邊侵入性處置費（腰椎穿刺、胸腔穿刺…）：床邊處置紀錄存檔時自動開，醫囑不能另外開 */
+  bedside?: BedsideKind
   /** 安寧共同照護費：安寧訪視時自動開，醫囑不能另外開 */
   palliative?: boolean
   /** 輸血計費項目（交叉試驗、各種血品）：住院帳單依血庫紀錄自動帶入，門診與醫囑都不能開 */
@@ -1646,6 +1648,8 @@ export interface IpdOrder {
   vent?: VentSetting
   /** 急救時自動開的（急救藥、CPR 處置費）：口頭醫囑記在帶領醫師名下，執行完成 */
   codeBlueId?: string
+  /** 床邊處置紀錄自動開的處置費 */
+  bedsideId?: string
   /** 隔離連動開的（哪一筆隔離、建議清單的哪一項） */
   isolationId?: string
   isoKey?: string
@@ -2779,6 +2783,10 @@ export interface Consent {
   examId?: string
   /** 侵入性處置（中心靜脈導管、胃造口）：綁住院中的那次住院和管路種類；放置時用掉（LineDevice.consentId） */
   lineKind?: LineKind
+  /** 床邊侵入性處置（腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管）：綁住院中的那次住院和處置種類（有側別的連側別）；執行時用掉（BedsideProcedure.consentId） */
+  bedsideKind?: BedsideKind
+  /** 紙本掃描（影像另存 db.consentScans；示範種子只有紀錄沒有影像） */
+  scan?: { at: string; by: string; pages: number }
   /** 手術同意書：簽的時候手術的側別（手術側別之後被更正，這張就不算，要重簽） */
   side?: SurgerySide
   /** 同意的項目（術式名稱等） */
@@ -2790,6 +2798,41 @@ export interface Consent {
   signedAt: string
   recordedBy: string
   revoked?: { at: string; by: string; reason: string }
+}
+
+/** 床邊侵入性處置：腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管置放 */
+export type BedsideKind = 'lp' | 'thoracentesis' | 'paracentesis' | 'chestTube'
+/**
+ * 床邊侵入性處置紀錄（醫師）：適應症、處置前暫停確認（病人身分、部位與側別）、出血風險評估、結果（外觀、引流量、開口壓）、併發症。
+ * 要有這次住院、這種處置（有側別的同側）還沒用掉的同意書，緊急才可以選原因。存檔時自動開一筆已執行的處置醫令（帳單照醫令帶）
+ */
+export interface BedsideProcedure {
+  id: string
+  admissionId: string
+  patientId: string
+  kind: BedsideKind
+  side?: 'left' | 'right'
+  indication: string
+  /** 處置前暫停確認的時間（病人身分、部位與側別都確認過才能存） */
+  timeOutAt: string
+  /** 出血風險（血小板低、抗凝血或抗血小板藥）：有風險時醫師寫的評估 */
+  bleedingRisks?: string[]
+  bleedingNote?: string
+  performedAt: string
+  performedBy: string
+  /** 外觀（例：淡黃清澈） */
+  appearance: string
+  /** 引流量 mL（胸腔、腹腔穿刺） */
+  volumeMl?: number
+  /** 引流量超過建議上限的原因 */
+  volumeNote?: string
+  /** 開口壓 cmH2O（腰椎穿刺） */
+  openingPressure?: number
+  complication: string
+  consentId?: string
+  consentWaiver?: string
+  orderId: string
+  recordedAt: string
 }
 
 export interface OpdRecordReview {

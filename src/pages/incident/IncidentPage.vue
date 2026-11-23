@@ -94,7 +94,7 @@ const sacOptions = [1, 2, 3, 4].map((v) => ({ value: v, label: SAC_LABEL[v as 1 
         <li v-for="x in mine" :key="x.id" class="flex flex-wrap items-center gap-2 px-4 py-2">
           <span class="tabular text-xs text-slate-500">{{ x.no }}</span><UBadge :tone="STATUS_TONE[x.status]">{{ x.statusLabel }}</UBadge>
           <b>{{ x.categoryLabel }}</b><span class="text-xs text-slate-600">{{ x.harmLabel }}</span><span v-if="x.anonymous" class="text-xs text-slate-500">（匿名）</span>
-          <span class="min-w-0 flex-1 truncate text-xs text-slate-600">{{ x.description }}</span>
+          <span class="min-w-0 flex-[1_1_10rem] truncate text-xs text-slate-600">{{ x.description }}</span>
           <span v-if="x.review?.actions && x.status === 'closed'" class="w-full text-xs text-emerald-800">改善措施：{{ x.review.actions }}</span>
         </li>
       </ul>

@@ -536,6 +536,12 @@ const procedureBase: Procedure[] = [
   // 磁振造影（點數為展示用近似值）：排程時看病人身上的植入物（MRI 不安全的要放射科醫師確認）
   { id: 'P067', code: '33084B', name: '磁振造影（頭部）', category: '影像', points: 6500, selfPrice: 12000, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
+  // 床邊侵入性處置：床邊處置紀錄存檔時自動開（醫囑不能另外開）
+  { id: 'P068', code: '47013C', name: '腰椎穿刺', category: '處置', points: 600, selfPrice: 1500, bedside: 'lp', active: true },
+  { id: 'P069', code: '47005C', name: '胸腔穿刺', category: '處置', points: 560, selfPrice: 1500, bedside: 'thoracentesis', active: true },
+  { id: 'P070', code: '47006C', name: '腹腔穿刺', category: '處置', points: 560, selfPrice: 1500, bedside: 'paracentesis', active: true },
+  { id: 'P071', code: '47015B', name: '胸管置放', category: '處置', points: 2100, selfPrice: 5000, bedside: 'chestTube', active: true },
+
   { id: 'P056', code: 'P4401B', name: '安寧共同照護費', category: '處置', points: 1500, selfPrice: 2000, palliative: true, active: true },
 ]
 

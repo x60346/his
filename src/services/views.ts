@@ -55,6 +55,7 @@ export const usable = {
     if (p.dailyFee) fail(`${p.name}是住院每日計費項目，出院結帳時自動帶入，不能另外開立`)
     // 交叉試驗、血品：備血單由血庫配血、發血，住院帳單依血庫紀錄帶入
     if (p.palliative) fail(`${p.name}是安寧共同照護計費項目：安寧訪視時自動帶入`)
+    if (p.bedside) fail(`${p.name}是床邊處置計費項目：在住院醫囑「床邊處置」分頁登錄處置時自動帶入`)
     if (p.codeBlue) fail(`${p.name}是急救計費項目：急救紀錄開始 CPR 時自動帶入`)
     if (p.er) fail(`${p.name}是急診計費項目，急診就醫依紀錄自動帶入`)
     if (p.surgery || p.anesthesiaFee) fail(`${p.name}是手術或麻醉計費項目：請在住院醫囑「手術」分頁申請手術，做完依手術室紀錄自動列入帳單`)

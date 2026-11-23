@@ -45,7 +45,7 @@ const md = (s?: string) => (s ? `${s.slice(5, 10).replace('-', '/')} ${s.slice(1
 <template>
   <div class="space-y-4 p-4">
     <div v-if="unacked.length || queried.length" class="flex flex-wrap items-center gap-3 rounded-md border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm text-cyan-900">
-      <span class="min-w-0 flex-1">
+      <span class="min-w-0 flex-[1_1_10rem]">
         <template v-if="unacked.length">有 <b>{{ unacked.length }}</b> 項醫囑異動尚未核對</template>
         <template v-if="queried.length">{{ unacked.length ? '；' : '' }}<b class="text-amber-800">{{ queried.length }}</b> 項有疑問、待醫師回覆（執行暫停）</template>
       </span>

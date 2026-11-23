@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -3531,7 +3531,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   {
     const done = visits.filter((v) => v.date === T && !v.er && ['charged', 'dispensed'].includes(v.status)).map((v) => ({ v, e: encounters.find((x) => x.visitId === v.id && x.status === 'completed') })).filter((x) => x.e)
     const future = (pid: string, dept: string) => visits.find((x) => x.patientId === pid && x.deptId === dept && x.date > T && x.status === 'registered')
-    const booked = done.find((x) => future(x.v.patientId, x.v.deptId))
+    let booked = done.find((x) => future(x.v.patientId, x.v.deptId))
+    // 有些日子今天看完診的人剛好都沒有之後的掛號：替第一位補一筆同科之後的預約（套用那一科之後某一診的診次）
+    if (!booked) {
+      for (const d of done) {
+        const tpl = visits.find((x) => x.deptId === d.v.deptId && x.date > T && x.status === 'registered' && !x.er)
+        if (!tpl) continue
+        const seq = Math.max(0, ...visits.filter((x) => x.sessionId === tpl.sessionId).map((x) => x.seqNo)) + 1
+        visits.push({ id: 'V-FA-1', date: tpl.date, sessionId: tpl.sessionId, deptId: tpl.deptId, doctorId: tpl.doctorId, patientId: d.v.patientId, seqNo: seq, identityCode: d.v.identityCode, caseType: d.v.caseType, cardSeq: tpl.cardSeq, status: 'registered', firstVisit: false, preventItems: [], createdAt: notFuture(addMinutes(d.e!.completedAt ?? nowStr, 10), 5) })
+        booked = d
+        break
+      }
+    }
     const rest = done.filter((x) => x !== booked)
     const at = (v: Visit) => encounters.find((x) => x.visitId === v.id)?.completedAt ?? nowStr
     const mk = (id: string, v: Visit, x: Partial<FollowUpAdvice> & { weeks: number; reason: string }): FollowUpAdvice => ({ id, visitId: v.id, patientId: v.patientId, doctorOf: v.doctorId, deptId: v.deptId, targetDate: addDays(v.date, x.weeks * 7), at: at(v), status: 'pending', ...x })
@@ -3884,10 +3895,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const oj = o2?.items.find((x) => !x.supplementOf && x.claim > 100)
     if (o2 && oj) cut(o2, oj, 2, '一般門診診察費（部分）', 100, '0501', '病歷記載不完整', `${o1?.month ?? cm1}-20 10:00`, { reply: { action: 'accept', text: '', by: docUser(oj.doctorId), at: `${o1?.month ?? cm1}-22 15:00` } })
     // 申復後仍維持核減（12 天前結果回來）：還在 60 天內，申報組可以申請爭議審議
-    const ok4 = o2?.items.find((x) => !x.supplementOf && x !== oj && lineOf(x))
-    if (o2 && ok4) {
+    // 有些月份的門診沒有處置（只有診察與藥）：往更早的月份找；都沒有就核減部分診察費
+    const s4 = subs('opd').slice(1).find((s) => s.items.some((x) => !x.supplementOf && x !== oj && lineOf(x)))
+    const ok4 = s4?.items.find((x) => !x.supplementOf && x !== oj && lineOf(x)) ?? o2?.items.find((x) => !x.supplementOf && x !== oj && x.claim > 100)
+    const sub4 = s4 ?? o2
+    if (sub4 && ok4) {
       const m = o1?.month ?? cm1
-      cut(o2, ok4, 4, lineOf(ok4)!.name, lineOf(ok4)!.amount, '0101', '病歷看不出這項處置的必要', `${m}-18 10:00`, {
+      const ln = lineOf(ok4)
+      cut(sub4, ok4, 4, ln ? ln.name : '一般門診診察費（部分）', ln ? ln.amount : 100, '0101', ln ? '病歷看不出這項處置的必要' : '病歷看不出需要這次回診', `${m}-18 10:00`, {
         reply: { action: 'appeal', text: '門診病歷有記載當時的症狀與理學檢查，這項處置是依病情需要做的', by: docUser(ok4.doctorId), at: `${m}-19 15:00` },
         result: { outcome: 'upheld', points: 0, by: 'U402', at: `${addDays(T, -12)} 10:00` },
       })
@@ -3964,6 +3979,24 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     consents.push(c)
     l.consentId = c.id
   }
+
+  // 床邊處置（示範）：住院中的肺炎病人昨天下午右側胸腔穿刺（肋膜積液），放置前主治說明、簽同意書（執行時用掉）
+  const bedsideProcedures: BedsideProcedure[] = []
+  {
+    const pn = admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.diagnosis.startsWith('J18'))
+    const doc = pn && users.find((u) => u.doctorId === pn.doctorId)
+    const at = `${addDays(T, -1)} 15:20`
+    if (pn && doc && pn.admittedAt && pn.admittedAt < addMinutes(at, -60)) {
+      const cat = addMinutes(at, -40)
+      const d = cat.slice(0, 10).replace(/-/g, '')
+      const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
+      consents.push({ id: 'CN-SEED-BP1', no: `CN${d}${String(n).padStart(3, '0')}`, kind: 'procedure', patientId: pn.patientId, admissionId: pn.id, bedsideKind: 'thoracentesis', side: 'right', title: '胸腔穿刺（右側）', explainedBy: doc.id, explanation: '說明抽肋膜積液的目的（診斷、緩解喘）、氣胸、出血、感染與復張性肺水腫風險', signer: { name: patients.find((p) => p.id === pn.patientId)?.name ?? '', relation: '本人' }, signedAt: cat, recordedBy: doc.id })
+      ipdOrders.push({ id: 'IO-BP-1', admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P069', content: '胸腔穿刺（右側）（床邊處置）', startAt: at, stopAt: at, status: 'done', doctorId: pn.doctorId, createdAt: addMinutes(at, 30), ackAt: addMinutes(at, 30), ackBy: doc.id, bedsideId: 'BP-SEED-1' })
+      bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30) })
+    }
+  }
+  // 同意書紙本：今天以前簽的都已掃描（示範資料只有掃描紀錄、沒有影像）；今天簽的還沒掃
+  for (const c of consents.filter((x) => x.signedAt.slice(0, 10) < T)) c.scan = { at: notFuture(addMinutes(c.signedAt, 120), 5), by: 'U201', pages: c.kind === 'surgery' ? 2 : 1 }
 
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
@@ -4147,6 +4180,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     claimCuts,
     opdReviews: [] as OpdRecordReview[],
     consents,
+    consentScans: [],
+    bedsideProcedures,
     preAuths,
     implantCardPrints,
     analyzerResults,

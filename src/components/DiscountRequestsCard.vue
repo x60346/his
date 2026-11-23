@@ -25,7 +25,7 @@ async function onReject(reason: string) {
     </template>
     <ul class="divide-y divide-slate-100">
       <li v-for="r in list" :key="r.id" class="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
-        <span class="min-w-0 flex-1">
+        <span class="min-w-0 flex-[1_1_10rem]">
           <span class="font-medium text-slate-800">{{ r.patientName }}</span> <span class="tabular text-xs text-slate-500">{{ r.chartNo }}</span>
           <span class="block text-xs text-slate-600">{{ r.ruleName }} <b class="tabular">−{{ r.amount }} 元</b><template v-if="r.reason">・{{ r.reason }}</template>・櫃台 {{ r.cashierName }} {{ r.requestedAt.slice(11, 16) }} 送簽</span>
         </span>

@@ -13,6 +13,8 @@ export interface RecordInput {
   surgeries: { no: string; recordAt?: string }[]
   death?: { manner: string; certAt?: string }
   consults: { dept: string; answeredAt?: string; cancelled?: boolean }[]
+  /** 這次住院有效的同意書：紙本掃描了沒 */
+  consents?: { no: string; scannedAt?: string }[]
   /** 住院期間缺病程紀錄的日期、最後一次補寫的時間 */
   progress?: { gaps: string[]; lastLateAt?: string }
 }
@@ -41,13 +43,15 @@ export function recordGaps(x: RecordInput): string[] {
   const cs = x.consults.filter((c) => !c.cancelled && !c.answeredAt)
   if (cs.length) out.push(`會診未回覆：${cs.map((c) => c.dept).join('、')}`)
   if (x.progress?.gaps.length) out.push(progressGapText(x.progress.gaps))
+  const un = (x.consents ?? []).filter((c) => !c.scannedAt)
+  if (un.length) out.push(`同意書紙本未掃描：${un.map((c) => c.no).join('、')}`)
   return out
 }
 
 /** 完成時間：完整的話＝最後補齊的那一項（出院那時就齊了＝出院時間）；不完整＝undefined */
 export function recordCompletedAt(x: RecordInput): string | undefined {
   if (recordGaps(x).length) return undefined
-  const ts = [x.dischargedAt, x.summary?.signedAt, ...x.surgeries.map((s) => s.recordAt), x.death?.manner === 'natural' ? x.death.certAt : undefined, ...x.consults.filter((c) => !c.cancelled).map((c) => c.answeredAt), x.progress?.lastLateAt].filter((t): t is string => !!t)
+  const ts = [x.dischargedAt, x.summary?.signedAt, ...x.surgeries.map((s) => s.recordAt), x.death?.manner === 'natural' ? x.death.certAt : undefined, ...x.consults.filter((c) => !c.cancelled).map((c) => c.answeredAt), x.progress?.lastLateAt, ...(x.consents ?? []).map((c) => c.scannedAt)].filter((t): t is string => !!t)
   return ts.sort().at(-1)
 }
 

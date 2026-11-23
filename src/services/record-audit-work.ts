@@ -23,6 +23,7 @@ export function recordInputOf(a: Admission): RecordInput {
     ...(a.dischargeSummary ? { summary: { ...(a.dischargeSummary.signedAt ? { signedAt: a.dischargeSummary.signedAt } : {}) } } : {}),
     surgeries: db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').map((s) => ({ no: s.no, ...(s.record ? { recordAt: s.record.at } : {}) })),
     ...(a.death ? { death: { manner: a.death.manner, ...(a.death.cert ? { certAt: a.death.cert.issuedAt } : {}) } } : {}),
+    consents: db.consents.filter((c) => c.admissionId === a.id && !c.revoked).map((c) => ({ no: c.no, ...(c.scan ? { scannedAt: c.scan.at } : {}) })),
     consults: db.consults.filter((c) => c.admissionId === a.id).map((c) => ({ dept: nameOf.dept(c.toDeptId), ...(c.answeredAt ? { answeredAt: c.answeredAt } : {}), ...(c.status === 'cancelled' ? { cancelled: true } : {}) })),
   }
 }

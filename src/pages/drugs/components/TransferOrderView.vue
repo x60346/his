@@ -181,7 +181,7 @@ const isOpenReturn = computed(() => tr.value?.kind === 'return' && (tr.value.sta
       <!-- 既有的單 -->
       <template v-else-if="tr">
         <header class="flex flex-wrap items-start gap-2">
-          <div class="min-w-0 flex-1">
+          <div class="min-w-0 flex-[1_1_10rem]">
             <h2 class="tabular flex items-center gap-2 text-lg font-bold text-slate-800">{{ tr.no }}<UBadge v-if="tr.kind === 'return'" tone="gray">退回藥庫</UBadge><UBadge :tone="transferStatusOf(tr).tone">{{ transferStatusOf(tr).label }}</UBadge></h2>
             <template v-if="tr.kind === 'return'">
               <p class="text-xs text-slate-500">{{ tr.fromName }} → {{ tr.toName }}・{{ tr.requestedByName }} {{ md(tr.requestedAt) }} 申請退回・原因：{{ tr.returnReason }}</p>

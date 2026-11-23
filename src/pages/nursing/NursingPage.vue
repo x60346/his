@@ -23,6 +23,7 @@ import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import WardFlagsPanel from './components/WardFlagsPanel.vue'
 import WardLinesPanel from './components/WardLinesPanel.vue'
 import LinePanel from '@/components/LinePanel.vue'
+import BedsidePanel from '@/components/BedsidePanel.vue'
 import NutritionPanel from '@/components/NutritionPanel.vue'
 import TubeFeedPanel from '@/components/TubeFeedPanel.vue'
 import SafetyPanel from '@/components/SafetyPanel.vue'
@@ -153,6 +154,7 @@ const tabs = computed(() =>
         ...(adm.value.death ? [{ key: 'death', label: '死亡・遺體護理', count: adm.value.death.care ? undefined : 1 }] : []),
         { key: 'risk', label: '風險評估', count: adm.value.riskOverdue + adm.value.riskDue || undefined },
         { key: 'lines', label: '管路', count: adm.value.lineTodo || undefined },
+        { key: 'bedside', label: '床邊處置' },
         { key: 'wounds', label: '傷口', count: adm.value.woundTodo || undefined },
         { key: 'infection', label: '感染通報' },
         { key: 'adr', label: '不良反應' },
@@ -329,6 +331,7 @@ const wardTotals = computed(() => ({
           <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
           <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
+          <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" />
           <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
           <TubeFeedPanel v-else-if="tab === 'tube'" :admission-id="adm.id" />
           <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />

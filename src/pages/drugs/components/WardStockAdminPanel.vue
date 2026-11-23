@@ -59,7 +59,7 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
         </template>
         <ul class="divide-y divide-slate-100 text-sm">
           <li v-for="r in w.rows" :key="r.drugId" class="flex flex-wrap items-center gap-2 px-4 py-1.5">
-            <span class="min-w-0 flex-1">
+            <span class="min-w-0 flex-[1_1_10rem]">
               <span class="font-medium text-slate-800">{{ r.drugName }}</span>
               <UBadge v-if="r.controlled" tone="red" class="ml-1">管制 {{ r.controlled }} 級</UBadge>
               <UBadge v-if="r.below" tone="yellow" class="ml-1">低於基準</UBadge>

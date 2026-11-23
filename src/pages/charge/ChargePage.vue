@@ -260,7 +260,7 @@ const identityOpen = ref(false)
         <div v-if="addonDue?.length" class="border-b border-amber-100 bg-amber-50/60 px-3 py-2">
           <div class="mb-1 text-xs font-semibold text-amber-900">門診加做待補收（自費）{{ addonDue.length }} 筆</div>
           <div v-for="a in addonDue" :key="`${a.encounterId}:${a.procId}`" class="flex flex-wrap items-center gap-2 py-1 text-sm">
-            <span class="min-w-0 flex-1 truncate">{{ a.patientName }} <span class="text-xs text-slate-500">{{ a.procName }}・{{ a.doctorName }} {{ a.at.slice(11) }}</span></span>
+            <span class="min-w-0 flex-[1_1_10rem] truncate">{{ a.patientName }} <span class="text-xs text-slate-500">{{ a.procName }}・{{ a.doctorName }} {{ a.at.slice(11) }}</span></span>
             <UButton size="sm" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'cash', received: a.amount })">現金 ${{ a.amount }}</UButton>
             <UButton size="sm" variant="secondary" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'card' })">刷卡</UButton>
           </div>
@@ -303,7 +303,7 @@ const identityOpen = ref(false)
               <span class="tabular text-slate-500">{{ d.date.slice(5).replace('-', '/') }}</span>
               <span class="text-slate-700">{{ d.deptName }}</span>
               <span class="tabular text-xs text-slate-400">{{ d.receiptNo }}</span>
-              <span class="min-w-0 flex-1 truncate text-xs text-slate-500">{{ d.oweReason }}<template v-if="d.repayments.length">・已收回 {{ d.repayments.length }} 次</template></span>
+              <span class="min-w-0 flex-[1_1_10rem] truncate text-xs text-slate-500">{{ d.oweReason }}<template v-if="d.repayments.length">・已收回 {{ d.repayments.length }} 次</template></span>
               <span class="tabular font-semibold text-amber-900">尚欠 ${{ d.outstanding.toLocaleString() }}</span>
               <UButton size="sm" variant="secondary" @click="openRepay(d)">收回</UButton>
             </li>
@@ -413,7 +413,7 @@ const identityOpen = ref(false)
           <div v-if="receipt.encounterId" class="no-print rounded-lg border border-slate-200 bg-white px-4 py-3"><CertificatePanel :encounter-id="receipt.encounterId" /></div>
           <div v-if="receipt.pendingRefund" class="no-print flex flex-wrap items-center gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
             <Undo2 class="h-4 w-4 shrink-0" />
-            <span class="min-w-0 flex-1">
+            <span class="min-w-0 flex-[1_1_10rem]">
               <b>待退費</b>：{{ receipt.pendingRefund.items.join('、') }}
               <span class="block text-xs text-red-800">用病人實際拿走的藥重算：應付 {{ receipt.pendingRefund.patientTotalAfter.toLocaleString() }} 元<template v-if="receipt.pendingRefund.nhiPoints">、申報點數 −{{ receipt.pendingRefund.nhiPoints }}</template></span>
             </span>

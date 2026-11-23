@@ -81,7 +81,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
         <UCard v-else title="Naranjo 因果關係量表" :subtitle="`目前 ${score} 分：${CAUSALITY_LABEL[causality]}（≥9 確定、5–8 很可能、1–4 可能、≤0 存疑）`">
           <ol class="space-y-1.5 text-sm">
             <li v-for="(q, i) in NARANJO" :key="i" class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span class="min-w-0 flex-1">{{ i + 1 }}. {{ q.q }}<span class="ml-1 text-xs text-slate-400">（是 {{ q.yes > 0 ? '+' : '' }}{{ q.yes }}／否 {{ q.no > 0 ? '+' : '' }}{{ q.no }}）</span></span>
+              <span class="min-w-0 flex-[1_1_10rem]">{{ i + 1 }}. {{ q.q }}<span class="ml-1 text-xs text-slate-400">（是 {{ q.yes > 0 ? '+' : '' }}{{ q.yes }}／否 {{ q.no > 0 ? '+' : '' }}{{ q.no }}）</span></span>
               <span class="flex gap-2">
                 <label v-for="a in ANS" :key="a.key" class="flex items-center gap-1 text-xs"><input v-model="answers[i]" type="radio" :name="`nar-${i}`" :value="a.key" class="h-3.5 w-3.5" />{{ a.label }}</label>
               </span>

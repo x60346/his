@@ -41,3 +41,17 @@ export const consentMissing = (anesthesia: string, have: Pick<Consent, 'kind' | 
   consentsForSurgery(anesthesia).filter((k) => !have.some((c) => c.kind === k && consentValid(c) && (k !== 'surgery' || !side || !c.side || c.side === side)))
 /** 有效但側別和手術不符的手術同意書（手術側別被更正過） */
 export const consentSideMismatch = (have: Pick<Consent, 'kind' | 'revoked' | 'side'>[], side: string) => have.find((c) => c.kind === 'surgery' && consentValid(c) && c.side && c.side !== side)
+
+// ── 紙本掃描：簽好的紙本同意書拍照或掃描附檔（JPEG／PNG，瀏覽器先縮圖），一張同意書最多 3 頁 ──
+export const CONSENT_SCAN_MAX_PAGES = 3
+/** 每頁 data URL 最多幾個字元（縮圖後的 JPEG 約 100–300 KB） */
+export const CONSENT_SCAN_MAX_CHARS = 600_000
+export function checkScanPages(pages: string[]): string | undefined {
+  if (!pages.length) return '請選掃描檔'
+  if (pages.length > CONSENT_SCAN_MAX_PAGES) return `最多 ${CONSENT_SCAN_MAX_PAGES} 頁`
+  if (pages.some((p) => !/^data:image\/(jpeg|png);base64,/.test(p))) return '只收 JPEG 或 PNG 影像'
+  if (pages.some((p) => p.length > CONSENT_SCAN_MAX_CHARS)) return '影像太大：請重新拍或掃描（每頁縮圖後要小於約 450 KB）'
+  return undefined
+}
+/** 還沒掃描紙本的有效同意書（撤回的也要掃，撤回的那張紙也要留；這裡只要有效的） */
+export const consentUnscanned = (c: Pick<Consent, 'scan' | 'revoked'>) => !c.scan && !c.revoked

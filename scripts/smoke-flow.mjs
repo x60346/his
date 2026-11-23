@@ -58,13 +58,13 @@ try {
     if (key === 'consent' && !input.notNeeded) {
       const sg = dbm.db.surgeries.find((x) => x.id === id)
       if (sg) for (const kind of api.consentMissing(sg.anesthesia, dbm.db.consents.filter((c) => c.surgeryId === sg.id))) {
-        dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId: sg.patientId, admissionId: sg.admissionId, surgeryId: sg.id, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101' })
+        dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId: sg.patientId, admissionId: sg.admissionId, surgeryId: sg.id, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101', scan: { at: dateUtil.now(), by: 'U201', pages: 1 } })
       }
     }
     return prepRaw.markPrep(id, key, input)
   }
   // 輸血同意書、檢查同意書：開始輸血、確認檢查前準備的「同意書」前自動補一張（測試輔助）；要測把關的用 bloodRaw／examRaw
-  const tconsent = (kind, patientId, extra) => dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId, ...extra, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101' })
+  const tconsent = (kind, patientId, extra) => dbm.db.consents.push({ id: `CN-T-${dbm.db.consents.length + 1}-${kind}`, no: `CN-T-${dbm.db.consents.length + 1}`, kind, patientId, ...extra, title: '測試', explainedBy: 'U101', explanation: '測試', signer: { name: '測試', relation: '本人' }, signedAt: dateUtil.now(), recordedBy: 'U101', scan: { at: dateUtil.now(), by: 'U201', pages: 1 } })
   const bloodRaw = { startTransfusion: api.bloodApi.startTransfusion }
   api.bloodApi.startTransfusion = async (requestId, unitId, input) => {
     const r = dbm.db.bloodRequests.find((x) => x.id === requestId)
@@ -1043,9 +1043,11 @@ try {
 
   // 展示資料本身不可違反用藥安全
   const { checkAllergies } = await load('/src/services/allergy.ts')
+  // 不良反應評估後才加的過敏（assessment.allergyAdded）：之前的處方當時還不知道，不算違規
   const unsafe = dbm.db.encounters.filter((e) => {
     const p = dbm.db.patients.find((x) => x.id === e.patientId)
-    return checkAllergies(p.allergies, e.medications.map((m) => dbm.db.drugs.find((d) => d.id === m.drugId))).length > 0
+    const known = p.allergies.filter((al) => !dbm.db.adrReports.some((r) => r.patientId === p.id && r.assessment?.allergyAdded === al && e.date < r.onsetAt.slice(0, 10)))
+    return checkAllergies(known, e.medications.map((m) => dbm.db.drugs.find((d) => d.id === m.drugId))).length > 0
   })
   ok(unsafe.length === 0, `種子病歷中沒有開立病人過敏的藥（違規 ${unsafe.length} 筆）`)
   const billing = await load('/src/services/billing.ts')
@@ -18905,6 +18907,129 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await R.addLateProgressNote({ admissionId: adm.id, forDate: y, ...soap })
     miss = await R.myMissingProgressNotes()
     ok(!miss.find((x) => x.admissionId === adm.id)?.dates.includes(y), '補寫後：不再算缺')
+  }
+  // 床邊侵入性處置：腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管；要同意書（同側）、處置前暫停、出血風險評估；自動開處置醫令
+  console.log('\n[床邊處置]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const B = api.bedsideApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.bedsideTitle('thoracentesis', 'right') === '胸腔穿刺（右側）' && api.bedsideTitle('lp') === '腰椎穿刺', '規則：處置名稱帶側別')
+    ok(api.bleedingRisks({ value: '32', at: '2026-11-20 08:00' }, [{ name: 'Warfarin 5mg', generic: 'Warfarin' }, { name: 'Aspirin', generic: 'Acetylsalicylic acid' }]).length === 2 && !api.bleedingRisks({ value: '180', at: '2026-11-20 08:00' }, []).length, '規則：血小板 < 50、抗凝血藥算出血風險（Aspirin 不算）')
+    const t0 = dateUtil.now()
+    const good = { kind: 'thoracentesis', side: 'left', indication: '肋膜積液', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '淡黃清澈', volumeMl: 600, complication: '無' }
+    ok(!Object.keys(api.checkBedsideInput(good, t0)).length, '規則：欄位齊全沒錯')
+    const e1 = api.checkBedsideInput({ ...good, side: '', timeOut: { identity: true }, volumeMl: 1800 }, t0, ['血小板 30'])
+    ok(e1.side && e1.timeOut && e1.volumeNote && e1.bleedingNote, `規則：側別、處置前暫停、超過 1500 mL 寫原因、出血風險寫評估（${Object.keys(e1).join('、')}）`)
+    ok(api.checkBedsideInput({ ...good, kind: 'lp', side: undefined, volumeMl: undefined, openingPressure: 80 }, t0).openingPressure, '規則：開口壓 0–60')
+    // 種子：肺炎病人昨天右側胸腔穿刺，用掉同意書、有處置費
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    const spc = db().consents.find((c) => c.id === sp?.consentId)
+    ok(sp && sp.side === 'right' && spc?.bedsideKind === 'thoracentesis' && spc.side === 'right' && spc.signedAt < sp.performedAt && db().ipdOrders.find((o) => o.id === sp.orderId)?.procId === 'P069', '種子：右側胸腔穿刺、事前簽的同側同意書、處置醫令')
+    const pnAdm = db().admissions.find((a) => a.id === sp.admissionId)
+    const W49 = await load('/src/services/ipd-bill.ts')
+    const bill = W49.ipdBillOf(pnAdm)
+    ok(bill.lines.some((l) => l.name.includes('胸腔穿刺')), '住院帳單帶入胸腔穿刺')
+    // 一般醫囑不能開、選單不列
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
+    const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(doc)
+    ok((await errOf(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P068', content: '' }))).includes('床邊處置'), '一般醫囑開腰椎穿刺費 → 擋')
+    ok(!(await api.masterApi.listProcedures({ keyword: '穿刺' })).length, '醫令選單不列床邊處置費')
+    // 沒同意書擋；護理師不能登錄
+    const base = { ...good, admissionId: adm.id }
+    ok((await errOf(() => B.recordBedside(base))).includes('同意書'), '沒同意書 → 擋')
+    await as('nurse01')
+    ok((await errOf(() => B.recordBedside(base))) !== '', '護理師不能登錄')
+    ok((await B.listBedside(adm.id)).items.length === 0, '護理師看得到（唯讀）')
+    await as(doc)
+    const sig = { patientId: adm.patientId, kind: 'procedure', bedsideKind: 'thoracentesis', title: '胸腔穿刺（左側）', explanation: '說明風險', signerName: 'x', relation: '本人' }
+    ok((await fieldsOf(() => api.consentApi.recordConsent(sig))).side, '胸腔穿刺同意書要選側別')
+    const c = await api.consentApi.recordConsent({ ...sig, side: 'left' })
+    ok(c.bedsideKind === 'thoracentesis' && c.side === 'left' && c.admissionId === adm.id, '記錄左側胸腔穿刺同意書')
+    ok((await errOf(() => api.consentApi.recordConsent({ ...sig, side: 'left' }))).includes('還沒用'), '同一種同側還沒用的只能一張')
+    let tg = await api.consentApi.consentTargets(adm.patientId)
+    ok(tg.admission.bedside.find((b) => b.kind === 'thoracentesis').ready.join() === 'left', '同意書總覽：左側已簽')
+    ok((await errOf(() => B.recordBedside({ ...base, side: 'right' }))).includes('側別要一致'), '右側沒有同意書（簽的是左側）→ 擋')
+    ok((await fieldsOf(() => B.recordBedside({ ...base, timeOut: { identity: true, site: false } }))).timeOut, '處置前暫停沒確認部位 → 擋')
+    const p = await B.recordBedside(base)
+    const o = db().ipdOrders.find((x) => x.id === p.orderId)
+    ok(p.consentNo === c.no && o?.status === 'done' && o.procId === 'P069' && o.bedsideId === p.id && db().auditLogs[0].action === '床邊處置', '登錄：用掉同意書、開已執行的處置醫令、稽核')
+    ok((await errOf(() => B.recordBedside(base))).includes('同意書'), '同意書用掉了：再做一次要重簽')
+    ok((await errOf(() => api.consentApi.revokeConsent(c.id, '不做了'))).includes('執行'), '執行過的同意書不能撤回')
+    ok((await api.consentApi.listConsents(adm.patientId)).find((x) => x.id === c.id)?.bedsideUsed, '同意書清單標已執行')
+    // 緊急：選原因可以不要同意書（張力性氣胸放胸管）
+    ok((await fieldsOf(() => B.recordBedside({ ...base, kind: 'chestTube', side: 'right', consentWaiver: '隨便' }))).consentWaiver, '原因要從清單選')
+    const ct = await B.recordBedside({ ...base, kind: 'chestTube', side: 'right', appearance: '氣體（無液體）', volumeMl: 0, consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0] })
+    ok(ct.consentWaiver && !ct.consentId && db().auditLogs[0].detail.includes('無同意書'), '緊急：記原因、稽核')
+    // 出血風險：使用中的 Warfarin → 要寫評估
+    db().ipdOrders.push({ id: 'IO-T-WARF', admissionId: adm.id, type: 'long', category: 'medication', drugId: 'M021', content: 'Warfarin 5mg', dose: 1, freq: 'QD', route: 'PO', startAt: t0, status: 'active', doctorId: adm.doctorId, createdAt: t0 })
+    ok((await B.listBedside(adm.id)).risks.some((r) => r.includes('Warfarin')), '清單列出血風險')
+    await api.consentApi.recordConsent({ ...sig, bedsideKind: 'lp', side: undefined, title: '腰椎穿刺' })
+    const lp = { ...base, kind: 'lp', side: undefined, volumeMl: undefined, appearance: '清澈無色', openingPressure: 18 }
+    ok((await fieldsOf(() => B.recordBedside(lp))).bleedingNote, '有出血風險沒寫評估 → 擋')
+    const lpr = await B.recordBedside({ ...lp, bleedingNote: 'Warfarin 已停 5 天，INR 1.1' })
+    ok(lpr.bleedingRisks?.length && lpr.openingPressure === 18 && lpr.volumeMl === undefined, '腰椎穿刺：記出血風險評估、開口壓')
+    const list = await B.listBedside(adm.id)
+    ok(list.items.length === 3 && list.items[0].performedAt >= list.items[2].performedAt, '清單：這次住院三筆')
+    // 出院了不能登錄
+    db().admissions.find((a) => a.id === adm.id).status = 'discharged'
+    ok((await errOf(() => B.recordBedside({ ...base, consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0] }))).includes('住院中'), '出院了不能登錄')
+  }
+  // 同意書紙本掃描：簽好的紙本附檔（1–3 頁 JPEG／PNG）；出院病歷檢查有效的同意書掃描了沒
+  console.log('\n[同意書紙本掃描]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const img = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
+    ok(api.checkScanPages([]) && api.checkScanPages([img, img, img, img]).includes('3 頁') && api.checkScanPages(['data:text/plain;base64,aGk=']).includes('JPEG') && api.checkScanPages([`data:image/png;base64,${'A'.repeat(700000)}`]).includes('太大') && !api.checkScanPages([img]), '規則：頁數、格式、大小')
+    ok(db().consents.filter((c) => c.signedAt.slice(0, 10) < T).every((c) => c.scan && c.scan.at <= dateUtil.now()) && db().consents.filter((c) => c.signedAt.slice(0, 10) >= T).every((c) => !c.scan), '種子：今天以前簽的都掃了、今天簽的還沒')
+    ok(api.recordGaps({ day: false, dischargedAt: '2026-11-05 10:00', summary: { signedAt: '2026-11-05 09:00' }, surgeries: [], consults: [], consents: [{ no: 'CN1' }, { no: 'CN2', scannedAt: '2026-11-04 10:00' }] }).join() === '同意書紙本未掃描：CN1', '規則：出院病歷缺掃描的同意書')
+    const W = await load('/src/services/record-audit-work.ts')
+    ok(!W.discharged().some((a) => api.recordGaps(W.recordInputOf(a)).some((g) => g.startsWith('同意書'))), '種子：出院病歷沒有假的「未掃描」')
+    // 出院病歷的同意書拿掉掃描 → 列缺；護理師補掃 → 不缺、完成時間算到掃描
+    const disc = W.discharged().find((a) => db().consents.some((c) => c.admissionId === a.id && !c.revoked) && !api.recordGaps(W.recordInputOf(a)).length)
+    const cn = db().consents.find((c) => c.admissionId === disc.id && !c.revoked)
+    delete cn.scan
+    ok(api.recordGaps(W.recordInputOf(disc)).join() === `同意書紙本未掃描：${cn.no}`, `出院病歷 ${disc.admitNo}：${cn.no} 未掃描算缺`)
+    await as('nurse01')
+    ok((await errOf(() => api.consentApi.attachConsentScan(cn.id, []))).includes('掃描檔'), '沒選檔 → 擋')
+    const v = await api.consentApi.attachConsentScan(cn.id, [img, img])
+    ok(v.scan?.pages === 2 && v.hasScanImage && db().auditLogs[0].action === '同意書掃描', '附上 2 頁：記紀錄、稽核')
+    ok(!api.recordGaps(W.recordInputOf(disc)).length && api.recordCompletedAt(W.recordInputOf(disc)) === v.scan.at, '補掃後不缺、完成時間＝掃描時間')
+    const s = await api.consentApi.consentScanOf(cn.id)
+    ok(s.pages.length === 2 && s.scan.byName, '看掃描：影像與掃描的人')
+    await api.consentApi.attachConsentScan(cn.id, [img])
+    ok(db().consentScans.filter((x) => x.consentId === cn.id).length === 1 && db().consentScans.find((x) => x.consentId === cn.id).pages.length === 1 && db().auditLogs[0].action === '同意書重新掃描', '重新掃描：換掉舊影像')
+    const seedOne = db().consents.find((c) => c.scan && !db().consentScans.some((x) => x.consentId === c.id))
+    ok(!(await api.consentApi.consentScanOf(seedOne.id)).pages.length, '示範種子：有紀錄沒影像')
+    await as('clerk01')
+    ok((await errOf(() => api.consentApi.attachConsentScan(cn.id, [img]))) !== '', '櫃台不能掃')
+  }
+  // 窄畫面：flex-wrap 列裡的文字不要用 min-w-0 flex-1（基準 0，放不下時被擠成 0 寬）
+  console.log('\n[窄畫面擠壓檢查]')
+  {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const files = []
+    const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); if (fs.statSync(p).isDirectory()) walk(p); else if (p.endsWith('.vue')) files.push(p) } }
+    walk('src')
+    const bad = []
+    for (const f of files) {
+      const stack = []
+      fs.readFileSync(f, 'utf8').split('\n').forEach((ln, i) => {
+        const ind = ln.search(/\S/)
+        if (ind < 0) return
+        while (stack.length && stack.at(-1).ind >= ind) stack.pop()
+        const cls = (ln.match(/class="([^"]*)"/) || [])[1] || ''
+        if (stack.at(-1)?.wrap && /(^|\s)min-w-0 flex-1(\s|$)/.test(cls)) bad.push(`${f}:${i + 1}`)
+        if (/<\w/.test(ln) && !/\/>\s*$/.test(ln) && !/<\/\w+>\s*$/.test(ln)) stack.push({ ind, wrap: /(^|\s)flex-wrap(\s|$)/.test(cls) && /(^|\s)flex(\s|$)/.test(cls) })
+      })
+    }
+    ok(!bad.length, `flex-wrap 列裡沒有 min-w-0 flex-1（${files.length} 個檔${bad.length ? `；還有 ${bad.slice(0, 5).join('、')}` : ''}）`)
   }
 } catch (e) {
   failed++

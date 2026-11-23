@@ -175,7 +175,7 @@ async function submitEnd() {
         <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm">
           <li v-for="i in active" :key="i.visitId" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
             <span :class="['tabular inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold', LEVEL_CLASS[i.level]]" :title="i.levelLabel">{{ i.level }}</span>
-            <div class="min-w-0 flex-1">
+            <div class="min-w-0 flex-[1_1_10rem]">
               <div class="flex flex-wrap items-center gap-2">
                 <b class="text-slate-800">{{ i.patientName }}</b>
                 <span class="text-xs text-slate-500">{{ i.gender }} {{ i.age }}・{{ i.chartNo }}</span>

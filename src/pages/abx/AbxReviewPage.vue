@@ -103,7 +103,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
                 <span class="tabular text-slate-500">{{ s.at.slice(5) }}</span>
                 <UBadge :tone="s.action === 'approve' ? 'green' : s.action === 'reject' ? 'red' : 'blue'">{{ STEP[s.action] }}</UBadge>
                 <span class="text-slate-500">{{ s.byName }}</span>
-                <span class="min-w-0 flex-1 text-slate-700">{{ s.text }}<template v-if="s.days">（至第 {{ s.days }} 天）</template></span>
+                <span class="min-w-0 flex-[1_1_10rem] text-slate-700">{{ s.text }}<template v-if="s.days">（至第 {{ s.days }} 天）</template></span>
               </li>
             </ul>
           </div>
