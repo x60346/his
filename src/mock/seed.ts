@@ -4012,8 +4012,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         labReports.push({ id: `LR-BP-${k}`, no: `L${rat.slice(0, 10).replace(/-/g, '')}95${k}`, patientId: pn.patientId, procId, orderId: oid, admissionId: pn.id, doctorId: pn.doctorId, orderedAt: addMinutes(at, 30), values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, reportedBy: 'U601', reportedAt: rat })
       }
       lab('IO-BP-L1', 'P072', '體液常規（胸水・床邊胸腔穿刺）', { 'F-WBC': '3200', 'F-PMN': '78', 'F-RBC': '1500' }, 1)
-      lab('IO-BP-L2', 'P073', '體液生化（胸水・床邊胸腔穿刺）', { 'F-PRO': '4.2', 'F-GLU': '45', 'F-LDH': '680' }, 2)
-      lab('IO-BP-L3', 'P074', '血清總蛋白、LDH（胸水判讀・床邊胸腔穿刺）', { TP: '6.8', LDH: '210' }, 3)
+      lab('IO-BP-L2', 'P073', '體液生化（胸水・床邊胸腔穿刺）', { 'F-PRO': '4.2', 'F-ALB': '2.4', 'F-GLU': '45', 'F-LDH': '680' }, 2)
+      lab('IO-BP-L3', 'P074', '血清總蛋白、白蛋白、LDH、血糖（胸水判讀・床邊胸腔穿刺）', { TP: '6.8', ALB: '3.6', LDH: '210', GLU: '128' }, 3)
     }
   }
   // 同意書紙本：今天以前簽的都已掃描（示範資料只有掃描紀錄、沒有影像）；今天簽的還沒掃

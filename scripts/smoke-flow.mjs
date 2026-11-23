@@ -19161,7 +19161,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('nurse01')
     let list = await api.bedsideApi.listBedside(sp.admissionId)
     const v = list.items.find((x) => x.id === sp.id)
-    ok(v.reading?.kind === 'exudate' && v.labs.length === 3, `種子：昨天胸腔穿刺判讀 ${v.reading?.label}（${v.reading?.reasons.join('；')}）`)
+    ok(v.readings[0]?.kind === 'exudate' && v.readings.length === 1 && v.labs.length === 3, `種子：昨天胸腔穿刺判讀 ${v.readings[0]?.label}（${v.readings[0]?.reasons.join('；')}）`)
     // 新的胸腔穿刺送體液生化：自動加血清；報告沒齊寫等什麼
     const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
     const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
@@ -19170,21 +19170,21 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const p = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'thoracentesis', side: 'left', indication: '左側肋膜積液', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '淡黃清澈', volumeMl: 500, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P073'] })
     const os = p.labOrderIds.map((id) => db().ipdOrders.find((o) => o.id === id))
     ok(os.map((o) => o.procId).join() === 'P073,P074' && os[1].content.includes('胸水判讀'), '胸水送生化：同時開血清總蛋白、LDH')
-    ok(p.readingWaiting === '等體液生化、血清總蛋白、LDH報告', `報告沒出：${p.readingWaiting}`)
+    ok(p.readingWaiting === '等體液生化、血清生化報告', `報告沒出：${p.readingWaiting}`)
     // 發報告（檢驗科）→ 判讀出來
     const rep = (o, values) => db().labReports.push({ id: `LR-T-${o.id}`, no: `LT${o.id}`, patientId: adm.patientId, procId: o.procId, orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: Object.entries(values).map(([code, value]) => ({ code, name: code, value })), reportedBy: 'U601', reportedAt: dateUtil.now() })
     rep(os[0], { 'F-PRO': '1.2', 'F-GLU': '110', 'F-LDH': '80' })
     list = await api.bedsideApi.listBedside(adm.id)
-    ok(list.items.find((x) => x.id === p.id).readingWaiting === '等血清總蛋白、LDH報告', '只有體液生化：等血清')
+    ok(list.items.find((x) => x.id === p.id).readingWaiting === '等血清生化報告', '只有體液生化：等血清')
     rep(os[1], { TP: '6.5', LDH: '190' })
     list = await api.bedsideApi.listBedside(adm.id)
-    ok(list.items.find((x) => x.id === p.id).reading?.kind === 'transudate', '血清也出來：漏出液')
+    ok(list.items.find((x) => x.id === p.id).readings[0]?.kind === 'transudate', '血清也出來：漏出液')
     // 腹腔穿刺送常規
     const pa = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'paracentesis', indication: '腹水', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '混濁', volumeMl: 1000, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
     ok(pa.labOrderIds.length === 1 && pa.readingWaiting === '等體液常規報告', '腹腔穿刺送常規：不加血清、等報告')
     rep(db().ipdOrders.find((o) => o.id === pa.labOrderIds[0]), { 'F-WBC': '900', 'F-PMN': '60', 'F-RBC': '100' })
     list = await api.bedsideApi.listBedside(adm.id)
-    ok(list.items.find((x) => x.id === pa.id).reading?.kind === 'sbp', '腹水嗜中性球 540 → 疑似自發性細菌性腹膜炎')
+    ok(list.items.find((x) => x.id === pa.id).readings[0]?.kind === 'sbp', '腹水嗜中性球 540 → 疑似自發性細菌性腹膜炎')
     ok((await errOf(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P074', content: '' }))) === '', '血清總蛋白、LDH 一般醫囑也能開')
   }
   console.log('\n[護理站預設病房]')
@@ -19204,6 +19204,78 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok(readFileSync('src/pages/nursing/NursingPage.vue', 'utf8').includes('nursingApi.myWard()'), '護理站沒指定病房時用 myWard')
     // 加護病房沒有病房常備：本班待辦、交班的常備提醒不能報錯（以前一開加護病房就跳「沒有病房常備」）
     ok((await api.wardStockApi.wardStockIfAny(api.masterApi.staticCodes.icuWard)) === undefined && (await api.wardStockApi.wardStockIfAny(api.masterApi.staticCodes.wards[0]))?.rows.length > 0, '沒有常備的病房回空、不報錯；一般病房照常')
+  }
+  // 交班帶入胸管、腹水 SAAG、腦脊髓液判讀
+  console.log('\n[交班胸管]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const sl = db().lines.find((l) => l.id === 'LN-SEED-CT1')
+    const pn = db().admissions.find((a) => a.id === sl.admissionId)
+    const ward = db().beds.find((b) => b.id === pn.bedId).ward
+    await as('nurse01')
+    let rows = await api.nursingApi.wardChestTubes(ward)
+    const r0 = rows.find((r) => r.lineId === sl.id)
+    const S = await load('/src/services/nursing-rules.ts')
+    const start = S.shiftRange(dateUtil.now()).start
+    const shiftMl = sl.drainage.filter((d) => d.at >= start).reduce((n, d) => n + d.ml, 0)
+    ok(r0 && r0.shiftMl === shiftMl && r0.ml24 === 600 && r0.day >= 1 && r0.text.startsWith(`胸管（右側胸 28Fr，第 ${r0.day} 天）本班引流 ${shiftMl} mL`) && r0.text.includes('無漏氣'), `交班：${r0?.bedNo} ${r0?.text}`)
+    await api.lineApi.recordDrainage(sl.id, { ml: 300, appearance: '血性', airLeak: true })
+    rows = await api.nursingApi.wardChestTubes(ward)
+    const r1 = rows.find((r) => r.lineId === sl.id)
+    ok(r1.shiftMl === shiftMl + 300 && r1.airLeak && r1.alerts.some((a) => a.includes('通知醫師')) && r1.text.includes('有漏氣') && r1.text.includes('（血性）'), `記一筆血性 300 mL、漏氣：${r1.text}`)
+    ok(!(await api.nursingApi.wardChestTubes(db().beds.find((b) => b.ward !== ward && b.ward !== api.masterApi.staticCodes.icuWard).ward)).length, '別的病房沒有胸管')
+    await api.lineApi.removeLine(sl.id, '不需要了')
+    ok(!(await api.nursingApi.wardChestTubes(ward)).some((r) => r.lineId === sl.id), '移除後不列')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8').includes('帶入交班'), '交班分頁有「帶入交班」')
+  }
+  console.log('\n[腹水 SAAG 與腦脊髓液判讀]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    ok(api.saagRead(3.2, 1.4).kind === 'portalHtn' && api.saagRead(3.0, 2.2).kind === 'nonPortal' && api.saagRead(3.0) === undefined, '規則：SAAG ≥1.1 門脈高壓、<1.1 非門脈高壓、缺值不判讀')
+    let c = api.csfRead({ wbc: 1800, pmn: 85, glu: 20, proGdl: 0.25 }, 120)
+    ok(c.kind === 'bacterial' && c.alert && c.reasons.join().includes('血糖比 0.17') && c.reasons.join().includes('蛋白 250 mg/dL'), `規則：細菌性腦膜炎（${c.reasons.join('；')}）`)
+    ok(api.csfRead({ wbc: 120, pmn: 10, glu: 60, proGdl: 0.07 }, 100).kind === 'pleocytosis', '規則：白血球增加、血糖比正常 → 病毒性或其他')
+    ok(api.csfRead({ wbc: 2, pmn: 0, glu: 65, proGdl: 0.03 }, 100).kind === 'csfNormal' && api.csfRead({ wbc: 2, glu: 65, proGdl: 0.08 }, 100).kind === 'csfProtein', '規則：正常、只有蛋白偏高')
+    ok(api.csfRead({ wbc: 1500, pmn: 80 }).kind === 'bacterial' && api.csfRead({ wbc: 3, glu: 30 }).kind === 'csfNormal', '規則：沒有血清血糖時不算比值（白血球 ≥1000 且嗜中性球 >50% 仍算細菌性）')
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
+    const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(doc)
+    const t0 = dateUtil.now()
+    const base = { admissionId: adm.id, timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過' }
+    const rep = (o, values) => db().labReports.push({ id: `LR-T-${o.id}`, no: `LT${o.id}`, patientId: adm.patientId, procId: o.procId, orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: Object.entries(values).map(([code, value]) => ({ code, name: code, value })), reportedBy: 'U601', reportedAt: dateUtil.now() })
+    const ord = (p, procId) => db().ipdOrders.find((o) => p.labOrderIds.includes(o.id) && o.procId === procId)
+    const viewOf = async (id) => (await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === id)
+    // 腹腔穿刺：常規＋生化（自動加血清）
+    const pa = await api.bedsideApi.recordBedside({ ...base, kind: 'paracentesis', indication: '肝硬化腹水', appearance: '淡黃清澈', volumeMl: 2000, labs: ['P072', 'P073'] })
+    ok(pa.labOrderIds.length === 3 && ord(pa, 'P074').content.includes('腹水判讀'), '腹腔穿刺送生化：同時開血清生化（腹水判讀）')
+    ok(pa.readingWaiting === '等體液常規、體液生化、血清生化報告' && !pa.readings.length, `報告沒出：${pa.readingWaiting}`)
+    rep(ord(pa, 'P072'), { 'F-WBC': '200', 'F-PMN': '30', 'F-RBC': '50' })
+    let v = await viewOf(pa.id)
+    ok(v.readings.map((r) => r.kind).join() === 'noSbp' && v.readingWaiting === '等體液生化、血清生化報告', '常規先出：嗜中性球 60（沒腹膜炎）、還等生化')
+    rep(ord(pa, 'P073'), { 'F-PRO': '1.0', 'F-ALB': '0.8', 'F-GLU': '110', 'F-LDH': '90' })
+    rep(ord(pa, 'P074'), { TP: '6.0', ALB: '2.8', LDH: '200', GLU: '110' })
+    v = await viewOf(pa.id)
+    ok(v.readings.map((r) => r.kind).join() === 'noSbp,portalHtn' && !v.readingWaiting && v.readings[1].reasons[0].startsWith('SAAG 2'), `都出來：${v.readings.map((r) => r.label).join('、')}（${v.readings[1].reasons[0]}）`)
+    // 腰椎穿刺：常規＋生化＋血清 → 細菌性腦膜炎
+    const lp = await api.bedsideApi.recordBedside({ ...base, kind: 'lp', indication: '發燒、頸部僵硬', appearance: '混濁', openingPressure: 32, labs: ['P072', 'P073', 'P059'] })
+    ok(lp.labOrderIds.length === 4 && ord(lp, 'P074').content.includes('腦脊髓液判讀'), '腰椎穿刺送生化：同時開血清（腦脊髓液判讀）')
+    rep(ord(lp, 'P072'), { 'F-WBC': '2400', 'F-PMN': '90', 'F-RBC': '20' })
+    v = await viewOf(lp.id)
+    // 血清用前後 24 小時內最近一份（剛才腹腔穿刺抽的那份也算），所以只等體液生化
+    ok(!v.readings.length && v.readingWaiting === '等體液生化報告', '腦脊髓液：生化有開就等齊再判讀（血清用 24 小時內剛抽的那份）')
+    rep(ord(lp, 'P073'), { 'F-PRO': '0.3', 'F-ALB': '0.1', 'F-GLU': '18', 'F-LDH': '60' })
+    rep(ord(lp, 'P074'), { TP: '7.0', ALB: '4.0', LDH: '180', GLU: '140' })
+    v = await viewOf(lp.id)
+    ok(v.readings[0]?.kind === 'bacterial' && v.readings[0].alert, `判讀：${v.readings[0]?.label}（${v.readings[0]?.reasons.join('；')}）`)
+    // 只送常規的腰椎穿刺：常規出來就判讀
+    const lp2 = await api.bedsideApi.recordBedside({ ...base, kind: 'lp', indication: '頭痛', appearance: '清澈無色', labs: ['P072'] })
+    rep(ord(lp2, 'P072'), { 'F-WBC': '3', 'F-PMN': '0', 'F-RBC': '0' })
+    v = await viewOf(lp2.id)
+    ok(v.readings[0]?.kind === 'csfNormal' && !v.readingWaiting, '只送常規：常規出來就判讀（大致正常）')
   }
 } catch (e) {
   failed++

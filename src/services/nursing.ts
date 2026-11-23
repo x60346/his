@@ -20,7 +20,7 @@ import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift,
 import { admissionView, find, nameOf, wardOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, drainBetween, lineTodosOf, painStateOf } from './line-work'
-import { lineKind } from './line-rules'
+import { CHEST_BLEED_MLH, chestState, lineKind } from './line-rules'
 import { screenable, screenStateOf } from './nutrition-work'
 import { highResidual, tubeSlotsOf } from './tube-work'
 import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
@@ -703,6 +703,48 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
     db.handovers.push(h)
     audit('交班', `${input.ward} ${input.shift}`)
     return h
+  })
+}
+
+export interface WardChestTube {
+  admissionId: string
+  patientName: string
+  bedNo: string
+  lineId: string
+  site: string
+  size: string
+  /** 放第幾天 */
+  day: number
+  /** 這一班（班開始到現在）的引流量、筆數 */
+  shiftMl: number
+  shiftRecords: number
+  ml24: number
+  /** 本班最後一筆的外觀（本班還沒記就沒有） */
+  lastAppearance?: string
+  airLeak: boolean
+  alerts: string[]
+  /** 帶入交班重點的一句話 */
+  text: string
+}
+/** 交班：病房裡身上有胸管的病人，本班引流、24 小時量、漏氣、提醒（帶入交班重點用） */
+export function wardChestTubes(ward: string): Promise<WardChestTube[]> {
+  return query(() => {
+    requireUser('nurse')
+    const t = now()
+    const { start } = shiftRange(t)
+    const out: WardChestTube[] = []
+    for (const a of db.admissions.filter((x) => x.status === 'admitted' && wardOf(x) === ward)) {
+      for (const l of activeLines(a.id).filter((x) => x.kind === 'chest')) {
+        const s = chestState(l, t)
+        const recs = (l.drainage ?? []).filter((d) => d.at >= start)
+        const shiftMl = recs.reduce((n, d) => n + d.ml, 0)
+        const day = Math.floor((Date.parse(t.slice(0, 10)) - Date.parse(l.insertedAt.slice(0, 10))) / 86400000) + 1
+        const alerts = [s.bleeding && `每小時 ${s.lastRate} mL（≥${CHEST_BLEED_MLH}），已通知醫師？`, s.recordDue && '超過 8 小時沒記引流', s.removeHint && '24 小時 <200 mL 沒漏氣，可請醫師評估拔管'].filter((x): x is string => !!x)
+        const text = `胸管（${l.site} ${l.size}，第 ${day} 天）本班引流 ${shiftMl} mL${recs.length ? `（${recs.at(-1)!.appearance}）` : '（本班還沒記）'}，24 小時 ${s.ml24} mL，${s.airLeak ? '有漏氣' : '無漏氣'}${alerts.length ? `；${alerts.join('；')}` : ''}`
+        out.push({ admissionId: a.id, patientName: nameOf.patient(a.patientId), bedNo: (a.bedId ? find.bed(a.bedId)?.bedNo : undefined) ?? '', lineId: l.id, site: l.site, size: l.size, day, shiftMl, shiftRecords: recs.length, ml24: s.ml24, ...(recs.length ? { lastAppearance: recs.at(-1)!.appearance } : {}), airLeak: s.airLeak, alerts, text })
+      }
+    }
+    return out.sort((x, y) => x.bedNo.localeCompare(y.bedNo))
   })
 }
 

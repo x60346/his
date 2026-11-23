@@ -455,13 +455,16 @@ const labItemsOf: Record<string, LabItemDef[]> = {
   ],
   P073: [
     { code: 'F-PRO', name: '蛋白', unit: 'g/dL' },
+    { code: 'F-ALB', name: '白蛋白', unit: 'g/dL' },
     { code: 'F-GLU', name: '糖', unit: 'mg/dL' },
     { code: 'F-LDH', name: '乳酸脫氫酶 LDH', unit: 'U/L' },
   ],
-  // 血清總蛋白、LDH：胸水判讀（Light's criteria）要同時抽
+  // 血清生化：體液判讀要同時抽（胸水 Light's criteria 用總蛋白、LDH；腹水 SAAG 用白蛋白；腦脊髓液用血糖算比值）
   P074: [
     { code: 'TP', name: '血清總蛋白', unit: 'g/dL', low: 6.4, high: 8.3 },
+    { code: 'ALB', name: '血清白蛋白', unit: 'g/dL', low: 3.5, high: 5.2 },
     { code: 'LDH', name: '血清 LDH', unit: 'U/L', low: 140, high: 280 },
+    { code: 'GLU', name: '血糖', unit: 'mg/dL', low: 70, high: 140, critLow: 40, critHigh: 400 },
   ],
   P059: [{ code: 'CULT', name: '培養結果', options: ['無菌生長', 'MRSA', 'CRE', 'VRE', '其他細菌'], normal: ['無菌生長'] }],
   P012: [
@@ -554,8 +557,8 @@ const procedureBase: Procedure[] = [
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
   // 體液檢驗（床邊處置送檢）
   { id: 'P072', code: '16008C', name: '體液常規（細胞計數、分類）', category: '檢驗', points: 150, selfPrice: 300, active: true },
-  { id: 'P073', code: '16009C', name: '體液生化（蛋白、糖、LDH）', category: '檢驗', points: 180, selfPrice: 350, active: true },
-  { id: 'P074', code: '09027C', name: '血清總蛋白、LDH', category: '檢驗', points: 120, selfPrice: 250, active: true },
+  { id: 'P073', code: '16009C', name: '體液生化（蛋白、白蛋白、糖、LDH）', category: '檢驗', points: 180, selfPrice: 350, active: true },
+  { id: 'P074', code: '09027C', name: '血清總蛋白、白蛋白、LDH、血糖', category: '檢驗', points: 120, selfPrice: 250, active: true },
   // 床邊侵入性處置：床邊處置紀錄存檔時自動開（醫囑不能另外開）
   { id: 'P068', code: '47013C', name: '腰椎穿刺', category: '處置', points: 600, selfPrice: 1500, bedside: 'lp', active: true },
   { id: 'P069', code: '47005C', name: '胸腔穿刺', category: '處置', points: 560, selfPrice: 1500, bedside: 'thoracentesis', active: true },

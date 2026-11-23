@@ -33,10 +33,10 @@ export const BEDSIDE_FLUID: Record<BedsideKind, string> = { lp: '腦脊髓液', 
 /** 可以勾的送檢（體液常規、生化、細菌培養）：登錄時自動開臨時檢驗醫囑，護理師貼條碼送檢 */
 export const BEDSIDE_LABS = [
   { procId: 'P072', label: '體液常規（細胞計數、分類）' },
-  { procId: 'P073', label: '體液生化（蛋白、糖、LDH）' },
+  { procId: 'P073', label: '體液生化（蛋白、白蛋白、糖、LDH）' },
   { procId: 'P059', label: '細菌培養' },
 ]
-/** 胸水（胸腔穿刺、胸管）送體液生化時，同時抽血清總蛋白、LDH（Light's criteria 要用） */
+/** 送體液生化時同時抽血清（胸水 Light's criteria、腹水 SAAG、腦脊髓液血糖比值都要用） */
 export const SERUM_PROC = 'P074'
 export const PLEURAL_KINDS: BedsideKind[] = ['thoracentesis', 'chestTube']
 /** 血清 LDH 參考值上限（Light's criteria 第三項：胸水 LDH > 上限的 2/3） */
@@ -45,9 +45,11 @@ export const SERUM_LDH_ULN = 280
 export const SERUM_PAIR_HOURS = 24
 
 export interface FluidRead {
-  kind: 'exudate' | 'transudate' | 'sbp' | 'noSbp'
+  kind: 'exudate' | 'transudate' | 'sbp' | 'noSbp' | 'portalHtn' | 'nonPortal' | 'bacterial' | 'pleocytosis' | 'csfProtein' | 'csfNormal'
   label: string
   reasons: string[]
+  /** 要馬上處理的（滲出液、腹膜炎、細菌性腦膜炎）：畫面標紅 */
+  alert?: boolean
 }
 /** 胸水 Light's criteria：任一項成立＝滲出液（蛋白比 > 0.5、LDH 比 > 0.6、胸水 LDH > 血清上限 2/3）；缺值回 undefined */
 export function lightCriteria(f: { pro?: number; ldh?: number }, s: { pro?: number; ldh?: number }, uln = SERUM_LDH_ULN): FluidRead | undefined {
@@ -57,7 +59,7 @@ export function lightCriteria(f: { pro?: number; ldh?: number }, s: { pro?: numb
   const r = (x: number) => Math.round(x * 100) / 100
   const reasons = [pr > 0.5 && `蛋白比 ${r(pr)}（> 0.5）`, lr > 0.6 && `LDH 比 ${r(lr)}（> 0.6）`, f.ldh! > (uln * 2) / 3 && `胸水 LDH ${f.ldh}（> 血清上限 2/3＝${Math.round((uln * 2) / 3)}）`].filter((x): x is string => !!x)
   return reasons.length
-    ? { kind: 'exudate', label: '滲出液', reasons }
+    ? { kind: 'exudate', label: '滲出液', reasons, alert: true }
     : { kind: 'transudate', label: '漏出液', reasons: [`蛋白比 ${r(pr)}、LDH 比 ${r(lr)}、胸水 LDH ${f.ldh}，三項都沒超過`] }
 }
 /** 腹水嗜中性球數（白血球 × 嗜中性球 %）≥ 250/µL：疑似自發性細菌性腹膜炎 */
@@ -65,7 +67,39 @@ export const SBP_PMN = 250
 export function ascitesPmn(wbc?: number, pmnPct?: number): FluidRead | undefined {
   if (typeof wbc !== 'number' || typeof pmnPct !== 'number' || !Number.isFinite(wbc) || !Number.isFinite(pmnPct)) return undefined
   const n = Math.round((wbc * pmnPct) / 100)
-  return n >= SBP_PMN ? { kind: 'sbp', label: '疑似自發性細菌性腹膜炎', reasons: [`嗜中性球 ${n}/µL（≥ ${SBP_PMN}）`] } : { kind: 'noSbp', label: '嗜中性球未達腹膜炎標準', reasons: [`嗜中性球 ${n}/µL（< ${SBP_PMN}）`] }
+  return n >= SBP_PMN ? { kind: 'sbp', label: '疑似自發性細菌性腹膜炎', reasons: [`嗜中性球 ${n}/µL（≥ ${SBP_PMN}）`], alert: true } : { kind: 'noSbp', label: '嗜中性球未達腹膜炎標準', reasons: [`嗜中性球 ${n}/µL（< ${SBP_PMN}）`] }
+}
+
+/** 腹水 SAAG（血清白蛋白 − 腹水白蛋白）≥ 1.1 g/dL：門脈高壓（肝硬化、心衰竭）；< 1.1：非門脈高壓（腹膜轉移、結核、胰臟炎…） */
+export const SAAG_CUT = 1.1
+export function saagRead(serumAlb?: number, fluidAlb?: number): FluidRead | undefined {
+  if (typeof serumAlb !== 'number' || typeof fluidAlb !== 'number' || !Number.isFinite(serumAlb) || !Number.isFinite(fluidAlb)) return undefined
+  const g = Math.round((serumAlb - fluidAlb) * 10) / 10
+  return g >= SAAG_CUT
+    ? { kind: 'portalHtn', label: '門脈高壓性腹水', reasons: [`SAAG ${g}（≥ ${SAAG_CUT}，肝硬化、心衰竭等）`] }
+    : { kind: 'nonPortal', label: '非門脈高壓性腹水', reasons: [`SAAG ${g}（< ${SAAG_CUT}，考慮腹膜轉移、結核、胰臟炎）`] }
+}
+
+/**
+ * 腦脊髓液（成人）：白血球 > 5/µL 算增加；腦脊髓液／血清血糖 < 0.4，或白血球 ≥ 1000 且嗜中性球 > 50%：疑似細菌性腦膜炎；
+ * 蛋白 > 45 mg/dL 偏高（體液生化的蛋白單位是 g/dL，換算 ×1000）。缺血清血糖就不算比值
+ */
+export const CSF_WBC_MAX = 5
+export const CSF_PRO_MAX = 45
+export const CSF_GLU_RATIO = 0.4
+export function csfRead(x: { wbc?: number; pmn?: number; glu?: number; proGdl?: number }, serumGlu?: number): FluidRead | undefined {
+  if (typeof x.wbc !== 'number' || !Number.isFinite(x.wbc)) return undefined
+  const ratio = typeof x.glu === 'number' && typeof serumGlu === 'number' && serumGlu > 0 ? Math.round((x.glu / serumGlu) * 100) / 100 : undefined
+  const proMg = typeof x.proGdl === 'number' ? Math.round(x.proGdl * 1000) : undefined
+  const reasons = [
+    `白血球 ${x.wbc}/µL${x.wbc > CSF_WBC_MAX ? `（> ${CSF_WBC_MAX}）` : ''}${typeof x.pmn === 'number' ? `、嗜中性球 ${x.pmn}%` : ''}`,
+    ratio !== undefined && `血糖比 ${ratio}${ratio < CSF_GLU_RATIO ? `（< ${CSF_GLU_RATIO}）` : ''}`,
+    proMg !== undefined && `蛋白 ${proMg} mg/dL${proMg > CSF_PRO_MAX ? `（> ${CSF_PRO_MAX}）` : ''}`,
+  ].filter((r): r is string => !!r)
+  if ((ratio !== undefined && ratio < CSF_GLU_RATIO) || (x.wbc >= 1000 && (x.pmn ?? 0) > 50)) return { kind: 'bacterial', label: '疑似細菌性腦膜炎（盡快給經驗性抗生素，等培養）', reasons, alert: true }
+  if (x.wbc > CSF_WBC_MAX) return { kind: 'pleocytosis', label: '白血球增加（病毒性或其他原因，配合培養與臨床）', reasons }
+  if (proMg !== undefined && proMg > CSF_PRO_MAX) return { kind: 'csfProtein', label: '白血球正常、蛋白偏高', reasons }
+  return { kind: 'csfNormal', label: '腦脊髓液大致正常', reasons }
 }
 
 export const CHEST_TUBE_SIZES = ['20Fr', '24Fr', '28Fr', '32Fr']

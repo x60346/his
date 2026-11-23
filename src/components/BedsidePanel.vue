@@ -22,6 +22,15 @@ const f = reactive({ kind: 'thoracentesis' as BedsideKind, side: '' as '' | 'lef
 const meta = computed(() => bedsideKind(f.kind))
 const ready = computed(() => !!v.value?.consentReady.some((c) => c.kind === f.kind && (!meta.value.sided || c.side === f.side)))
 const readySides = computed(() => (v.value?.consentReady ?? []).filter((c) => c.kind === f.kind && c.side).map((c) => SIDE_TEXT[c.side!]))
+// 送檢會怎麼判讀（勾體液生化會同時抽血清生化）
+const hint = computed(() => {
+  const chem = f.labs.includes('P073')
+  const routine = f.labs.includes('P072')
+  if (f.kind === 'thoracentesis' || f.kind === 'chestTube') return chem ? "會同時抽血清生化，報告齊了自動用 Light's criteria 判讀漏出液或滲出液。" : ''
+  if (f.kind === 'paracentesis') return [routine && '體液常規：算嗜中性球數（≥250/µL 疑似自發性細菌性腹膜炎）', chem && '體液生化＋同時抽的血清：算 SAAG（≥1.1 門脈高壓）'].filter(Boolean).join('；')
+  if (f.kind === 'lp') return routine ? `體液常規：白血球、嗜中性球判讀${chem ? '；體液生化＋同時抽的血清：加上蛋白與血糖比值（< 0.4 疑似細菌性腦膜炎）' : '（勾體液生化才算得出血糖比值）'}` : ''
+  return ''
+})
 const overVolume = computed(() => !!meta.value.maxVolumeMl && Number(f.volumeMl) > meta.value.maxVolumeMl)
 function openAdd() {
   const first = v.value?.consentReady[0]
@@ -67,8 +76,8 @@ async function submit() {
             <div v-if="p.volumeNote" class="text-xs text-slate-500">超過建議量：{{ p.volumeNote }}</div>
             <div v-if="p.tubeSize" class="text-xs text-slate-600">胸管 {{ p.tubeSize }}・放置時{{ p.airLeak ? '有漏氣' : '沒有漏氣' }}（引流量、拔管在「管路」）</div>
             <div v-if="p.labs.length" class="text-xs text-slate-600">送檢：{{ p.labs.join('、') }}</div>
-            <div v-if="p.reading" :class="['text-xs', p.reading.kind === 'exudate' || p.reading.kind === 'sbp' ? 'text-red-700' : 'text-slate-700']"><b>判讀：{{ p.reading.label }}</b>（{{ p.reading.reasons.join('；') }}）</div>
-            <div v-else-if="p.readingWaiting" class="text-xs text-slate-500">判讀：{{ p.readingWaiting }}</div>
+            <div v-for="r in p.readings" :key="r.kind" :class="['text-xs', r.alert ? 'text-red-700' : 'text-slate-700']"><b>判讀：{{ r.label }}</b>（{{ r.reasons.join('；') }}）</div>
+            <div v-if="p.readingWaiting" class="text-xs text-slate-500">判讀：{{ p.readingWaiting }}</div>
             <div v-if="p.bleedingRisks?.length" class="text-xs text-amber-700">出血風險 {{ p.bleedingRisks.join('、') }}：{{ p.bleedingNote }}</div>
           </li>
         </ul>
@@ -135,8 +144,7 @@ async function submit() {
           <div class="flex flex-wrap gap-x-4 gap-y-1">
             <label v-for="l in BEDSIDE_LABS" :key="l.procId" class="inline-flex items-center gap-2"><input v-model="f.labs" type="checkbox" :value="l.procId" class="h-4 w-4" />{{ l.label }}</label>
           </div>
-          <p v-if="(f.kind === 'thoracentesis' || f.kind === 'chestTube') && f.labs.includes('P073')" class="mt-1 text-xs text-slate-500">會同時抽血清總蛋白、LDH，報告齊了自動用 Light's criteria 判讀漏出液或滲出液。</p>
-          <p v-else-if="f.kind === 'paracentesis' && f.labs.includes('P072')" class="mt-1 text-xs text-slate-500">體液常規出來後自動算嗜中性球數（≥250/µL 疑似自發性細菌性腹膜炎）。</p>
+          <p v-if="hint" class="mt-1 text-xs text-slate-500">{{ hint }}</p>
           <p v-if="act.fieldErrors.value.labs" class="mt-1 text-xs text-red-600">{{ act.fieldErrors.value.labs }}</p>
         </div>
         <UInput v-if="overVolume" v-model="f.volumeNote" label="超過建議量的原因與病人狀況" required :error="act.fieldErrors.value.volumeNote" />

@@ -37,6 +37,13 @@ const udNote = computed(() => {
   const boxes = ud.value.r.carts.reduce((n, c) => n + c.boxes.length, 0)
   return [boxes && `${ud.value.r.carts.length} 車藥（${boxes} 盒）還沒點收`, ud.value.r.issues.length && `${ud.value.r.issues.length} 盒回報不符、藥局處理中`, stock].filter(Boolean).join('；')
 })
+// 胸管：本班引流、漏氣、提醒（可一鍵帶入交班重點）
+const { data: chest } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardChestTubes(props.ward) }), [() => props.ward, () => props.clock])
+const chestRows = computed(() => (chest.value?.ward === props.ward ? chest.value.v : []))
+function useChest(c: { admissionId: string; text: string }) {
+  form.admissionId = c.admissionId
+  form.content = form.content.trim() ? `${form.content.trim()}；${c.text}` : c.text
+}
 const save = useAction(nursingApi.addHandover, { success: '已新增交班' })
 async function submit() {
   if (!form.admissionId) return
@@ -60,6 +67,22 @@ async function submit() {
       </div>
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>
+
+    <!-- 胸管：本班引流量、漏氣、提醒，帶入交班重點 -->
+    <section v-if="chestRows.length" class="rounded-md border border-slate-200 p-3 text-sm">
+      <div class="mb-1 font-semibold text-slate-700">胸管（本班）</div>
+      <ul class="space-y-1.5">
+        <li v-for="c in chestRows" :key="c.lineId" class="flex flex-wrap items-start gap-2">
+          <span class="tabular w-14 shrink-0 font-medium text-slate-700">{{ c.bedNo }}</span>
+          <div class="min-w-0 flex-[1_1_14rem]">
+            <div><b>{{ c.patientName }}</b> <span class="text-xs text-slate-500">{{ c.site }} {{ c.size }}・第 {{ c.day }} 天</span></div>
+            <div class="text-xs text-slate-600">本班 {{ c.shiftRecords ? `${c.shiftMl} mL（${c.shiftRecords} 筆・${c.lastAppearance}）` : '還沒記' }}・24 小時 {{ c.ml24 }} mL・{{ c.airLeak ? '有漏氣' : '無漏氣' }}</div>
+            <div v-for="a in c.alerts" :key="a" class="text-xs text-red-700">{{ a }}</div>
+          </div>
+          <UButton size="sm" variant="secondary" @click="useChest(c)">帶入交班</UButton>
+        </li>
+      </ul>
+    </section>
 
     <!-- 48 小時內從加護病房轉來：帶出加護病房的轉出摘要（接班的人先看） -->
     <section v-if="patients.some((p) => p.icuOut)" class="rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm">
