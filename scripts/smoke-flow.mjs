@@ -5,7 +5,10 @@ import { createServer } from 'vite'
 // ---------- 固定的模擬時鐘 ----------
 // 種子資料依「現在幾點」決定今天走到哪一步（清晨重建時還沒有人看過診）。測試若用真實時間，
 // 清晨跑（GitHub Actions 是 UTC，台灣早上推送就是 UTC 凌晨）今天就沒有待批價、待領藥的病人，大半流程測試會失敗、擋住部署。
-// 所以測試一律從「今天 14:30」開始，時間照真實流逝往前走（交易、稽核的先後仍然正確）。setClock 可改到別的時刻測種子
+// 所以測試一律從「今天 14:35」開始，時間照真實流逝往前走（交易、稽核的先後仍然正確）。setClock 可改到別的時刻測種子
+// 不從 14:30 整開始：種子用亂數挑「90 分鐘前以前」給藥的護理師，14:30 整時 13:00 那一劑剛好不算、14:31 起才算，
+// 抽亂數的次數差一次、後面的資料整串不同（14:30 建的種子沒有 9 月出院的住院）。GitHub Actions 跑得快，整輪只過 1–2 分鐘，
+// 從 14:30 開始就會一直落在這條邊界上、時好時壞；14:35 起到 14:59 之間沒有這種邊界
 const RealDate = Date
 let clockBase = 0
 let realBase = 0
@@ -15,7 +18,7 @@ function setClock(hh, mm) {
   clockBase = d.getTime()
   realBase = RealDate.now()
 }
-setClock(14, 30)
+setClock(14, 35)
 const fakeNow = () => clockBase + (RealDate.now() - realBase)
 globalThis.Date = class extends RealDate {
   constructor(...a) {
@@ -4121,7 +4124,7 @@ try {
       }
       ok(!sameTime, `${label} 重建：今天沒有一大群人擠在同一個掛號時間`)
     }
-    setClock(14, 30)
+    setClock(14, 35)
   }
 
   console.log('\n[轉科]')

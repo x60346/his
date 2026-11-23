@@ -3017,7 +3017,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 主治隔天早上停 Ceftriaxone、改 Augmentin 口服＝接受（抗生素指標的接受率、用量有歷史資料）
   {
     const dr11 = users.find((u) => u.doctorId === 'DR11')!.id
-    const pn = admissions.find((a) => a.status === 'discharged' && a.diagnosis.startsWith('J18') && a.dischargedAt! >= `${addDays(T, -28)} 00:00` && a.dischargedAt! > addMinutes(a.admittedAt!, 4 * 24 * 60))
+    // 建議（入院後約 74 小時送出）要落在抗生素指標的最近 30 天內：只看出院日的話，依日期可能挑到 30 天前送出的那位
+    const pn = admissions.find((a) => a.status === 'discharged' && a.diagnosis.startsWith('J18') && a.dischargedAt! >= `${addDays(T, -28)} 00:00` && a.dischargedAt! > addMinutes(a.admittedAt!, 4 * 24 * 60) && addMinutes(a.admittedAt!, 74 * 60) >= `${addDays(T, -28)} 00:00`)
     if (pn) {
       const start = addMinutes(pn.admittedAt!, 60)
       const sentAt = addMinutes(start, 73 * 60)
