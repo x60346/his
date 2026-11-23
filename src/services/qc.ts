@@ -53,7 +53,8 @@ export function recordQc(input: { analyte: string; values: [number, number]; cor
     failFields(checkQcInput(input, lastToday))
     const values: [number, number] = [Number(input.values[0]), Number(input.values[1])]
     const z: [number, number] = [qcZ(input.analyte, 0, values[0]), qcZ(input.analyte, 1, values[1])]
-    const prev = db.qcRuns.filter((r) => r.analyte === input.analyte).sort((a, b) => a.at.localeCompare(b.at)).at(-1)
+    // 2-2s 跨次比較：被拒絕的那次已經矯正作廢，不拿來比
+    const prev = db.qcRuns.filter((r) => r.analyte === input.analyte && r.result !== 'reject').sort((a, b) => a.at.localeCompare(b.at)).at(-1)
     const { result, rules } = westgard(z, prev?.z)
     const r: QcRun = { id: newId('QC'), analyte: input.analyte, date, at: t, by: u.id, values, z, result, rules, ...(input.correction?.trim() ? { correction: input.correction.trim() } : {}) }
     db.qcRuns.push(r)

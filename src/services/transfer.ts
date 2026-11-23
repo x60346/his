@@ -242,8 +242,10 @@ export interface ReceiveTransferInput {
  */
 export function receiveTransfer(id: string, input: ReceiveTransferInput): Promise<TransferView> {
   return mutate(() => {
-    const u = requireUser('pharmacist')
+    requireUser('pharmacist')
     const tr = trOf(id)
+    // 退回藥庫是藥庫端簽收（決定入庫、待報廢、拒收）：限定藥庫藥師時，送出的藥局藥師不能自己簽
+    const u = tr.kind === 'return' ? requirePermission('transfer.warehouse') : requireUser('pharmacist')
     if (tr.status !== 'issued') fail('只有運送中的撥補單可以簽收', 'CONFLICT')
     const isReturn = tr.kind === 'return'
     if (!isReturn && Object.values(input.dispositions ?? {}).some((ds) => ds.some((d) => d !== 'stock'))) fail('只有退回藥庫可以放待報廢區或拒收')

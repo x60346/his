@@ -160,7 +160,7 @@ export function payIpd(admissionId: string, input: Pick<PayInput, 'payMethod' | 
     const t = now()
     const owed = owe ? due - received : 0
     const charge: Charge = {
-      id: newId('C'), visitId: '', admissionId: a.id, ipd: bill.meta, patientId: a.patientId, lines: bill.lines, nhiPoints: bill.nhiPoints, patientTotal: bill.patientTotal,
+      id: newId('C'), visitId: '', admissionId: a.id, ipd: { ...bill.meta, identityCode: bill.identityCode }, patientId: a.patientId, lines: bill.lines, nhiPoints: bill.nhiPoints, patientTotal: bill.patientTotal,
       payMethod: input.payMethod, received, change: owe ? 0 : received - due,
       receiptNo: nextReceiptNo(t.slice(0, 10)), cashierId: cashier.id, paidAt: t, voided: false,
       ...(owe ? { owed, oweReason: input.owe!.reason.trim(), repayments: [] } : {}),

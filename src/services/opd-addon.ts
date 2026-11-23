@@ -75,6 +75,18 @@ export function addOpdLab(encounterId: string, procId: string, opts: { selfPay?:
     const price = procPriceOn(proc, e.date)
     const amount = selfPay || price.points === 0 ? price.selfPrice : 0
     e.procedures.push({ procId, qty: 1, selfPay: selfPay || price.points === 0, addon: { specimenId: sp!.id, at: t, by: u.id, selfPay: amount > 0, amount } })
+    // 健保給付的加做：病人不用付，但要開一張 0 元補收收據帶健保點數，申報才會算到（申報只看收據）
+    if (!amount) {
+      const main = activeChargeOf(v.id)
+      const c: Charge = {
+        id: newId('C'), visitId: v.id, patientId: e.patientId, ...(main ? { supplementOf: main.id } : {}),
+        lines: [{ kind: 'procedure', name: `${proc.name}（加做）`, qty: 1, unitPrice: price.points, amount: price.points, patientPay: false }],
+        nhiPoints: price.points, patientTotal: 0, payMethod: 'cash', received: 0, change: 0,
+        receiptNo: nextReceiptNo(t.slice(0, 10)), cashierId: u.id, paidAt: t, voided: false,
+      }
+      db.charges.push(c)
+      e.procedures.at(-1)!.addon!.chargeId = c.id
+    }
     ;(sp!.opdKeys ??= []).push(`E:${e.id}:${procId}`)
     audit('門診加做', `${nameOf.patient(e.patientId)} ${proc.name}（加做：條碼 ${sp!.barcode}${amount ? `；自費 ${amount} 元待補繳` : '；健保不用補繳'}）`)
     return { procName: proc.name, barcode: sp!.barcode, due: amount }

@@ -90,4 +90,12 @@ export function closeOrders(a: Admission, nurseOrDoctorId: string, t: string, no
     Object.assign(m, { status: 'held', note, executedAt: t, nurseId: nurseOrDoctorId })
   }
   db.mar = db.mar.filter((m) => !(m.admissionId === a.id && m.status === 'pending'))
+  // 住院結束：還在走的轉入加護病房申請、還沒到場的快速反應小組呼叫一起結案（之後都要「住院中」才能處理，不關會永遠掛在待辦）
+  const why = `住院結束（${note.replace(/時未給藥$/, '')}）自動取消`
+  for (const r of db.icuRequests.filter((r) => r.admissionId === a.id && (r.status === 'pending' || r.status === 'accepted'))) Object.assign(r, { status: 'cancelled', decidedBy: nurseOrDoctorId, decidedAt: t, decideNote: why })
+  closePendingRrt(a.id, why)
+}
+/** 還沒到場的快速反應小組呼叫結案（出院、死亡、轉進加護病房） */
+export function closePendingRrt(admissionId: string, note: string): void {
+  for (const c of db.rrtCalls.filter((c) => c.admissionId === admissionId && c.status === 'pending')) Object.assign(c, { status: 'cancelled', closedNote: note })
 }

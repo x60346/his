@@ -172,7 +172,11 @@ export function completeEncounter(encounterId: string, draft: EncounterDraft, op
     const rxAlerts = settleRxAlerts(drugRefs(e.medications.map((m) => m.drugId)), opdInUse(e.patientId, e.date, e.id), opts.rxAlertReasons)
     if (rxAlerts) e.rxAlerts = rxAlerts
     else delete e.rxAlerts
-    for (const p of e.procedures) usable.procedure(p.procId)
+    for (const p of e.procedures) {
+      usable.procedure(p.procId)
+      // 數量 0 或負數會變成負的計費項目、扣掉應收與申報點數
+      if (!Number.isInteger(p.qty) || p.qty <= 0) fail(`${find.procedure(p.procId)?.name ?? p.procId} 數量要是正整數`)
+    }
     for (const d of e.diagnoses) usable.icd(d.icd)
     if (e.refillTimes > 0 && v.caseType !== '04' && v.caseType !== '08') fail('連續處方箋需為慢性病案件（04）')
 

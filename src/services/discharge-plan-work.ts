@@ -28,7 +28,8 @@ export function followUpsDue(t: string) {
   return db.dischargePlans
     .filter((p) => p.enrolled && !p.followUp)
     .map((p) => ({ p, a: find.admission(p.admissionId)! }))
-    .filter(({ a }) => a?.status === 'discharged' && !!a.dischargedAt)
+    // 死亡、轉院的不用打電話追蹤
+    .filter(({ a }) => a?.status === 'discharged' && !!a.dischargedAt && a.dischargeType !== '死亡' && a.dischargeType !== '轉院')
     .map(({ p, a }) => ({ plan: p, admission: a, due: followUpDue(a.dischargedAt!, false, t) }))
 }
 

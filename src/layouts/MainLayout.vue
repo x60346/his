@@ -73,9 +73,14 @@ async function resetData() {
   })
   if (!ok) return
   resetting.value = true
-  await masterApi.resetDemoData()
-  resetting.value = false
-  ui.toast.success('已重置為今天的展示資料')
+  try {
+    await masterApi.resetDemoData()
+    ui.toast.success('已重置為今天的展示資料')
+  } catch (e) {
+    ui.toast.error(e instanceof Error ? e.message : '重置失敗')
+  } finally {
+    resetting.value = false
+  }
 }
 
 async function logout() {

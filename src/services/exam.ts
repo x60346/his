@@ -353,6 +353,7 @@ export function completeExam(id: string, input: ExamDoneInput = {}): Promise<Exa
   return mutate(() => {
     const u = requireTech()
     const e = examById(id)
+    if (e.cancelled) fail('這筆檢查已取消', 'CONFLICT')
     if (!e.arrivedAt) fail('病人還沒報到', 'CONFLICT')
     if (e.doneAt) fail('已經完成了', 'CONFLICT')
     failFields(checkContrastDone(input, !!imagingOf(e.procId)?.contrast))

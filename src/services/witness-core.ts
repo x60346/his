@@ -8,7 +8,7 @@
 // - 失敗**回傳** { ok:false }（不丟錯）：mutate 丟錯會回滾整筆，連「確認失敗」的稽核也不見
 import type { User } from '@/types'
 import { db, newId } from '@/mock/db'
-import { audit, fieldErrors } from './http'
+import { afterCommit, audit, fieldErrors, passwordAgeOf, passwordLockOf } from './http'
 
 export type WitnessPurpose = 'discount' | 'wardCount' | 'scrap' | 'residual' | 'transfusion' | 'pca' | 'wardReturn'
 export const WITNESS_MIN = 10
@@ -58,6 +58,9 @@ export function grantWitness(opts: {
   const u = db.users.find((x) => x.username === username)
   if (!u || u.password !== opts.password) return no('password', '帳號或密碼錯誤')
   if (!u.active) return no('username', '此帳號已停用')
+  // 不能登入的帳號也不能當第二人：管理員剛重設（臨時密碼別人知道）、密碼過期或被鎖
+  if (u.mustChangePassword) return no('username', '這個帳號的密碼剛被重設、本人還沒改，不能當第二人')
+  if (passwordLockOf(u) !== null || passwordAgeOf(u)?.expired) return no('username', '這個帳號的密碼已過期，不能當第二人')
   if (u.id === opts.actor.id) return no('username', opts.selfMessage)
   const why = opts.qualifies(u)
   if (why) return no('username', why)
@@ -77,7 +80,8 @@ export function witnessFor(token: string | undefined, purpose: WitnessPurpose, r
 
 /** 一次性：正式作業成功時用掉（呼叫端在 mutate 的最後呼叫，失敗回滾時確認還留著可重送） */
 export function consumeWitness(token: string | undefined): void {
-  if (token) grants.delete(token)
+  // 存檔成功才真的用掉（存檔失敗、交易回滾時確認還留著，可以重送）
+  if (token) afterCommit(() => grants.delete(token))
 }
 
 /** 病房效期收回（有管制藥）：綁那個病房 */

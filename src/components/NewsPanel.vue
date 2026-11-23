@@ -54,6 +54,7 @@ async function submitCall() {
       <div v-for="c in v.calls" :key="c.id">
         <b class="text-slate-700">{{ at(c.calledAt) }} 快速反應</b>（{{ c.trigger === 'auto' ? `NEWS2 ${c.score} 分自動呼叫` : `${c.calledByName}呼叫：${c.reason}` }}）
         <template v-if="c.status === 'done'">→ {{ at(c.assessedAt) }} {{ c.assessedByName }}評估（{{ c.responseMin }} 分鐘到場）：{{ c.findings }}；處置 {{ c.actions }}；<b>{{ RRT_DISPOSITION_LABEL[c.disposition!] }}</b></template>
+        <template v-else-if="c.status === 'cancelled'">→ {{ c.closedNote }}</template>
         <template v-else>→ 等到場評估</template>
       </div>
     </div>

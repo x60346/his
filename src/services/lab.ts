@@ -142,6 +142,8 @@ export function correctLab(id: string, input: { values: Record<string, string>; 
   return mutate(() => {
     const u = requireUser('lab')
     const r = must(db.labReports.find((x) => x.id === id), '檢驗報告')
+    // 培養報告的菌種、危急值是登打培養時設的，一般更正會重算數值、把危急值弄掉
+    if (r.culture) fail('培養報告不能用一般更正（請重新登打培養結果）', 'CONFLICT')
     const why = input.reason?.trim()
     const p = must(find.patient(r.patientId), '病患')
     const { values, errors } = buildLabValues(procItems(r.procId), input.values ?? {}, p.gender)

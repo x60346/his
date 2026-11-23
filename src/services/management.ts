@@ -101,7 +101,8 @@ function metricsOf(month: string, t: string): MonthMetrics {
     revenueOther: sumDept((n) => n === '病歷影本'),
     revenueOpd: sumDept((n) => !n.endsWith('（住院）') && n !== '病歷影本'),
     nhiPoints: rep.nhiPoints,
-    drugShare: rep.nhiPoints ? round1((drugPts / valid.reduce((n, c) => n + c.nhiPoints, 0)) * 100) : null,
+    // 藥費占率：分子分母都用部分負擔前的健保點數（收據的 nhiPoints 已扣部分負擔，拿來當分母會高估）
+    drugShare: ((gross) => (gross ? round1((drugPts / gross) * 100) : null))(valid.reduce((n, c) => n + c.lines.filter((l) => !l.patientPay && ['drug', 'procedure', 'consult', 'ward'].includes(l.kind)).reduce((m, l) => m + l.amount, 0), 0)),
     labReports: db.labReports.filter((r) => inR(r.reportedAt, from, to)).length,
     imagingReports: db.imagingReports.filter((r) => inR(r.reportedAt, from, to)).length,
     prescriptions: db.encounters.filter((e) => e.status === 'completed' && e.medications.length && e.date >= from && e.date <= to).length,

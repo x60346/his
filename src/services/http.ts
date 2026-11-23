@@ -104,17 +104,31 @@ export async function query<T>(fn: () => T, opts: { public?: boolean } = {}): Pr
  * fn 中途丟出錯誤時整個資料庫回到執行前的狀態，不會留下改到一半的資料；
  * 成功才 commit（存入 localStorage 並通知頁面重新查詢）。
  */
+/** 交易成功存檔後才做的事（記憶體裡、不在資料庫的狀態，例如用掉第二人確認）；交易失敗就不做 */
+let commitHooks: (() => void)[] = []
+export function afterCommit(fn: () => void): void {
+  commitHooks.push(fn)
+}
+
 export async function mutate<T>(fn: () => T): Promise<T> {
   await delay()
+  commitHooks = []
   const snapshot = structuredClone(db)
+  // 這個分頁的登入狀態（登入、角色、鎖定）也是交易的一部分：存檔失敗時一起回到執行前，
+  // 否則會出現「畫面說失敗、其實已經登入／鎖定／登出」
+  const session = { userId: sessionUserId, loginAt: sessionLoginAt, role: sessionActiveRole, lock: sessionLockState }
   try {
     // 可能失敗的步驟（包含複製回傳值）都要在 commit 之前完成；
     // 否則會出現「已存檔、但記憶體被回滾」的不一致
     const result = clone(fn())
     commit()
+    for (const h of commitHooks) h()
+    commitHooks = []
     return result
   } catch (e) {
     replaceDatabase(snapshot)
+    restoreSession(session)
+    commitHooks = []
     // 存檔失敗＝交易失敗：資料沒存下來，就不能讓使用者以為完成了
     if (e instanceof StorageWriteError) {
       throw new ServiceError(
@@ -233,6 +247,12 @@ export function setSessionLock(lock: SessionLock | null): void {
   } catch {
     // 無 sessionStorage 時僅保留在記憶體
   }
+}
+
+function restoreSession(s: { userId: string | null; loginAt: number; role: Role | null; lock: SessionLock | null }): void {
+  if (s.userId === sessionUserId && s.loginAt === sessionLoginAt && s.role === sessionActiveRole && s.lock === sessionLockState) return
+  setSessionUser(s.userId, s.loginAt, s.role)
+  setSessionLock(s.lock)
 }
 
 /** 這個分頁的登入時間（毫秒）；測試用來模擬「另一個比較早登入的分頁」 */

@@ -104,6 +104,10 @@ export function collectErSpecimen(barcode: string): Promise<ErSpecimenView> {
     if (!s.er) fail(s.admissionId ? '住院檢體請在病房採檢' : '門診檢體在抽血櫃台採檢', 'CONFLICT')
     const st = specimenStage(s)
     if (st !== 'printed') fail(`這支檢體${SPECIMEN_STAGE_LABEL[st]}`, 'CONFLICT')
+    // 印了條碼之後醫師把檢驗從醫令刪掉：那幾項不採（刪光了這張條碼就作廢）
+    const live = (s.opdKeys ?? []).filter((k) => { const [, encId, procId] = k.split(':'); return db.encounters.find((x) => x.id === encId)?.procedures.some((p) => p.procId === procId && !p.notDone) })
+    if (!live.length) fail('這張條碼的檢驗已經從醫令刪掉了，不用採檢（條碼作廢）', 'CONFLICT')
+    if (live.length !== (s.opdKeys ?? []).length) s.opdKeys = live
     Object.assign(s, { collectedAt: now(), collectedBy: u.id })
     audit('急診床邊採檢', `${s.barcode} ${nameOf.patient(s.patientId)}`)
     return spView(s)

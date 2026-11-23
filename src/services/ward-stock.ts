@@ -166,6 +166,7 @@ export function refillWard(ward: string, lines: { drugId: string; qty: number }[
     const errors: Record<string, string> = {}
     const todo = (lines ?? []).filter((l) => l.qty !== 0)
     if (!todo.length) fail('沒有要補充的品項')
+    if (new Set(todo.map((l) => l.drugId)).size !== todo.length) fail('同一個品項出現兩次，請重新整理')
     for (const l of todo) {
       const item = db.wardStockItems.find((x) => x.ward === ward && x.drugId === l.drugId)
       const d = find.drug(l.drugId)
@@ -198,6 +199,7 @@ export function countWard(ward: string, input: { lines: { drugId: string; book: 
     const loc = wardLoc(ward)
     const view = wardView(ward)
     const lines = input.lines ?? []
+    if (new Set(lines.map((l) => l.drugId)).size !== lines.length) fail('同一個品項點了兩次，請重新整理')
     const missing = view.rows.filter((r) => !lines.some((l) => l.drugId === r.drugId))
     if (missing.length) fail(`還有 ${missing.map((r) => r.drugName).join('、')} 沒點`)
     const changed = lines.filter((l) => view.rows.find((r) => r.drugId === l.drugId)?.onHand !== l.book)

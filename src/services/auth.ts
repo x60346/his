@@ -99,6 +99,9 @@ export function changeOwnPassword(input: { current: string; next: string }): Pro
   return mutate(() => {
     const u = sessionUser()
     if (!u) fail('請先登入', 'UNAUTHORIZED')
+    // 密碼過期太久被鎖的帳號要管理員重設（登入也是這樣擋）：開著的分頁不能自己改密碼解鎖
+    const lockDays = passwordLockOf(u!)
+    if (lockDays !== null) fail(`密碼已過期 ${lockDays} 天，帳號已鎖定，請洽系統管理員重設密碼`, 'UNAUTHORIZED')
     const v = fieldErrors()
     if (!input.current) v.add('current', '請輸入目前的密碼')
     else if (input.current !== u!.password) v.add('current', '目前的密碼不正確')

@@ -50,12 +50,14 @@ export function udBoxWard(b: UdBox): string {
   return (a?.bedId ? find.bed(a.bedId)?.ward : undefined) ?? ''
 }
 
+const CLOSE_NOTES = ['出院時未給藥', '病人死亡', '日間手術回家時未給藥', '結束留觀時未給藥']
 /** 發出去的這一劑為什麼不會給了（還會給的回 undefined） */
 function returnCause(marId: string, line: UdLine): UdReturnCause | undefined {
   const m = db.mar.find((x) => x.id === marId)
   if (m) {
     if (m.status === 'refused') return 'refused'
-    if (m.status === 'held') return m.note === '出院時未給藥' ? 'discharged' : 'held'
+    // 住院結束時（closeOrders）標的暫停：出院、死亡、日間手術回家、結束留觀
+    if (m.status === 'held') return CLOSE_NOTES.includes(m.note ?? '') ? 'discharged' : 'held'
     return undefined
   }
   // 排程被刪了：停止醫囑、出院都會刪掉還沒給的排程

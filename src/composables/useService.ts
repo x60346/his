@@ -52,6 +52,8 @@ export function useQuery<T>(fn: () => Promise<T>, deps: WatchSource[] = [], opts
       if (my === ticket) data.value = result
     } catch (e) {
       if (my === ticket) {
+        // 新的條件讀取失敗（找不到、沒權限）：不能繼續顯示上一筆的資料，像是新選的那一筆
+        data.value = undefined
         error.value = errorMessage(e)
         // 「沒登入所以讀不到」不需要錯誤提示：第一個失敗的查詢負責轉回登入頁，其餘（含跳轉後才回來的）一律靜默
         if (isUnauthorized(e)) await handleUnauthorized()

@@ -10,10 +10,9 @@ import { icuWard, wards } from '@/mock/codes'
 import { audit, fail, failFields, must, mutate, permissionsOf, query, requirePermission, requireUser, sessionRole, sessionUser } from './http'
 import { find, nameOf } from './views'
 import { careRoleOf } from './care-team'
-import { lineDays } from './line-rules'
 import { INFECTION_KINDS, per1000 } from './infection-rules'
 import { checkClusterDecision, notifyState } from './ipc-rules'
-import { currentClusters, pendingNotifiable, wardOfCase, type NotifiablePending } from './ipc-work'
+import { currentClusters, pendingNotifiable, wardOfCase, wardOnDay, type NotifiablePending } from './ipc-work'
 
 const canIpc = () => {
   const u = sessionUser()
@@ -35,16 +34,20 @@ export function infectionStats(days = 30): Promise<IpcStats> {
     const from = addDays(to, -(days - 1))
     const confirmed = db.infectionCases.filter((c) => c.status === 'confirmed' && c.onsetAt >= from && c.onsetAt <= to)
     const devKinds = INFECTION_KINDS.filter((k) => k.line)
+    // 病人日、管路日逐日歸到那一天病人所在的病房（和個案歸屬 wardOfCase 一樣），轉床的才不會分子分母各算一邊
+    const dates = Array.from({ length: days }, (_, i) => addDays(from, i))
+    const allAdms = db.admissions.filter((a) => a.admittedAt && a.status !== 'cancelled' && a.status !== 'reserved')
+    const admById = new Map(allAdms.map((a) => [a.id, a]))
+    const daysIn = (a: (typeof allAdms)[number], s: string, e: string | undefined, ward: string | undefined) =>
+      dates.filter((d) => s.slice(0, 10) <= d && (!e || e.slice(0, 10) >= d) && (!ward || wardOnDay(a, d) === ward)).length
     const rowOf = (ward: string | undefined) => {
-      const adms = db.admissions.filter((a) => a.admittedAt && a.status !== 'cancelled' && a.status !== 'reserved' && (!ward || (a.bedId ? find.bed(a.bedId)?.ward === ward : false)))
-      const ids = new Set(adms.map((a) => a.id))
-      const patientDays = adms.reduce((n, a) => n + lineDays({ insertedAt: a.admittedAt!, removedAt: a.dischargedAt }, from, to), 0)
-      const cs = confirmed.filter((c) => (ward ? wardOfCase(c) === ward : ids.has(c.admissionId)))
+      const patientDays = allAdms.reduce((n, a) => n + daysIn(a, a.admittedAt!, a.dischargedAt, ward), 0)
+      const cs = confirmed.filter((c) => (ward ? wardOfCase(c) === ward : admById.has(c.admissionId)))
       return {
         ward: ward ?? '全院', patientDays, hai: cs.length, density: per1000(cs.length, patientDays),
         devices: devKinds.map((k) => {
-          const ls = db.lines.filter((l) => ids.has(l.admissionId) && l.kind === k.line)
-          const ld = ls.reduce((n, l) => n + lineDays(l, from, to), 0)
+          const ls = db.lines.filter((l) => admById.has(l.admissionId) && l.kind === k.line)
+          const ld = ls.reduce((n, l) => n + daysIn(admById.get(l.admissionId)!, l.insertedAt, l.removedAt, ward), 0)
           const n = cs.filter((c) => c.kind === k.kind).length
           return { kind: k.kind, short: k.short, lineDays: ld, cases: n, rate: per1000(n, ld) }
         }),

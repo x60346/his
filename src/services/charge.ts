@@ -4,14 +4,12 @@ import type { Charge, ChargeLine, DiscountRequest, DiscountRule, PayMethod, Repa
 import { permDef, permits } from './permission-rules'
 import { db, nextCounter, newId } from '@/mock/db'
 import { diffDays, now, today } from '@/utils/date'
-import { applyDiscount, calcChargeLines, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
+import { applyDiscount, checkCash, checkRepay, discountAmountOf, outstandingOf, summarize } from './billing'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, ServiceError, requirePermission } from './http'
-import { billingLookup, find, nameOf, visitView, type VisitView } from './views'
-import { nextReceiptNo, nextRefundNo, pendingRefundOf, prepayAvailable, refundParts, refundPrepay, type PendingRefund } from './money'
-import { certFeeLines, certsOfEncounter } from './certificate-fee'
+import { find, nameOf, visitView, type VisitView } from './views'
+import { nextReceiptNo, nextRefundNo, opdBaseLines, pendingRefundOf, prepayAvailable, refundParts, refundPrepay, type PendingRefund } from './money'
 import { consumeWitness, grantWitness, WITNESS_MIN, witnessFor } from './witness-core'
 import { buildDailyReport, REPORT_MAX_DAYS, type DailyReport } from './daily-report'
-import { obsItemsOf } from './ipd-bill'
 import { erBillMode } from './er-rules'
 
 export interface ChargeListItem extends VisitView {
@@ -65,10 +63,7 @@ function usableDiscount(code: string): DiscountRule {
 function buildPreview(visitId: string, discountCode?: string): ChargePreview {
   const v = must(find.visit(visitId), '掛號紀錄')
   const e = must(find.encounterOfVisit(visitId), '病歷')
-  // 診斷證明書費跟著這次看診收（自費項目，優免打折也適用）
-  // 急診留觀後離院、轉院：留觀期間的藥與檢驗處置一起收
-  const obsAdm = v.er?.disposition?.kind === 'obs' && v.er.obsEnd ? find.admission(v.er.disposition.admissionId ?? '') : undefined
-  const base = [...calcChargeLines(v, e, billingLookup(v.identityCode), obsAdm ? obsItemsOf(obsAdm) : undefined), ...certFeeLines(certsOfEncounter(e.id))]
+  const base = opdBaseLines(v, e)
   const rule = discountCode ? usableDiscount(discountCode) : undefined
   const lines = rule ? applyDiscount(base, rule) : base
   const sum = summarize(lines)
@@ -274,7 +269,8 @@ export function pay(visitId: string, input: PayInput): Promise<Charge> {
       id: newId('C'), visitId, patientId: v.patientId, lines: pv.lines, nhiPoints: pv.nhiPoints, patientTotal: pv.patientTotal,
       payMethod: input.payMethod, received, change: owe ? 0 : received - due,
       ...(applied ? { prepaidApplied: applied } : {}),
-      receiptNo: nextReceiptNo(v.date),
+      // 收據號依開立（結帳）那天編：隔天才結帳、留觀過午夜結束的，號碼和日結同一天
+      receiptNo: nextReceiptNo(now().slice(0, 10)),
       cashierId: cashier.id, paidAt: now(), voided: false,
       ...(owe ? { owed, oweReason: input.owe!.reason.trim(), repayments: [] } : {}),
       ...(rule ? { discount: { code: rule.code, name: rule.name, ...(discountReason ? { reason: discountReason } : {}), amount: pv.discount!.amount, ...(approved ? { approvedBy: approved.approverId, approverName: approved.approverName } : {}) } } : {}),
@@ -323,6 +319,8 @@ function cancelModeOf(c: Charge): CancelMode {
     const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length ? 'void' : 'refund'
     return { mode, refundAmount: 0, ...(discharged ? { blocked: '病人已出院：住院收據不能作廢或退費' } : mode === 'refund' ? { blocked: '住院收據只能在結帳當天、出院前作廢重結' } : {}) }
   }
+  // 門診加做的補收收據：只退這一筆，和藥有沒有發出無關
+  if (c.supplementOf) return { mode: c.paidAt.slice(0, 10) === today() ? 'void' : 'refund', refundAmount: refundParts(c).reduce((n, p) => n + p.amount, 0) }
   const dispensed = db.dispenses.find((d) => d.visitId === c.visitId && d.status === 'dispensed')
   // 部分退費過的不能作廢（退款單已經開出去了）
   const mode = c.paidAt.slice(0, 10) === today() && !c.repayments?.length && !c.partialRefunds?.length ? 'void' : 'refund'
@@ -374,6 +372,11 @@ export function refundReturnedDrugs(chargeId: string): Promise<Charge> {
  * 「未執行」也清掉：重新批價時由醫師決定醫令（沒做的刪掉），不然重新批價會照收 */
 function reopenVisit(c: Charge) {
   if (c.admissionId) return // 住院收據：沒有掛號、調劑單要回復，作廢後重新結帳即可
+  // 加做的補收收據：主收據還有效，不動掛號與調劑；這筆加做回到「待補收」
+  if (c.supplementOf) {
+    for (const x of find.encounterOfVisit(c.visitId)?.procedures ?? []) if (x.addon?.chargeId === c.id) delete x.addon.chargeId
+    return
+  }
   db.dispenses = db.dispenses.filter((d) => d.visitId !== c.visitId)
   for (const x of find.encounterOfVisit(c.visitId)?.procedures ?? []) delete x.notDone
   must(find.visit(c.visitId), '掛號紀錄').status = 'consulted'

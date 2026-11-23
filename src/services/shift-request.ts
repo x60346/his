@@ -141,13 +141,21 @@ export function decideShiftRequest(id: string, approve: boolean, note = ''): Pro
     if (approve) {
       const a = shiftOf(r.shiftId)
       if (!a || a.nurseId !== r.requesterId) fail('班表已經改過（這一班不是申請人的了）：請退回', 'CONFLICT')
-      if (r.kind === 'leave') db.nurseShifts = db.nurseShifts.filter((x) => x.id !== a!.id)
-      else {
+      // 已經分好的責任分床跟著班走：請假的那幾床清掉（護理長重分），換班的換成接班的人
+      const sameShift = (s: { ward: string; date: string; shift: string }, x: { ward: string; date: string; shift: string }) => s.ward === x.ward && s.date === x.date && s.shift === x.shift
+      if (r.kind === 'leave') {
+        db.nurseShifts = db.nurseShifts.filter((x) => x.id !== a!.id)
+        db.nurseAssignments = db.nurseAssignments.filter((x) => !(sameShift(x, a!) && x.nurseId === a!.nurseId))
+      } else {
         const b = shiftOf(r.targetShiftId!)
         if (!b || b.nurseId !== r.targetId) fail('班表已經改過（對方那一班不是對方的了）：請退回', 'CONFLICT')
         const c = swapCheck(a!, b!)
         if (c.block) fail(`${c.block}：請退回`, 'CONFLICT')
         const [na, nb] = [a!.nurseId, b!.nurseId]
+        for (const x of db.nurseAssignments) {
+          if (sameShift(x, a!) && x.nurseId === na) x.nurseId = nb
+          else if (sameShift(x, b!) && x.nurseId === nb) x.nurseId = na
+        }
         a!.nurseId = nb
         b!.nurseId = na
       }

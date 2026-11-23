@@ -19972,6 +19972,64 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await api.dashboardApi.getDashboard()).radUnstaffedDesk === undefined, '護理師沒有這張')
     ok(readFileSync('src/components/DoctorCallPanel.vue', 'utf8').includes('rrt.run(c.id)') && readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8').includes('wardCallStats') && readFileSync('src/pages/home/HomePage.vue', 'utf8').includes('radUnstaffedDesk'), '畫面接上：呼叫快速反應小組、交班呼叫統計、櫃台首頁')
   }
+  // 全程式回顧修正的回歸測試
+  console.log('\n[回顧修正回歸]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const t0 = dateUtil.now()
+    // 取消的影像檢查不能完成
+    const ex = db().imagingExams.find((e) => !e.doneAt && api.RAD_ROOMS.includes(e.room))
+    Object.assign(ex, { arrivedAt: t0, arrivedBy: 'U401', cancelled: { at: t0, by: 'U401', reason: '測試' } })
+    await as('rt01')
+    ok((await errOf(() => examDoneRaw.completeExam(ex.id, {}))).includes('已取消'), '取消的影像檢查不能完成')
+    // 培養報告不能用一般更正
+    const cult = db().labReports.find((r) => r.culture)
+    if (cult) { await as('lab01'); ok((await errOf(() => api.labApi.correctLab(cult.id, { values: {}, reason: '測試' }))).includes('培養'), '培養報告不能用一般更正（危急值不會被洗掉）') }
+    // 胸管置放那一筆不算每小時出血
+    const ins = `${T} 10:00`
+    let cs = api.chestState({ insertedAt: ins, drainage: [{ at: ins, ml: 800, appearance: '淡黃' }] }, `${T} 11:00`)
+    ok(!cs.bleeding && cs.lastRate === undefined, '胸管置放時一次引流 800 mL：不算出血')
+    cs = api.chestState({ insertedAt: ins, drainage: [{ at: ins, ml: 800, appearance: '淡黃' }, { at: `${T} 11:00`, ml: 250, appearance: '血性' }] }, `${T} 11:10`)
+    ok(cs.bleeding && cs.lastRate === 250, '之後一小時 250 mL：出血警示')
+    // 停止的醫囑不會再生回逾時劑次
+    const IPD = await load('/src/services/ipd.ts')
+    const o = db().ipdOrders.find((x) => x.status === 'active' && x.category === 'medication' && x.type === 'long' && !x.infusion && x.freq && db().admissions.find((a) => a.id === x.admissionId)?.status === 'admitted')
+    Object.assign(o, { status: 'stopped', stopAt: t0 })
+    db().mar = db().mar.filter((m) => !(m.orderId === o.id && m.status === 'pending'))
+    IPD.ensureMar(o.admissionId, T)
+    ok(!db().mar.some((m) => m.orderId === o.id && m.status === 'pending'), '停止的醫囑：補排程不會再生回刪掉的劑次')
+    // 門診退藥：同一項送兩次擋下
+    const d = db().dispenses.find((x) => x.status === 'dispensed' && dbm.db.encounters.find((e) => e.id === x.encounterId)?.medications.length)
+    if (d) { await as('ph01'); const m = await errOf(() => api.pharmacyApi.returnDispense(d.id, { reason: '測試', lines: [{ idx: 0, qty: 1 }, { idx: 0, qty: 1 }] })); ok(m.includes('兩次'), `門診退藥同一項送兩次：擋下（${m}）`) }
+    // 住院結束：轉入加護病房申請、還沒到場的快速反應小組一起結案
+    const BW = await load('/src/services/bed-work.ts')
+    const a = db().admissions.find((x) => x.status === 'admitted' && !db().beds.find((b) => b.id === x.bedId)?.ward.startsWith('3I'))
+    db().icuRequests.push({ id: 'IR-T-FIX', admissionId: a.id, category: 'A', reason: '測試', requestedBy: 'U001', requestedAt: t0, status: 'accepted' })
+    db().rrtCalls.push({ id: 'RRT-T-FIX', admissionId: a.id, trigger: 'manual', reason: '測試', calledBy: 'U101', calledAt: t0, status: 'pending' })
+    BW.closeOrders(a, 'U101', t0, '病人死亡')
+    const ir = db().icuRequests.find((x) => x.id === 'IR-T-FIX'), rc = db().rrtCalls.find((x) => x.id === 'RRT-T-FIX')
+    ok(ir.status === 'cancelled' && ir.decideNote.includes('病人死亡') && rc.status === 'cancelled' && rc.closedNote.includes('病人死亡'), `住院結束：加護病房申請、快速反應小組呼叫結案（${rc.closedNote}）`)
+    // 死亡出院的不列出院後電話追蹤
+    const DPW = await load('/src/services/discharge-plan-work.ts')
+    const dead = db().admissions.find((x) => x.status === 'discharged' && x.dischargedAt)
+    db().dischargePlans.push({ id: 'DP-T-FIX', admissionId: dead.id, enrolled: true })
+    const was = dead.dischargeType
+    dead.dischargeType = '死亡'
+    ok(!DPW.followUpsDue(t0).some((x) => x.plan.id === 'DP-T-FIX'), '死亡出院：不列出院後電話追蹤')
+    dead.dischargeType = was
+    // 第二人：管理員剛重設、本人還沒改的帳號不能當見證
+    const n3 = db().users.find((u) => u.username === 'nurse03')
+    n3.mustChangePassword = true
+    await as('nurse01')
+    const w = await api.witnessApi.approveWitness({ purpose: 'wardCount', ward: db().wardStockItems[0].ward, username: 'nurse03', password: '1234' })
+    ok(!w.ok && w.message.includes('重設'), `密碼剛被重設的帳號不能當第二人：${w.message}`)
+    delete n3.mustChangePassword
+    // 展示資料沒過期：只有管理員能重置
+    await as('clerk01')
+    ok((await errOf(() => api.masterApi.resetDemoData())) !== '', '資料沒過期：櫃台不能重置展示資料')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

@@ -50,7 +50,8 @@ export function ipdItemOf(a: Admission): ClaimItem | undefined {
   const c = ipdCharge(a)
   if (!c || a.status !== 'discharged' || !a.dischargedAt) return undefined
   const p = find.patient(a.patientId)
-  if (db.identities.find((i) => i.code === p?.defaultIdentity)?.selfPay) return undefined
+  // 身分以結帳當時為準（舊收據沒存就看病人現在的預設身分）
+  if (db.identities.find((i) => i.code === (c.ipd?.identityCode ?? p?.defaultIdentity))?.selfPay) return undefined
   const categories = ipdCategories(c.lines, (n) => db.procedures.find((x) => x.name === n))
   const lp = linePoints(c.lines)
   const day = dayAdm(a)

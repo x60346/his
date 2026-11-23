@@ -365,6 +365,7 @@ export function returnDispense(id: string, input: ReturnInput): Promise<Dispense
     const d = must(db.dispenses.find((x) => x.id === id), '調劑單')
     if (d.status === 'returned') fail('這張已經全部退藥了', 'CONFLICT')
     if (dispenseOpen(d)) fail('還沒發藥，不需要退藥', 'CONFLICT')
+    if (new Set((input.lines ?? []).map((l) => l.idx)).size !== (input.lines ?? []).length) fail('同一項藥退了兩次，請重新整理')
     const e = must(db.encounters.find((x) => x.id === d.encounterId), '病歷')
     const txns = dispenseTxns(d)
     if (!txns.length) fail('這張是帳本開帳前發的藥，查不到發出的批號，不能用退藥退回；實物請用盤點單調整', 'CONFLICT')

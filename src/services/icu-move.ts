@@ -106,6 +106,7 @@ export function decideIcuRequest(id: string, input: { accept: boolean; note?: st
     const a = admittedOf(r.admissionId)
     const note = input.note?.trim()
     if (!input.accept && !note) failField('note', '不同意：請寫原因（例：目前可在病房觀察，每小時生命徵象）')
+    if (input.accept && input.bedId && !isIcuBed(find.bed(input.bedId))) failField('bedId', '請選加護病房的床')
     const t = now()
     Object.assign(r, { status: input.accept ? 'accepted' : 'declined', decidedBy: u.id, decidedAt: t, ...(note ? { decideNote: note } : {}) })
     audit(input.accept ? '同意轉入加護病房' : '不同意轉入加護病房', `${nameOf.patient(a.patientId)}${note ? `（${note}）` : ''}`)

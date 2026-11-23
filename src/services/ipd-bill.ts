@@ -9,7 +9,7 @@ import { calcChargeLines, calcIpdChargeLines, IPD_COPAY_DEFAULT, IPD_INTERIM_DEF
 import { billingLookup, find } from './views'
 import { erBillMode } from './er-rules'
 import { keptMedications } from './rx-rules'
-import { certFeeLines, certsOfAdmission } from './certificate-fee'
+import { certFeeLines, certsOfAdmission, certsOfEncounter } from './certificate-fee'
 import { isolatedDays } from './flag-work'
 import { bloodFeeItems } from './blood-work'
 import { surgeryFeeItems } from './surgery-work'
@@ -26,7 +26,8 @@ function bedSegments(a: Admission, from: string, to: string, days: number): IpdB
   const segs = hist.map((h, i) => {
     // 急診留觀轉住院：住院從結束留觀那天起算，留觀床那段併到起算日（觀察床費另依時數算在急診）
     const start = (i === 0 || h.from < from ? from : h.from).slice(0, 10)
-    const end = (hist[i + 1]?.from ?? to).slice(0, 10)
+    // 期中結算：截止日之後才轉床的，那一段也只算到截止日
+    const end = [(hist[i + 1]?.from ?? to).slice(0, 10), to.slice(0, 10)].sort()[0]
     const bed = find.bed(h.bedId)
     return { bedNo: bed?.bedNo ?? h.bedId, bedClass: bed?.bedClass ?? '健保床', days: Math.max(0, diffDays(start, end)), extraFee: bed?.extraFee ?? 0, start, waivedDays: 0, ...(isIcuBed(bed) ? { icu: true } : {}) }
   })
@@ -105,7 +106,8 @@ export function erLinesOf(a: Admission): ChargeLine[] {
   if (!e) return []
   // 急診開的藥退回藥局的扣掉（門診有收據時是走部分退費；這裡沒有收據，直接少算）
   const kept = { ...e, medications: keptMedications(e.medications, db.dispenses.find((d) => d.visitId === v.id)) }
-  return calcChargeLines(v, kept, billingLookup(v.identityCode))
+  // 急診寫的診斷證明書費也一起收（急診那次沒有門診收據）
+  return [...calcChargeLines(v, kept, billingLookup(v.identityCode)), ...certFeeLines(certsOfEncounter(e.id))]
     .filter((l) => l.kind !== 'copay-basic' && l.kind !== 'copay-drug')
     .map((l) => ({ ...l, name: `急診：${l.name}` }))
 }

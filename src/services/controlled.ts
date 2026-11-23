@@ -127,15 +127,17 @@ function ledgerOf(drug: Drug, loc: StockLocation, from: string, to: string): Con
     })
   }
   // 殘餘量銷毀：給藥紀錄上的；扣帳的地點＝病房常備（stockFrom ward）或住院藥局（藥局直送、UD 調劑）
-  const wardOf = (admissionId: string) => {
+  // 病房以給藥當時的床位為準（之後轉床，帳仍在原病房）
+  const wardOf = (admissionId: string, at: string) => {
     const a = find.admission(admissionId)
-    const bed = a?.bedId ? find.bed(a.bedId) : undefined
+    const h = (a?.bedHistory ?? []).filter((x) => x.from <= at).pop()
+    const bed = find.bed(h?.bedId ?? a?.bedId ?? '')
     return bed ? stockLoc.ward(bed.ward)?.id : undefined
   }
   for (const m of db.mar.filter((x) => x.residual && x.executedAt && inRange(x.executedAt))) {
     const o = db.ipdOrders.find((x) => x.id === m.orderId)
     if (o?.drugId !== drug.id) continue
-    const where = m.stockFrom === 'ward' ? wardOf(m.admissionId) : stockLoc.ipd()
+    const where = m.stockFrom === 'ward' ? wardOf(m.admissionId, m.executedAt!) : stockLoc.ipd()
     if (where !== loc.id) continue
     const a = find.admission(m.admissionId)
     const p = a ? find.patient(a.patientId) : undefined

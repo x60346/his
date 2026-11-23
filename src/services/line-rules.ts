@@ -104,12 +104,14 @@ export function chestState(l: Pick<LineDevice, 'insertedAt' | 'drainage' | 'remo
   const in24 = recs.filter((r) => r.at > from)
   const last = recs.at(-1)
   const prevAt = recs.length > 1 ? recs.at(-2)!.at : l.insertedAt
-  const lastRate = last ? Math.round(last.ml / Math.max(1, hoursBetween(prevAt, last.at))) : undefined
+  // 放置當下那一筆（置放時一次引流出的量）不是每小時引流速度，不算出血
+  const placement = !!last && recs.length === 1 && last.at <= l.insertedAt
+  const lastRate = last && !placement ? Math.round(last.ml / Math.max(1, hoursBetween(prevAt, last.at))) : undefined
   const ml24 = in24.reduce((n, r) => n + r.ml, 0)
   const open = !l.removedAt
   return {
-    ml24, ...(last ? { lastAt: last.at, lastRate } : {}), airLeak: !!last?.airLeak,
-    bleeding: open && !!last && lastRate! >= CHEST_BLEED_MLH,
+    ml24, ...(last ? { lastAt: last.at, ...(lastRate !== undefined ? { lastRate } : {}) } : {}), airLeak: !!last?.airLeak,
+    bleeding: open && lastRate !== undefined && lastRate >= CHEST_BLEED_MLH,
     removeHint: open && hoursBetween(l.insertedAt, now) >= 24 && !!in24.length && ml24 < CHEST_REMOVE_ML24 && !in24.some((r) => r.airLeak),
     recordDue: open && hoursBetween(last?.at ?? l.insertedAt, now) >= CHEST_RECORD_HOURS,
   }

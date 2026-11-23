@@ -7,7 +7,7 @@ export const CODING_DAYS = 7
 
 /** 首頁：病歷管理師待審查、逾時；主治編碼修改未讀 */
 export function codingCounts(t: string, doctorId?: string) {
-  const xs = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && !a.coding)
+  const xs = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && !a.coding && !(a.obs && a.obs.outcome !== 'admit'))
   return {
     due: xs.length, overdue: xs.filter((a) => a.dischargedAt!.slice(0, 10) < addDays(t.slice(0, 10), -CODING_DAYS)).length,
     changed: doctorId ? db.admissions.filter((a) => a.doctorId === doctorId && a.coding?.changed && !a.coding.ack).length : 0,

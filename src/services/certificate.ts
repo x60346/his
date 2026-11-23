@@ -8,6 +8,7 @@ import { audit, fail, failFields, must, mutate, query, requireUser, sessionRole 
 import { find, nameOf } from './views'
 import { requireCare } from './care-team'
 import { activeIpdChargeOf } from './ipd-bill'
+import { erBillMode } from './er-rules'
 import { CERT_MAX_COPIES } from './certificate-rules'
 
 
@@ -23,6 +24,8 @@ function feePaid(c: Pick<MedicalCertificate, 'encounterId' | 'admissionId'>): bo
   if (c.encounterId) {
     const e = db.encounters.find((x) => x.id === c.encounterId)
     const v = e ? find.visit(e.visitId) : undefined
+    // 急診收住院：急診的費用（含證明書費）併入住院帳單，住院結帳才算收了
+    if (v?.er && erBillMode(v.er) === 'ipd') return !!v.er.disposition?.admissionId && !!activeIpdChargeOf(v.er.disposition.admissionId)
     return v?.status === 'charged' || v?.status === 'dispensed'
   }
   return !!c.admissionId && !!activeIpdChargeOf(c.admissionId)

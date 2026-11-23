@@ -1,6 +1,7 @@
 // 收付款的服務層內部工具（不在 services/index.ts 對外）：收據、退款單的編號，掛號預收款還剩多少。
 // 批價（charge）、掛號（booking）、停診（schedule）共用——每一筆收錢、退錢都有自己的單號、算在發生那天的日結。
-import type { Charge, PayMethod, Refund, Visit, VisitPrepay } from '@/types'
+import type { Charge, ChargeLine, Encounter, PayMethod, Refund, Visit, VisitPrepay } from '@/types'
+import { obsItemsOf } from './ipd-bill'
 import { db, nextCounter } from '@/mock/db'
 import { now } from '@/utils/date'
 import { fail, failField, must } from './http'
@@ -21,7 +22,20 @@ export const activeChargeOf = (visitId: string): Charge | undefined => db.charge
 export const prepayHeld = (v: Pick<Visit, 'prepay'>): number => (v.prepay ? v.prepay.amount - v.prepay.refunds.reduce((n, r) => n + r.amount, 0) : 0)
 
 /** 預收款還沒用掉的：在手上的 − 目前有效收據扣抵掉的（收據作廢或退費後，預收款回到這次就醫，重新批價時再扣抵） */
-export const prepayAvailable = (v: Pick<Visit, 'id' | 'prepay'>): number => prepayHeld(v) - (activeChargeOf(v.id)?.prepaidApplied ?? 0)
+export const prepayAvailable = (v: Pick<Visit, 'id' | 'prepay'>): number =>
+  prepayHeld(v) - (activeChargeOf(v.id)?.prepaidApplied ?? 0) - db.charges.filter((c) => c.visitId === v.id && c.voided && !c.supplementOf).reduce((n, c) => n + prepayPaidBack(c), 0)
+
+/**
+ * 部分退費從預收扣抵的那一份退出去的錢（部分退費先退結帳時付的，不夠才動到預收）：
+ * 之後整張退費、預收回到這次就醫時要扣掉，否則重新批價會再退一次
+ */
+function prepayPaidBack(c: Charge): number {
+  const applied = c.prepaidApplied ?? 0
+  if (!applied || !c.partialRefunds?.length) return 0
+  const paidOther = c.patientTotal - (c.owed ?? 0) - applied + (c.repayments ?? []).reduce((n, r) => n + r.amount, 0)
+  const refunded = c.partialRefunds.reduce((n, pr) => n + pr.parts.reduce((m, x) => m + x.amount, 0), 0)
+  return Math.min(applied, Math.max(0, refunded - paidOther))
+}
 
 /** 預收金額檢查：正整數、不超過 99,999 */
 export function checkPrepay(amount: unknown): string | null {
@@ -48,6 +62,17 @@ export function refundPrepay(v: Visit, amount: number, reason: string, cashierId
   const r = { receiptNo: nextRefundNo(t.slice(0, 10)), amount, reason, cashierId, at: t }
   v.prepay!.refunds.push(r)
   return r
+}
+
+/**
+ * 門診收據的計費項目（批價預覽與部分退費重算共用，兩邊才會一致）：
+ *   - 門診加做的檢驗不在主收據（自費的另開補收收據，健保的另外申報）
+ *   - 急診留觀後離院：留觀期間的藥與檢驗處置一起收
+ *   - 診斷證明書費跟著這次看診收
+ */
+export function opdBaseLines(v: Visit, e: Encounter): ChargeLine[] {
+  const obsAdm = v.er?.disposition?.kind === 'obs' && v.er.obsEnd ? find.admission(v.er.disposition.admissionId ?? '') : undefined
+  return [...calcChargeLines(v, { ...e, procedures: e.procedures.filter((p) => !p.addon) }, billingLookup(v.identityCode), obsAdm ? obsItemsOf(obsAdm) : undefined), ...certFeeLines(certsOfEncounter(e.id))]
 }
 
 // ---------- 退費：可退的錢、部分退藥後的差額 ----------
@@ -98,7 +123,7 @@ export function pendingRefundOf(c: Charge): PendingRefund | undefined {
   if (!d?.returns?.length && !notDone.length) return undefined
   const v = must(find.visit(c.visitId), '掛號紀錄')
   // 病人實際拿走的藥＋實際做了的檢驗處置
-  const base = [...calcChargeLines(v, { ...e, medications: keptMedications(e.medications, d), procedures: e.procedures.filter((p) => !p.notDone) }, billingLookup(v.identityCode)), ...certFeeLines(certsOfEncounter(e.id))]
+  const base = opdBaseLines(v, { ...e, medications: keptMedications(e.medications, d), procedures: e.procedures.filter((p) => !p.notDone) })
   // 優免用結帳時的類別（之後被停用也照用，不必重新核准）
   const rule = c.discount ? db.discounts.find((x) => x.code === c.discount!.code) : undefined
   const sum = summarize(rule ? applyDiscount(base, rule) : base)

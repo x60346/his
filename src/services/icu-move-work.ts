@@ -4,7 +4,7 @@ import type { Admission, Bed, ProgressNote } from '@/types'
 import { db } from '@/mock/db'
 import { addMinutes, ageOf } from '@/utils/date'
 import { find } from './views'
-import { isIcuBed } from './bed-work'
+import { closePendingRrt, isIcuBed } from './bed-work'
 import { icuSince } from './icu-work'
 import { activeVent } from './vent-work'
 import { gcsTotal, mapOf } from './icu-rules'
@@ -46,6 +46,8 @@ export function afterIcuMove(a: Admission, fromBed: Bed | undefined, toBed: Bed,
   if (isIcuBed(toBed) && !isIcuBed(fromBed)) {
     const r = acceptedRequest(a.id)
     if (r) Object.assign(r, { status: 'placed', placedAt: t, bedId: toBed.id })
+    // 轉進加護病房：還沒到場的快速反應小組呼叫不用再來了
+    closePendingRrt(a.id, '已轉入加護病房')
   }
   if (!isIcuBed(toBed) && isIcuBed(fromBed)) delete a.rassTarget
 }

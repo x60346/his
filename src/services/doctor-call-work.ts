@@ -1,7 +1,7 @@
 // 呼叫醫師的內部工具（index 不匯出、不會被包成 API）：首頁的待辦（值班醫師沒寫值班紀錄、緊急呼叫沒回覆）
 import type { DoctorCall } from '@/types'
 import { db } from '@/mock/db'
-import { addMinutes } from '@/utils/date'
+import { addDays, addMinutes } from '@/utils/date'
 import { dutyDateOf, isOffHours } from './duty-rules'
 
 /** 緊急呼叫幾分鐘沒回覆要再找 */
@@ -13,10 +13,12 @@ export const shiftDateOf = (t: string) => (isOffHours(t) ? dutyDateOf(t) : dutyD
 /** 這筆呼叫之後，被呼叫的醫師有沒有幫那位病人寫值班紀錄 */
 export const dutyNoteAfter = (c: DoctorCall) => ((doctorId) => db.progressNotes.some((n) => n.admissionId === c.admissionId && n.kind === 'duty' && n.doctorId === doctorId && n.at >= c.calledAt))(db.users.find((x) => x.id === c.toUserId)?.doctorId)
 
-/** 這一班值班醫師被呼叫、回覆了，但之後沒幫那位病人寫值班紀錄的 */
+/** 這一班（含上一班）值班醫師被呼叫、回覆了，但之後沒幫那位病人寫值班紀錄的 */
 export function callsWithoutNote(userId: string, t: string): DoctorCall[] {
-  const from = `${shiftDateOf(t)} 00:00`
-  return db.doctorCalls.filter((c) => c.toUserId === userId && c.toRole === 'oncall' && c.response && c.calledAt >= from && !dutyNoteAfter(c))
+  // 這一班和上一班（週末白天已經是新的一班，昨晚的還要能提醒）；以值班日判斷（那天 00–08 點屬於前一天的班）
+  const date = shiftDateOf(t)
+  const dates = [date, addDays(date, -1)]
+  return db.doctorCalls.filter((c) => c.toUserId === userId && c.toRole === 'oncall' && c.response && isOffHours(c.calledAt) && dates.includes(dutyDateOf(c.calledAt)) && !dutyNoteAfter(c))
 }
 
 /** 某一天那一班、某一科：被呼叫的統計（呼叫時間在那一班的下班時間內、病人是這一科的、找的是值班醫師） */

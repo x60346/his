@@ -193,7 +193,10 @@ export function endPca(id: string, input: { reason: string; residualMl: number; 
     if (p.status !== 'running') fail('這筆 PCA 沒有在使用中', 'CONFLICT')
     if (!PCA_END_REASONS.includes(input.reason) && !input.reason?.startsWith('其他')) failField('reason', '請選結束原因')
     const vol = find.drug(p.drugId)?.pca?.volumeMl ?? 100
-    if (typeof input.residualMl !== 'number' || Number.isNaN(input.residualMl) || input.residualMl < 0 || input.residualMl > vol) failField('residualMl', `剩餘量 0–${vol} ml`)
+    // 剩餘量可以比機器算的少（實際量），但不能多於一袋減掉已記的累計用量（否則管制藥帳上銷毀＋使用超過一袋）
+    const used = p.records.at(-1)?.usedMl ?? 0
+    const max = Math.max(0, vol - used)
+    if (typeof input.residualMl !== 'number' || Number.isNaN(input.residualMl) || input.residualMl < 0 || input.residualMl > max) failField('residualMl', `剩餘量 0–${max} ml（一袋 ${vol} ml、已記累計用量 ${used} ml）`)
     const w = witnessOk(input.witness, p, 'end', u.id)
     const t = now()
     Object.assign(p, { status: 'ended', end: { at: t, by: u.id, witnessBy: w.witnessId, reason: input.reason, residualMl: input.residualMl } })

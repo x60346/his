@@ -82,7 +82,8 @@ function item(a: Admission): CodingItem {
 export function codingQueue(): Promise<{ todo: CodingItem[]; done: CodingItem[]; canCode: boolean }> {
   return query(() => {
     const u = requirePermission('coding')
-    const xs = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt)
+    // 急診留觀後離院、轉院的沒有住院申報，不用編碼審查
+    const xs = db.admissions.filter((a) => a.status === 'discharged' && a.dischargedAt && !(a.obs && a.obs.outcome !== 'admit'))
     const from = addDays(today(), -30)
     const dFrom = addDays(today(), -90)
     return {

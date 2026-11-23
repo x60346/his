@@ -4,6 +4,7 @@ import type { Charge, PayMethod } from '@/types'
 import { db } from '@/mock/db'
 import { addDays, diffDays } from '@/utils/date'
 import { find, nameOf, visitView } from './views'
+import { erBillMode } from './er-rules'
 
 export interface DailyReport {
   /** 報表期間（單日時 date = to） */
@@ -210,7 +211,8 @@ export function buildDailyReport(date: string, to: string, estimate: (visitId: s
   const newDebt = valid.reduce((s, c) => s + (c.owed ?? 0), 0)
   const repaid = repayments.reduce((s, x) => s + x.amount, 0)
   const unpaid = db.visits
-    .filter((v) => inRange(v.date) && v.status === 'consulted')
+    // 急診收住院（費用進住院帳）、留觀還沒結束的不是待批價（和批價清單同一個條件）
+    .filter((v) => inRange(v.date) && v.status === 'consulted' && (!v.er || erBillMode(v.er) === 'opd'))
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((v) => {
       const vv = visitView(v)

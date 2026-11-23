@@ -143,7 +143,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup,
     for (const x of obs.drugs) {
       if (!x.qty) continue
       const price = drugPriceOn(x.drug, x.date.slice(0, 10))
-      const self = selfPayVisit
+      const self = selfPayVisit || !!x.selfPay
       const l: ChargeLine = self ? { kind: 'self', name: `${x.drug.name}（留觀，自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: round(price.selfPrice * x.qty), patientPay: true } : { kind: 'drug', name: `${x.drug.name}（留觀）`, qty: x.qty, unitPrice: price.nhiPrice, amount: round(price.nhiPrice * x.qty), patientPay: false }
       const same = merged.find((m) => m.name === l.name && m.unitPrice === l.unitPrice)
       if (same) Object.assign(same, { qty: Math.round((same.qty + l.qty) * 100) / 100, amount: round(same.amount + l.amount) })
@@ -155,7 +155,7 @@ export function calcChargeLines(visit: Visit, enc: Encounter, lk: BillingLookup,
     }
     for (const x of obs.procedures) {
       const price = procPriceOn(x.proc, x.date.slice(0, 10))
-      lines.push(selfPayVisit || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（留觀，自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: `${x.proc.name}（留觀）`, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
+      lines.push(selfPayVisit || x.selfPay || price.points === 0 ? { kind: 'self', name: `${x.proc.name}（留觀，自費）`, qty: x.qty, unitPrice: price.selfPrice, amount: price.selfPrice * x.qty, patientPay: true } : { kind: 'procedure', name: `${x.proc.name}（留觀）`, qty: x.qty, unitPrice: price.points, amount: price.points * x.qty, patientPay: false })
     }
   }
 

@@ -550,7 +550,8 @@ export function rebookNoShow(visitId: string, input: { sessionId: string; note?:
     const { u, v } = noShowSource(visitId)
     const s = must(find.session(input.sessionId), '診次')
     if (s.deptId !== v.deptId) fail('改約只能掛同一科（要看別科請另外掛號）')
-    const nv = createVisit({ patientId: v.patientId, sessionId: s.id, identityCode: v.identityCode, caseType: v.caseType })
+    // 預防保健的案件類別跟著預防保健項目走，改約的新掛號沒有帶項目：改回一般門診（和預約回診一樣）
+    const nv = createVisit({ patientId: v.patientId, sessionId: s.id, identityCode: v.identityCode, caseType: v.caseType === 'A3' || v.caseType === '08' ? '01' : v.caseType })
     nv.rebookedFrom = v.id
     if (v.followUpOf) nv.followUpOf = { ...v.followUpOf }
     if (v.afterDischarge) nv.afterDischarge = { ...v.afterDischarge }

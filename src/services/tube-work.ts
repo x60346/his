@@ -4,6 +4,7 @@ import type { IpdOrder, TubeFeedPlan, TubeFeedRecord } from '@/types'
 import { db } from '@/mock/db'
 import { addDays, addMinutes } from '@/utils/date'
 import { feedSlots, slotState, TUBE_RESIDUAL_HOLD } from './nutrition-rules'
+import { shiftRange } from './nursing-rules'
 
 /** 現在有效的管灌醫囑（長期飲食醫囑、種類管灌） */
 export function activeTubeOrder(admissionId: string, t: string): (IpdOrder & { diet: { tube: TubeFeedPlan } }) | undefined {
@@ -21,16 +22,19 @@ export interface FeedSlot {
   record?: TubeFeedRecord
 }
 
-/** 今天（連續灌食含昨天最後一班）的時段：開醫囑之前的不算；記過的帶紀錄 */
+/** 今天的時段（連續灌食含昨天最後一班、分次灌食含上一班還沒記的）：開醫囑之前的不算；記過的帶紀錄 */
 export function tubeSlotsOf(admissionId: string, t: string): { order?: IpdOrder & { diet: { tube: TubeFeedPlan } }; slots: FeedSlot[] } {
   const order = activeTubeOrder(admissionId, t)
   if (!order) return { slots: [] }
   const plan = order.diet.tube
   const date = t.slice(0, 10)
-  const raw = [...(plan.mode === 'continuous' ? feedSlots(plan, addDays(date, -1)).slice(-1) : []), ...feedSlots(plan, date)]
+  const recs = db.tubeFeeds.filter((r) => r.orderId === order.id)
+  // 昨天的：連續灌食的最後一班；分次灌食上一班還沒記的（過了午夜仍是逾時，不能一到 00:00 就消失；和交班一樣看到上一班）
+  const yesterday = feedSlots(plan, addDays(date, -1))
+  const prevShiftStart = addMinutes(shiftRange(t).start, -8 * 60)
+  const raw = [...(plan.mode === 'continuous' ? yesterday.slice(-1) : yesterday.filter((s) => s.slot >= prevShiftStart && !recs.some((r) => r.slot === s.slot))), ...feedSlots(plan, date)]
   // 開醫囑之後的時段才算（分次：預定時間在開立之後；連續：這一班還沒結束）
   const startAt = order.startAt
-  const recs = db.tubeFeeds.filter((r) => r.orderId === order.id)
   const slots = raw
     .filter((s) => (plan.mode === 'bolus' ? s.slot >= startAt : addMinutes(s.slot, 8 * 60) > startAt))
     .map((s) => {

@@ -93,6 +93,8 @@ export interface IpdBillMeta {
   copay: { fromDay: number; toDay: number; rate: number; amount: number }[]
   /** 部分負擔超過每次住院上限，被截掉多少 */
   capped?: number
+  /** 結帳時的身分（之後病人預設身分改了，申報仍照這個） */
+  identityCode?: string
 }
 
 /** 住院部分負擔：急性病房依住院日數分段（30 日內、31–60 日、61 日起）的比率（%）與每次住院上限（元） */
@@ -2169,7 +2171,9 @@ export interface RrtCall {
   reason?: string
   calledBy: string
   calledAt: string
-  status: 'pending' | 'done'
+  /** cancelled：小組還沒到場病人就出院、死亡或轉進加護病房（自動結案，不算到場時間） */
+  status: 'pending' | 'done' | 'cancelled'
+  closedNote?: string
   assessedBy?: string
   assessedAt?: string
   /** 評估發現、處置 */

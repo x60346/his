@@ -27,10 +27,12 @@ export const useAuth = defineStore('auth', () => {
   }
 
   // 管理員改了帳號（例：拿掉目前用的角色、加了新角色）：資料庫有寫入就重新讀一次登入者，選單跟著變
+  // 權限（can）、密碼過期狀態也要跟著變，否則選單與強制改密碼畫面都停在舊的；帳號被停用就登出
   watch(dbVersion, () => {
     if (!user.value) return
     const now = authApi.currentUser()
-    if (now && (now.role !== user.value.role || now.roles.join() !== user.value.roles.join())) user.value = now
+    if (!now) return void expire()
+    if (JSON.stringify(now) !== JSON.stringify(user.value)) user.value = now
   })
 
   async function logout() {

@@ -62,7 +62,8 @@ export function ensureLabDraws(admissionId: string, date: string): boolean {
 export function ensureMar(admissionId: string, date: string): boolean {
   let added = ensureLabDraws(admissionId, date)
   // 點滴（連續輸注）不排給藥時間：由護理師接上、換瓶（infusion.ts）
-  const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long' && !o.infusion)
+  // 只排執行中的：停止（含修改）時已刪掉還沒給的，停止的醫囑再排一次會把刪掉的逾時劑次又生回來
+  const orders = db.ipdOrders.filter((o) => o.admissionId === admissionId && o.category === 'medication' && o.type === 'long' && !o.infusion && o.status === 'active')
   for (const o of orders) {
     // 給藥時間依服用時機對齊用餐（drug-rules.marTimes）；時機是開立時存在醫囑上的，不跟著主檔變
     const times = marTimes(o.freq ?? '', find.freq(o.freq ?? '')?.times ?? [], o.timing, o.route)
@@ -469,7 +470,8 @@ export function reviseOrder(orderId: string, input: ReviseInput): Promise<OrderV
     if (input.dose === old.dose && input.freq === old.freq && input.route === old.route && (input.timing || undefined) === timingNow) fail('沒有任何變更')
     const t = now()
     const q = openQuery(old)
-    const handled = db.mar.filter((m) => m.orderId === old.id && m.status !== 'pending').map((m) => m.scheduledAt).sort().at(-1)
+    // 已處理到哪一次：給過的（可能提前給）或時間已到的；預先記的暫停、拒絕（例：明早禁食）不算，否則今天剩下的劑次會被跳過
+    const handled = db.mar.filter((m) => m.orderId === old.id && m.status !== 'pending' && (m.status === 'given' || m.scheduledAt <= t)).map((m) => m.scheduledAt).sort().at(-1)
     const startAt = handled && addMinutes(handled, 1) > t ? addMinutes(handled, 1) : t
     const unit = doseUnitOf(must(find.drug(old.drugId!), '藥品'))
     settlePharmOnChange(old, 'modified', user.id, t)

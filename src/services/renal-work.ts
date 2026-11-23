@@ -66,7 +66,8 @@ export function tdmOf(o: IpdOrder): TdmState | undefined {
   const m = TDM_PROC[o.drugId ?? '']
   if (!m || o.status !== 'active') return undefined
   const given = db.mar.filter((x) => x.orderId === o.id && x.status === 'given').length
-  const ordered = db.ipdOrders.some((x) => x.admissionId === o.admissionId && x.procId === m.procId && x.createdAt >= o.createdAt)
+  // 停掉（沒抽）的谷濃度醫囑不算「已開」，否則「該抽了」永遠不會再出現
+  const ordered = db.ipdOrders.some((x) => x.admissionId === o.admissionId && x.procId === m.procId && x.createdAt >= o.createdAt && x.status !== 'stopped')
   const latest = db.labReports
     .filter((r) => r.admissionId === o.admissionId && r.procId === m.procId && r.reportedAt >= o.createdAt)
     .sort((a, b) => b.reportedAt.localeCompare(a.reportedAt))[0]

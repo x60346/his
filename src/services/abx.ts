@@ -2,7 +2,7 @@
 // 開立時的把關在 ipd.createOrder（先用後審：要理由與感染部位）；規則在 abx-rules（純函式），待辦在 abx-work
 import type { AbxStep, IpdOrder, VitalRecord } from '@/types'
 import { db } from '@/mock/db'
-import { addDays, now } from '@/utils/date'
+import { addDays, ageOf, now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { ABX_DEFAULT_DAYS, ABX_MAX_DAYS, abxDay, abxState, abxText } from './abx-rules'
 import { courseStartOf } from './abx-steward-work'
@@ -60,7 +60,7 @@ export function abxPatientPart(admissionId: string, t: string): AbxPatientPart {
     .map((x) => `${x.content}・${x.abx ? abxText(x.abx, t) : `使用第 ${abxDay(courseStartOf(x), t)} 天`}`)
   return {
     admissionId: a.id, admitNo: a.admitNo, bedNo: find.bed(a.bedId ?? '')?.bedNo ?? '',
-    patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', age: p ? `${new Date(t).getFullYear() - Number(p.birthDate.slice(0, 4))} 歲` : '',
+    patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', age: p ? `${ageOf(p.birthDate, t.slice(0, 10))} 歲` : '',
     diagnosis: a.diagnosis, attendingName: nameOf.doctor(a.doctorId), deptName: nameOf.dept(a.deptId), allergies: p?.allergies ?? [], flags: flagsOf(a.patientId), renal: renalOf(a.id, t).text,
     ...(latest ? { latestVitals: latest } : {}), labs, antibiotics,
   }

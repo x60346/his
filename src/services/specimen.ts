@@ -157,6 +157,8 @@ export function rejectSpecimen(barcode: string, reason: string): Promise<Specime
     failFields(checkRejectReason(reason))
     const t = now()
     s.rejected = { at: t, by: u.id, reason: reason.trim() }
+    // 這支上過機、待審核的結果一起作廢（否則新檢體收件後只能放行舊檢體的數值，手動登打與重新上機都被擋）
+    for (const x of db.analyzerResults) if (x.barcode === s.barcode && x.status === 'held') Object.assign(x, { status: 'recollect', recollect: { at: t, by: u.id, reason: reason.trim() } })
     reopenLabOrders(s.orderIds)
     audit('檢體退件', `${s.barcode} ${nameOf.patient(s.patientId)}：${reason.trim()}`)
     return view(s, t)

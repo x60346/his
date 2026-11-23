@@ -1,7 +1,7 @@
 // 護理站呼叫醫師：護理師記打給誰（預設下班時間找那一科的值班醫師、上班時間找主治）、為什麼、緊急或一般；
 // 醫師回覆（電話醫囑或到床邊）由護理師或被呼叫的醫師記。緊急呼叫 15 分鐘沒回覆提醒再找（找主治或上一級）。
 // 值班醫師被呼叫、回覆了但沒有幫那位病人寫值班紀錄：首頁提醒（值班結束前補）
-import type { DoctorCall } from '@/types'
+import type { DoctorCall, RrtCall } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser, sessionRole } from './http'
@@ -27,7 +27,7 @@ export interface DoctorCallView extends DoctorCall {
   escalatedToName?: string
   /** 找的是主治也沒回覆：可以改呼叫快速反應小組 */
   canRrt: boolean
-  rrtStatus?: 'pending' | 'done'
+  rrtStatus?: RrtCall['status']
 }
 const view = (c: DoctorCall, t: string): DoctorCallView => ({
   ...c, toName: nameOf.user(c.toUserId), calledByName: nameOf.user(c.calledBy), roleLabel: { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole],

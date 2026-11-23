@@ -54,7 +54,7 @@ const rrt = useAction(doctorCallApi.callRrtFromCall, { success: '已呼叫快速
               <UButton v-if="c.canEscalate" size="sm" variant="danger" :loading="esc.pending.value" @click="esc.run(c.id)">改找主治</UButton>
               <UButton v-if="c.canRrt" size="sm" variant="danger" :loading="rrt.pending.value" @click="rrt.run(c.id)">主治也沒回覆：呼叫快速反應小組</UButton>
               <UBadge v-if="c.escalatedToName" tone="gray">已改找 {{ c.escalatedToName }}</UBadge>
-              <UBadge v-if="c.rrtStatus" :tone="c.rrtStatus === 'pending' ? 'red' : 'gray'">{{ c.rrtStatus === 'pending' ? '已呼叫快速反應小組（還沒到場）' : '快速反應小組已評估' }}</UBadge>
+              <UBadge v-if="c.rrtStatus" :tone="c.rrtStatus === 'pending' ? 'red' : 'gray'">{{ c.rrtStatus === 'pending' ? '已呼叫快速反應小組（還沒到場）' : c.rrtStatus === 'done' ? '快速反應小組已評估' : '快速反應小組呼叫已結案' }}</UBadge>
               <UBadge v-if="c.noteId" tone="green">已寫護理紀錄</UBadge>
             </div>
             <div class="text-xs text-slate-700">{{ c.reason }}</div>

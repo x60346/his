@@ -9,10 +9,13 @@ import { findClusters, notifiableOf, notifyDueAt } from './ipc-rules'
 
 /** 個案在哪個病房：發生那天住的床（床位紀錄），沒有就用目前（或最後）的床 */
 export function wardOfCase(c: Pick<InfectionCase, 'admissionId' | 'onsetAt'>): string {
-  const a = find.admission(c.admissionId)
+  return wardOnDay(find.admission(c.admissionId), c.onsetAt.slice(0, 10))
+}
+/** 某一天（以當天結束時的床位為準）病人在哪個病房：個案歸屬與病人日、管路日的分母用同一個算法 */
+export function wardOnDay(a: Admission | undefined, date: string): string {
   const hist = a?.bedHistory ?? []
-  const at = `${c.onsetAt.slice(0, 10)} 23:59`
-  const h = [...hist].filter((x) => x.from <= at).pop() ?? hist[hist.length - 1]
+  const at = `${date} 23:59`
+  const h = [...hist].filter((x) => x.from <= at).pop() ?? hist[0]
   return find.bed(h?.bedId ?? a?.bedId ?? '')?.ward ?? ''
 }
 

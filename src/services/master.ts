@@ -320,6 +320,9 @@ export function seedInfo(): { seededAt: string; stale: boolean; schema: number; 
 
 /** 重置為今天的展示資料；可選醫院規模（不給就沿用目前的）。登入狀態保留，因為使用者 id 在種子中固定 */
 export async function resetDemoData(scale?: HospitalScale): Promise<void> {
-  await query(() => undefined)
+  // 資料過期（不是今天產生的）任何人都可以重置（每天的展示便利）；沒過期的要系統管理員，避免誤把當天操作清掉
+  await query(() => {
+    if (!isSeedStale()) requireUser('admin')
+  })
   resetDatabase(scale)
 }
