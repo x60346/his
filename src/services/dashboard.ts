@@ -3,6 +3,7 @@ import { commitIfPossible, db } from '@/mock/db'
 import { consentScanOverdue } from './consent-rules'
 import { escalateTo, readingAlertPending, readingEscalated } from './bedside-work'
 import { dutyDateOf, isOffHours } from './duty-rules'
+import { callsWithoutNote, overdueUrgentCalls } from './doctor-call-work'
 import { radUnstaffedExams } from './rad-roster-work'
 import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
@@ -167,6 +168,10 @@ export interface DashboardStats {
   bedsideAlerts?: number
   /** 主治：夜間值班醫師寫的值班紀錄還沒看（我主治、住院中） */
   dutyNotesUnread?: number
+  /** 值班醫師：這一班被呼叫、回覆了但沒寫值班紀錄的 */
+  callsWithoutNote?: number
+  /** 護理師：緊急呼叫醫師超過 15 分鐘沒回覆 */
+  callsOverdue?: number
   /** 醫師：今晚（下班時間就是這一班）我值班的科、住院中幾位 */
   dutyTonight?: { depts: string; inpatients: number }
   /** 同科醫師：別人主治的病人異常判讀超過 2 小時沒知悉（升級） */
@@ -534,11 +539,13 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? {
             ...((mine) => (mine.length ? { dutyTonight: { depts: mine.map((s) => nameOf.dept(s.deptId)).join('、'), inpatients: db.admissions.filter((a) => a.status === 'admitted' && !a.obs && mine.some((s) => s.deptId === a.deptId)).length } } : {}))(db.dutyShifts.filter((s) => s.userId === me.id && s.date === (isOffHours(t) ? dutyDateOf(t) : t.slice(0, 10)))),
+            callsWithoutNote: callsWithoutNote(me.id, t).length,
             dutyNotesUnread: db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId && db.progressNotes.some((n) => n.admissionId === a.id && n.kind === 'duty' && !n.dutyAck)).length,
             bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length,
             bedsideAlertsEscalated: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId !== me.doctorId && ((to) => (to.kind === 'oncall' ? to.userId === me.id : careRoleOf(me.doctorId, a)?.kind === 'team'))(escalateTo(a.id, t))) && readingEscalated(p, t)).length,
           } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
+          ...(sessionRole() === 'nurse' ? { callsOverdue: overdueUrgentCalls(t).filter((c) => !scope || scope.has(c.admissionId)).length } : {}),
           ...(sessionRole() === 'nurse' ? { consentUnscanned: db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)) && db.consents.some((c) => c.admissionId === a.id && consentScanOverdue(c, t))).length } : {}),
           ...(sessionRole() === 'nurse' ? { nursingRecordMissing: db.admissions.filter((a) => (!scope || scope.has(a.id)) && nursingGapsOf(a, t).length).length } : {}),
           ...(sessionRole() === 'nurse' ? { negativeRoomTodo: db.beds.filter((b) => b.negativePressure && negativeRoomState(b, t).state !== 'ok').length } : {}),

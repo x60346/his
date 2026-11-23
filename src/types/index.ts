@@ -968,6 +968,21 @@ export interface ImagingExam {
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
+/** 護理站呼叫醫師：打給誰、幾點、為什麼、緊急或一般；醫師回覆的時間與方式（電話醫囑、到床邊） */
+export interface DoctorCall {
+  id: string
+  admissionId: string
+  calledAt: string
+  calledBy: string
+  /** 被呼叫的醫師（使用者 id） */
+  toUserId: string
+  /** 呼叫的時候對方是值班醫師還是主治 */
+  toRole: 'oncall' | 'attending' | 'other'
+  urgency: 'urgent' | 'routine'
+  reason: string
+  response?: { at: string; by: string; how: 'phone' | 'bedside'; note?: string }
+}
+
 /** 醫師值班：某一天、某一科由誰值班（平日 17:00 到隔天 08:00、週六日全天）；主治不在時接急事（判讀異常升級、危急值通報） */
 export interface DutyShift {
   id: string

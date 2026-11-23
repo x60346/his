@@ -19683,6 +19683,71 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/pages/nursing/NursingPage.vue', 'utf8').includes('dutyApi.onCallNow()') && readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8').includes('wardDutyNotes'), '護理站顯示值班醫師、交班顯示值班紀錄')
   }
+  // 呼叫醫師：護理師記打給誰、緊急或一般、回覆；值班醫師被呼叫沒寫值班紀錄提醒
+  console.log('\n[呼叫醫師]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    // 種子：昨晚兩次找值班醫師；04:30 那位沒寫值班紀錄
+    const c1 = db().doctorCalls.find((c) => c.id === 'DC-SEED-1'), c2 = db().doctorCalls.find((c) => c.id === 'DC-SEED-2')
+    ok(c1?.toRole === 'oncall' && c1.response?.how === 'phone' && c2?.response?.how === 'bedside', '種子：昨晚兩次找值班醫師（電話、到床邊）')
+    const oncallUser = db().users.find((u) => u.id === c1.toUserId)
+    await as(oncallUser.username)
+    const mine = await api.doctorCallApi.myCallsWithoutNote()
+    ok(mine.map((x) => x.id).join() === 'DC-SEED-2' && (await api.dashboardApi.getDashboard()).callsWithoutNote === 1, `值班醫師 ${oncallUser.username}：04:30 那位還沒寫值班紀錄（寫了的那位不算）`)
+    // 護理師記呼叫：白天建議找主治
+    const adm = db().admissions.find((a) => a.id === c2.admissionId)
+    await as('nurse01')
+    let L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    const wd = new Date(`${T}T00:00:00`).getDay()
+    const ocNow = db().dutyShifts.find((d) => d.deptId === adm.deptId && d.date === T)?.userId, attId = db().users.find((u) => u.doctorId === adm.doctorId)?.id
+    ok(L.calls.length >= 1 && ((wd === 0 || wd === 6) && ocNow && ocNow !== attId ? L.suggest?.role === 'oncall' : L.suggest?.role === 'attending' && L.suggest.userId === attId), `建議找：${L.suggest?.name}（${L.suggest?.role}）`)
+    ok((await fieldsOf(() => api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: L.suggest.userId, urgency: 'urgent', reason: ' ' }))).reason, '要寫為什麼找')
+    const att = db().users.find((u) => u.doctorId === adm.doctorId)
+    const c = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: att.id, urgency: 'urgent', reason: '血壓 82/50、冒冷汗' })
+    ok(c.toRole === 'attending' && c.urgency === 'urgent' && !c.overdue && db().auditLogs[0].action === '呼叫醫師', '緊急找主治：記錄、稽核')
+    // 15 分鐘沒回覆 → 護理師首頁、紀錄標紅
+    db().doctorCalls.find((x) => x.id === c.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -20)
+    L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    ok(L.calls.find((x) => x.id === c.id).overdue && (await api.dashboardApi.getDashboard()).callsOverdue >= 1, '緊急 20 分鐘沒回覆：標紅、護理師首頁提醒')
+    // 醫師回覆：別的醫師不能記；被呼叫的醫師或護理師可以
+    const other = db().users.find((u) => u.doctorId && u.id !== att.id && !u.passwordExpired)
+    await as(other.username)
+    ok((await errOf(() => api.doctorCallApi.respondCall(c.id, { how: 'bedside' }))).includes('被呼叫'), '別的醫師不能記回覆')
+    await as('nurse01')
+    const r = await api.doctorCallApi.respondCall(c.id, { how: 'bedside', note: '到床邊，給 NS 500 mL' })
+    ok(r.response.how === 'bedside' && r.waitMinutes >= 20 && !r.overdue && (await errOf(() => api.doctorCallApi.respondCall(c.id, { how: 'phone' }))).includes('記過'), `記回覆：到床邊（等 ${r.waitMinutes} 分）、不能重複`)
+    ok(!(await api.dashboardApi.getDashboard()).callsOverdue, '回覆了：首頁提醒消失')
+    // 晚上：建議找值班醫師；值班醫師寫了值班紀錄 → 提醒消失
+    setClock(22, 0)
+    try {
+      L = await api.doctorCallApi.listDoctorCalls(adm.id)
+      const today = db().dutyShifts.find((s) => s.deptId === adm.deptId && s.date === T)
+      // 主治本人值班 → 建議主治（自己的病人，記成主治、不必寫值班紀錄）
+      today.userId = att.id
+      L = await api.doctorCallApi.listDoctorCalls(adm.id)
+      ok(L.suggest?.role === 'attending' && L.suggest.userId === att.id, '22:00 主治本人值班：建議找主治')
+      // 換同科別人值班 → 建議值班醫師
+      today.userId = oncallUser.id !== att.id ? oncallUser.id : other.id
+      L = await api.doctorCallApi.listDoctorCalls(adm.id)
+      ok(L.suggest?.role === 'oncall' && L.suggest.userId === today.userId, `22:00 建議找值班醫師 ${L.suggest?.name}`)
+      await as('nurse01')
+      const cAtt = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: today.userId, urgency: 'routine', reason: '要安眠藥' })
+      ok(cAtt.toRole === 'oncall', '22:00 找值班醫師：記成值班醫師')
+      today.userId = att.id
+      const cOwn = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: att.id, urgency: 'routine', reason: '家屬想談' })
+      ok(cOwn.toRole === 'attending', '主治本人值班時找他：記成主治')
+    } finally { setClock(14, 35) }
+    // 補寫 04:30 那位的值班紀錄（值班時間才能寫：時鐘調回昨晚那一班的凌晨不容易，直接放一筆）
+    db().progressNotes.push({ id: 'PN-T-DUTY', admissionId: c2.admissionId, at: `${T} 06:00`, doctorId: oncallUser.doctorId, kind: 'duty', items: [{ label: '事件', text: '失眠' }, { label: '處理', text: 'Lorazepam' }], subjective: '', objective: '', assessment: '', plan: '' })
+    await as(oncallUser.username)
+    ok(!(await api.doctorCallApi.myCallsWithoutNote()).length && !(await api.dashboardApi.getDashboard()).callsWithoutNote, '寫了值班紀錄：提醒消失')
+    await as('nurse01')
+    const done = db().admissions.find((a) => a.status === 'discharged')
+    ok((await errOf(() => api.doctorCallApi.callDoctor({ admissionId: done.id, toUserId: att.id, urgency: 'routine', reason: 'x' }))).includes('住院中'), '出院的不能記')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

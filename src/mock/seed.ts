@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, RadShift, DutyShift, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, RadShift, DutyShift, DoctorCall, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -4087,6 +4087,20 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 呼叫醫師（示範）：昨晚護理站兩次找值班醫師——02:05 緊急（發燒，電話回覆、寫了值班紀錄，就是上面那筆）、
+  // 04:30 一般（另一位病人睡不著要安眠藥，到床邊看了，但沒寫值班紀錄 → 值班醫師首頁提醒）
+  const doctorCalls: DoctorCall[] = []
+  {
+    const dn = progressNotes.find((n) => n.id === 'PN-SEED-DUTY1')
+    const a1 = dn && admissions.find((a) => a.id === dn.admissionId)
+    const s1 = a1 && dutyShifts.find((s) => s.deptId === a1.deptId && s.date === addDays(T, -1))
+    if (a1 && s1 && nowStr > `${T} 02:12`) {
+      doctorCalls.push({ id: 'DC-SEED-1', admissionId: a1.id, calledAt: `${T} 02:05`, calledBy: 'U201', toUserId: s1.userId, toRole: 'oncall', urgency: 'urgent', reason: '發燒 38.6°C、心跳 108', response: { at: `${T} 02:12`, by: 'U201', how: 'phone', note: '電話醫囑：抽血培養、給退燒藥' } })
+      const a2 = admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== a1.id && a.deptId === a1.deptId && a.doctorId !== users.find((u) => u.id === s1.userId)?.doctorId)
+      if (a2 && nowStr > `${T} 04:50`) doctorCalls.push({ id: 'DC-SEED-2', admissionId: a2.id, calledAt: `${T} 04:30`, calledBy: 'U201', toUserId: s1.userId, toRole: 'oncall', urgency: 'routine', reason: '睡不著、焦慮，要安眠藥', response: { at: `${T} 04:50`, by: 'U201', how: 'bedside', note: '到床邊評估，開 Lorazepam 0.5 mg 一次' } })
+    }
+  }
+
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
   // 明天骨折那台的鎖定骨板：主刀申請、已核准
@@ -4278,6 +4292,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     roomDowntimes,
     radShifts,
     dutyShifts,
+    doctorCalls,
     radShiftRequests: [],
     // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],

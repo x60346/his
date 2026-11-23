@@ -51,6 +51,7 @@ import * as line from './line'
 import * as bedside from './bedside'
 import * as radRoster from './rad-roster'
 import * as duty from './duty'
+import * as doctorCall from './doctor-call'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
 import * as delirium from './delirium'
@@ -150,6 +151,7 @@ export const lineApi = overNetwork(line)
 export const bedsideApi = overNetwork(bedside)
 export const radRosterApi = overNetwork(radRoster)
 export const dutyApi = overNetwork(duty)
+export const doctorCallApi = overNetwork(doctorCall)
 export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)
 export const deliriumApi = overNetwork(delirium)
@@ -374,6 +376,7 @@ export type { ConsentView } from './consent'
 export type { BedsideView } from './bedside'
 export type { RadRoster, RadRequestView } from './rad-roster'
 export type { DutyRoster } from './duty'
+export type { DoctorCallView } from './doctor-call'
 export type { PreAuthView } from './preauth'
 export type { DrgEstimate } from './drg'
 export type { CodingItem } from './coding'
