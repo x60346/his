@@ -16,7 +16,7 @@ import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
 import { calloutEscalated, calloutRate, calloutStatus, calloutTarget, checkCallout, checkCalloutAttempt, CALLOUT_ROLE_LABEL } from './callout-rules'
 import { onCallFor } from './duty-rules'
 import { addDays } from '@/utils/date'
-import { calloutMinutesOf, canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
+import { calloutMinutesOf, canAckLab, careAdmissionOf, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
 export type { LabWorkItem }
 
@@ -61,8 +61,9 @@ export interface LabReportView extends LabReport {
 }
 
 const whereOf = (r: LabReport) => {
-  if (r.admissionId) {
-    const a = find.admission(r.admissionId)
+  const ca = careAdmissionOf(r)
+  if (ca) {
+    const a = ca
     const bed = a?.bedId ? find.bed(a.bedId) : undefined
     return bed ? `${bed.ward} ${bed.bedNo}` : '住院'
   }
@@ -71,11 +72,11 @@ const whereOf = (r: LabReport) => {
 }
 
 /** 住院的主治醫師（升級通報的對象） */
-const attendingOf = (r: LabReport) => (r.admissionId ? find.admission(r.admissionId)?.doctorId : undefined)
+const attendingOf = (r: LabReport) => careAdmissionOf(r)?.doctorId
 /** 升級時建議打給誰：住院＝主治；門診＝同科其他醫師 */
 function suggestOf(r: LabReport): string[] {
   const att = attendingOf(r)
-  if (r.admissionId) return att ? [nameOf.doctor(att)] : []
+  if (careAdmissionOf(r)) return att ? [nameOf.doctor(att)] : []
   const dept = find.doctor(r.doctorId)?.deptId
   return db.doctors.filter((d) => d.deptId === dept && d.id !== r.doctorId).map((d) => d.name)
 }
@@ -99,7 +100,7 @@ function reportView(r: LabReport): LabReportView {
     calloutMinutes: calloutMinutesOf(r.procId),
     calloutTries: r.calloutAttempts?.length ?? 0,
     calloutEscalated: calloutEscalated(r),
-    calloutTarget: calloutTarget(r.orderId ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}), ...((s) => (s ? { onCallName: nameOf.user(s.userId) } : {}))(r.admissionId ? ((a) => (a ? onCallFor(db.dutyShifts, a.deptId, now()) : undefined))(find.admission(r.admissionId)) : undefined) }),
+    calloutTarget: ((ca) => calloutTarget(r.orderId || ca ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}), ...((s) => (s ? { onCallName: nameOf.user(s.userId) } : {}))(ca ? onCallFor(db.dutyShifts, ca.deptId, now()) : undefined) }))(careAdmissionOf(r)),
     calloutSuggest: suggestOf(r),
     where: whereOf(r),
     items: procItems(r.procId).map((d) => ({ ...d, ref: labRefText(d, p?.gender ?? 'M') })),
@@ -221,7 +222,7 @@ export function calloutFailed(id: string, input: { to: string; toRole: 'nurse' |
     const r = must(db.labReports.find((x) => x.id === id), '檢驗報告')
     if (!r.values.some((v) => v.critical)) fail('這份報告沒有危急值，不需要通報', 'CONFLICT')
     if (r.callout) fail('這份報告已經通報過了', 'CONFLICT')
-    failFields(checkCalloutAttempt(input ?? {}, r.admissionId ? 'ipd' : 'opd'))
+    failFields(checkCalloutAttempt(input ?? {}, careAdmissionOf(r) ? 'ipd' : 'opd'))
     const t = now()
     ;(r.calloutAttempts ??= []).push({ at: t, by: u.id, to: input.to.trim(), toRole: input.toRole, ...(input.note?.trim() ? { note: input.note.trim() } : {}) })
     const n = r.calloutAttempts.length

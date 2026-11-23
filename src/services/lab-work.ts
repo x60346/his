@@ -4,6 +4,7 @@
 import type { Gender, LabItemDef, LabReport } from '@/types'
 import { db } from '@/mock/db'
 import { find, nameOf } from './views'
+import { erBillMode } from './er-rules'
 import { labOrderStage, opdSpecimenOf, specimenOfOrder } from './specimen-work'
 import { labNeedsAck, labRefText } from './lab-rules'
 import { calloutLimitOf, calloutStatus } from './callout-rules'
@@ -89,10 +90,23 @@ export function pendingLabWork(): LabWorkItem[] {
 }
 
 /** 誰能按「已知悉」：開立醫師；住院另加主治醫師 */
+/**
+ * 這份報告現在歸哪一次住院：住院醫囑的就是那次；急診開的、病人已經從急診收住院（直接或留觀後）還在住院中，
+ * 危急值要找病房與主治，不是已經不在照顧的急診醫師
+ */
+export function careAdmissionOf(r: LabReport) {
+  if (r.admissionId) return find.admission(r.admissionId)
+  const e = r.encounterId ? db.encounters.find((x) => x.id === r.encounterId) : undefined
+  const v = e ? find.visit(e.visitId) : undefined
+  const id = v?.er && erBillMode(v.er) === 'ipd' ? v.er.disposition?.admissionId : undefined
+  const a = id ? find.admission(id) : undefined
+  return a?.status === 'admitted' ? a : undefined
+}
+// 開立醫師，或這份報告現在歸屬的住院的主治（急診開的、已收住院的也算）
 export function canAckLab(r: LabReport, doctorId?: string): boolean {
   if (!doctorId) return false
   if (r.doctorId === doctorId) return true
-  return !!r.admissionId && find.admission(r.admissionId)?.doctorId === doctorId
+  return careAdmissionOf(r)?.doctorId === doctorId
 }
 
 /** 首頁：可以登打的待檢驗（住院還沒採檢、還沒收件的不算）；某醫師待確認的報告份數 */

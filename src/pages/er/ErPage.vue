@@ -205,11 +205,16 @@ async function submitEnd() {
             </span>
           </li>
         </ul>
-        <details v-if="done.length" class="rounded-md border border-slate-200 bg-white p-3 text-sm">
+        <details v-if="done.length" :open="done.some((i) => i.labs && (i.labs.toCollect || i.labs.toReceive))" class="rounded-md border border-slate-200 bg-white p-3 text-sm">
           <summary class="cursor-pointer text-slate-600">最近 24 小時已離開急診 {{ done.length }} 位</summary>
           <ul class="mt-2 divide-y divide-slate-100">
             <li v-for="i in done" :key="i.visitId" class="py-1 text-xs text-slate-600">
               <span :class="['mr-1 inline-block w-5 rounded text-center font-bold', LEVEL_CLASS[i.level]]">{{ i.level }}</span>{{ i.arrivedAt.slice(5) }} {{ i.patientName }}・{{ i.complaint }}・{{ i.stageLabel }}<span v-if="i.dispositionText">（{{ i.dispositionText }}）</span>
+              <!-- 已離開急診（收住院、離院）但急診開的檢驗還沒採檢或收件：仍要能印條碼、採檢、看報告，不然這筆檢驗沒人做、卻照樣計費 -->
+              <template v-if="i.labs && (i.labs.toCollect || i.labs.toReceive || i.labs.fresh)">
+                <span class="ml-1 font-semibold text-amber-800">檢驗：{{ labText(i.labs) }}</span>
+                <UButton size="sm" variant="secondary" class="ml-1" @click="labVisit = i.visitId">檢驗</UButton>
+              </template>
             </li>
           </ul>
         </details>
