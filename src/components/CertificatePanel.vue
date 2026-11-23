@@ -25,9 +25,14 @@ const mode = ref<Mode>('new')
 const editing = ref<CertificateView>()
 const form = reactive({ diagnoses: '', advice: '', purpose: '請假' as string | number, copies: 1, reason: '' })
 const dateText = ref('')
+// 草稿走 useAction：服務層不讓開（例：不是自己的病人）時要看到原因，不是按了沒反應
+const draftAct = useAction(certificateApi.certificateDraft)
+// 打開表單時清掉上一次送出留下的欄位錯誤
+const clearErrors = () => { issue.fieldErrors.value = {}; update.fieldErrors.value = {}; reissue.fieldErrors.value = {} }
 async function openNew() {
-  const d = await certificateApi.certificateDraft(q()).catch(() => undefined)
+  const d = await draftAct.run(q())
   if (!d) return
+  clearErrors()
   Object.assign(form, { diagnoses: d.diagnoses, advice: '', purpose: d.purpose, copies: 1, reason: '' })
   dateText.value = d.visitDate ? `應診日期 ${toRoc(d.visitDate)}` : `住院期間 ${toRoc(d.stayFrom!)} 至 ${toRoc(d.stayTo!)}`
   mode.value = 'new'
@@ -35,6 +40,7 @@ async function openNew() {
   formOpen.value = true
 }
 function openEdit(c: CertificateView, m: Mode) {
+  clearErrors()
   Object.assign(form, { diagnoses: c.diagnoses, advice: c.advice, purpose: c.purpose, copies: c.copies, reason: '' })
   dateText.value = c.visitDate ? `應診日期 ${toRoc(c.visitDate)}` : `住院期間 ${toRoc(c.stayFrom!)} 至 ${toRoc(c.stayTo!)}`
   mode.value = m
@@ -90,7 +96,7 @@ const MODE_TITLE: Record<Mode, string> = { new: '開立診斷證明書', edit: '
         <span class="ml-auto flex gap-1.5">
           <template v-if="isDoctor && c.doctorId === auth.user?.doctorId">
             <UButton v-if="c.editable" size="sm" variant="ghost" @click="openEdit(c, 'edit')">修改</UButton>
-            <UButton v-if="c.editable" size="sm" variant="ghost" @click="(voiding = c), (voidReason = ''), (voidOpen = true)">作廢</UButton>
+            <UButton v-if="c.editable" size="sm" variant="ghost" @click="(voiding = c), (voidReason = ''), (voidIt.fieldErrors.value = {}), (voidOpen = true)">作廢</UButton>
             <UButton v-if="c.reissuable" size="sm" variant="ghost" @click="openEdit(c, 'reissue')">作廢重開</UButton>
           </template>
           <UButton v-if="c.printable" size="sm" variant="secondary" :icon="Printer" :loading="doPrint.pending.value" @click="openPrint(c)">列印</UButton>

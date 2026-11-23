@@ -18,7 +18,7 @@ const roles = Object.keys(roleLabel) as Role[]
 const pages = computed(() =>
   (routes.find((r) => r.children)?.children ?? [])
     .filter((r) => r.meta?.group)
-    .map((r) => ({ title: r.meta!.title!, group: r.meta!.group!, roles: r.meta!.roles })),
+    .map((r) => ({ title: r.meta!.title!, group: r.meta!.group!, roles: r.meta!.roles, permission: r.meta!.permission as string | undefined })),
 )
 const allowedPage = (p: { roles?: Role[] }, role: Role) => role === 'admin' || !p.roles?.length || p.roles.includes(role)
 
@@ -147,7 +147,9 @@ const groups = computed(() => [...new Set((rows.value ?? []).map((r) => r.group)
               <td class="px-3 py-1.5 text-xs text-slate-500">{{ p.group }}</td>
               <td class="px-3 py-1.5 text-slate-800">{{ p.title }}</td>
               <td v-for="r in roles" :key="r" class="px-3 text-center">
-                <Check v-if="allowedPage(p, r)" class="mx-auto h-4 w-4 text-emerald-600" :aria-label="`${roleLabel[r]}可進入`" />
+                <!-- 受權限管的頁面（經營月報、編碼審查、出院準備…）：角色符合還要被授權，打勾會誤導 -->
+                <span v-if="allowedPage(p, r) && p.permission" class="text-xs text-amber-700" :title="`需要權限：${rows?.find((x) => x.key === p.permission)?.label ?? p.permission}`">需授權</span>
+                <Check v-else-if="allowedPage(p, r)" class="mx-auto h-4 w-4 text-emerald-600" :aria-label="`${roleLabel[r]}可進入`" />
                 <Minus v-else class="mx-auto h-4 w-4 text-slate-300" :aria-label="`${roleLabel[r]}不可進入`" />
               </td>
             </tr>

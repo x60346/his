@@ -35,7 +35,8 @@ const scrapOpen = computed({ get: () => !!scrapping.value, set: (v) => !v && (sc
 const approveScrap = (cred: { username: string; password: string }) => witnessApi.approveWitness({ purpose: 'scrapQuarantine', lotId: scrapping.value!.row.lotId, ...cred })
 async function onScrapApproved(token: string) {
   const s = scrapping.value
-  if (s) await scrap.run(s.row.lotId, s.reason, token)
+  // 報廢失敗（例：這批剛被動過）：覆核對話框已自己關掉，重新打開並保留原因，不必從頭再寫
+  if (s && !(await scrap.run(s.row.lotId, s.reason, token))) scrapping.value = s
 }
 </script>
 

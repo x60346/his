@@ -12,8 +12,13 @@ import { addDays, today } from '@/utils/date'
 const open = defineModel<boolean>({ required: true })
 const { data } = useQuery(async () => (open.value ? examApi.examHoursSettings() : undefined), [open])
 const grid = ref<{ room: ExamRoomHours['room']; weekday: number; weekdayLabel: string; roomName: string; start: string; end: string; closed: boolean }[]>([])
+// 每次打開只帶入一次：之後的存檔（含這裡的加休診日、取消休診）會重新查詢，不能蓋掉還沒存的時段
+let loaded = false
+watch(open, () => (loaded = false))
 watch(data, (d) => {
-  if (d) grid.value = d.rows.map((r) => ({ room: r.room, weekday: r.weekday, weekdayLabel: r.weekdayLabel, roomName: r.roomName, start: r.start ?? '', end: r.end ?? '', closed: r.closed }))
+  if (!d || loaded) return
+  loaded = true
+  grid.value = d.rows.map((r) => ({ room: r.room, weekday: r.weekday, weekdayLabel: r.weekdayLabel, roomName: r.roomName, start: r.start ?? '', end: r.end ?? '', closed: r.closed }))
 })
 const days = computed(() => grid.value.filter((g) => g.room === 'XR').map((g) => ({ weekday: g.weekday, label: g.weekdayLabel })))
 const cell = (room: string, wd: number) => grid.value.find((g) => g.room === room && g.weekday === wd)!

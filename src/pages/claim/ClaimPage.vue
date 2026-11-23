@@ -3,6 +3,7 @@
 // 有問題的先改資料或註記排除、月份結束後送出（鎖定）、匯出 CSV；送出後才改的列在下一個月「補報」。
 // 點數、檢核、能不能送都由服務層算（claim.ts、claim-rules）
 import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Download, Send } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UPageHeader, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import ClaimCutPanel from './ClaimCutPanel.vue'
@@ -12,7 +13,12 @@ import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { downloadFile } from '@/utils/download'
 
-const kind = ref<'opd' | 'ipd' | 'cuts' | 'preauth'>('opd')
+// 首頁卡片帶 ?tab= 直接到對的分頁（核減與申復、事前審查）
+const route = useRoute()
+const kindOf = (q: unknown) => (['opd', 'ipd', 'cuts', 'preauth'] as const).find((x) => x === String(q ?? ''))
+const kind = ref<'opd' | 'ipd' | 'cuts' | 'preauth'>(kindOf(route.query.tab) ?? 'opd')
+// 已經在這頁、又從首頁卡片點進來（只有網址的 tab 變）：跟著切
+watch(() => route.query.tab, (q) => { const k = kindOf(q); if (k) kind.value = k })
 const month = ref<string>()
 watch(kind, () => (month.value = undefined))
 const { data, loading } = useQuery(async () => (kind.value === 'cuts' || kind.value === 'preauth' ? undefined : claimApi.claimBoard(kind.value, month.value)), [kind, month])

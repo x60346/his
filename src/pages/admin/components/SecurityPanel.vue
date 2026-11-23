@@ -17,8 +17,10 @@ const save = useAction(authApi.saveIdleLockMinutes, { success: (m) => `已設定
 // 密碼原則：期限（0＝不限）與不可重複最近幾次
 const { data: pwPolicy } = useQuery(() => authApi.passwordPolicy())
 const pw = ref<{ maxDays?: number; history?: number; graceDays?: number }>({})
+// 只帶入一次（用旗標，不看欄位是否空白：清空密碼期限再改其他欄位時，別的存檔不能把整張表單蓋回去）
+let pwLoaded = false
 watch(pwPolicy, (v) => {
-  if (v && pw.value.maxDays === undefined) pw.value = { ...v }
+  if (v && !pwLoaded) { pw.value = { ...v }; pwLoaded = true }
 })
 const pwProblems = computed(() => checkPasswordPolicy(pw.value))
 const pwDirty = computed(() => !!pwPolicy.value && (pw.value.maxDays !== pwPolicy.value.maxDays || pw.value.history !== pwPolicy.value.history || pw.value.graceDays !== pwPolicy.value.graceDays))

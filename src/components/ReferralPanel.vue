@@ -24,10 +24,13 @@ const replyOpen = ref(false)
 // ---------- 轉出 ----------
 const formOpen = ref(false)
 const form = reactive<ReferralOutInput>({ toHospital: '', toDept: '', purpose: REFERRAL_PURPOSES[0], urgent: false, summary: '' })
+// 草稿走 useAction：不能開時要看到原因
+const draftAct = useAction(referralApi.referralOutDraft)
 async function openNew() {
   if (!props.encounterId) return
-  const d = await referralApi.referralOutDraft(props.encounterId).catch(() => undefined)
+  const d = await draftAct.run(props.encounterId)
   if (!d) return
+  issue.fieldErrors.value = {}
   Object.assign(form, d)
   formOpen.value = true
 }
@@ -87,7 +90,7 @@ async function onVoid() {
         <UBadge v-if="r.voided" tone="gray">已作廢</UBadge>
         <UBadge v-else-if="r.printed?.length" tone="gray">已印 {{ r.printed.length }} 次</UBadge>
         <span class="ml-auto flex gap-1.5">
-          <UButton v-if="!r.voided && r.doctorId === auth.user?.doctorId" size="sm" variant="ghost" @click="(voiding = r), (voidReason = ''), (voidOpen = true)">作廢</UButton>
+          <UButton v-if="!r.voided && r.doctorId === auth.user?.doctorId" size="sm" variant="ghost" @click="(voiding = r), (voidReason = ''), (voidIt.fieldErrors.value = {}), (voidOpen = true)">作廢</UButton>
           <UButton v-if="!r.voided" size="sm" variant="secondary" :icon="Printer" @click="printing = r">列印</UButton>
         </span>
       </li>

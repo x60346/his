@@ -26,8 +26,12 @@ const impact = ref<SessionImpact>()
 const form = reactive({ mode: 'substitute' as 'substitute' | 'suspend', doctorId: undefined as string | number | undefined, reason: '' })
 /** 停診完成後的通知名單（留在對話框裡，看得到要打給誰） */
 const result = ref<AffectedVisit[] | null>(null)
+// 走 useAction：沒權限、這一診剛被刪掉時要有錯誤提示（以前直接 await，失敗按了沒反應）
+const loadImpact = useAction(scheduleApi.getSessionImpact)
 async function openAdjust(s: SessionView) {
-  impact.value = await scheduleApi.getSessionImpact(s.id)
+  const r = await loadImpact.run(s.id)
+  if (!r) return
+  impact.value = r
   Object.assign(form, { mode: impact.value.candidates.length ? 'substitute' : 'suspend', doctorId: impact.value.candidates[0]?.id, reason: '' })
   result.value = null
   sub.fieldErrors.value = {}

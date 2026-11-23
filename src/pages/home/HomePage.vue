@@ -11,6 +11,8 @@ import { dashboardApi, masterApi, opdApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
 import { useAuth } from '@/stores/auth'
+import type { Role } from '@/types'
+import type { PermKey } from '@/services'
 import { useCan } from '@/composables/useCan'
 import DiscountRequestsCard from '@/components/DiscountRequestsCard.vue'
 import LabAcksCard from '@/components/LabAcksCard.vue'
@@ -79,14 +81,14 @@ const todos = computed<Todo[]>(() => {
     ...(s.value.opdReviewPending ? [{ roles: ['clerk', 'admin'], label: '門診病歷待抽審', count: s.value.opdReviewPending, hint: '已抽樣、還沒審查的門診病歷（「編碼審查」頁「門診病歷抽審」分頁）', route: 'coding', icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.codingDue !== undefined ? [{ roles: ['clerk', 'admin'], label: '待編碼審查', count: s.value.codingDue ?? 0, hint: s.value.codingOverdue ? `其中 ${s.value.codingOverdue} 位出院超過 7 天` : '已出院的住院：確認或修改主診斷與次診斷（「編碼審查」頁）', route: 'coding', icon: ShieldAlert, urgent: !!s.value.codingOverdue }] : []),
     { roles: ['doctor'], label: '事前審查待填寫', count: s.value.preAuthToFill ?? 0, hint: '需健保事前審查的藥或特殊材料：填病情摘要與理由，或補件（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
-    ...(s.value.preAuthToSubmit !== undefined ? [{ roles: ['clerk', 'admin'], label: '事前審查待送審', count: s.value.preAuthToSubmit ?? 0, hint: s.value.preAuthOverdue ? `另有 ${s.value.preAuthOverdue} 件審查超過 14 天沒結果` : '主治已填好的送審單：送審（健保申報「事前審查」）', route: 'claims', icon: ShieldAlert, urgent: !!s.value.preAuthOverdue }] : []),
+    ...(s.value.preAuthToSubmit !== undefined ? [{ roles: ['clerk', 'admin'], label: '事前審查待送審', count: s.value.preAuthToSubmit ?? 0, hint: s.value.preAuthOverdue ? `另有 ${s.value.preAuthOverdue} 件審查超過 14 天沒結果` : '主治已填好的送審單：送審（健保申報「事前審查」）', route: 'claims', query: { tab: 'preauth' }, icon: ShieldAlert, urgent: !!s.value.preAuthOverdue }] : []),
     ...(s.value.claimCutsReplyOverdue ? [{ roles: ['doctor'], label: '核減回覆逾期', count: s.value.claimCutsReplyOverdue, hint: '核減後 14 天內要回覆（申報組要趕健保署的申復期限）：到「健保審查回覆」頁申復或接受', route: 'claim-cuts', icon: ShieldAlert, urgent: true }] : []),
     ...(s.value.preAuthExpiring ? [{ roles: ['doctor'], label: '事前審查快到期', count: s.value.preAuthExpiring, hint: '門診核准 30 天內到期、或核准量（次數）快用完：病人還要繼續用的話，看診時在處方旁按「續約申請」', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
-    ...(s.value.preAuthExpiringAll ? [{ roles: ['clerk', 'admin'], label: '事前審查快到期（全院）', count: s.value.preAuthExpiringAll, hint: '門診核准 30 天內到期或快用完、還沒續約：提醒主治看診時續約申請（健保申報「事前審查」可只看快到期）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
+    ...(s.value.preAuthExpiringAll ? [{ roles: ['clerk', 'admin'], label: '事前審查快到期（全院）', count: s.value.preAuthExpiringAll, hint: '門診核准 30 天內到期或快用完、還沒續約：提醒主治看診時續約申請（健保申報「事前審查」可只看快到期）', route: 'claims', query: { tab: 'preauth' }, icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.claimToSubmit ? [{ roles: ['clerk', 'admin'], label: '健保申報待送出', count: s.value.claimToSubmit, hint: `上個月的申報還沒送：${s.value.claimSubmitText ?? ''}（每月 20 日前送上個月）`, route: 'claims', icon: ShieldAlert, urgent: !!s.value.claimSubmitUrgent }] : []),
     { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
-    ...(s.value.claimCutsAppealed !== undefined ? [{ roles: ['clerk', 'admin'], label: '申復結果待記錄', count: s.value.claimCutsAppealed ?? 0, hint: '醫師已申復的核減：健保署結果回來後記補付或維持（健保申報「核減與申復」）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
-    ...(s.value.claimDisputes ? [{ roles: ['clerk', 'admin'], label: '爭議審議', count: s.value.claimDisputes, hint: '申復後仍維持核減（或只補付一部分）：60 天內可申請爭議審議；審議中的結果回來要記錄（健保申報「核減與申復」）', route: 'claims', icon: ShieldAlert, urgent: false }] : []),
+    ...(s.value.claimCutsAppealed !== undefined ? [{ roles: ['clerk', 'admin'], label: '申復結果待記錄', count: s.value.claimCutsAppealed ?? 0, hint: '醫師已申復的核減：健保署結果回來後記補付或維持（健保申報「核減與申復」）', route: 'claims', query: { tab: 'cuts' }, icon: ShieldAlert, urgent: false }] : []),
+    ...(s.value.claimDisputes ? [{ roles: ['clerk', 'admin'], label: '爭議審議', count: s.value.claimDisputes, hint: '申復後仍維持核減（或只補付一部分）：60 天內可申請爭議審議；審議中的結果回來要記錄（健保申報「核減與申復」）', route: 'claims', query: { tab: 'cuts' }, icon: ShieldAlert, urgent: false }] : []),
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '術前準備未完成', count: s.value.surgeryPrepDue, hint: '今天、明天要開的手術，同意書、禁食、部位標記等還沒完成（全院）', route: 'or', icon: Scissors, urgent: true },
     { roles: ['nurse'], label: '恢復室', count: s.value.pacuIn ?? 0, hint: s.value.pacuLong ? `其中 ${s.value.pacuLong} 位停留超過 2 小時` : '術後病人：每 15 分鐘 Aldrete 與疼痛評分，達標轉回病房', route: 'or', icon: ShieldAlert, urgent: !!s.value.pacuLong },
@@ -102,8 +104,8 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: '疼痛 ≥4 處置後 1 小時還沒重評（全院；護理站生命徵象記疼痛分數就算重評）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: '導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（全院，護理站「管路」分頁）', route: 'nursing', icon: Droplet },
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
-    { roles: ['doctor', 'nurse', 'admin'], label: '疑似群聚待判定', count: s.value.clustersOpen ?? 0, hint: '同病房 14 天內兩例以上同菌種或同感染部位：確認（寫處置）或排除（寫原因）（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
-    { roles: ['doctor', 'nurse', 'admin'], label: '法定傳染病通報逾時', count: s.value.notifiableOverdue ?? 0, hint: '隔離原因或診斷符合法定傳染病、超過通報時限還沒通報（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
+    { roles: ['doctor', 'nurse', 'admin'], label: '疑似群聚待判定', count: s.value.clustersOpen ?? 0, hint: '同病房 14 天內兩例以上同菌種或同感染部位：確認（寫處置）或排除（寫原因）（「感染管制」頁）', route: 'infection', query: { tab: 'clusters' }, icon: Droplet, urgent: true },
+    { roles: ['doctor', 'nurse', 'admin'], label: '法定傳染病通報逾時', count: s.value.notifiableOverdue ?? 0, hint: '隔離原因或診斷符合法定傳染病、超過通報時限還沒通報（「感染管制」頁）', route: 'infection', query: { tab: 'notify' }, icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '抗藥菌待隔離', count: s.value.mdroAlerts ?? 0, hint: '你的住院病人培養出 MRSA、CRE 或 VRE，還沒開接觸隔離（「隔離與 DNR」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '法定傳染病待通報', count: s.value.notifiablePending ?? 0, hint: '你的住院病人隔離原因或診斷符合法定傳染病：在時限內通報（「隔離與 DNR」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '院內感染待判定', count: s.value.infectionToDecide ?? 0, hint: '醫師、護理師通報的院內感染個案：判定成立或不成立（「感染管制」頁）', route: 'infection', icon: Droplet, urgent: true },
@@ -126,7 +128,7 @@ const todos = computed<Todo[]>(() => {
     ...(s.value.callsOverdue ? [{ roles: ['nurse'], label: '緊急呼叫醫師沒回覆', count: s.value.callsOverdue, hint: '緊急找醫師超過 15 分鐘還沒回覆：再找一次，或改找主治、上一級（護理站病人「呼叫醫師」分頁）', route: 'nursing', icon: Siren, urgent: true }] : []),
     ...(s.value.dutyNotesUnread ? [{ roles: ['doctor'], label: '值班紀錄待看', count: s.value.dutyNotesUnread, hint: '值班醫師昨晚處理了你的住院病人：住院醫囑上方看值班紀錄、按「已看」（接手後續）', route: 'ipd', icon: Siren, urgent: true }] : []),
     { roles: ['doctor'], label: '傷口 2 週沒變小', count: s.value.woundStall ?? 0, hint: '你的住院病人傷口連續 2 週面積沒變小：評估換敷料、會診整形外科、營養（住院醫囑「傷口」分頁）', route: 'ipd', icon: Droplet, urgent: true },
-    { roles: ['nurse'], label: '負壓室待處理', count: s.value.negativeRoomTodo ?? 0, hint: '負壓隔離室這一班還沒記錄壓差、或負壓不足（高於 −2.5 Pa）：沒處理好不能收新的空氣隔離病人（護理站「負壓室」分頁）', route: 'nursing', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '負壓室待處理', count: s.value.negativeRoomTodo ?? 0, hint: '負壓隔離室這一班還沒記錄壓差、或負壓不足（高於 −2.5 Pa）：沒處理好不能收新的空氣隔離病人（護理站「負壓室」分頁）', route: 'nursing', query: { tab: 'negative', ...(s.value.negativeRoomWard ? { ward: s.value.negativeRoomWard } : {}) }, icon: Droplet, urgent: true },
     { roles: ['nurse'], label: 'NEWS2 再量逾時', count: s.value.newsRecheckOverdue ?? 0, hint: 'NEWS2 中或高的病人 1 小時內要再量一次生命徵象（含給氧、意識；護理站「生命徵象」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '重症流程表漏記', count: s.value.icuHourlyLate ?? 0, hint: '加護病房病人超過 75 分鐘沒記流程表（每小時一筆；護理站「重症流程表」分頁）', route: 'nursing', query: { ward: masterApi.staticCodes.icuWard }, icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '點滴已滴完未換', count: s.value.infusionOverdue, hint: '點滴已滴完還沒換瓶、或醫囑停了還在滴（護理站「點滴」分頁）', route: 'nursing', icon: Droplet, urgent: true },
@@ -221,7 +223,12 @@ const todos = computed<Todo[]>(() => {
     { roles: ['admin'], label: '採購單待核准', count: s.value.purchasePending, hint: '藥師送出、等核准才算訂購', route: 'drugs', query: { tab: 'purchase' }, icon: Truck, urgent: true },
   ]
   // 管理員不做第一線作業，下方指標卡已涵蓋其他數字；只列「核准採購」這種只有管理員能做的事
-  return list.filter((t) => t.roles.includes(role ?? ''))
+  // 點了會到「沒有權限」的不列：目標頁要權限（感染管制、死亡審查、安寧、快速反應、加護病房、出院準備…）或角色不符的
+  const reachable = (name: string) => {
+    const r = router.getRoutes().find((x) => x.name === name)
+    return !!r && auth.canAccess(r.meta.roles as Role[] | undefined, r.meta.permission as PermKey | undefined)
+  }
+  return list.filter((t) => t.roles.includes(role ?? '') && reachable(t.route))
 })
 
 const trend = computed(() =>

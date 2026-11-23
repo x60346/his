@@ -17,7 +17,8 @@ const v = computed(() => (data.value?.admissionId === props.admissionId ? data.v
 
 // 建清單：建議預設勾選，院外的手打
 const picked = ref<Record<string, boolean>>({})
-watch(() => v.value?.draft, (d) => (picked.value = Object.fromEntries((d ?? []).map((x) => [x.id, true]))), { immediate: true })
+// 建議清單換了（換病人、建議品項變了）才重設勾選；同一份建議重新查詢不能把護理師取消勾的又勾回來
+watch(() => (v.value?.draft ?? []).map((x) => x.id).join(), () => (picked.value = Object.fromEntries((v.value?.draft ?? []).map((x) => [x.id, true]))), { immediate: true })
 const outside = ref<{ name: string; dose?: number; freq: string }[]>([])
 const addOutside = () => outside.value.push({ name: '', freq: '' })
 // 院外的藥是這位病人的：換病人清掉

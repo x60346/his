@@ -2,7 +2,7 @@
 // 住院檢體（護理站、住院醫囑的病人分頁「檢體」）：還沒印條碼的檢驗醫囑（依容器合併，會印成幾支）→「印條碼」（標籤：條碼、病人、
 // 床號、項目、容器顏色）→ 採檢（掃條碼或按「採檢」）→ 等檢驗科收件；被退件的列出原因，醫囑回到待印條碼，重新印、重新採。
 // 醫師只能看。規則在服務層 specimen.ts
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Printer, ScanLine } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
 import Barcode39 from '@/components/Barcode39.vue'
@@ -42,13 +42,20 @@ async function onScanned(x: ScanInput) {
   pending.value = undefined
   await collect.run(p.s.barcode, { ...p.opts, scan: 'skip' in x ? x : { patientCode: x.patientCode, specimenCode: x.drugCode } })
 }
+// 掃條碼採檢：只收這位病人待採檢的條碼；要問空腹的請用下方按鈕；要掃描核對的開核對畫面
+const scanErr = ref('')
+watch(code, () => (scanErr.value = ''))
 async function onScan() {
-  const s = v.value?.printed.find((x) => x.barcode === code.value.trim())
-  if (policy.value?.requireScan && s) {
+  const bc = code.value.trim()
+  if (!bc) return
+  const s = v.value?.printed.find((x) => x.barcode === bc)
+  if (!s) return void (scanErr.value = '不是這位病人待採檢的條碼（請確認病人）')
+  if (s.needsFasting) return void (scanErr.value = '這支要問空腹：請在下方按「採檢（空腹）」或「非空腹」')
+  if (policy.value?.requireScan) {
     code.value = ''
-    if (!s.needsFasting) return startCollect(s, {})
+    return startCollect(s, {})
   }
-  if (code.value.trim() && (await collect.run(code.value.trim()))) code.value = ''
+  if (await collect.run(bc)) code.value = ''
 }
 const scanTarget = computed(() => (pending.value ? { admissionId: props.admissionId, orderId: '', patientLabel: pending.value.s.patientName, content: `採檢 ${pending.value.s.barcode}：${pending.value.s.tests.join('、')}`, needDrug: true } : undefined))
 const scanLabel = (s: SpecimenView) => (!s.scan ? '' : s.scan.mode === 'scanned' ? '已掃描核對' : `未掃描（${SCAN_SKIP_LABEL[s.scan.reason]}）`)
@@ -76,7 +83,7 @@ const scanLabel = (s: SpecimenView) => (!s.scan ? '' : s.scan.mode === 'scanned'
       <section>
         <h4 class="mb-1 font-semibold text-slate-700">待採檢（已印條碼）</h4>
         <form v-if="isNurse && v.printed.length" class="mb-2 flex items-end gap-2" @submit.prevent="onScan">
-          <UInput v-model="code" class="flex-1" label="掃條碼採檢" placeholder="S2026…" :error="collect.fieldErrors.value.fasting ? `${collect.fieldErrors.value.fasting}：請在下方按「採檢（空腹）」或「非空腹」` : undefined" />
+          <UInput v-model="code" class="flex-1" label="掃條碼採檢" placeholder="S2026…" :error="scanErr || (collect.fieldErrors.value.fasting ? `${collect.fieldErrors.value.fasting}：請在下方按「採檢（空腹）」或「非空腹」` : collect.fieldErrors.value.scan)" />
           <UButton type="submit" size="sm" :icon="ScanLine" :loading="collect.pending.value">採檢</UButton>
         </form>
         <p v-if="!v.printed.length" class="text-xs text-slate-400">沒有</p>

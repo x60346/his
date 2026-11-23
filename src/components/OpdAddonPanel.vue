@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 門診加做（看診醫師）：看完診、批價後補開檢驗——掛在今天已收件的同管別檢體上（不用再抽）。
 // 健保的不用補繳；自費的要到批價補繳，繳完檢驗科才能發報告。服務層 opd-addon.ts
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { FlaskConical } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, USelect } from '@/components/ui'
 import { opdAddonApi, type OpdAddonOption } from '@/services'
@@ -15,9 +15,16 @@ const selfPay = ref(false)
 const labs = computed(() => props.procs.filter((p) => p.labItems?.length && p.active && !props.encounter.procedures.some((x) => x.procId === p.id)).map((p) => ({ value: p.id, label: p.name })))
 const addons = computed(() => props.encounter.procedures.filter((p) => p.addon))
 const nameOf = (id: string) => props.procs.find((p) => p.id === id)?.name ?? id
+// 換病人：選的檢驗、檢體資訊都是上一位的，清掉
+watch(() => props.encounter.id, () => { pick.value = ''; opt.value = undefined; selfPay.value = false })
+const optAct = useAction(opdAddonApi.opdAddonOption)
 async function onPick(id: string) {
   pick.value = id
-  opt.value = id ? await opdAddonApi.opdAddonOption(props.encounter.id, id).catch(() => undefined) : undefined
+  const encId = props.encounter.id
+  const r = id ? await optAct.run(encId, id) : undefined
+  // 回來時已經改選別項、或換了病人：這個結果作廢
+  if (pick.value !== id || props.encounter.id !== encId) return
+  opt.value = r
   selfPay.value = !!opt.value?.selfPayVisit
 }
 const add = useAction(opdAddonApi.addOpdLab, { success: (r) => `已補開 ${r.procName}（加做：條碼 ${r.barcode}）${r.due ? `，自費 ${r.due} 元請病人到批價補繳` : '，健保不用補繳'}` })

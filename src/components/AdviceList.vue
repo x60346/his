@@ -23,7 +23,12 @@ async function openBook(a: AdviceView) {
 }
 async function loadSessions(a: AdviceView) {
   const b = booking[a.id]
-  if (b) b.sessions = await bookingApi.adviceSessions(a.id, b.date).catch(() => [])
+  if (!b) return
+  const date = b.date
+  b.sessions = undefined
+  const s = await bookingApi.adviceSessions(a.id, date).catch(() => [])
+  // 回來時日期已經又改了：舊日期的診次不能顯示在新日期下（會掛錯天）
+  if (booking[a.id]?.date === date) booking[a.id].sessions = s
 }
 const book = useAction(bookingApi.bookAdvice, { success: (a) => `已掛號：${a.patientName} ${a.bookedText}` })
 async function onBook(a: AdviceView, sessionId: string) {

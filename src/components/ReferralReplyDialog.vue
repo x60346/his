@@ -14,10 +14,12 @@ const form = reactive<ReferralReplyInput>({ diagnosis: '', treatment: '', advice
 /** 存好之後切到預覽 */
 const saved = ref<ReferralInView>()
 const dlg = ref<InstanceType<typeof UDialog>>()
+const draftAct = useAction(referralApi.referralReplyDraft)
 watch(open, async (o) => {
   if (!o || !props.visitId) return
   saved.value = undefined
-  const d = await referralApi.referralReplyDraft(props.visitId).catch(() => undefined)
+  // 走 useAction：不能開回覆單時顯示原因（以前對話框打開又自己關掉，沒有說明）
+  const d = await draftAct.run(props.visitId)
   if (d) Object.assign(form, d)
   else open.value = false
 })

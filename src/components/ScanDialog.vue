@@ -60,6 +60,9 @@ async function scanDrug() {
   dRes.value = (await runCheck('drug', dCode.value)) ?? undefined
   if (dRes.value && !dRes.value.ok) focus('d')
 }
+// 核對過之後條碼又被改了（多掃一次、手誤）：之前的 ✓ 不算數，要重新核對
+watch(pCode, () => { pRes.value = undefined; dRes.value = undefined })
+watch(dCode, () => (dRes.value = undefined))
 const allOk = computed(() => !!pRes.value?.ok && (!props.target?.needDrug || !!dRes.value?.ok))
 function proceed() {
   if (!allOk.value) return

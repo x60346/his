@@ -9,7 +9,7 @@ import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today, addMinutes } from '@/utils/date'
 import { permissionsOf, query, sessionRole, sessionUser } from './http'
-import { openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
+import { marUrgency, openQuery, shiftInstanceOf, shiftOf } from './nursing-rules'
 import { nameOf, openDeptTransfer, stockLoc } from './views'
 import { usableQty } from './stock-rules'
 import { pendingRefundOf } from './money'
@@ -192,6 +192,8 @@ export interface DashboardStats {
   mortalityToReview?: number
   /** 負壓隔離室這一班沒記錄壓差、或負壓不足（護理師，全院） */
   negativeRoomTodo?: number
+  /** 首頁卡片帶到哪個病房的「負壓室」分頁（只有有負壓室的病房才有那個分頁） */
+  negativeRoomWard?: string
   /** 感染管制：疑似群聚待判定、法定傳染病通報逾時（全院）；醫師：自己病人待通報 */
   clustersOpen?: number
   notifiableOverdue?: number
@@ -403,7 +405,8 @@ export function getDashboard(): Promise<DashboardStats> {
         total: active.length,
         waiting: count('registered'),
         inConsult: count('in-consult'),
-        toCharge: count('consulted'),
+        // 和批價清單同一個條件：今天看的、或急診留觀今天結束的
+        toCharge: db.visits.filter((v) => (v.date === t || v.er?.obsEnd?.at.slice(0, 10) === t) && v.status === 'consulted' && erBillMode(v.er) === 'opd').length,
         // 與藥局清單同一規則：今天以前開立、還沒發藥的都算（前幾日沒領的也還在等）
         toDispense: db.dispenses.filter((d) => awaitingPickup(d, t)).length,
         done: count('charged') + count('dispensed'),
@@ -422,7 +425,8 @@ export function getDashboard(): Promise<DashboardStats> {
         // 急診留觀床不算病房床位
         emptyBeds: db.beds.filter((b) => b.status === 'empty' && !isObsBed(b)).length,
         totalBeds: db.beds.filter((b) => !isObsBed(b)).length,
-        overdueMar: db.mar.filter((m) => m.status === 'pending' && m.scheduledAt < n).length,
+        // 和護理站同一條規則：過了預定時間 30 分鐘才算逾時
+        overdueMar: db.mar.filter((m) => m.status === 'pending' && marUrgency(m.scheduledAt, n) === 'overdue').length,
       },
       suspendNoticesPending: suspendNoticeVisits(t).filter((v) => !v.notifiedAt).length,
       // 門診藥局的可用量（不含過期品）低於該地點的安全庫存；和藥品庫存頁的「缺貨／偏低」同一個判斷
@@ -553,7 +557,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'nurse' ? { callsOverdue: overdueUrgentCalls(t).filter((c) => !scope || scope.has(c.admissionId)).length } : {}),
           ...(sessionRole() === 'nurse' ? { consentUnscanned: db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)) && db.consents.some((c) => c.admissionId === a.id && consentScanOverdue(c, t))).length } : {}),
           ...(sessionRole() === 'nurse' ? { nursingRecordMissing: db.admissions.filter((a) => (!scope || scope.has(a.id)) && nursingGapsOf(a, t).length).length } : {}),
-          ...(sessionRole() === 'nurse' ? { negativeRoomTodo: db.beds.filter((b) => b.negativePressure && negativeRoomState(b, t).state !== 'ok').length } : {}),
+          ...(sessionRole() === 'nurse' ? ((xs) => ({ negativeRoomTodo: xs.length, ...(xs[0] ? { negativeRoomWard: xs[0].ward } : {}) }))(db.beds.filter((b) => b.negativePressure && negativeRoomState(b, t).state !== 'ok')) : {}),
           ...(sessionRole() === 'nurse' ? { icuHourlyLate: inpt.filter((a) => !!icuHourly(a, t)?.late).length, newsRecheckOverdue: inpt.filter((a) => newsStateOf(a, t)?.recheck?.status === 'overdue').length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { newsAlerts: newsAlertCount(me.doctorId, t) } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('mortality.review') ? { mortalityToReview: db.admissions.filter((a) => needsMortalityReview(a) && !a.mortalityReview).length } : {}),

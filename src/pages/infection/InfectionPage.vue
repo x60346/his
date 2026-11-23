@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 感染管制（權限「感染管制」，示範 dr11）：全院待判定的院內感染個案（舊的在前）、最近 30 天判定過的；點一筆在右邊判定（和病人分頁同一個元件）
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { UBadge, UCard, UPageHeader, UQueryState, UTabs } from '@/components/ui'
 import IpcPanels from './components/IpcPanels.vue'
 import InfectionPanel from '@/components/InfectionPanel.vue'
@@ -10,7 +11,12 @@ import { useQuery } from '@/composables/useService'
 const { data, loading, reload } = useQuery(() => infectionApi.listInfectionWork())
 const picked = ref<string>()
 // 分頁：個案判定、指標、群聚、法定傳染病
-const tab = ref<'cases' | 'stats' | 'clusters' | 'notify'>('cases')
+// 首頁卡片帶 ?tab= 直接到對的分頁（群聚、法定傳染病）
+const route = useRoute()
+const tabOf = (q: unknown) => (['cases', 'stats', 'clusters', 'notify'] as const).find((x) => x === String(q ?? ''))
+const tab = ref<'cases' | 'stats' | 'clusters' | 'notify'>(tabOf(route.query.tab) ?? 'cases')
+// 已經在這頁、又從首頁卡片點進來（只有網址的 tab 變）：跟著切
+watch(() => route.query.tab, (q) => { const t = tabOf(q); if (t) tab.value = t })
 const tabs = computed(() => [
   { key: 'cases', label: '個案判定', count: data.value?.pending.length || undefined },
   { key: 'stats', label: '指標' },
