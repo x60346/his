@@ -19,7 +19,7 @@ import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type
 import { find, nameOf } from './views'
 import { mriRiskOf } from './implant-work'
 import { examStaffMissing, radUnstaffedExams } from './rad-roster-work'
-import { RAD_BLOCKS, RAD_ROOMS } from './rad-roster-rules'
+import { blockNow, RAD_BLOCKS, RAD_ROOMS } from './rad-roster-rules'
 
 export interface ExamView extends ImagingExam {
   stage: ExamStage
@@ -161,6 +161,8 @@ export interface ExamBoard {
   rooms: { room: string; name: string; hoursText: string; exams: ExamView[]; /** 這天的放射師（要放射師的檢查室）：上午 某某・下午 — */ staff?: string }[]
   /** 未來 14 天已排、沒有放射師的檢查筆數 */
   unstaffed: number
+  /** 放射師：現在這一段排在哪幾間（完成別間的要寫支援原因）；不用查的時候沒有 */
+  myDutyNow?: string[]
 }
 
 export function examBoard(date: string): Promise<ExamBoard> {
@@ -191,6 +193,7 @@ export function examBoard(date: string): Promise<ExamBoard> {
       downtimeStats: downtimeHours(db.roomDowntimes, `${addDays(now().slice(0, 10), -30)} 00:00`, now()),
       needsReschedule: needsReschedule().length,
       unstaffed: radUnstaffedExams(now()).length,
+      ...((d) => (d ? { myDutyNow: d } : {}))(u ? myDutyNow(u, now()) : undefined),
     }
   })
 }
@@ -322,6 +325,16 @@ export interface ExamDoneInput {
   contrastMl?: number
   /** 顯影劑不良反應（沒有就不填） */
   reaction?: { severity: ContrastReactionSeverity; symptoms: string; action: string }
+  /** 放射師不是這間這一段排班的人：支援原因 */
+  coverNote?: string
+}
+
+/** 放射師現在（這一段）排在哪幾間；放射科醫師、下班時間不查（undefined） */
+function myDutyNow(u: { id: string }, t: string): ImagingExam['room'][] | undefined {
+  if (sessionRole() !== 'radtech') return undefined
+  const b = blockNow(t)
+  if (!b) return undefined
+  return db.radShifts.filter((s) => s.date === t.slice(0, 10) && s.block === b && s.userId === u.id).map((s) => s.room)
 }
 /**
  * 檢查完成（放射師）：要先報到；住院的臨時醫囑一起完成。完成後進判讀清單。
@@ -339,7 +352,15 @@ export function completeExam(id: string, input: ExamDoneInput = {}): Promise<Exa
     const c = contrastOf(e)
     if (c?.level === 'block') fail(c.text, 'CONFLICT')
     const t = now()
-    Object.assign(e, { doneAt: t, doneBy: u.id, ...(input.contrastMl !== undefined ? { contrastMl: Number(input.contrastMl) } : {}) })
+    // 排班：要放射師的檢查室，完成的人不是這一段排在這間的 → 寫支援原因（不擋：人手調度、急件）
+    const duty = RAD_ROOMS.includes(e.room) ? myDutyNow(u, t) : undefined
+    let cover: ImagingExam['cover']
+    if (duty && !duty.includes(e.room)) {
+      if (!input.coverNote?.trim()) failField('coverNote', `你這段沒有排在${examRoomName(e.room)}：請寫支援原因（例：本班人員用餐、急件支援）`)
+      const r = db.radShifts.find((s) => s.date === t.slice(0, 10) && s.room === e.room && s.block === blockNow(t))
+      cover = { note: input.coverNote!.trim(), ...(r ? { rostered: nameOf.user(r.userId) } : {}) }
+    }
+    Object.assign(e, { doneAt: t, doneBy: u.id, ...(cover ? { cover } : {}), ...(input.contrastMl !== undefined ? { contrastMl: Number(input.contrastMl) } : {}) })
     if (input.reaction) {
       const rx = { severity: input.reaction.severity, symptoms: input.reaction.symptoms.trim(), action: input.reaction.action.trim(), at: t, by: u.id }
       if (contrastReactionReportable(rx.severity)) {

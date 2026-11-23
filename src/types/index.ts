@@ -962,6 +962,8 @@ export interface ImagingExam {
   mri?: { level: 'conditional' | 'unsafe'; items: string[]; clearedBy?: string; reason?: string }
   /** 含顯影劑的：完成時放射師記用量（mL） */
   contrastMl?: number
+  /** 完成的放射師不是這間、這一段排班的人（支援）：寫原因；排班的人是誰 */
+  cover?: { note: string; rostered?: string }
   /** 顯影劑不良反應（完成時記）：嚴重度、症狀、處置；中度以上自動產生不良反應通報（adrId） */
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
@@ -975,6 +977,23 @@ export interface RadShift {
   userId: string
   by: string
   at: string
+}
+
+/** 放射師請假、換班申請（放射師申請、組長核准）：請假核准＝那一格清掉（變成沒排人）；換班核准＝改成接手的人 */
+export interface RadShiftRequest {
+  id: string
+  shiftId: string
+  date: string
+  room: ExamRoom
+  block: 'am' | 'pm'
+  requesterId: string
+  kind: 'leave' | 'swap'
+  /** 換班：接手的人 */
+  toUserId?: string
+  reason: string
+  at: string
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled'
+  decided?: { at: string; by: string; note?: string }
 }
 
 /** 檢查室開放時段（每間、每週幾；沒列的＝預設 08:00–17:00）：closed＝這天不開 */

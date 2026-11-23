@@ -118,6 +118,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '今日脫離評估', count: s.value.weanDue ?? 0, hint: '插管接呼吸器的病人今天還沒做 SAT（停鎮靜）／SBT（自發呼吸）：做完記結果（住院醫囑「呼吸器與鎮靜」分頁）', route: 'ipd', icon: Droplet },
     ...(s.value.bedsideAlerts ? [{ roles: ['doctor'], label: '床邊處置判讀異常', count: s.value.bedsideAlerts, hint: '你的住院病人穿刺送檢判讀為滲出液、疑似腹膜炎或細菌性腦膜炎，還沒按「已知悉」（住院醫囑「床邊處置」分頁）', route: 'ipd', icon: Siren, urgent: true }] : []),
     ...(s.value.radUnstaffed ? [{ roles: ['radtech', 'admin'], label: '檢查沒有放射師', count: s.value.radUnstaffed, hint: '未來 14 天已排的一般攝影、電腦斷層、磁振造影，那段時間沒有排放射師：在影像檢查室「放射師排班」補人', route: 'exam', query: { roster: '1' }, icon: ScanLine, urgent: true }] : []),
+    ...(s.value.radRequestsPending ? [{ roles: ['radtech', 'admin'], label: '放射師請假換班待核准', count: s.value.radRequestsPending, hint: '放射師申請請假或換班：在影像檢查室「放射師排班」核准或退回（請假核准後那段沒有人，要再補）', route: 'exam', query: { roster: '1' }, icon: ScanLine, urgent: false }] : []),
     { roles: ['doctor'], label: '傷口 2 週沒變小', count: s.value.woundStall ?? 0, hint: '你的住院病人傷口連續 2 週面積沒變小：評估換敷料、會診整形外科、營養（住院醫囑「傷口」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: '負壓室待處理', count: s.value.negativeRoomTodo ?? 0, hint: '負壓隔離室這一班還沒記錄壓差、或負壓不足（高於 −2.5 Pa）：沒處理好不能收新的空氣隔離病人（護理站「負壓室」分頁）', route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['nurse'], label: 'NEWS2 再量逾時', count: s.value.newsRecheckOverdue ?? 0, hint: 'NEWS2 中或高的病人 1 小時內要再量一次生命徵象（含給氧、意識；護理站「生命徵象」分頁）', route: 'nursing', icon: Droplet, urgent: true },

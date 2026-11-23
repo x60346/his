@@ -160,6 +160,8 @@ export interface DashboardStats {
   woundStall?: number
   /** 放射師排班（權限 radiology.roster）：未來 14 天已排、沒有放射師的檢查 */
   radUnstaffed?: number
+  /** 放射師排班：請假、換班待核准 */
+  radRequestsPending?: number
   /** 主治：床邊處置送檢的異常判讀（滲出液、腹膜炎、細菌性腦膜炎）還沒知悉 */
   bedsideAlerts?: number
   /** 加護病房重症流程表超過 75 分鐘沒記的病人（護理師，我的病人範圍） */
@@ -517,7 +519,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('surgery.schedule') ? ((xs) => ({ emergencyWaiting: xs.length, emergencyOverdue: xs.filter((s) => emergencyState(s, t)?.state === 'overdue').length }))(db.surgeries.filter((s) => s.urgency && !s.sentAt && (s.status === 'requested' || s.status === 'scheduled') && db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')) : {}),
           ...(me && sessionRole() === 'lab' && permissionsOf({ ...me, role: 'lab' }).includes('pathology') ? ((c) => ({ pathToReceive: c.toReceive, pathOverdue: c.overdue }))(pathCounts(t)) : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length, rcaOverdue: db.incidents.flatMap((x) => x.rca?.plans ?? []).filter((p) => planOverdue(p, today())).length } : {}),
-          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('radiology.roster') ? { radUnstaffed: radUnstaffedExams(t).length } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('radiology.roster') ? { radUnstaffed: radUnstaffedExams(t).length, radRequestsPending: db.radShiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length, clustersOpen: currentClusters().filter((c) => !c.decision).length, notifiableOverdue: db.admissions.flatMap(pendingNotifiable).filter((p) => p.dueAt < t).length } : {}),

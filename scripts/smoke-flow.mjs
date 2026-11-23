@@ -84,6 +84,9 @@ try {
     if (a && api.CONSENT_LINE_KINDS.includes(input.kind) && !input.consentWaiver && !api.unusedLineConsent(dbm.db.consents, dbm.db.lines, a.id, input.kind)) tconsent('procedure', a.patientId, { admissionId: a.id, lineKind: input.kind })
     return lineRaw.addLine(input)
   }
+  // 放射師完成不是自己這段排班的檢查室要寫支援原因：其他段落測的是完成本身，沒寫就自動補（測試輔助）；要測把關的用 examDoneRaw
+  const examDoneRaw = { completeExam: api.examApi.completeExam }
+  api.examApi.completeExam = async (id, input = {}) => examDoneRaw.completeExam(id, { coverNote: '測試支援', ...input })
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
     api.labApi[k] = async (input) => {
@@ -19398,6 +19401,84 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('rt02')
     ok((await errOf(() => api.radRosterApi.setRadShift({ date: tm, room: 'XR', block: 'am', userId: 'U802' }))) !== '' && !(await api.radRosterApi.radRoster(T, 1)).canEdit, '一般放射師只能看')
     ok((await api.radRosterApi.myRadShifts()).length === db().radShifts.filter((s) => s.userId === 'U802' && s.date === T).length, '我今天的班（rt02）')
+  }
+  // 放射師完成檢查要當班（不是就寫支援原因）、請假與換班
+  console.log('\n[放射師當班與請假換班]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    ok(api.blockNow('2026-11-24 14:30') === 'pm' && api.blockNow('2026-11-24 09:00') === 'am' && api.blockNow('2026-11-24 19:00') === undefined, '規則：現在是哪一段（下班時間沒有）')
+    // 找一筆今天已報到、還沒完成的 X 光／CT／MR；沒有就把一筆待做的改成今天現在報到
+    const t0 = dateUtil.now()
+    let ex = db().imagingExams.find((e) => !e.cancelled && e.arrivedAt && !e.doneAt && api.RAD_ROOMS.includes(e.room) && !(api.examApi && false))
+    if (!ex) {
+      ex = db().imagingExams.find((e) => !e.cancelled && !e.doneAt && api.RAD_ROOMS.includes(e.room) && !Object.keys(e.prep ?? {}).length)
+      Object.assign(ex, { start: dateUtil.addMinutes(t0, -10), arrivedAt: dateUtil.addMinutes(t0, -5), arrivedBy: 'U401' })
+    }
+    // 確保檢查前準備都確認過（這段只測排班）
+    const P = await load('/src/services/imaging-work.ts')
+    for (const d of P.imagingOf(ex.procId)?.prep ?? []) (ex.prep ??= {})[d.id] = { ok: true, at: t0, by: 'U801' }
+    if (P.imagingOf(ex.procId)?.contrast) ex.procId = db().procedures.find((p) => P.imagingOf(p.id) && !P.imagingOf(p.id).contrast && !(P.imagingOf(p.id).prep ?? []).length && P.imagingOf(p.id).room === ex.room)?.id ?? ex.procId
+    const block = api.blockNow(t0)
+    const onDuty = db().radShifts.find((s) => s.date === T && s.room === ex.room && s.block === block)
+    const offTech = db().users.find((u) => u.roles?.includes('radtech') && u.id !== onDuty?.userId)
+    db().radShifts = db().radShifts.filter((s) => !(s.date === T && s.block === block && s.userId === offTech.id && s.room === ex.room))
+    await as(offTech.username)
+    ok((await fieldsOf(() => examDoneRaw.completeExam(ex.id, {}))).coverNote?.includes('支援原因'), `${offTech.username} 這段沒排在${ex.room}：沒寫支援原因 → 擋`)
+    const b = await api.examApi.examBoard(T)
+    ok(Array.isArray(b.myDutyNow) && !b.myDutyNow.includes(ex.room), `看板告訴畫面：我這段排在 ${b.myDutyNow.join('、') || '（沒有）'}`)
+    const v = await examDoneRaw.completeExam(ex.id, { coverNote: '本班人員用餐，代做' })
+    ok(v.doneAt && v.cover?.note === '本班人員用餐，代做' && (onDuty ? v.cover.rostered === db().users.find((u) => u.id === onDuty.userId).name : true), `支援完成：記原因${v.cover?.rostered ? `、排班的是 ${v.cover.rostered}` : ''}`)
+    // 當班的人不用寫
+    const ex2 = db().imagingExams.find((e) => !e.cancelled && !e.doneAt && e.id !== ex.id && e.room === ex.room)
+    if (ex2 && onDuty) {
+      Object.assign(ex2, { arrivedAt: dateUtil.addMinutes(t0, -3), arrivedBy: 'U401', prep: Object.fromEntries((P.imagingOf(ex2.procId)?.prep ?? []).map((d) => [d.id, { ok: true, at: t0, by: 'U801' }])) })
+      if (!P.imagingOf(ex2.procId)?.contrast) {
+        await as(db().users.find((u) => u.id === onDuty.userId).username)
+        const v2 = await examDoneRaw.completeExam(ex2.id, {})
+        ok(v2.doneAt && !v2.cover, '當班的放射師完成不用寫')
+      } else ok(true, '（第二筆含顯影劑，略過）')
+    } else ok(true, '（沒有第二筆或這段沒排人，略過）')
+    // 請假、換班
+    await as('rt02')
+    const tm = dateUtil.addDays(T, 2)
+    let roster = await api.radRosterApi.radRoster(T, 7)
+    const mine = roster.myShifts.find((s) => s.date === tm)
+    ok(roster.myShifts.length > 0 && mine, `rt02 的班 ${roster.myShifts.length} 格`)
+    const sh = db().radShifts.find((s) => s.id === mine.id)
+    ok((await fieldsOf(() => api.radRosterApi.requestRadChange({ shiftId: sh.id, kind: 'leave', reason: ' ' }))).reason, '請假要寫原因')
+    const other = db().radShifts.find((s) => s.userId !== 'U802' && s.date === tm)
+    ok((await errOf(() => api.radRosterApi.requestRadChange({ shiftId: other.id, kind: 'leave', reason: 'x' }))).includes('自己的班'), '不能申請別人的班')
+    const busyId = db().radShifts.find((s) => s.date === sh.date && s.block === sh.block && s.userId !== 'U802').userId
+    ok((await fieldsOf(() => api.radRosterApi.requestRadChange({ shiftId: sh.id, kind: 'swap', toUserId: busyId, reason: '家裡有事' }))).toUserId?.includes('已經有班'), '換給這段已經有班的人 → 擋')
+    const lv = await api.radRosterApi.requestRadChange({ shiftId: sh.id, kind: 'leave', reason: '看診' })
+    ok(lv.status === 'pending' && (await errOf(() => api.radRosterApi.requestRadChange({ shiftId: sh.id, kind: 'leave', reason: '再一次' }))).includes('等核准'), '請假送出、同一格不能重複')
+    roster = await api.radRosterApi.radRoster(T, 7)
+    ok(roster.myShifts.find((s) => s.id === sh.id).pending === '請假申請中' && !roster.canEdit, '我的班標申請中')
+    ok((await errOf(() => api.radRosterApi.decideRadChange(lv.id, true))) !== '', '放射師不能核准')
+    await as('rt01')
+    ok((await api.dashboardApi.getDashboard()).radRequestsPending === 1, '組長首頁：待核准 1')
+    ok((await fieldsOf(() => api.radRosterApi.decideRadChange(lv.id, false, ''))).note, '退回要寫原因')
+    const before = (await api.radRosterApi.radRoster(T, 14)).unstaffed.length
+    const ok1 = await api.radRosterApi.decideRadChange(lv.id, true)
+    ok(ok1.status === 'approved' && !db().radShifts.some((s) => s.id === sh.id) && db().auditLogs[0].action === '放射師班別核准', '請假核准：那一格清掉、稽核')
+    ok((await api.radRosterApi.radRoster(T, 14)).unstaffed.length >= before, '那段的檢查會變成沒有放射師（再補人）')
+    // 換班：rt03 的一格換給這段有空的 rt02
+    await as('rt03')
+    const s3 = db().radShifts.find((s) => s.userId === 'U803' && s.date > T && !db().radShifts.some((x) => x.date === s.date && x.block === s.block && x.userId === 'U802'))
+    const sw = await api.radRosterApi.requestRadChange({ shiftId: s3.id, kind: 'swap', toUserId: 'U802', reason: '家裡有事' })
+    await as('rt01')
+    const rej = await api.radRosterApi.decideRadChange(sw.id, false, '那天人力不足，請另找人')
+    ok(rej.status === 'rejected' && db().radShifts.find((s) => s.id === s3.id).userId === 'U803', '退回：班不變')
+    await as('rt03')
+    const sw2 = await api.radRosterApi.requestRadChange({ shiftId: s3.id, kind: 'swap', toUserId: 'U802', reason: '家裡有事（改找 rt02 確認過）' })
+    ok((await api.radRosterApi.radRoster(T, 7)).requests.some((r) => r.id === rej.id && r.status === 'rejected'), '放射師看得到自己被退回的申請')
+    await as('rt01')
+    const ap = await api.radRosterApi.decideRadChange(sw2.id, true)
+    ok(ap.status === 'approved' && db().radShifts.find((s) => s.id === s3.id).userId === 'U802', '換班核准：改成接手的人')
+    ok((await errOf(() => api.radRosterApi.decideRadChange(sw2.id, true))).includes('處理過'), '不能重複處理')
   }
 } catch (e) {
   failed++

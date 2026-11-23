@@ -44,16 +44,18 @@ const done = useAction(examApi.completeExam, { success: (e) => `檢查完成：$
 // 含顯影劑的完成：用量、有沒有不良反應
 const finishing = ref<ExamView>()
 const finishOpen = computed({ get: () => !!finishing.value, set: (x) => !x && (finishing.value = undefined) })
-const fin = reactive({ ml: '', hasReaction: false, severity: 'mild' as 'mild' | 'moderate' | 'severe', symptoms: '', action: '' })
+const fin = reactive({ ml: '', hasReaction: false, severity: 'mild' as 'mild' | 'moderate' | 'severe', symptoms: '', action: '', cover: '' })
+// 放射師完成不是自己這段排的檢查室：要寫支援原因（服務層擋）
+const needCover = (e: ExamView) => !!board.value?.myDutyNow && ['XR', 'CT', 'MR'].includes(e.room) && !board.value.myDutyNow.includes(e.room)
 function finish(e: ExamView) {
-  if (!e.contrast) return void done.run(e.id)
-  Object.assign(fin, { ml: '', hasReaction: false, severity: 'mild', symptoms: '', action: '' })
+  if (!e.contrast && !needCover(e)) return void done.run(e.id)
+  Object.assign(fin, { ml: '', hasReaction: false, severity: 'mild', symptoms: '', action: '', cover: '' })
   done.fieldErrors.value = {}
   finishing.value = e
 }
 async function confirmFinish() {
   if (!finishing.value) return
-  const input = { contrastMl: fin.ml === '' ? undefined : Number(fin.ml), ...(fin.hasReaction ? { reaction: { severity: fin.severity, symptoms: fin.symptoms, action: fin.action } } : {}) }
+  const input = { ...(fin.cover.trim() ? { coverNote: fin.cover } : {}), contrastMl: fin.ml === '' ? undefined : Number(fin.ml), ...(fin.hasReaction ? { reaction: { severity: fin.severity, symptoms: fin.symptoms, action: fin.action } } : {}) }
   if (await done.run(finishing.value.id, input)) finishing.value = undefined
 }
 // 停機：登記（放射師、放射科醫師）、提早結束；排在停機時段的一鍵排到下一個空檔（櫃台）
@@ -161,7 +163,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                   <UButton v-if="e.stage === 'scheduled' && board.canSchedule" size="sm" variant="ghost" @click="moving = moving === e.id ? undefined : e.id">改時間</UButton>
                   <UButton v-if="board.canArrive" size="sm" variant="ghost" @click="cancelling = e">取消</UButton>
                 </div>
-                <p v-if="e.stage === 'done' && (e.contrastMl || e.contrastReaction)" class="text-xs text-slate-600">{{ e.doneByName }} 完成{{ e.contrastMl ? `・顯影劑 ${e.contrastMl} mL` : '' }}
+                <p v-if="e.stage === 'done' && (e.contrastMl || e.contrastReaction || e.cover)" class="text-xs text-slate-600">{{ e.doneByName }} 完成{{ e.cover ? `（支援：${e.cover.note}${e.cover.rostered ? `；排班 ${e.cover.rostered}` : ''}）` : '' }}{{ e.contrastMl ? `・顯影劑 ${e.contrastMl} mL` : '' }}
                   <span v-if="e.contrastReaction" :class="e.contrastReaction.severity === 'mild' ? 'text-amber-800' : 'font-semibold text-red-700'">・不良反應（{{ CONTRAST_REACTION_LABEL[e.contrastReaction.severity].split('（')[0] }}）：{{ e.contrastReaction.symptoms }}，{{ e.contrastReaction.action }}{{ e.contrastReaction.adrId ? '（已通報藥師評估）' : '' }}</span></p>
                 <p v-if="e.mri" :class="['text-xs', e.mri.level === 'unsafe' ? 'font-semibold text-red-700' : 'text-amber-800']">{{ e.mri.level === 'unsafe' ? `MRI 不安全植入物：${e.mri.items.join('、')}（放射科確認：${e.mri.reason}）` : `MRI 有條件植入物：${e.mri.items.join('、')}，照廠商條件掃描` }}</p>
                 <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
@@ -216,9 +218,11 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
         <UButton :loading="addDt.pending.value" @click="saveDowntime">登記</UButton>
       </template>
     </UDialog>
-    <UDialog v-model="finishOpen" title="完成檢查（含顯影劑）" size="md">
+    <UDialog v-model="finishOpen" :title="finishing?.contrast ? '完成檢查（含顯影劑）' : '完成檢查'" size="md">
       <div v-if="finishing" class="space-y-3 text-sm">
         <p><b>{{ finishing.patientName }}</b> {{ finishing.where }}・{{ finishing.procName }}</p>
+        <UInput v-if="needCover(finishing)" v-model="fin.cover" label="支援原因（你這段沒有排在這間）" placeholder="例：本班人員用餐、急件支援" :error="done.fieldErrors.value.coverNote" />
+        <template v-if="finishing.contrast">
         <UInput v-model="fin.ml" type="number" label="顯影劑用量（mL）" placeholder="例：80" :error="done.fieldErrors.value.contrastMl" />
         <UCheckbox v-model="fin.hasReaction" label="有顯影劑不良反應" />
         <template v-if="fin.hasReaction">
@@ -226,6 +230,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
           <UInput v-model="fin.symptoms" label="症狀" placeholder="例：前胸蕁麻疹、癢" :error="done.fieldErrors.value.symptoms" />
           <UTextarea v-model="fin.action" label="處置" :rows="2" placeholder="例：觀察 30 分鐘緩解；給抗組織胺" :error="done.fieldErrors.value.action" />
           <p v-if="fin.severity !== 'mild'" class="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">中度以上會自動產生藥物不良反應通報（碘化顯影劑），送藥師評估；要不要加入過敏由藥師決定。</p>
+        </template>
         </template>
       </div>
       <template #footer>

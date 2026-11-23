@@ -22,4 +22,7 @@ export function staffMissing(shifts: Pick<RadShift, 'date' | 'room' | 'block'>[]
   const date = start.slice(0, 10)
   return blocksOf(start, minutes).filter((b) => !shifts.some((s) => s.date === date && s.room === room && s.block === b))
 }
+/** 現在這個時間是哪一段（08:00–17:00 以外回 undefined：值班時間不查排班） */
+export const blockNow = (t: string): RadShift['block'] | undefined => blocksOf(t.slice(0, 16), 1)[0]
+
 export const staffMissingText = (blocks: RadShift['block'][]) => (blocks.length ? `${blocks.map(radBlockLabel).join('、')}沒有排放射師` : '')
