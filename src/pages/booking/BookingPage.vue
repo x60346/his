@@ -511,7 +511,7 @@ function openIdentity(v: VisitView) {
               <UCheckbox v-model="refOn">病人持外院轉診單（基本部分負擔收經轉診的金額）</UCheckbox>
               <ReferralInForm v-if="refOn" v-model="refForm" class="pl-6" :visit-date="selectedSession?.date" :errors="register.fieldErrors.value" />
             </div>
-            <div v-if="estimate" class="rounded-md border border-slate-200 px-3 py-2 text-sm">
+            <div v-if="estimate && patient" class="rounded-md border border-slate-200 px-3 py-2 text-sm">
               <div class="flex items-baseline justify-between gap-2">
                 <span class="text-slate-600">預估應收</span>
                 <span class="tabular text-lg font-semibold text-slate-800">{{ estimate.total }} 元</span>
