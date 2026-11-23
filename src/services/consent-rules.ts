@@ -55,3 +55,7 @@ export function checkScanPages(pages: string[]): string | undefined {
 }
 /** 還沒掃描紙本的有效同意書（撤回的也要掃，撤回的那張紙也要留；這裡只要有效的） */
 export const consentUnscanned = (c: Pick<Consent, 'scan' | 'revoked'>) => !c.scan && !c.revoked
+/** 簽好幾小時還沒掃描要提醒（病房護理師） */
+export const CONSENT_SCAN_DUE_HOURS = 24
+export const consentScanOverdue = (c: Pick<Consent, 'scan' | 'revoked' | 'signedAt'>, now: string) =>
+  consentUnscanned(c) && Date.parse(c.signedAt.replace(' ', 'T')) <= Date.parse(now.replace(' ', 'T')) - CONSENT_SCAN_DUE_HOURS * 3600000

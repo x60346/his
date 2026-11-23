@@ -18961,8 +18961,8 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await errOf(() => api.consentApi.revokeConsent(c.id, '不做了'))).includes('執行'), '執行過的同意書不能撤回')
     ok((await api.consentApi.listConsents(adm.patientId)).find((x) => x.id === c.id)?.bedsideUsed, '同意書清單標已執行')
     // 緊急：選原因可以不要同意書（張力性氣胸放胸管）
-    ok((await fieldsOf(() => B.recordBedside({ ...base, kind: 'chestTube', side: 'right', consentWaiver: '隨便' }))).consentWaiver, '原因要從清單選')
-    const ct = await B.recordBedside({ ...base, kind: 'chestTube', side: 'right', appearance: '氣體（無液體）', volumeMl: 0, consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0] })
+    ok((await fieldsOf(() => B.recordBedside({ ...base, kind: 'chestTube', side: 'right', tubeSize: '28Fr', consentWaiver: '隨便' }))).consentWaiver, '原因要從清單選')
+    const ct = await B.recordBedside({ ...base, kind: 'chestTube', side: 'right', tubeSize: '28Fr', appearance: '氣體（無液體）', volumeMl: 0, consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0] })
     ok(ct.consentWaiver && !ct.consentId && db().auditLogs[0].detail.includes('無同意書'), '緊急：記原因、稽核')
     // 出血風險：使用中的 Warfarin → 要寫評估
     db().ipdOrders.push({ id: 'IO-T-WARF', admissionId: adm.id, type: 'long', category: 'medication', drugId: 'M021', content: 'Warfarin 5mg', dose: 1, freq: 'QD', route: 'PO', startAt: t0, status: 'active', doctorId: adm.doctorId, createdAt: t0 })
@@ -18986,7 +18986,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
     const img = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
     ok(api.checkScanPages([]) && api.checkScanPages([img, img, img, img]).includes('3 頁') && api.checkScanPages(['data:text/plain;base64,aGk=']).includes('JPEG') && api.checkScanPages([`data:image/png;base64,${'A'.repeat(700000)}`]).includes('太大') && !api.checkScanPages([img]), '規則：頁數、格式、大小')
-    ok(db().consents.filter((c) => c.signedAt.slice(0, 10) < T).every((c) => c.scan && c.scan.at <= dateUtil.now()) && db().consents.filter((c) => c.signedAt.slice(0, 10) >= T).every((c) => !c.scan), '種子：今天以前簽的都掃了、今天簽的還沒')
+    ok(db().consents.filter((c) => c.signedAt.slice(0, 10) < T).filter((c) => !c.scan).length === 1 && db().consents.filter((c) => c.scan).every((c) => c.scan.at <= dateUtil.now()) && db().consents.filter((c) => c.signedAt.slice(0, 10) >= T).every((c) => !c.scan), '種子：今天以前簽的只留一張沒掃（提醒示範）、今天簽的還沒')
     ok(api.recordGaps({ day: false, dischargedAt: '2026-11-05 10:00', summary: { signedAt: '2026-11-05 09:00' }, surgeries: [], consults: [], consents: [{ no: 'CN1' }, { no: 'CN2', scannedAt: '2026-11-04 10:00' }] }).join() === '同意書紙本未掃描：CN1', '規則：出院病歷缺掃描的同意書')
     const W = await load('/src/services/record-audit-work.ts')
     ok(!W.discharged().some((a) => api.recordGaps(W.recordInputOf(a)).some((g) => g.startsWith('同意書'))), '種子：出院病歷沒有假的「未掃描」')
@@ -19030,6 +19030,97 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
       })
     }
     ok(!bad.length, `flex-wrap 列裡沒有 min-w-0 flex-1（${files.length} 個檔${bad.length ? `；還有 ${bad.slice(0, 5).join('、')}` : ''}）`)
+  }
+  // 胸管接管路：床邊處置登錄胸管 → 自動建管路；護理師每班記引流量與漏氣；每小時 ≥200 通知醫師、24 小時 <200 沒漏氣可評估拔管；穿刺液送檢自動開檢驗
+  console.log('\n[胸管與送檢]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const B = api.bedsideApi
+    const L = api.lineApi
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const t0 = dateUtil.now()
+    const at = (m) => dateUtil.addMinutes(t0, m)
+    // 規則
+    const base24 = { insertedAt: at(-30 * 60), drainage: [{ at: at(-20 * 60), ml: 100, airLeak: false }, { at: at(-10 * 60), ml: 50, airLeak: false }, { at: at(-60), ml: 20, airLeak: false }] }
+    let s = api.chestState(base24, t0)
+    ok(s.ml24 === 170 && s.removeHint && !s.bleeding && !s.recordDue && s.lastRate === 2, `規則：24 小時 ${s.ml24} mL、沒漏氣、放滿 24 小時 → 可評估拔管（最近每小時 ${s.lastRate}）`)
+    s = api.chestState({ ...base24, drainage: [...base24.drainage.slice(0, 2), { at: at(-60), ml: 20, airLeak: true }] }, t0)
+    ok(!s.removeHint && s.airLeak, '規則：有漏氣不提示拔管')
+    s = api.chestState({ insertedAt: at(-180), drainage: [{ at: at(-120), ml: 100, airLeak: false }, { at: at(-60), ml: 250, airLeak: false }] }, t0)
+    ok(s.bleeding && s.lastRate === 250 && !s.removeHint, '規則：上一段每小時 250 mL → 通知醫師；放不到 24 小時不提示拔管')
+    ok(api.chestState({ insertedAt: at(-600), drainage: [{ at: at(-540), ml: 50, airLeak: false }] }, t0).recordDue, '規則：超過 8 小時沒記 → 該記了')
+    ok(api.checkDrainage({ ml: '', appearance: '' }, at(-60), t0).ml && api.checkDrainage({ ml: 10, appearance: '血性', at: at(10) }, at(-60), t0).at, '規則：引流量、外觀、時間')
+    // 種子：肺炎病人 6 小時前右側胸管、三筆引流，同意書另外簽
+    const sl = db().lines.find((l) => l.id === 'LN-SEED-CT1')
+    const sbp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-2')
+    ok(sl && sl.kind === 'chest' && sl.drainage.length === 3 && sbp?.lineId === sl.id && db().consents.find((c) => c.id === sbp.consentId)?.bedsideKind === 'chestTube' && db().ipdOrders.find((o) => o.id === sbp.orderId)?.procId === 'P071', '種子：胸管、引流紀錄、同意書、處置費')
+    const ss = api.chestState(sl, t0)
+    ok(ss.ml24 === 600 && !ss.bleeding && !ss.recordDue && !ss.removeHint, `種子：24 小時 ${ss.ml24} mL、沒有提醒`)
+    // 管路分頁不能直接登錄胸管
+    const pn = db().admissions.find((a) => a.id === sl.admissionId)
+    await as('nurse01')
+    ok((await errOf(() => api.lineApi.addLine({ admissionId: pn.id, kind: 'chest', site: '左側胸', size: '28Fr', insertedAt: t0.slice(0, 16), placedBy: 'x' }))).includes('床邊處置'), '管路分頁登錄胸管 → 擋（請在床邊處置）')
+    // 記引流量
+    ok((await fieldsOf(() => L.recordDrainage(sl.id, { ml: '', appearance: '', airLeak: false }))).ml, '引流量要填')
+    let v = await L.recordDrainage(sl.id, { ml: 320, appearance: '血性', airLeak: true })
+    ok(v.state.chest.bleeding && v.state.chest.airLeak && db().auditLogs[0].action === '胸管引流' && db().auditLogs[0].detail.includes('通知醫師'), `記一筆 320 mL（上一筆 1 小時前）→ 每小時 ${v.state.chest.lastRate} 通知醫師、漏氣、稽核`)
+    const tasks = await api.nursingApi.listWardTasks(db().beds.find((b) => b.id === pn.bedId).ward)
+    ok(tasks.some((x) => x.admissionId === pn.id && x.kind === 'line' && x.urgency === 'overdue' && x.text.includes('通知醫師')), '本班待辦：胸管出血列逾時')
+    const cvc = db().lines.find((l) => l.kind === 'cvc' && !l.removedAt)
+    ok((await errOf(() => L.recordDrainage(cvc.id, { ml: 10, appearance: '血性', airLeak: false }))).includes('胸管'), '其他管路不能記引流')
+    // 醫師登錄左側胸管＋送檢：建管路、開檢驗（體液管不和血清合管）
+    const doc = db().users.find((u) => u.doctorId === pn.doctorId).username
+    await as(doc)
+    const good = { admissionId: pn.id, kind: 'chestTube', side: 'left', indication: '左側氣胸', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '淡黃清澈', volumeMl: 150, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0] }
+    ok((await fieldsOf(() => B.recordBedside(good))).tubeSize, '胸管要選尺寸')
+    ok((await fieldsOf(() => B.recordBedside({ ...good, tubeSize: '24Fr', labs: ['P999'] }))).labs, '送檢項目要從清單選')
+    ok((await errOf(() => B.recordBedside({ ...good, side: 'right', tubeSize: '28Fr' }))).includes('已經有一條胸管'), '同一側已經有胸管 → 擋')
+    const p = await B.recordBedside({ ...good, tubeSize: '24Fr', airLeak: true, labs: ['P059', 'P072', 'P073'] })
+    const nl = db().lines.find((l) => l.id === p.lineId)
+    ok(nl && nl.kind === 'chest' && nl.site === '左側胸' && nl.size === '24Fr' && nl.drainage[0].ml === 150 && nl.drainage[0].airLeak && nl.bedsideId === p.id, '登錄胸管：自動建管路、放置的引流算第一筆')
+    const los = p.labOrderIds.map((id) => db().ipdOrders.find((o) => o.id === id))
+    ok(los.length === 3 && los.every((o) => o.status === 'active' && o.type === 'stat' && o.content.includes('胸水・床邊胸管置放')) && los.map((o) => o.procId).join() === 'P072,P073,P059', `送檢：開 3 筆臨時檢驗（${los.map((o) => o.content).join('、')}）`)
+    ok(p.labs.length === 3, '處置紀錄列出送檢')
+    await as('nurse01')
+    const ws = await api.specimenApi.wardSpecimens(pn.id)
+    const fluid = ws.toPrint.find((g) => g.tube === 'fluid')
+    ok(fluid && fluid.orders.length === 2 && !ws.toPrint.find((g) => g.tube === 'red')?.orders.some((o) => o.content.includes('胸水')) && ws.toPrint.find((g) => g.tube === 'culture')?.orders.some((o) => o.content.includes('胸水')), '檢體：體液常規、生化同一支無菌體液管（不和血清合管），培養另一支')
+    ok(api.SPECIMENS.some((x) => x.key === 'fluid'), '培養檢體多了體液')
+    // 腰椎穿刺送檢寫腦脊髓液
+    await as(doc)
+    const lp = await B.recordBedside({ admissionId: pn.id, kind: 'lp', indication: '疑腦膜炎', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '混濁', complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], labs: ['P072'], bleedingNote: '評估過' })
+    ok(db().ipdOrders.find((o) => o.id === lp.labOrderIds[0]).content.startsWith('體液常規（腦脊髓液'), '腰椎穿刺送檢寫腦脊髓液')
+    // 移除胸管照一般管路
+    await as('nurse01')
+    await L.removeLine(nl.id, '不需要了')
+    ok(db().lines.find((l) => l.id === nl.id).removedAt && (await errOf(() => L.recordDrainage(nl.id, { ml: 10, appearance: '淡黃清澈', airLeak: false }))).includes('移除'), '移除後不能再記')
+  }
+  // 同意書未掃描提醒：住院中的病人有簽超過 24 小時還沒掃描的 → 護理師首頁、本班待辦；病患資料頁可以用網址帶到同意書分頁
+  console.log('\n[同意書未掃描提醒]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const t0 = dateUtil.now()
+    ok(api.consentScanOverdue({ signedAt: dateUtil.addMinutes(t0, -25 * 60) }, t0) && !api.consentScanOverdue({ signedAt: dateUtil.addMinutes(t0, -23 * 60) }, t0) && !api.consentScanOverdue({ signedAt: dateUtil.addMinutes(t0, -25 * 60), revoked: {} }, t0), '規則：簽超過 24 小時、有效的才提醒')
+    const un = db().consents.find((c) => !c.scan && c.signedAt.slice(0, 10) < T)
+    const adm = db().admissions.find((a) => a.id === un?.admissionId)
+    ok(un && adm?.status === 'admitted', `種子：住院中 ${adm?.admitNo} 的 ${un?.no} 沒掃描`)
+    await as('nurse01')
+    let list = await api.consentApi.unscannedConsents()
+    ok(list.length === 1 && list[0].admissionId === adm.id && list[0].nos.join() === un.no && list[0].bedNo, `病房清單：${list[0]?.bedNo} ${list[0]?.patientName}（${list[0]?.nos.join()}）`)
+    let dash = await api.dashboardApi.getDashboard()
+    ok(dash.consentUnscanned === 1 || dash.consentUnscanned === 0, `首頁：同意書紙本未掃描 ${dash.consentUnscanned}（依責任分床）`)
+    await as('nurse01')
+    await api.consentApi.attachConsentScan(un.id, ['data:image/jpeg;base64,/9j/4AAQ'])
+    list = await api.consentApi.unscannedConsents()
+    dash = await api.dashboardApi.getDashboard()
+    ok(!list.length && !dash.consentUnscanned, '掃描後清單、首頁都沒有了')
+    await as('dr01')
+    ok((await (async () => { try { await api.consentApi.unscannedConsents(); return false } catch { return true } })()), '醫師不看病房清單')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/patients/PatientsPage.vue', 'utf8').includes('route.query.tab') && readFileSync('src/pages/nursing/components/WardTasksPanel.vue', 'utf8').includes("tab: 'consents'"), '本班待辦連到病患資料「同意書」分頁')
   }
 } catch (e) {
   failed++

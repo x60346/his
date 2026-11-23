@@ -447,6 +447,17 @@ const labItemsOf: Record<string, LabItemDef[]> = {
   P058: [{ code: 'COVID', name: '新冠病毒抗原', options: ['陰性', '陽性'], normal: ['陰性'] }],
   // Vancomycin 谷濃度（下一劑前抽）：目標 10–20，過高腎毒性
   P060: [{ code: 'VANT', name: 'Vancomycin 谷濃度', unit: 'µg/mL', low: 10, high: 20, critHigh: 40 }],
+  // 體液（胸水、腹水、腦脊髓液）：床邊處置送檢；沒有參考值（依檢體種類判讀，例：胸水用 Light's criteria）
+  P072: [
+    { code: 'F-WBC', name: '白血球', unit: '/µL' },
+    { code: 'F-PMN', name: '嗜中性球', unit: '%' },
+    { code: 'F-RBC', name: '紅血球', unit: '/µL' },
+  ],
+  P073: [
+    { code: 'F-PRO', name: '蛋白', unit: 'g/dL' },
+    { code: 'F-GLU', name: '糖', unit: 'mg/dL' },
+    { code: 'F-LDH', name: '乳酸脫氫酶 LDH', unit: 'U/L' },
+  ],
   P059: [{ code: 'CULT', name: '培養結果', options: ['無菌生長', 'MRSA', 'CRE', 'VRE', '其他細菌'], normal: ['無菌生長'] }],
   P012: [
     { code: 'FLU-A', name: 'A 型流感', options: ['陰性', '陽性'], normal: ['陰性'] },
@@ -536,6 +547,9 @@ const procedureBase: Procedure[] = [
   // 磁振造影（點數為展示用近似值）：排程時看病人身上的植入物（MRI 不安全的要放射科醫師確認）
   { id: 'P067', code: '33084B', name: '磁振造影（頭部）', category: '影像', points: 6500, selfPrice: 12000, active: true },
   // 安寧共同照護：每次訪視一次（點數為展示用近似值）
+  // 體液檢驗（床邊處置送檢）
+  { id: 'P072', code: '16008C', name: '體液常規（細胞計數、分類）', category: '檢驗', points: 150, selfPrice: 300, active: true },
+  { id: 'P073', code: '16009C', name: '體液生化（蛋白、糖、LDH）', category: '檢驗', points: 180, selfPrice: 350, active: true },
   // 床邊侵入性處置：床邊處置紀錄存檔時自動開（醫囑不能另外開）
   { id: 'P068', code: '47013C', name: '腰椎穿刺', category: '處置', points: 600, selfPrice: 1500, bedside: 'lp', active: true },
   { id: 'P069', code: '47005C', name: '胸腔穿刺', category: '處置', points: 560, selfPrice: 1500, bedside: 'thoracentesis', active: true },
@@ -558,7 +572,7 @@ const imagingOf: Record<string, NonNullable<Procedure['imaging']>> = {
 }
 
 /** 檢驗的檢體容器（沒列的檢驗用紅頭生化管） */
-const tubeOf: Record<string, TubeKind> = { P003: 'purple', P005: 'purple', P010: 'urine', P012: 'swab', P052: 'gas', P057: 'sputum', P058: 'swab', P059: 'culture' }
+const tubeOf: Record<string, TubeKind> = { P003: 'purple', P005: 'purple', P010: 'urine', P012: 'swab', P052: 'gas', P057: 'sputum', P058: 'swab', P059: 'culture', P072: 'fluid', P073: 'fluid' }
 /** 檢查前準備（報到時逐項確認） */
 const NPO6 = { id: 'npo6', label: '禁食 6 小時（最後進食時間已確認）' }
 const CONSENT = { id: 'consent', label: '顯影劑同意書已簽' }
@@ -571,7 +585,7 @@ const examOf: Record<string, { room: ExamRoom; minutes: number; prep?: { id: str
  */
 /** 要空腹的檢驗、每次需要的檢體量（mL；沒列的 0.5） */
 const fastingProcs = ['P004', 'P006', 'P007']
-const specimenMlOf: Record<string, number> = { P003: 1, P005: 1, P010: 10, P011: 1, P055: 1, P052: 1, P060: 1, P059: 5, P057: 5 }
+const specimenMlOf: Record<string, number> = { P003: 1, P005: 1, P010: 10, P011: 1, P055: 1, P052: 1, P060: 1, P059: 5, P057: 5, P072: 5, P073: 5 }
 const labLimitsOf: Record<string, LabLimits> = { P052: { stat: 30 }, P005: { routine: 1440 }, P057: { stat: 1440, routine: 1440 }, P059: { noTat: true }, P004: { callout: 15 } }
 export const procedures: Procedure[] = procedureBase.map((p) => ({ ...p, ...(labItemsOf[p.id] ? { labItems: labItemsOf[p.id], tube: tubeOf[p.id] ?? 'red', specimenMl: specimenMlOf[p.id] ?? 0.5, ...(fastingProcs.includes(p.id) ? { fasting: true as const } : {}), ...(labLimitsOf[p.id] ? { labLimits: labLimitsOf[p.id] } : {}) } : {}), ...(imagingOf[p.id] ? { imaging: { ...imagingOf[p.id], ...examOf[p.id] } } : {}) }))
 

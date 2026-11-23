@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 病患資料：左邊搜尋清單，右邊基本資料、就醫紀錄、住院紀錄（含出院病摘）、預防保健資格。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Pencil, UserPlus } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UEmpty, UInput, UStatusBadge, UTable, UTabs, type Column } from '@/components/ui'
 import PatientEditDialog from '@/components/PatientEditDialog.vue'
@@ -30,6 +31,12 @@ useRevealOnNarrow(selectedId) // 窄螢幕點選後把明細捲進畫面
 const { data: patient } = useQuery(async () => (selectedId.value ? patientApi.getPatient(selectedId.value) : null), [selectedId])
 
 const tab = ref('visits')
+// 從別頁連過來（例：護理站「同意書紙本未掃描」）：?id=病人&tab=分頁
+const route = useRoute()
+watch(() => [route.query.id, route.query.tab], ([id, t]) => {
+  if (typeof id === 'string' && id) selectedId.value = id
+  if (typeof t === 'string' && t) tab.value = t
+}, { immediate: true })
 // 病歷影本：有「病歷影本申請」權限的人（預設櫃台）才有這個分頁
 const tabs = computed(() => [
   { key: 'visits', label: '就醫紀錄', count: visits.value?.length },

@@ -3,9 +3,9 @@
 import type { Specimen, TubeKind } from '@/types'
 import { addMinutes } from '@/utils/date'
 
-export const TUBE_LABEL: Record<TubeKind, string> = { purple: '紫頭（EDTA）', red: '紅頭（生化）', gas: '動脈血氣體', urine: '尿杯', swab: '拭子', sputum: '痰盒', culture: '培養容器' }
+export const TUBE_LABEL: Record<TubeKind, string> = { purple: '紫頭（EDTA）', red: '紅頭（生化）', gas: '動脈血氣體', urine: '尿杯', swab: '拭子', sputum: '痰盒', culture: '培養容器', fluid: '無菌體液管' }
 /** 標籤上的顏色（Tailwind class） */
-export const TUBE_COLOR: Record<TubeKind, string> = { purple: 'bg-purple-500', red: 'bg-red-500', gas: 'bg-sky-500', urine: 'bg-yellow-400', swab: 'bg-slate-400', sputum: 'bg-emerald-500', culture: 'bg-orange-500' }
+export const TUBE_COLOR: Record<TubeKind, string> = { purple: 'bg-purple-500', red: 'bg-red-500', gas: 'bg-sky-500', urine: 'bg-yellow-400', swab: 'bg-slate-400', sputum: 'bg-emerald-500', culture: 'bg-orange-500', fluid: 'bg-amber-700' }
 /** 病人自行收集的容器（門診）：發給病人、交回才算採檢 */
 export const SELF_COLLECT_TUBES: TubeKind[] = ['urine', 'sputum']
 export const SPECIMEN_REJECT_REASONS = ['溶血', '檢體量不足', '凝固', '標籤錯誤', '容器錯誤']
@@ -44,7 +44,7 @@ export function addonCheck(sp: Pick<Specimen, 'tube' | 'collectedAt' | 'received
 }
 
 /** 一支管子裝得下多少檢體（mL）：同管別的檢驗合起來超過就拆成兩支條碼 */
-export const TUBE_CAPACITY_ML: Record<TubeKind, number> = { purple: 3, red: 5, gas: 1, urine: 10, swab: 5, sputum: 5, culture: 10 }
+export const TUBE_CAPACITY_ML: Record<TubeKind, number> = { purple: 3, red: 5, gas: 1, urine: 10, swab: 5, sputum: 5, culture: 10, fluid: 20 }
 /** 依量拆支：照順序裝，裝不下就開新的一支（單項就超過容量的自己一支） */
 export function splitByVolume<T>(items: T[], ml: (x: T) => number, capacity: number): T[][] {
   const out: T[][] = []

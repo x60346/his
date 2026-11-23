@@ -288,7 +288,7 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
       if (ps.reassess) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: ps.reassess.status === 'overdue' ? 'overdue' : 'upcoming', at: ps.reassess.dueAt, text: `疼痛 ${ps.last!.score} 分處置後重評` })
       else if (measured && !ps.thisShift) tasks.push({ ...base, id: `pain-${a.id}`, kind: 'pain', urgency: 'todo', text: '本班尚未評估疼痛' })
       // 管路：今天還沒評估還需要嗎、評估可以移除、留置針滿 96 小時（滿 7 天提醒主治，在醫師首頁）
-      for (const x of lineTodosOf(a.id, t).filter((y) => y.kind !== 'attending')) tasks.push({ ...base, id: x.id, kind: 'line', urgency: x.kind === 'need' ? 'todo' : 'due', text: x.text })
+      for (const x of lineTodosOf(a.id, t).filter((y) => y.kind !== 'attending')) tasks.push({ ...base, id: x.id, kind: 'line', urgency: x.kind === 'chestBleed' ? 'overdue' : x.kind === 'need' || x.kind === 'chestRemove' ? 'todo' : 'due', text: x.text })
       // 管灌：該灌沒記的（前後 1 小時「現在」、超過「逾時」；連續灌食每班記一次）
       const tf = tubeSlotsOf(a.id, t)
       for (const x of tf.slots.filter((y) => y.state === 'due' || y.state === 'overdue')) tasks.push({ ...base, id: `tube-${a.id}-${x.slot}`, kind: 'tube', urgency: x.state as 'due' | 'overdue', at: x.slot, text: `管灌 ${x.ml} ml${tf.order!.diet.tube.mode === 'continuous' ? '（本班連續灌食量）' : ''}` })

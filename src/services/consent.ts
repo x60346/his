@@ -5,7 +5,7 @@ import type { Consent } from '@/types'
 import { db, newId, nextCounter } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
-import { checkConsentInput, checkScanPages, CONSENT_KIND_LABEL, CONSENT_LINE_KINDS, examConsentOk, transfusionConsentOk, unusedLineConsent } from './consent-rules'
+import { checkConsentInput, checkScanPages, consentScanOverdue, CONSENT_KIND_LABEL, CONSENT_LINE_KINDS, examConsentOk, transfusionConsentOk, unusedLineConsent } from './consent-rules'
 import { lineKind } from './line-rules'
 import type { LineKind } from '@/types'
 import { imagingOf } from './imaging-work'
@@ -174,5 +174,18 @@ export function consentScanOf(id: string): Promise<{ pages: string[]; scan?: Con
     requireUser('doctor', 'nurse')
     const c = must(db.consents.find((x) => x.id === id), '同意書')
     return { pages: db.consentScans.find((s) => s.consentId === c.id)?.pages ?? [], ...(c.scan ? { scan: { ...c.scan, byName: nameOf.user(c.scan.by) } } : {}) }
+  })
+}
+
+/** 病房：住院中的病人有簽超過 24 小時還沒掃描的同意書（護理師；本班待辦上方提醒） */
+export function unscannedConsents(): Promise<{ admissionId: string; patientId: string; patientName: string; ward: string; bedNo: string; nos: string[] }[]> {
+  return query(() => {
+    requireUser('nurse')
+    const t = now()
+    return db.admissions.filter((a) => a.status === 'admitted')
+      .map((a) => ({ a, nos: db.consents.filter((c) => c.admissionId === a.id && consentScanOverdue(c, t)).map((c) => c.no) }))
+      .filter((x) => x.nos.length)
+      .map(({ a, nos }) => ((b) => ({ admissionId: a.id, patientId: a.patientId, patientName: nameOf.patient(a.patientId), ward: b?.ward ?? '', bedNo: b?.bedNo ?? '', nos }))(a.bedId ? find.bed(a.bedId) : undefined))
+      .sort((x, y) => x.ward.localeCompare(y.ward) || x.bedNo.localeCompare(y.bedNo))
   })
 }

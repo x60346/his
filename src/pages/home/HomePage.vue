@@ -50,6 +50,7 @@ const todos = computed<Todo[]>(() => {
   const list: (Todo & { roles: string[] })[] = [
     { roles: ['lab'], label: '備血待處理', count: s.value.bloodWork ?? 0, hint: s.value.bloodUrgent ? `其中急件 ${s.value.bloodUrgent} 張` : '待驗血型、交叉試驗還沒配滿的備血單', route: 'blood', icon: Droplet, urgent: !!s.value.bloodUrgent },
     { roles: ['doctor'], label: '輸血反應待確認', count: s.value.bloodReactions ?? 0, hint: '我的病人輸血時發生反應、已停止輸血：請在住院醫囑「輸血」分頁寫處置', route: 'ipd', icon: Droplet, urgent: true },
+    ...(s.value.consentUnscanned ? [{ roles: ['nurse'], label: '同意書紙本未掃描', count: s.value.consentUnscanned, hint: '住院病人有簽超過 24 小時還沒掃描的同意書：護理站「本班待辦」列出是哪幾張，到病患資料「同意書」附上掃描檔', route: 'nursing', icon: Siren, urgent: false }] : []),
     ...(s.value.nursingRecordMissing ? [{ roles: ['nurse'], label: '護理紀錄缺漏', count: s.value.nursingRecordMissing, hint: '住院病人最近 6 個已結束的班有沒寫護理紀錄的（每班至少一筆）：護理站「本班待辦」列出哪幾班', route: 'nursing', icon: Siren, urgent: false }] : []),
     { roles: ['nurse'], label: '急診待看診', count: s.value.erWaiting, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間` : '已檢傷、等醫師看的急診病人', route: 'er', icon: Siren, urgent: !!s.value.erOverdue },
     { roles: ['doctor'], label: '急診待看診', count: s.value.erDeciding !== undefined ? s.value.erWaiting : 0, hint: s.value.erOverdue ? `其中 ${s.value.erOverdue} 位超過目標等候時間（在門診看診的急診診次依級數叫號）` : '在門診看診的急診診次依檢傷級數叫號', route: 'opd', icon: Siren, urgent: !!s.value.erOverdue },

@@ -6,7 +6,7 @@ import { addDays, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { find, nameOf } from './views'
 import { INFECTION_KINDS, per1000 } from './infection-rules'
-import { checkLineInput, LINE_KINDS, LINE_REMOVE_REASONS, lineDays, lineKind, lineState, type LineState } from './line-rules'
+import { checkDrainage, checkLineInput, LINE_KINDS, LINE_REMOVE_REASONS, lineDays, lineKind, lineState, type LineState } from './line-rules'
 import { intubationDnrProblem } from './vent-rules'
 import { activeDnr } from './flag-work'
 import { activeVent } from './vent-work'
@@ -72,6 +72,7 @@ export function addLine(input: LineInput): Promise<LineView> {
     const a = admittedOf(input.admissionId)
     const t = now()
     failFields(checkLineInput(input, t))
+    if (lineKind(input.kind).bedsideOnly) fail(`${lineKind(input.kind).label}請在住院醫囑「床邊處置」登錄置放（同意書、處置費、送檢一起處理），會自動接到管路`, 'CONFLICT')
     if (a.admittedAt && input.insertedAt < addDays(a.admittedAt.slice(0, 10), -30)) failField('insertedAt', '放置時間太早（入院前 30 天以上）')
     // 氣管內管：DNR 不施行氣管內插管的病人不能放
     const dnr = input.kind === 'ett' ? intubationDnrProblem(activeDnr(a.patientId)?.withhold) : undefined
@@ -107,6 +108,25 @@ export function checkLineNeed(lineId: string, needed: boolean, note = ''): Promi
     const t = now()
     ;(l.needChecks ??= []).push({ date: today(), at: t, by: u.id, needed, ...(note.trim() ? { note: note.trim() } : {}) })
     audit('管路評估', `${nameOf.patient(find.admission(l.admissionId)?.patientId)} ${lineKind(l.kind).label}：${needed ? '還需要' : '可以移除'}${note.trim() ? `（${note.trim()}）` : ''}`)
+    return lineView(l, t)
+  })
+}
+
+/** 胸管引流紀錄（護理師、醫師）：這一段的引流量、外觀、有沒有漏氣；at 不給＝現在 */
+export function recordDrainage(lineId: string, input: { ml: number | string; appearance: string; airLeak: boolean; at?: string }): Promise<LineView> {
+  return mutate(() => {
+    const u = requireUser('nurse', 'doctor')
+    const l = must(db.lines.find((x) => x.id === lineId), '管路')
+    admittedOf(l.admissionId)
+    if (l.removedAt) fail('已經移除了', 'CONFLICT')
+    if (l.kind !== 'chest') fail('只有胸管要記引流量')
+    const t = now()
+    failFields(checkDrainage(input, l.insertedAt, t))
+    const at = input.at ?? t
+    if ((l.drainage ?? []).some((d) => d.at >= at)) failField('at', '時間要晚於上一筆紀錄')
+    ;(l.drainage ??= []).push({ at, by: u.id, ml: Number(input.ml), appearance: input.appearance.trim(), airLeak: !!input.airLeak })
+    const s = lineState(l, t).chest!
+    audit('胸管引流', `${nameOf.patient(find.admission(l.admissionId)?.patientId)} 胸管（${l.site}）：${Number(input.ml)} mL ${input.appearance.trim()}${input.airLeak ? '、漏氣' : ''}${s.bleeding ? `（每小時 ${s.lastRate} mL，通知醫師）` : ''}`)
     return lineView(l, t)
   })
 }

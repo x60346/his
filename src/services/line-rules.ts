@@ -39,7 +39,7 @@ export function painState(records: { at: string; pain?: number }[], now: string,
 }
 
 // ---------- 管路 ----------
-export const LINE_KINDS: { kind: LineKind; label: string; short: string; dailyNeed: boolean; sites: string[]; sizes: string[] }[] = [
+export const LINE_KINDS: { kind: LineKind; label: string; short: string; dailyNeed: boolean; sites: string[]; sizes: string[]; bedsideOnly?: true }[] = [
   { kind: 'foley', label: '導尿管', short: 'Foley', dailyNeed: true, sites: ['尿道'], sizes: ['14Fr', '16Fr', '18Fr'] },
   { kind: 'cvc', label: '中心靜脈導管', short: 'CVC', dailyNeed: true, sites: ['右內頸靜脈', '左內頸靜脈', '右鎖骨下靜脈', '股靜脈'], sizes: ['7Fr 三腔', '7Fr 雙腔'] },
   { kind: 'pivc', label: '周邊靜脈留置針', short: 'IV', dailyNeed: false, sites: ['右手背', '左手背', '右前臂', '左前臂', '右肘前', '左肘前'], sizes: ['18G', '20G', '22G', '24G'] },
@@ -47,6 +47,8 @@ export const LINE_KINDS: { kind: LineKind; label: string; short: string; dailyNe
   { kind: 'peg', label: '胃造口', short: 'PEG', dailyNeed: false, sites: ['左上腹'], sizes: ['20Fr', '24Fr'] },
   // 氣管內管（醫師插管）：每天評估改由「每日脫離評估」（SAT／SBT）；管路日＝呼吸器日（VAP 的分母）
   { kind: 'ett', label: '氣管內管', short: 'ETT', dailyNeed: false, sites: ['經口', '經鼻', '氣切'], sizes: ['7.0', '7.5', '8.0', '8.5'] },
+  // 胸管：醫師在「床邊處置」登錄置放時自動建立（管路分頁不能直接登錄）；護理師每班記引流量與漏氣
+  { kind: 'chest', label: '胸管', short: 'CT', dailyNeed: false, sites: ['右側胸', '左側胸'], sizes: ['20Fr', '24Fr', '28Fr', '32Fr'], bedsideOnly: true },
 ]
 export const lineKind = (k: LineKind) => LINE_KINDS.find((x) => x.kind === k)!
 /** 導尿管、CVC 放滿幾天提醒主治（感染風險：每天評估還需不需要） */
@@ -69,9 +71,59 @@ export interface LineState {
   attendingAlert: boolean
   /** 周邊留置針滿 96 小時：提醒更換 */
   replaceDue: boolean
+  /** 胸管：引流與漏氣 */
+  chest?: ChestState
 }
 
-export function lineState(l: Pick<LineDevice, 'kind' | 'insertedAt' | 'needChecks' | 'removedAt'>, now: string): LineState {
+// ---------- 胸管 ----------
+/** 每小時引流超過多少 mL 要通知醫師（術後或外傷出血） */
+export const CHEST_BLEED_MLH = 200
+/** 24 小時引流少於多少 mL、而且沒有漏氣，可以請醫師評估拔管 */
+export const CHEST_REMOVE_ML24 = 200
+/** 幾小時沒記引流要提醒（每班至少一次） */
+export const CHEST_RECORD_HOURS = 8
+export const CHEST_APPEARANCES = ['血性', '淡血性', '淡黃清澈', '混濁', '膿性', '無液體']
+export interface ChestState {
+  /** 最近 24 小時引流量 */
+  ml24: number
+  lastAt?: string
+  /** 最近一次記錄有沒有漏氣 */
+  airLeak: boolean
+  /** 最近一次記錄的每小時引流量 */
+  lastRate?: number
+  /** 最近一次每小時 ≥200 mL：通知醫師 */
+  bleeding: boolean
+  /** 放滿 24 小時、最近 24 小時 < 200 mL、這段期間都沒漏氣：可以請醫師評估拔管 */
+  removeHint: boolean
+  /** 超過 8 小時沒記引流 */
+  recordDue: boolean
+}
+export function chestState(l: Pick<LineDevice, 'insertedAt' | 'drainage' | 'removedAt'>, now: string): ChestState {
+  const recs = [...(l.drainage ?? [])].sort((a, b) => a.at.localeCompare(b.at))
+  const from = addMinutes(now, -24 * 60)
+  const in24 = recs.filter((r) => r.at > from)
+  const last = recs.at(-1)
+  const prevAt = recs.length > 1 ? recs.at(-2)!.at : l.insertedAt
+  const lastRate = last ? Math.round(last.ml / Math.max(1, hoursBetween(prevAt, last.at))) : undefined
+  const ml24 = in24.reduce((n, r) => n + r.ml, 0)
+  const open = !l.removedAt
+  return {
+    ml24, ...(last ? { lastAt: last.at, lastRate } : {}), airLeak: !!last?.airLeak,
+    bleeding: open && !!last && lastRate! >= CHEST_BLEED_MLH,
+    removeHint: open && hoursBetween(l.insertedAt, now) >= 24 && !!in24.length && ml24 < CHEST_REMOVE_ML24 && !in24.some((r) => r.airLeak),
+    recordDue: open && hoursBetween(last?.at ?? l.insertedAt, now) >= CHEST_RECORD_HOURS,
+  }
+}
+export function checkDrainage(x: { ml?: number | string; appearance?: string; at?: string }, insertedAt: string, now: string): Record<string, string> {
+  const e: Record<string, string> = {}
+  const v = Number(x.ml)
+  if (x.ml === '' || x.ml === undefined || !Number.isFinite(v) || v < 0 || v > 5000) e.ml = '請填引流量（mL，0–5000）'
+  if (!x.appearance?.trim()) e.appearance = '請選外觀'
+  if (x.at !== undefined && (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(x.at) || x.at > now || x.at < insertedAt)) e.at = '時間要在放置之後、現在以前'
+  return e
+}
+
+export function lineState(l: Pick<LineDevice, 'kind' | 'insertedAt' | 'needChecks' | 'removedAt' | 'drainage'>, now: string): LineState {
   const end = l.removedAt ?? now
   const hours = hoursBetween(l.insertedAt, end)
   const day = Math.floor((Date.parse(end.slice(0, 10)) - Date.parse(l.insertedAt.slice(0, 10))) / 86400000) + 1
@@ -84,6 +136,7 @@ export function lineState(l: Pick<LineDevice, 'kind' | 'insertedAt' | 'needCheck
     removable: open && !!last && !last.needed,
     attendingAlert: open && meta.dailyNeed && hours >= LINE_ATTENDING_DAYS * 24,
     replaceDue: open && l.kind === 'pivc' && hours >= PIVC_REPLACE_HOURS,
+    ...(l.kind === 'chest' ? { chest: chestState(l, now) } : {}),
   }
 }
 

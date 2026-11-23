@@ -4,8 +4,8 @@
 // 提醒只提醒不擋；判斷都在 line-rules（服務層回 state，畫面只顯示）
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
-import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { CONSENT_LINE_KINDS, LINE_CONSENT_WAIVERS, lineApi, LINE_KINDS, LINE_REMOVE_REASONS, lineKind, type LineView } from '@/services'
+import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
+import { CHEST_APPEARANCES, CHEST_BLEED_MLH, CONSENT_LINE_KINDS, LINE_CONSENT_WAIVERS, lineApi, LINE_KINDS, LINE_REMOVE_REASONS, lineKind, type LineView } from '@/services'
 import type { LineKind } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -44,6 +44,23 @@ async function submitNotNeed() {
   if (notNeed.value && (await need.run(notNeed.value.id, false, notNeedNote.value))) notNeed.value = undefined
 }
 
+// ---------- 胸管引流 ----------
+// 胸管在「床邊處置」登錄，這裡不能選
+const addKinds = LINE_KINDS.filter((k) => !k.bedsideOnly)
+const dr = ref<LineView>()
+const drOpen = computed({ get: () => !!dr.value, set: (x) => !x && (dr.value = undefined) })
+const drForm = reactive({ ml: '' as string | number, appearance: '', airLeak: false })
+function openDr(l: LineView) {
+  const last = l.drainage?.at(-1)
+  Object.assign(drForm, { ml: '', appearance: last?.appearance ?? '', airLeak: !!last?.airLeak })
+  drain.fieldErrors.value = {}
+  dr.value = l
+}
+const drain = useAction(lineApi.recordDrainage, { success: (l) => `已記引流：24 小時 ${l.state.chest?.ml24 ?? 0} mL` })
+async function submitDr() {
+  if (dr.value && (await drain.run(dr.value.id, { ml: drForm.ml, appearance: drForm.appearance, airLeak: drForm.airLeak }))) dr.value = undefined
+}
+
 // ---------- 移除 ----------
 const rm = ref<LineView>()
 const rmOpen = computed({ get: () => !!rm.value, set: (x) => !x && (rm.value = undefined) })
@@ -76,17 +93,31 @@ async function submitRm() {
               <span class="tabular text-xs text-slate-500">{{ l.insertedAt.slice(5) }} 放置（{{ l.placedBy }}）・已放 {{ ageText(l) }}</span>
               <span v-if="l.consentNo" class="text-xs text-slate-500">同意書 {{ l.consentNo }}</span>
               <UBadge v-else-if="l.consentWaiver" tone="gray" :title="l.consentWaiver">無同意書：{{ l.consentWaiver.startsWith('緊急') ? '緊急' : '外院放置' }}</UBadge>
+              <template v-if="l.state.chest">
+                <span class="text-xs text-slate-600">24 小時 {{ l.state.chest.ml24 }} mL<template v-if="l.state.chest.lastAt">・最近 {{ l.state.chest.lastAt.slice(5) }}</template></span>
+                <UBadge v-if="l.state.chest.airLeak" tone="yellow">漏氣</UBadge>
+                <UBadge v-if="l.state.chest.bleeding" tone="red">每小時 {{ l.state.chest.lastRate }} mL（≥{{ CHEST_BLEED_MLH }}）：通知醫師</UBadge>
+                <UBadge v-if="l.state.chest.recordDue" tone="cyan">該記引流量了</UBadge>
+                <UBadge v-if="l.state.chest.removeHint" tone="yellow">可評估拔管</UBadge>
+              </template>
               <UBadge v-if="l.state.attendingAlert" tone="red">滿 7 天：請主治評估</UBadge>
               <UBadge v-if="l.state.replaceDue" tone="red">滿 96 小時：請更換</UBadge>
               <UBadge v-if="l.state.removable" tone="yellow">評估可移除</UBadge>
               <UBadge v-else-if="l.state.needCheckDue" tone="cyan">今天還沒評估</UBadge>
             </div>
+            <details v-if="l.drainage?.length" class="text-xs text-slate-600">
+              <summary class="cursor-pointer">引流紀錄 {{ l.drainage.length }} 筆</summary>
+              <ul class="mt-1 space-y-0.5">
+                <li v-for="d in [...l.drainage].reverse()" :key="d.at" class="tabular">{{ d.at.slice(5) }}・{{ d.ml }} mL・{{ d.appearance }}{{ d.airLeak ? '・漏氣' : '' }}</li>
+              </ul>
+            </details>
             <div v-if="l.needChecks.length" class="text-xs text-slate-500">最近評估：{{ l.needChecks.at(-1)!.at.slice(5) }} {{ l.needChecks.at(-1)!.byName }}・{{ l.needChecks.at(-1)!.needed ? '還需要' : `可以移除（${l.needChecks.at(-1)!.note}）` }}</div>
             <div class="flex flex-wrap gap-1.5">
               <template v-if="lineKind(l.kind).dailyNeed">
                 <UButton size="sm" variant="secondary" :loading="need.pending.value" @click="need.run(l.id, true)">還需要</UButton>
                 <UButton size="sm" variant="secondary" @click="(notNeedNote = ''), (notNeed = l)">可以移除</UButton>
               </template>
+              <UButton v-if="l.kind === 'chest'" size="sm" variant="secondary" @click="openDr(l)">記引流量</UButton>
               <UButton size="sm" variant="ghost" @click="openRm(l)">移除</UButton>
             </div>
           </li>
@@ -97,14 +128,14 @@ async function submitRm() {
             <li v-for="l in lines.removed" :key="l.id">{{ l.label }} {{ l.site }} {{ l.size }}・{{ l.insertedAt.slice(5) }} → {{ l.removedAt!.slice(5) }}（{{ l.state.day }} 天）・{{ l.removeReason }}・{{ l.removedByName }}</li>
           </ul>
         </details>
-        <p class="text-xs text-slate-500">導尿管、中心靜脈導管每天評估還需要嗎，滿 7 天提醒主治；周邊留置針滿 96 小時提醒更換。只提醒，不擋。</p>
+        <p class="text-xs text-slate-500">導尿管、中心靜脈導管每天評估還需要嗎，滿 7 天提醒主治；周邊留置針滿 96 小時提醒更換；胸管每班記引流量（每小時 ≥200 mL 通知醫師，24 小時 &lt;200 mL 又沒漏氣可評估拔管）。胸管在住院醫囑「床邊處置」登錄。只提醒，不擋。</p>
       </template>
     </UQueryState>
 
     <UDialog v-model="addOpen" title="登錄管路放置" @submit="submitAdd">
       <div class="space-y-3 text-sm">
         <div class="flex flex-wrap gap-2">
-          <label v-for="k in LINE_KINDS" :key="k.kind" :class="['cursor-pointer rounded-md border-2 px-3 py-1', form.kind === k.kind ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
+          <label v-for="k in addKinds" :key="k.kind" :class="['cursor-pointer rounded-md border-2 px-3 py-1', form.kind === k.kind ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
             <input v-model="form.kind" type="radio" :value="k.kind" class="sr-only" @change="(form.site = ''), (form.size = ''), (form.consentWaiver = '')" />{{ k.label }}
           </label>
         </div>
@@ -139,6 +170,24 @@ async function submitRm() {
       <template #footer>
         <UButton variant="secondary" @click="notNeedOpen = false">取消</UButton>
         <UButton type="submit" :loading="need.pending.value">送出</UButton>
+      </template>
+    </UDialog>
+
+    <UDialog v-model="drOpen" :title="`記引流量：胸管（${dr?.site ?? ''}）`" size="sm" @submit="submitDr">
+      <div class="space-y-3 text-sm">
+        <UInput v-model="drForm.ml" type="number" label="這一段的引流量（mL）" required :hint="dr?.drainage?.at(-1) ? `上一筆 ${dr.drainage.at(-1)!.at.slice(5)} 之後` : undefined" :error="drain.fieldErrors.value.ml" />
+        <div>
+          <div class="mb-1 text-slate-700">外觀</div>
+          <div class="flex flex-wrap gap-1.5">
+            <label v-for="a in CHEST_APPEARANCES" :key="a" :class="['cursor-pointer rounded-md border-2 px-2 py-0.5', drForm.appearance === a ? 'border-brand-500 bg-brand-50' : 'border-slate-200']"><input v-model="drForm.appearance" type="radio" :value="a" class="sr-only" />{{ a }}</label>
+          </div>
+          <p v-if="drain.fieldErrors.value.appearance" class="mt-1 text-xs text-red-600">{{ drain.fieldErrors.value.appearance }}</p>
+        </div>
+        <UCheckbox v-model="drForm.airLeak" label="水封瓶有氣泡（漏氣）" />
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="drOpen = false">取消</UButton>
+        <UButton type="submit" :loading="drain.pending.value">記錄</UButton>
       </template>
     </UDialog>
 

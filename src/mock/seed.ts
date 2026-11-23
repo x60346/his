@@ -3992,11 +3992,26 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const n = (counters[`consent:${d}`] = (counters[`consent:${d}`] ?? 0) + 1)
       consents.push({ id: 'CN-SEED-BP1', no: `CN${d}${String(n).padStart(3, '0')}`, kind: 'procedure', patientId: pn.patientId, admissionId: pn.id, bedsideKind: 'thoracentesis', side: 'right', title: '胸腔穿刺（右側）', explainedBy: doc.id, explanation: '說明抽肋膜積液的目的（診斷、緩解喘）、氣胸、出血、感染與復張性肺水腫風險', signer: { name: patients.find((p) => p.id === pn.patientId)?.name ?? '', relation: '本人' }, signedAt: cat, recordedBy: doc.id })
       ipdOrders.push({ id: 'IO-BP-1', admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P069', content: '胸腔穿刺（右側）（床邊處置）', startAt: at, stopAt: at, status: 'done', doctorId: pn.doctorId, createdAt: addMinutes(at, 30), ackAt: addMinutes(at, 30), ackBy: doc.id, bedsideId: 'BP-SEED-1' })
+      // 胸腔穿刺抽出的是混濁積液（疑似膿胸）：6 小時前改放右側胸管引流（另外簽胸管同意書），護理師之後記了兩次引流量
+      const ct = addMinutes(nowStr, -360)
+      const cat2 = addMinutes(ct, -30)
+      const d2 = cat2.slice(0, 10).replace(/-/g, '')
+      const n2 = (counters[`consent:${d2}`] = (counters[`consent:${d2}`] ?? 0) + 1)
+      consents.push({ id: 'CN-SEED-BP2', no: `CN${d2}${String(n2).padStart(3, '0')}`, kind: 'procedure', patientId: pn.patientId, admissionId: pn.id, bedsideKind: 'chestTube', side: 'right', title: '胸管置放（右側）', explainedBy: doc.id, explanation: '說明胸管引流膿胸的必要、疼痛、出血、氣胸與感染風險，可能需要放幾天', signer: { name: patients.find((p) => p.id === pn.patientId)?.name ?? '', relation: '本人' }, signedAt: cat2, recordedBy: doc.id })
+      ipdOrders.push({ id: 'IO-BP-2', admissionId: pn.id, type: 'stat', category: 'procedure', procId: 'P071', content: '胸管置放（右側）（床邊處置）', startAt: ct, stopAt: ct, status: 'done', doctorId: pn.doctorId, createdAt: addMinutes(ct, 20), ackAt: addMinutes(ct, 20), ackBy: doc.id, bedsideId: 'BP-SEED-2' })
+      lines.push({ id: 'LN-SEED-CT1', admissionId: pn.id, kind: 'chest', site: '右側胸', size: '28Fr', insertedAt: ct, placedBy: doc.name, recordedBy: doc.id, recordedAt: addMinutes(ct, 20), bedsideId: 'BP-SEED-2',
+        drainage: [{ at: ct, by: doc.id, ml: 450, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 120), by: 'U201', ml: 90, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 300), by: 'U201', ml: 60, appearance: '混濁', airLeak: false }] })
+      bedsideProcedures.push({ id: 'BP-SEED-2', admissionId: pn.id, patientId: pn.patientId, kind: 'chestTube', side: 'right', indication: '右側肋膜積液混濁（昨日胸腔穿刺），疑似膿胸，放胸管引流', timeOutAt: addMinutes(ct, -5), performedAt: ct, performedBy: doc.id, appearance: '混濁', volumeMl: 450, complication: '無', consentId: 'CN-SEED-BP2', orderId: 'IO-BP-2', tubeSize: '28Fr', airLeak: false, lineId: 'LN-SEED-CT1', recordedAt: addMinutes(ct, 20) })
       bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30) })
     }
   }
   // 同意書紙本：今天以前簽的都已掃描（示範資料只有掃描紀錄、沒有影像）；今天簽的還沒掃
   for (const c of consents.filter((x) => x.signedAt.slice(0, 10) < T)) c.scan = { at: notFuture(addMinutes(c.signedAt, 120), 5), by: 'U201', pages: c.kind === 'surgery' ? 2 : 1 }
+  // 住院中的病人有一張簽了兩天以上還沒掃描（病房首頁、本班待辦提醒的示範）
+  {
+    const old = consents.filter((c) => c.scan && c.signedAt <= addMinutes(nowStr, -48 * 60) && admissions.some((a) => a.id === c.admissionId && a.status === 'admitted')).sort((a, b) => a.id.localeCompare(b.id))[0]
+    if (old) delete old.scan
+  }
 
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；

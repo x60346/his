@@ -893,7 +893,7 @@ export interface Drug {
 export type ProcedureCategory = '診察' | '檢驗' | '影像' | '處置' | '復健'
 
 /** 檢體容器：紫頭（EDTA，血球）、紅頭（生化）、動脈血氣體、尿杯、拭子、痰盒、培養 */
-export type TubeKind = 'purple' | 'red' | 'gas' | 'urine' | 'swab' | 'sputum' | 'culture'
+export type TubeKind = 'purple' | 'red' | 'gas' | 'urine' | 'swab' | 'sputum' | 'culture' | 'fluid'
 /**
  * 住院檢體（一支條碼）：同一位病人、同管別的檢驗醫囑合併。護理師印條碼 → 採檢（掃條碼或勾選）→ 檢驗科收件後才能發報告；
  * 退件（溶血、量不足…）＝那幾筆醫囑回到待採檢
@@ -1229,7 +1229,7 @@ export interface LabValue {
  * 還沒發的不存：待檢驗清單由醫令推算（見 lab.listLabWork）
  */
 /** 細菌培養：檢體、藥敏結果（S 敏感、I 中等、R 抗藥） */
-export type CultureSpecimen = 'urine' | 'blood' | 'sputum' | 'wound'
+export type CultureSpecimen = 'urine' | 'blood' | 'sputum' | 'wound' | 'fluid'
 export type SirResult = 'S' | 'I' | 'R'
 export interface CultureIsolate {
   /** 菌種主檔 id（culture-rules.ORGANISMS） */
@@ -2203,7 +2203,7 @@ export interface PalliativeCase {
 export type PupilLight = 'brisk' | 'sluggish' | 'none'
 
 /** 管路：導尿管、中心靜脈導管、周邊靜脈留置針、鼻胃管 */
-export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg' | 'ett'
+export type LineKind = 'foley' | 'cvc' | 'pivc' | 'ngt' | 'peg' | 'ett' | 'chest'
 
 /** 呼吸器模式：容積控制、壓力控制、同步間歇強制換氣、壓力支持、持續正壓 */
 export type VentMode = 'AC/VC' | 'AC/PC' | 'SIMV' | 'PSV' | 'CPAP'
@@ -2287,6 +2287,10 @@ export interface LineDevice {
   removedAt?: string
   removedBy?: string
   removeReason?: string
+  /** 胸管：床邊處置登錄時一起建立（哪一筆床邊處置） */
+  bedsideId?: string
+  /** 胸管引流紀錄（護理師每班記）：這一段的引流量、外觀、水封瓶有沒有氣泡（漏氣） */
+  drainage?: { at: string; by: string; ml: number; appearance: string; airLeak: boolean }[]
 }
 
 /**
@@ -2832,6 +2836,12 @@ export interface BedsideProcedure {
   consentId?: string
   consentWaiver?: string
   orderId: string
+  /** 送檢（體液常規、生化、培養）自動開的臨時檢驗醫囑 */
+  labOrderIds?: string[]
+  /** 胸管：尺寸、放置時有沒有漏氣、建立的管路 */
+  tubeSize?: string
+  airLeak?: boolean
+  lineId?: string
   recordedAt: string
 }
 

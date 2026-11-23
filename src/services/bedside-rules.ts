@@ -28,6 +28,16 @@ export const bedsideKind = (k: BedsideKind) => BEDSIDE_KINDS.find((x) => x.kind 
 export const SIDE_TEXT: Record<'left' | 'right', string> = { left: '左側', right: '右側' }
 export const bedsideTitle = (k: BedsideKind, side?: 'left' | 'right') => `${bedsideKind(k).label}${side ? `（${SIDE_TEXT[side]}）` : ''}`
 
+/** 穿刺液是什麼（送檢醫囑上寫） */
+export const BEDSIDE_FLUID: Record<BedsideKind, string> = { lp: '腦脊髓液', thoracentesis: '胸水', paracentesis: '腹水', chestTube: '胸水' }
+/** 可以勾的送檢（體液常規、生化、細菌培養）：登錄時自動開臨時檢驗醫囑，護理師貼條碼送檢 */
+export const BEDSIDE_LABS = [
+  { procId: 'P072', label: '體液常規（細胞計數、分類）' },
+  { procId: 'P073', label: '體液生化（蛋白、糖、LDH）' },
+  { procId: 'P059', label: '細菌培養' },
+]
+export const CHEST_TUBE_SIZES = ['20Fr', '24Fr', '28Fr', '32Fr']
+
 /** 沒有同意書也能執行的原因（張力性氣胸這類來不及） */
 export const BEDSIDE_CONSENT_WAIVERS = ['緊急狀況，來不及事先取得同意（醫療法第 63 條但書，事後補說明）']
 
@@ -62,6 +72,11 @@ export interface BedsideInput {
   complication?: string
   bleedingNote?: string
   volumeNote?: string
+  /** 送檢（BEDSIDE_LABS 的 procId） */
+  labs?: string[]
+  /** 胸管：尺寸、放好時水封瓶有沒有氣泡 */
+  tubeSize?: string
+  airLeak?: boolean
 }
 
 /** 欄位檢查（risks：這位病人現在的出血風險；有就要寫評估） */
@@ -85,6 +100,9 @@ export function checkBedsideInput(x: BedsideInput, now: string, risks: string[] 
     if (!Number.isFinite(p) || p < 0 || p > 60) e.openingPressure = '開口壓 0–60 cmH2O（沒量可以空白）'
   }
   if (!x.complication?.trim()) e.complication = '請寫併發症（沒有寫「無」）'
+  if (x.kind === 'chestTube' && !x.tubeSize?.trim()) e.tubeSize = '請選胸管尺寸'
+  if ((x.labs ?? []).some((p) => !BEDSIDE_LABS.some((l) => l.procId === p))) e.labs = '送檢項目不對'
+  if (x.labs?.length && x.kind === 'chestTube' && Number(x.volumeMl) === 0) e.labs = '沒有引流液，不能送檢'
   if (risks.length && !x.bleedingNote?.trim()) e.bleedingNote = '有出血風險：請寫評估（例：已輸血小板、Warfarin 停 5 天 INR 1.1）'
   return e
 }

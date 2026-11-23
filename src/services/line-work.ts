@@ -3,7 +3,7 @@ import type { Admission, LineDevice } from '@/types'
 import { db } from '@/mock/db'
 import { shiftRange } from './nursing-rules'
 import { pcaPainRecords } from './pca-work'
-import { lineKind, lineState, painState, PIVC_REPLACE_HOURS, LINE_ATTENDING_DAYS, type PainState } from './line-rules'
+import { CHEST_BLEED_MLH, CHEST_RECORD_HOURS, lineKind, lineState, painState, PIVC_REPLACE_HOURS, LINE_ATTENDING_DAYS, type PainState } from './line-rules'
 
 export const activeLines = (admissionId: string): LineDevice[] => db.lines.filter((l) => l.admissionId === admissionId && !l.removedAt)
 
@@ -14,7 +14,7 @@ export interface LineTodo {
   id: string
   lineId: string
   /** need 今天還沒評估、removable 評估可移除還沒移除、replace 留置針滿 96 小時、attending 滿 7 天（提醒主治） */
-  kind: 'need' | 'removable' | 'replace' | 'attending'
+  kind: 'need' | 'removable' | 'replace' | 'attending' | 'chestBleed' | 'chestRecord' | 'chestRemove'
   text: string
 }
 
@@ -27,6 +27,9 @@ export function lineTodosOf(admissionId: string, t: string): LineTodo[] {
     if (s.removable) out.push({ id: `line-rm-${l.id}`, lineId: l.id, kind: 'removable', text: `${name}：評估可以移除，請移除` })
     else if (s.needCheckDue) out.push({ id: `line-need-${l.id}`, lineId: l.id, kind: 'need', text: `${name} 第 ${s.day} 天：今天評估還需要嗎` })
     if (s.replaceDue) out.push({ id: `line-rep-${l.id}`, lineId: l.id, kind: 'replace', text: `${name} 已放 ${s.hours} 小時（滿 ${PIVC_REPLACE_HOURS}）：請更換` })
+    if (s.chest?.bleeding) out.push({ id: `line-cb-${l.id}`, lineId: l.id, kind: 'chestBleed', text: `${name} 每小時引流 ${s.chest.lastRate} mL（≥${CHEST_BLEED_MLH}）：通知醫師` })
+    if (s.chest?.recordDue) out.push({ id: `line-cr-${l.id}`, lineId: l.id, kind: 'chestRecord', text: `${name}：超過 ${CHEST_RECORD_HOURS} 小時沒記引流量` })
+    if (s.chest?.removeHint) out.push({ id: `line-cx-${l.id}`, lineId: l.id, kind: 'chestRemove', text: `${name} 24 小時 ${s.chest.ml24} mL、沒有漏氣：可請醫師評估拔管` })
     if (s.attendingAlert) out.push({ id: `line-att-${l.id}`, lineId: l.id, kind: 'attending', text: `${name} 已放 ${s.day} 天（滿 ${LINE_ATTENDING_DAYS} 天）：請主治評估是否移除` })
   }
   return out

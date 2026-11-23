@@ -5,7 +5,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UCheckbox, UDialog, UInput, UQueryState, UTextarea } from '@/components/ui'
-import { BEDSIDE_CONSENT_WAIVERS, BEDSIDE_KINDS, bedsideApi, bedsideKind, SIDE_TEXT } from '@/services'
+import { BEDSIDE_CONSENT_WAIVERS, BEDSIDE_FLUID, BEDSIDE_KINDS, BEDSIDE_LABS, bedsideApi, bedsideKind, CHEST_TUBE_SIZES, SIDE_TEXT } from '@/services'
 import type { BedsideKind } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -18,14 +18,14 @@ const { data, loading } = useQuery(async () => ({ id: props.admissionId, v: awai
 const v = computed(() => (data.value?.id === props.admissionId ? data.value.v : undefined))
 
 const open = ref(false)
-const f = reactive({ kind: 'thoracentesis' as BedsideKind, side: '' as '' | 'left' | 'right', indication: '', identity: false, site: false, performedAt: '', appearance: '', volumeMl: '', volumeNote: '', openingPressure: '', complication: '無', bleedingNote: '', consentWaiver: '' })
+const f = reactive({ kind: 'thoracentesis' as BedsideKind, side: '' as '' | 'left' | 'right', indication: '', identity: false, site: false, performedAt: '', appearance: '', volumeMl: '', volumeNote: '', openingPressure: '', complication: '無', bleedingNote: '', consentWaiver: '', labs: [] as string[], tubeSize: '', airLeak: false })
 const meta = computed(() => bedsideKind(f.kind))
 const ready = computed(() => !!v.value?.consentReady.some((c) => c.kind === f.kind && (!meta.value.sided || c.side === f.side)))
 const readySides = computed(() => (v.value?.consentReady ?? []).filter((c) => c.kind === f.kind && c.side).map((c) => SIDE_TEXT[c.side!]))
 const overVolume = computed(() => !!meta.value.maxVolumeMl && Number(f.volumeMl) > meta.value.maxVolumeMl)
 function openAdd() {
   const first = v.value?.consentReady[0]
-  Object.assign(f, { kind: first?.kind ?? 'thoracentesis', side: first?.side ?? '', indication: '', identity: false, site: false, performedAt: now().slice(0, 16).replace(' ', 'T'), appearance: '', volumeMl: '', volumeNote: '', openingPressure: '', complication: '無', bleedingNote: '', consentWaiver: '' })
+  Object.assign(f, { kind: first?.kind ?? 'thoracentesis', side: first?.side ?? '', indication: '', identity: false, site: false, performedAt: now().slice(0, 16).replace(' ', 'T'), appearance: '', volumeMl: '', volumeNote: '', openingPressure: '', complication: '無', bleedingNote: '', consentWaiver: '', labs: [], tubeSize: '', airLeak: false })
   act.fieldErrors.value = {}
   open.value = true
 }
@@ -35,7 +35,7 @@ async function submit() {
   const ok = await act.run({
     admissionId: props.admissionId, kind: f.kind, ...(m.sided ? { side: f.side } : {}), indication: f.indication, timeOut: { identity: f.identity, site: f.site },
     performedAt: f.performedAt.replace('T', ' '), appearance: f.appearance, ...(m.volume ? { volumeMl: f.volumeMl, volumeNote: f.volumeNote } : {}), ...(m.pressure ? { openingPressure: f.openingPressure } : {}),
-    complication: f.complication, bleedingNote: f.bleedingNote, ...(!ready.value && f.consentWaiver ? { consentWaiver: f.consentWaiver } : {}),
+    complication: f.complication, bleedingNote: f.bleedingNote, labs: f.labs, ...(f.kind === 'chestTube' ? { tubeSize: f.tubeSize, airLeak: f.airLeak } : {}), ...(!ready.value && f.consentWaiver ? { consentWaiver: f.consentWaiver } : {}),
   })
   if (ok) open.value = false
 }
@@ -65,6 +65,8 @@ async function submit() {
               外觀 {{ p.appearance }}<template v-if="p.volumeMl !== undefined">・引流 {{ p.volumeMl }} mL</template><template v-if="p.openingPressure !== undefined">・開口壓 {{ p.openingPressure }} cmH2O</template>・併發症：{{ p.complication }}
             </div>
             <div v-if="p.volumeNote" class="text-xs text-slate-500">超過建議量：{{ p.volumeNote }}</div>
+            <div v-if="p.tubeSize" class="text-xs text-slate-600">胸管 {{ p.tubeSize }}・放置時{{ p.airLeak ? '有漏氣' : '沒有漏氣' }}（引流量、拔管在「管路」）</div>
+            <div v-if="p.labs.length" class="text-xs text-slate-600">送檢：{{ p.labs.join('、') }}</div>
             <div v-if="p.bleedingRisks?.length" class="text-xs text-amber-700">出血風險 {{ p.bleedingRisks.join('、') }}：{{ p.bleedingNote }}</div>
           </li>
         </ul>
@@ -117,6 +119,21 @@ async function submit() {
           </div>
           <UInput v-if="meta.volume" v-model="f.volumeMl" type="number" label="引流量（mL）" required :hint="meta.maxVolumeMl ? `建議單次不超過 ${meta.maxVolumeMl} mL` : undefined" :error="act.fieldErrors.value.volumeMl" />
           <UInput v-if="meta.pressure" v-model="f.openingPressure" type="number" label="開口壓（cmH2O，選填）" :error="act.fieldErrors.value.openingPressure" />
+        </div>
+        <div v-if="f.kind === 'chestTube'" class="flex flex-wrap items-center gap-2">
+          <span class="text-slate-600">胸管尺寸：</span>
+          <label v-for="s in CHEST_TUBE_SIZES" :key="s" :class="['cursor-pointer rounded-md border-2 px-2 py-0.5', f.tubeSize === s ? 'border-brand-500 bg-brand-50' : 'border-slate-200']">
+            <input v-model="f.tubeSize" type="radio" :value="s" class="sr-only" />{{ s }}
+          </label>
+          <UCheckbox v-model="f.airLeak" label="水封瓶有氣泡（漏氣）" />
+          <p v-if="act.fieldErrors.value.tubeSize" class="w-full text-xs text-red-600">{{ act.fieldErrors.value.tubeSize }}</p>
+        </div>
+        <div class="rounded-md border border-slate-200 px-3 py-2">
+          <div class="mb-1 font-medium text-slate-700">送檢（{{ BEDSIDE_FLUID[f.kind] }}；自動開臨時檢驗，護理師貼條碼送檢）</div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1">
+            <label v-for="l in BEDSIDE_LABS" :key="l.procId" class="inline-flex items-center gap-2"><input v-model="f.labs" type="checkbox" :value="l.procId" class="h-4 w-4" />{{ l.label }}</label>
+          </div>
+          <p v-if="act.fieldErrors.value.labs" class="mt-1 text-xs text-red-600">{{ act.fieldErrors.value.labs }}</p>
         </div>
         <UInput v-if="overVolume" v-model="f.volumeNote" label="超過建議量的原因與病人狀況" required :error="act.fieldErrors.value.volumeNote" />
         <UInput v-model="f.complication" label="併發症" required hint="沒有寫「無」" :error="act.fieldErrors.value.complication" />

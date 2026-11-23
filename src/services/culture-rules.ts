@@ -8,6 +8,7 @@ export const SPECIMENS: { key: CultureSpecimen; label: string }[] = [
   { key: 'blood', label: '血液' },
   { key: 'sputum', label: '痰液' },
   { key: 'wound', label: '傷口' },
+  { key: 'fluid', label: '體液（胸水、腹水、腦脊髓液）' },
 ]
 export const specimenLabel = (k?: CultureSpecimen) => SPECIMENS.find((s) => s.key === k)?.label ?? ''
 
