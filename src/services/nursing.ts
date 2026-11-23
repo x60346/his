@@ -620,7 +620,7 @@ export function listNursingNotes(admissionId: string): Promise<(NursingNote & { 
   )
 }
 
-export function addNursingNote(input: Pick<NursingNote, 'admissionId' | 'focus' | 'data' | 'action' | 'response'>): Promise<NursingNote> {
+export function addNursingNote(input: Pick<NursingNote, 'admissionId' | 'focus' | 'data' | 'action' | 'response'> & { callId?: string }): Promise<NursingNote> {
   return mutate(() => {
     const nurse = requireUser('nurse')
     admitted(input.admissionId)
@@ -638,6 +638,15 @@ export function addNursingNote(input: Pick<NursingNote, 'admissionId' | 'focus' 
     if (!n.focus) errs.add('focus', '請輸入焦點（Focus）')
     if (!n.data && !n.action) errs.add('data', '資料（D）與措施（A）至少填寫一項')
     errs.done()
+    // 從呼叫醫師帶入：同一位病人、醫師回覆了、還沒寫過護理紀錄的那筆，標記已記錄
+    if (input.callId) {
+      const c = db.doctorCalls.find((x) => x.id === input.callId)
+      if (!c || c.admissionId !== n.admissionId) fail('找不到這位病人的呼叫紀錄', 'NOT_FOUND')
+      if (!c!.response) fail('醫師還沒回覆，回覆後再帶入護理紀錄', 'CONFLICT')
+      if (c!.noteId) fail('這筆呼叫已經寫過護理紀錄了', 'CONFLICT')
+      c!.noteId = n.id
+      n.callId = c!.id
+    }
     db.nursingNotes.push(n)
     return n
   })

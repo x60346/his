@@ -2,8 +2,9 @@
 // 醫師值班：各科每天一位值班醫師（平日 17:00 到隔天 08:00、週六日全天）。有權限（醫師值班排班）的人可以改，其他人看。
 // 下班時間主治不在：床邊處置判讀異常超過 2 小時改通知值班醫師、危急值通報提示值班醫師。服務層 duty.ts、規則 duty-rules
 import { computed, ref } from 'vue'
-import { UButton, UCard, UPageHeader, UQueryState } from '@/components/ui'
-import { dutyApi } from '@/services'
+import { UBadge, UButton, UCard, UPageHeader, UQueryState } from '@/components/ui'
+import { doctorCallApi, dutyApi } from '@/services'
+import { useAuth } from '@/stores/auth'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, today } from '@/utils/date'
 
@@ -11,6 +12,9 @@ const from = ref(today())
 const { data, loading } = useQuery(async () => ({ from: from.value, v: await dutyApi.dutyRoster(from.value, 7) }), [from])
 const r = computed(() => (data.value?.from === from.value ? data.value.v : undefined))
 const set = useAction(dutyApi.setDuty, { success: '已更新值班' })
+// 醫師：我這一班被呼叫的（下班前對一遍：回覆了沒、值班紀錄寫了沒）
+const isDoctor = useAuth().user?.role === 'doctor'
+const { data: mine } = useQuery(async () => (isDoctor ? await doctorCallApi.myShiftCalls() : undefined), [])
 const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getDay()]
 </script>
 
@@ -23,6 +27,20 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
           <template v-if="r.now.offHours">現在值班：<span v-for="x in r.now.onCall" :key="x.deptName" class="mr-3"><b>{{ x.deptName }}</b> {{ x.name }}</span><span v-if="!r.now.onCall.length" class="text-amber-700">沒有排值班</span></template>
           <span v-else class="text-slate-500">現在是上班時間（主治負責）</span>
         </div>
+        <UCard v-if="mine?.calls.length" :padded="false">
+          <div class="px-4 py-2 text-sm font-semibold text-slate-700">我這一班被呼叫（{{ mine.date.slice(5) }} 那一班）</div>
+          <ul class="divide-y divide-slate-100 border-t border-slate-200 text-sm">
+            <li v-for="c in mine.calls" :key="c.id" class="flex flex-wrap items-center gap-2 px-4 py-1.5">
+              <span class="tabular text-xs text-slate-500">{{ c.calledAt.slice(11) }}</span>
+              <UBadge :tone="c.urgency === 'urgent' ? 'red' : 'gray'">{{ c.urgency === 'urgent' ? '緊急' : '一般' }}</UBadge>
+              <b>{{ c.patientName }}</b><span class="text-xs text-slate-500">{{ c.bed }}</span>
+              <span class="flex-[1_1_12rem] text-xs text-slate-700">{{ c.reason }}</span>
+              <UBadge v-if="!c.response" tone="yellow">還沒回覆</UBadge>
+              <UBadge v-else-if="c.noteWritten" tone="green">值班紀錄已寫</UBadge>
+              <RouterLink v-else :to="{ name: 'ipd', query: { admission: c.admissionId } }" class="text-xs font-semibold text-amber-700 underline">還沒寫值班紀錄 →</RouterLink>
+            </li>
+          </ul>
+        </UCard>
         <UCard :padded="false">
           <div class="px-4 py-2 text-sm font-semibold text-slate-700">護理站呼叫值班醫師（{{ r.shiftCalls.hoursText }}）</div>
           <p v-if="!r.shiftCalls.rows.length" class="px-4 pb-3 text-sm text-slate-400">那一班沒有排值班</p>

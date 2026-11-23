@@ -33,4 +33,4 @@ export function shiftCallStats(date: string, deptId: string) {
 }
 
 /** 護理站：緊急呼叫超過 15 分鐘沒回覆（再找主治或上一級） */
-export const overdueUrgentCalls = (t: string) => db.doctorCalls.filter((c) => c.urgency === 'urgent' && !c.response && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES)
+export const overdueUrgentCalls = (t: string) => db.doctorCalls.filter((c) => c.urgency === 'urgent' && !c.response && !c.escalatedTo && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES)

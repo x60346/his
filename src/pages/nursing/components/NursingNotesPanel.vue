@@ -1,14 +1,14 @@
 <script setup lang="ts">
 // 護理紀錄：Focus DAR（焦點 Focus、資料 Data、措施 Action、反應 Response）。
 // 焦點常用語做成按鈕；反應（R）常常是一段時間後才知道（給退燒藥一小時後複測），所以允許先空著。
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { UButton, UInput, UQueryState, UTextarea } from '@/components/ui'
 import { nursingApi, type AdmissionView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { usePhrases } from '@/composables/usePhrases'
 import PhraseHint from '@/components/PhraseHint.vue'
 
-const props = defineProps<{ admission: AdmissionView; /** 從別的分頁帶入的草稿（呼叫醫師） */ draft?: { focus: string; data: string; action: string } }>()
+const props = defineProps<{ admission: AdmissionView; /** 從別的分頁帶入的草稿（呼叫醫師） */ draft?: { callId: string; focus: string; data: string; action: string } }>()
 const emit = defineEmits<{ 'draft-used': [] }>()
 
 const { data, loading } = useQuery(
@@ -23,16 +23,18 @@ const notes = computed(() => (data.value?.id === props.admission.id ? data.value
 const focusPresets = ['體溫過高', '急性疼痛', '跌倒高危險群', '皮膚完整性受損', '焦慮', '睡眠型態紊亂', '營養攝取不足']
 const blank = () => ({ focus: '', data: '', action: '', response: '' })
 const form = reactive(blank())
-watch(() => props.admission.id, () => Object.assign(form, blank()))
+// 從呼叫醫師帶入的：存檔時一起標記那筆呼叫已寫護理紀錄
+const fromCall = ref<string>()
+watch(() => props.admission.id, () => { Object.assign(form, blank()); fromCall.value = undefined })
 // 帶入的草稿：填進表單（R 反應留給護理師觀察後寫）
-watch(() => props.draft, (d) => { if (d) { Object.assign(form, { ...blank(), ...d }); emit('draft-used') } }, { immediate: true })
+watch(() => props.draft, (d) => { if (d) { const { callId, ...f } = d; Object.assign(form, { ...blank(), ...f }); fromCall.value = callId; emit('draft-used') } }, { immediate: true })
 
 // 片語：D／A／R 輸入「.簡碼」再按空白鍵展開（護理師個人的片語）
 const phrase = usePhrases(() => props.admission.bed?.ward)
 
 const save = useAction(nursingApi.addNursingNote, { success: '已新增護理紀錄' })
 async function submit() {
-  if (await save.run({ admissionId: props.admission.id, ...form })) Object.assign(form, blank())
+  if (await save.run({ admissionId: props.admission.id, ...form, ...(fromCall.value ? { callId: fromCall.value } : {}) })) { Object.assign(form, blank()); fromCall.value = undefined }
 }
 
 // 補記反應：每筆紀錄各自一個草稿
@@ -47,6 +49,7 @@ async function respond(noteId: string) {
   <div class="space-y-4 p-4">
     <div class="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div class="mb-2 text-sm font-semibold text-slate-700">新增護理紀錄（Focus DAR）</div>
+      <p v-if="fromCall" class="mb-2 text-xs text-brand-700">從呼叫醫師帶入：存檔後那筆呼叫標「已寫護理紀錄」<button type="button" class="ml-2 underline" @click="fromCall = undefined">不連結</button></p>
       <div class="mb-2 flex flex-wrap gap-1.5">
         <UButton v-for="p in focusPresets" :key="p" size="sm" variant="secondary" @click="form.focus = p">{{ p }}</UButton>
       </div>

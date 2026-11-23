@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（5027 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（5045 項） |
 
 ### 展示帳號
 
@@ -125,6 +125,10 @@ npm run dev          # 開發伺服器 http://localhost:5180
    - **侵入性處置同意書（管路）**：登錄放置**中心靜脈導管、胃造口**時，這次住院要有**這種管路還沒用掉的侵入性處置同意書**（醫師在病人資料「同意書」分頁記錄，選 CVC 或胃造口；同一種還沒用的只能一張）。放置時用掉那張（管路列顯示同意書編號；同意書清單標「已放置」、不能撤回），**換新的要重簽**；**緊急狀況**（醫療法第 63 條但書）或**外院已放置的補登**選原因才能登錄（管路列標「無同意書」、稽核寫原因）。導尿管、留置針、鼻胃管不用；氣管內管照舊（急救插管）。示範資料：敗血症那位的 CVC 有放置前簽的同意書。
    - **出院病歷查病程紀錄**：出院病歷的完整性加上**住院期間每天的病程紀錄**（入院隔天到出院前一天；入院、出院當天不要求），缺的列「病程紀錄缺 N 天：日期」。主治在「健保審查回覆」頁的「出院病歷待完成」按「**補寫病程紀錄**」選缺的那天補寫（S／O／A／P；標「補寫 某日的病程」、時間記實際寫的時候，病歷完成時間算到最後一次補寫）；住院中最近 7 天缺的也可以在這裡補寫（照護團隊；今天的在住院醫囑頁寫）。出院的只有主治能補。示範資料：歷史出院病人每天都有查房紀錄，只有 9 天前出院的肺炎病人缺出院前兩天那天（期限還沒到）。
    - **床邊處置紀錄與同意書**：住院醫囑多一個「床邊處置」分頁（護理站同分頁唯讀）：醫師登錄**腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管置放**——適應症、**處置前暫停**（病人身分、部位與側別都勾才能存）、執行時間、外觀、引流量（胸腔、腹腔穿刺、胸管；胸腔穿刺單次超過 1500 mL、腹腔穿刺超過 5000 mL 要寫原因與病人狀況）、開口壓（腰椎穿刺，選填）、併發症（沒有寫「無」）。**出血風險**：最近的血小板 < 50 或使用中的抗凝血／抗血小板藥（Warfarin、Clopidogrel、Heparin 類、新型口服抗凝血劑；Aspirin 不算）會列出，有的話要寫評估才能存。要有這次住院、**這種處置（有側別的要同側）還沒用掉的侵入性處置同意書**（醫師在病患資料「同意書」分頁記錄，胸腔穿刺、胸管要選側別）；登錄時用掉（同意書標「已執行」、不能撤回），**緊急**（張力性氣胸這類，醫療法第 63 條但書）勾原因才能不要同意書。存檔自動開一筆**已執行的處置醫令**（新的四個計費醫令，一般醫囑開不出來），住院帳單、DRG 預估照醫令帶。示範資料：住院中的肺炎病人昨天下午右側胸腔穿刺 800 mL（有事前簽的右側同意書）。
+   - **呼叫升級、我這一班被呼叫、呼叫連結護理紀錄（第六十二輪）**：
+     - **緊急呼叫改找主治**：緊急呼叫超過 15 分鐘沒回覆，那筆旁邊出現「改找主治」：一鍵記一筆新的緊急呼叫給主治（原因前面註明「升級：某某 N 分鐘沒回覆」），舊的那筆標「已改找 某某」、不再提醒（首頁「緊急呼叫醫師沒回覆」扣掉）。找的已經是主治就提示聯絡科主任或快速反應小組；一般呼叫不用升級。只有護理師能按，寫稽核。
+     - **我這一班被呼叫**：值班醫師在「醫師值班」頁上方看「我這一班被呼叫」：時間、緊急或一般、病人與床號、原因，還沒回覆、值班紀錄已寫，或「還沒寫值班紀錄 →」連到那位病人的住院醫囑。下班前對一遍。
+     - **呼叫連結護理紀錄**：從呼叫帶入的護理紀錄存檔時連結那筆呼叫（表單上方提示，可以「不連結」），呼叫標「已寫護理紀錄」、不再出現帶入按鈕；同一筆不能帶兩次、醫師還沒回覆的不能帶。
    - **呼叫帶入護理紀錄、值班被呼叫統計、報到查放射師（第六十一輪）**：
      - **呼叫帶入護理紀錄**：「呼叫醫師」分頁裡醫師回覆了的呼叫多一個「帶入護理紀錄」：切到護理紀錄分頁，焦點「通知醫師」、D 填呼叫時間與原因、A 填通知誰（值班醫師／主治）、幾點怎麼回覆、醫師怎麼處理；R（反應）留給護理師觀察後再寫。
      - **值班被呼叫統計**：醫師值班頁上方列「護理站呼叫值班醫師」：這一班（下班時間是現在這一班，白天看昨晚那一班）各科值班醫師被呼叫幾次、緊急幾次、還沒回覆、平均等候分鐘、回覆了但沒寫值班紀錄的筆數。只算找值班醫師的（找主治的不算）。示範資料：昨晚內科被呼叫 2 次、緊急 1、1 筆沒寫值班紀錄。
@@ -388,6 +392,7 @@ scripts/smoke-flow.mjs   流程測試
 | 手術同意書側別 | `Consent.side`；`consent-rules`（`consentMissing` 比對側別、`consentSideMismatch`）；`surgery.changeSurgerySide`；`SurgeryView.consentMissing` 標側別不符；`SurgeryConsents.vue` 更正側別 |
 | 侵入性處置同意書（管路） | `Consent.lineKind`、`LineDevice.consentId`／`consentWaiver`；`consent-rules`（`CONSENT_LINE_KINDS`、`LINE_CONSENT_WAIVERS`、`unusedLineConsent`）；`line.addLine` 把關、`listLines().consentReady`；`consent.recordConsent`（`lineKind`）、`consentTargets().admission.lines`、`revokeConsent` 用掉的擋；`LinePanel.vue`、`ConsentPanel.vue` |
 | 床邊處置 | `BedsideProcedure`（`db.bedsideProcedures`）、`Procedure.bedside`（P068–P071）、`IpdOrder.bedsideId`、`Consent.bedsideKind`；`bedside-rules`（`BEDSIDE_KINDS`、`bleedingRisks`、`unusedBedsideConsent`、`checkBedsideInput`、`BEDSIDE_CONSENT_WAIVERS`）；`bedside.ts`（`listBedside`、`recordBedside`）；`consent.recordConsent`（`bedsideKind`、`side`）、`consentTargets().admission.bedside`；`views.usable.procedure`、`master.listProcedures` 擋；`BedsidePanel.vue`（`IpdPage`、`NursingPage`） |
+| 呼叫升級、我這一班、呼叫連結護理紀錄 | `DoctorCall.noteId`／`escalatedTo`／`escalatedFrom`、`NursingNote.callId`；`nursing.addNursingNote`（`callId`）；`doctor-call.ts`（`escalateCall`、`myShiftCalls`、`DoctorCallView.canEscalate`／`escalatedToName`）；`overdueUrgentCalls` 排除已升級；`DoctorCallPanel`、`NursingNotesPanel`（`fromCall`）、`DutyPage` |
 | 呼叫帶入護理紀錄、值班被呼叫統計、報到查放射師 | `DoctorCallView.noteDraft`（`doctor-call.ts` 內部 `callNoteDraft`）；`DoctorCallPanel` emit `note` → `NursingPage.takeCallNote` → `NursingNotesPanel` prop `draft`；`doctor-call-work`（`shiftDateOf`、`dutyNoteAfter`、`shiftCallStats`）、`DutyRoster.shiftCalls`（`DutyPage`）；`ImagingExam.arriveStaff`、`exam.arriveExam(id, { staffNote })`、`ExamBoard.unstaffedNow`；`ExamRoomPage` 報到對話框；smoke 測試輔助 `arriveRaw` |
 | 呼叫醫師紀錄 | `DoctorCall`（`db.doctorCalls`）；`doctor-call.ts`（`listDoctorCalls`、`callDoctor`、`respondCall`、`myCallsWithoutNote`）＋`doctor-call-work`（`CALL_URGENT_MINUTES`、`callsWithoutNote`、`overdueUrgentCalls`）；`dashboard.callsWithoutNote`／`callsOverdue`；`DoctorCallPanel`（`NursingPage` 分頁 `calls`） |
 | 護理站看值班 | `nursing.wardDutyNotes`（`HandoverPanel`）；`duty.onCallNow`（`NursingPage` 值班醫師列） |
@@ -850,6 +855,7 @@ scripts/smoke-flow.mjs   流程測試
 - 侵入性處置同意書：種子的 CVC 有同意書且已用掉；清單標已放置；沒同意書 CVC、胃造口擋；原因要從清單選；外院、緊急選原因可登錄；導尿管不用；可記錄對象與管路清單；留置針不能開、沒住院不能開；記錄綁住院與種類；同一種一張；放置用掉、不能撤回；換新要重簽；稽核；撤回後擋
 - 床邊處置：規則（名稱帶側別、出血風險、欄位、開口壓）；種子右側胸腔穿刺有同側同意書與醫令、帳單帶入；一般醫囑開不出、選單不列；沒同意書擋、護理師不能登錄（看得到）；同意書要選側別、同種同側一張、總覽；側別不符擋、處置前暫停擋；登錄用掉同意書、開醫令、稽核；用掉要重簽、不能撤回、清單標已執行；緊急原因要從清單選、記原因；出血風險列出、沒評估擋、記評估與開口壓；出院了不能登錄
 - 同意書紙本掃描：規則（頁數、格式、大小）；種子今天以前的都掃了；出院病歷缺掃描算缺、種子沒有假的；沒選檔擋；附上記紀錄稽核；補掃後完成時間；看掃描；重新掃描換掉；種子有紀錄沒影像；櫃台不能掃
+- 呼叫升級與我這一班：草稿帶呼叫編號、存檔後標已寫不再給草稿、不能重複、別的病人不能連；還沒回覆不能帶；才剛打不能升級、18 分鐘可以且首頁提醒、改找主治新的一筆緊急註明升級與稽核、舊的標已改找不再提醒、不能重複、已是主治提示科主任、一般呼叫不用、醫師不能按；值班醫師這一班被呼叫（病人床號依時間）、值班紀錄已寫筆數、沒被呼叫的空、護理師不能查
 - 呼叫帶入護理紀錄與值班統計：回覆了的呼叫有草稿（D 時間與原因、A 通知誰與回覆）、還沒回覆的沒有、主治電話回覆的草稿、存成護理紀錄 R 留空；值班頁那一班內科被呼叫次數、緊急、平均等候、沒寫值班紀錄（週末白天是這一班）；別科 0；補了值班紀錄歸零；還沒回覆計入。報到查放射師：看板列現在沒放射師的檢查室、沒寫誰來做擋、寫了記下與稽核、補排了人直接報到、別天看板不列；下班時間不查
 - 呼叫醫師：種子昨晚兩次找值班醫師；值班醫師被呼叫沒寫值班紀錄提醒（寫了的不算）；白天建議主治、週末建議值班醫師；要寫原因；緊急 20 分鐘沒回覆標紅、護理師首頁提醒；別的醫師不能記回覆、被呼叫的醫師可以、不能重複；22:00 主治本人值班建議主治、換人值班建議值班醫師、記成的角色；寫了值班紀錄提醒消失；出院的不能記
 - 護理站看值班：交班列值班紀錄、別病房看不到、主治已看標示、超過 24 小時不列；現在值班（上班／週末、22:00 內科）、櫃台也查得到；畫面接上

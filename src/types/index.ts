@@ -983,6 +983,11 @@ export interface DoctorCall {
   urgency: 'urgent' | 'routine'
   reason: string
   response?: { at: string; by: string; how: 'phone' | 'bedside'; note?: string }
+  /** 帶入後寫成的護理紀錄 */
+  noteId?: string
+  /** 緊急沒回覆、改找主治：新的那筆呼叫／從哪一筆升級來的 */
+  escalatedTo?: string
+  escalatedFrom?: string
 }
 
 /** 醫師值班：某一天、某一科由誰值班（平日 17:00 到隔天 08:00、週六日全天）；主治不在時接急事（判讀異常升級、危急值通報） */
@@ -3138,6 +3143,8 @@ export interface NursingNote {
   /** 反應（R）常在措施後一段時間才觀察到，補記的時間另外記錄 */
   respondedAt?: string
   nurseId: string
+  /** 從呼叫醫師紀錄帶入的 */
+  callId?: string
 }
 
 /** 住院病程紀錄 */

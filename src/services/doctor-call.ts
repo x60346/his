@@ -6,8 +6,8 @@ import { db, newId } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser, sessionRole } from './http'
 import { find, nameOf } from './views'
-import { onCallFor } from './duty-rules'
-import { callsWithoutNote, CALL_URGENT_MINUTES, minutesBetween } from './doctor-call-work'
+import { dutyDateOf, isOffHours, onCallFor } from './duty-rules'
+import { callsWithoutNote, CALL_URGENT_MINUTES, dutyNoteAfter, minutesBetween, shiftDateOf } from './doctor-call-work'
 
 
 export interface DoctorCallView extends DoctorCall {
@@ -18,19 +18,25 @@ export interface DoctorCallView extends DoctorCall {
   overdue: boolean
   /** 等了幾分鐘才回覆（回覆了才有） */
   waitMinutes?: number
-  /** 回覆了：帶入護理紀錄（Focus DAR）的草稿；反應（R）要護理師之後觀察再補 */
-  noteDraft?: { focus: string; data: string; action: string }
+  /** 回覆了、還沒寫護理紀錄：帶入護理紀錄（Focus DAR）的草稿；反應（R）要護理師之後觀察再補 */
+  noteDraft?: { callId: string; focus: string; data: string; action: string }
+  /** 緊急沒回覆可以一鍵改找主治（還沒升級過、找的不是主治本人） */
+  canEscalate: boolean
+  escalatedToName?: string
 }
 const view = (c: DoctorCall, t: string): DoctorCallView => ({
   ...c, toName: nameOf.user(c.toUserId), calledByName: nameOf.user(c.calledBy), roleLabel: { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole],
-  overdue: c.urgency === 'urgent' && !c.response && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
-  ...(c.response ? { waitMinutes: minutesBetween(c.calledAt, c.response.at), noteDraft: callNoteDraft(c) } : {}),
+  overdue: c.urgency === 'urgent' && !c.response && !c.escalatedTo && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  ...(c.response ? { waitMinutes: minutesBetween(c.calledAt, c.response.at), ...(c.noteId ? {} : { noteDraft: callNoteDraft(c) }) } : {}),
+  canEscalate: c.urgency === 'urgent' && !c.response && !c.escalatedTo && c.toRole !== 'attending' && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  ...(c.escalatedTo ? { escalatedToName: nameOf.user(db.doctorCalls.find((x) => x.id === c.escalatedTo)?.toUserId) } : {}),
 })
 /** 呼叫紀錄 → 護理紀錄草稿：D＝呼叫時間與原因；A＝通知誰、怎麼回覆、醫師處理 */
-function callNoteDraft(c: DoctorCall): { focus: string; data: string; action: string } {
+function callNoteDraft(c: DoctorCall): { callId: string; focus: string; data: string; action: string } {
   const r = c.response!
   const role = { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole]
   return {
+    callId: c.id,
     focus: '通知醫師',
     data: `${c.calledAt.slice(11)} ${c.reason}`,
     action: `${c.calledAt.slice(11)} ${c.urgency === 'urgent' ? '緊急' : ''}通知${role} ${nameOf.user(c.toUserId)}；${r.at.slice(11)} ${r.how === 'phone' ? '電話回覆' : '到床邊'}${r.note ? `：${r.note}` : ''}`,
@@ -88,6 +94,47 @@ export function respondCall(id: string, input: { how: 'phone' | 'bedside'; note?
     c.response = { at: t, by: u.id, how: input.how, ...(input.note?.trim() ? { note: input.note.trim() } : {}) }
     audit('醫師回覆呼叫', `${nameOf.patient(find.admission(c.admissionId)?.patientId)}：${nameOf.user(c.toUserId)} ${input.how === 'phone' ? '電話' : '到床邊'}（等 ${minutesBetween(c.calledAt, t)} 分）`)
     return view(c, t)
+  })
+}
+
+/** 緊急呼叫超過 15 分鐘沒回覆：一鍵改找主治（護理師）。舊的那筆標「已改找」、不再提醒；新的那筆緊急、原因註明升級 */
+export function escalateCall(id: string): Promise<DoctorCallView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const c = must(db.doctorCalls.find((x) => x.id === id), '呼叫紀錄')
+    const t = now()
+    if (c.response) fail('醫師已經回覆了', 'CONFLICT')
+    if (c.escalatedTo) fail('已經改找過了', 'CONFLICT')
+    if (c.urgency !== 'urgent') fail('一般呼叫不用升級（要緊急請重新記一筆緊急呼叫）', 'CONFLICT')
+    const wait = minutesBetween(c.calledAt, t)
+    if (wait < CALL_URGENT_MINUTES) fail(`才等 ${wait} 分鐘：緊急呼叫 ${CALL_URGENT_MINUTES} 分鐘沒回覆再改找主治`, 'CONFLICT')
+    const a = must(find.admission(c.admissionId), '住院紀錄')
+    if (a.status !== 'admitted') fail('病人目前不在住院中', 'CONFLICT')
+    const att = attendingUser(a.doctorId)
+    if (!att) fail('找不到主治的帳號，請直接聯絡科主任', 'CONFLICT')
+    if (c.toUserId === att!.id) fail('找的已經是主治：請聯絡科主任或啟動快速反應小組', 'CONFLICT')
+    const n: DoctorCall = { id: newId('DC'), admissionId: a.id, calledAt: t, calledBy: u.id, toUserId: att!.id, toRole: 'attending', urgency: 'urgent', reason: `（升級：${nameOf.user(c.toUserId)} ${wait} 分鐘沒回覆）${c.reason}`, escalatedFrom: c.id }
+    db.doctorCalls.push(n)
+    c.escalatedTo = n.id
+    audit('呼叫醫師升級', `${a.admitNo} ${nameOf.patient(a.patientId)}：${nameOf.user(c.toUserId)} ${wait} 分鐘沒回覆，改找主治 ${att!.name}`)
+    return view(n, t)
+  })
+}
+
+/** 值班醫師：我這一班被呼叫的（病人、床號、回覆了沒、寫值班紀錄了沒）——下班前對一遍 */
+export function myShiftCalls(): Promise<{ date: string; calls: (DoctorCallView & { patientName: string; bed: string; noteWritten: boolean })[] }> {
+  return query(() => {
+    const u = requireUser('doctor')
+    const t = now()
+    const date = shiftDateOf(t)
+    return {
+      date,
+      calls: db.doctorCalls.filter((c) => c.toUserId === u.id && isOffHours(c.calledAt) && dutyDateOf(c.calledAt) === date).sort((x, y) => x.calledAt.localeCompare(y.calledAt)).map((c) => {
+        const a = find.admission(c.admissionId)
+        const b = a?.bedId ? find.bed(a.bedId) : undefined
+        return { ...view(c, t), patientName: nameOf.patient(a?.patientId), bed: b ? `${b.ward} ${b.bedNo}` : '', noteWritten: dutyNoteAfter(c) }
+      }),
+    }
   })
 }
 

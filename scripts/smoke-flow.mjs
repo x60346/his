@@ -19833,6 +19833,72 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     }
     ok(readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('@click="doArrive(e)"') && readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('arrive.fieldErrors.value.staffNote') && readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('現在這段沒有排放射師：報到前先聯絡支援'), '畫面接上：報到前問誰來做、卡片標現在沒有放射師')
   }
+  // 呼叫標記已寫護理紀錄、緊急沒回覆改找主治、值班醫師我這一班被呼叫
+  console.log('\n[呼叫升級與我這一班]')
+  {
+    resetDb('small')
+    const { readFileSync } = await import('node:fs')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const c2 = db().doctorCalls.find((c) => c.id === 'DC-SEED-2')
+    const adm = db().admissions.find((a) => a.id === c2.admissionId)
+    const att = db().users.find((u) => u.doctorId === adm.doctorId)
+    await as('nurse01')
+    // 帶入護理紀錄 → 呼叫標記已寫、草稿消失、不能重複
+    let L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    const d = L.calls.find((c) => c.id === c2.id).noteDraft
+    ok(d?.callId === c2.id, '草稿帶呼叫編號')
+    const n = await api.nursingApi.addNursingNote({ admissionId: adm.id, ...d, response: '' })
+    L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    const v2 = L.calls.find((c) => c.id === c2.id)
+    ok(n.callId === c2.id && v2.noteId === n.id && !v2.noteDraft, '存檔後呼叫標記已寫護理紀錄、不再給草稿')
+    ok((await errOf(() => api.nursingApi.addNursingNote({ admissionId: adm.id, ...d, response: '' }))).includes('已經寫過'), '同一筆不能再帶一次')
+    const other = db().admissions.find((a) => a.status === 'admitted' && a.id !== adm.id)
+    ok((await errOf(() => api.nursingApi.addNursingNote({ admissionId: other.id, ...d, response: '' }))).includes('找不到'), '別的病人不能連這筆呼叫')
+    // 緊急沒回覆：15 分鐘內不能升級；超過可以一鍵改找主治
+    const oc = db().users.find((u) => u.doctorId && u.id !== att.id && db().doctors.find((x) => x.id === u.doctorId)?.deptId === adm.deptId)
+    const c = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: oc.id, urgency: 'urgent', reason: '血壓 78/40' })
+    ok(!c.canEscalate && (await errOf(() => api.doctorCallApi.escalateCall(c.id))).includes('15 分鐘'), '才剛打：不能升級')
+    ok((await errOf(() => api.nursingApi.addNursingNote({ admissionId: adm.id, focus: '通知醫師', data: 'x', action: 'x', response: '', callId: c.id }))).includes('還沒回覆'), '還沒回覆的不能帶入護理紀錄')
+    db().doctorCalls.find((x) => x.id === c.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -18)
+    L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    ok(L.calls.find((x) => x.id === c.id).canEscalate && (await api.dashboardApi.getDashboard()).callsOverdue >= 1, '18 分鐘沒回覆：可以改找主治、首頁提醒')
+    const before = (await api.dashboardApi.getDashboard()).callsOverdue
+    const e = await api.doctorCallApi.escalateCall(c.id)
+    ok(e.toUserId === att.id && e.toRole === 'attending' && e.urgency === 'urgent' && e.reason.includes('18 分鐘沒回覆') && e.reason.includes('血壓 78/40') && e.escalatedFrom === c.id && db().auditLogs[0].action === '呼叫醫師升級', `改找主治 ${e.toName}：新的一筆緊急、註明升級`)
+    L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    const old = L.calls.find((x) => x.id === c.id)
+    ok(old.escalatedToName === att.name && !old.overdue && !old.canEscalate && (await api.dashboardApi.getDashboard()).callsOverdue === before - 1, '舊的那筆標已改找、不再提醒')
+    ok((await errOf(() => api.doctorCallApi.escalateCall(c.id))).includes('改找過'), '不能重複升級')
+    db().doctorCalls.find((x) => x.id === e.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -20)
+    ok((await errOf(() => api.doctorCallApi.escalateCall(e.id))).includes('科主任') && !(await api.doctorCallApi.listDoctorCalls(adm.id)).calls.find((x) => x.id === e.id).canEscalate, '找的已經是主治：請聯絡科主任')
+    const r = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: oc.id, urgency: 'routine', reason: '要軟便劑' })
+    db().doctorCalls.find((x) => x.id === r.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -60)
+    ok((await errOf(() => api.doctorCallApi.escalateCall(r.id))).includes('一般呼叫'), '一般呼叫不用升級')
+    await as(oc.username)
+    ok((await errOf(() => api.doctorCallApi.escalateCall(c.id))) !== '', '醫師不能按升級')
+    // 值班醫師：我這一班被呼叫的
+    const W = await load('/src/services/doctor-call-work.ts')
+    const sd = W.shiftDateOf(dateUtil.now())
+    const ocSeed = db().users.find((u) => u.id === c2.toUserId)
+    // 週末白天這一班是現在這班：把種子兩筆搬進來
+    if (api.dutyDateOf(c2.calledAt) !== sd) for (const [i, x] of db().doctorCalls.filter((x) => x.id.startsWith('DC-SEED')).entries()) {
+      const w = x.response ? W.minutesBetween(x.calledAt, x.response.at) : 0
+      x.calledAt = dateUtil.addMinutes(dateUtil.now(), -120 + i * 30)
+      if (x.response) x.response.at = dateUtil.addMinutes(x.calledAt, w)
+    }
+    await as(ocSeed.username)
+    const M = await api.doctorCallApi.myShiftCalls()
+    const exp = db().doctorCalls.filter((x) => x.toUserId === ocSeed.id && api.isOffHours(x.calledAt) && api.dutyDateOf(x.calledAt) === sd)
+    ok(M.date === sd && M.calls.length === exp.length && exp.length >= 2 && M.calls.every((x) => x.patientName && x.bed) && M.calls.map((x) => x.calledAt).join() === [...exp].map((x) => x.calledAt).sort().join(), `${ocSeed.username} 這一班被呼叫 ${M.calls.length} 次（病人、床號、依時間）`)
+    const want = exp.filter((x) => db().progressNotes.some((p) => p.kind === 'duty' && p.admissionId === x.admissionId && p.at >= x.calledAt && p.doctorId === ocSeed.doctorId)).length
+    ok(M.calls.filter((x) => x.noteWritten).length === want, `值班紀錄已寫 ${want} 筆、其他標還沒寫`)
+    await as('dr05')
+    ok(!(await api.doctorCallApi.myShiftCalls()).calls.length, '沒被呼叫的醫師：空的')
+    await as('nurse01')
+    ok((await errOf(() => api.doctorCallApi.myShiftCalls())) !== '', '護理師不能查')
+    ok(readFileSync('src/components/DoctorCallPanel.vue', 'utf8').includes('esc.run(c.id)') && readFileSync('src/pages/duty/DutyPage.vue', 'utf8').includes('myShiftCalls') && readFileSync('src/pages/nursing/components/NursingNotesPanel.vue', 'utf8').includes('callId: fromCall.value'), '畫面接上：改找主治、我這一班、帶入連結呼叫')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)
