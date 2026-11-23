@@ -91,6 +91,21 @@ try {
   const examDoneRaw = { completeExam: api.examApi.completeExam }
   api.examApi.completeExam = async (id, input = {}) => examDoneRaw.completeExam(id, { coverNote: '測試支援', ...input })
   // 報到時這間這段沒排放射師要寫誰來做：其他段落測的是報到本身，自動補（測試輔助）；要測把關的用 arriveRaw
+  // 排在之後幾天的手術不能今天送手術室：其他段落測的是送了之後的流程，送之前把排程挪到今天（測試輔助）；要測把關的用 sendRaw
+  const sendRaw = { sendToOr: api.surgeryApi.sendToOr }
+  api.surgeryApi.sendToOr = async (id) => {
+    const sg = dbm.db.surgeries.find((x) => x.id === id)
+    const td = dateUtil.now().slice(0, 10)
+    const orig = sg?.schedule?.start
+    if (sg?.schedule && orig.slice(0, 10) > td) sg.schedule.start = `${td}${orig.slice(10)}`
+    try {
+      return await sendRaw.sendToOr(id)
+    } finally {
+      // 送完放回原本排的時間（其他段落用排程那天的看板找這台）
+      const cur = dbm.db.surgeries.find((x) => x.id === id)
+      if (cur?.schedule && orig) cur.schedule.start = orig
+    }
+  }
   const arriveRaw = { arriveExam: api.examApi.arriveExam }
   api.examApi.arriveExam = async (id, opts = {}) => arriveRaw.arriveExam(id, { staffNote: '測試支援', ...opts })
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
@@ -7148,6 +7163,7 @@ try {
     // 檢查順序
     msg = await errOf(() => S.recordCheck(s1.id, 'signIn', api.CHECK_ITEMS.signIn.items))
     ok(msg.includes('送到手術室後'), '還沒送來不能查核')
+    if (dbm.db.surgeries.find((x) => x.id === s1.id).schedule.start.slice(0, 10) > dateUtil.now().slice(0, 10)) ok((await errOf(() => sendRaw.sendToOr(s1.id))).includes('手術當天再送'), '排在之後的手術：今天不能送手術室')
     v = await S.sendToOr(s1.id)
     ok(v.status === 'sent', '送手術室')
     msg = await errOf(() => S.markPrep(s1.id, 'npo'))

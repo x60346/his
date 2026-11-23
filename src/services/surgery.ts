@@ -341,6 +341,8 @@ export function sendToOr(id: string): Promise<SurgeryView> {
     const miss = prepMissing(s)
     if (miss.length) fail(`術前準備還沒完成：${miss.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label).join('、')}`, 'CONFLICT')
     const t = now()
+    // 排在之後幾天的不能今天就送（送了病人就算在手術室，病房的給藥、交班都不再列）：手術當天再送
+    if (s.schedule && s.schedule.start.slice(0, 10) > t.slice(0, 10)) fail(`這台排在 ${s.schedule.start.slice(5, 16)}：手術當天再送手術室`, 'CONFLICT')
     Object.assign(s, { status: 'sent', sentAt: t, sentBy: u.id })
     audit('送手術室', audText(s))
     return surgeryView(s)
