@@ -3,7 +3,7 @@
 // 服務層用它把關（太早不能給），頁面用它上色，兩邊不會各算各的。
 import type { HandoverNote, IpdOrder, MarRecord, NursingNote, VitalRecord } from '@/types'
 import { commitIfPossible, db, newId } from '@/mock/db'
-import { now, today } from '@/utils/date'
+import { addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, fieldErrors, must, mutate, query, requireUser, requirePermission } from './http'
 import { ensureMar, marViews, orderView, type MarView, type OrderView } from './ipd'
 import { doseUnitOf } from './billing'
@@ -703,6 +703,18 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
     db.handovers.push(h)
     audit('交班', `${input.ward} ${input.shift}`)
     return h
+  })
+}
+
+/** 交班：這個病房的病人最近 24 小時的值班紀錄（夜間值班醫師處理過的事；主治看過沒有） */
+export function wardDutyNotes(ward: string): Promise<{ id: string; admissionId: string; bedNo: string; patientName: string; at: string; doctorName: string; items: { label: string; text: string }[]; acked: boolean }[]> {
+  return query(() => {
+    requireUser('nurse', 'doctor')
+    const from = addMinutes(now(), -24 * 60)
+    const ids = new Map(db.admissions.filter((a) => a.status === 'admitted' && wardOf(a) === ward).map((a) => [a.id, a]))
+    return db.progressNotes.filter((n) => n.kind === 'duty' && ids.has(n.admissionId) && n.at >= from)
+      .map((n) => ((a) => ({ id: n.id, admissionId: a.id, bedNo: (a.bedId ? find.bed(a.bedId)?.bedNo : undefined) ?? '', patientName: nameOf.patient(a.patientId), at: n.at, doctorName: nameOf.doctor(n.doctorId), items: n.items ?? [], acked: !!n.dutyAck }))(ids.get(n.admissionId)!))
+      .sort((x, y) => x.bedNo.localeCompare(y.bedNo) || x.at.localeCompare(y.at))
   })
 }
 

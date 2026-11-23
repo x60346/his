@@ -49,7 +49,7 @@ import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
 import WardStockPanel from './components/WardStockPanel.vue'
-import { bloodApi, masterApi, pressureApi, nursingApi, staffingApi, suggestAssign } from '@/services'
+import { bloodApi, dutyApi, masterApi, pressureApi, nursingApi, staffingApi, suggestAssign } from '@/services'
 import { UDialog, USelect } from '@/components/ui'
 import { useAction } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -73,6 +73,9 @@ if (!wards.includes(String(useRoute().query.ward)) && useAuth().user?.role === '
   nursingApi.myWard().then((w) => { if (w && wards.includes(w) && ward.value === wards[0]) ward.value = w }).catch(() => {})
 }
 
+// 現在的值班醫師（下班時間）：只列這個病房有病人的科
+const { data: onCall } = useQuery(() => dutyApi.onCallNow(), [() => clock.value.slice(0, 13)])
+const wardOnCall = computed(() => (onCall.value?.offHours ? onCall.value.list.filter((x) => (data.value?.list ?? []).some((p) => p.deptId === x.deptId)) : []))
 const { data, loading, reload } = useQuery(
   async () => {
     const w = ward.value
@@ -220,6 +223,12 @@ const wardTotals = computed(() => ({
       <UBadge v-if="wardTotals.stat" tone="yellow">待執行臨時醫囑 {{ wardTotals.stat }}</UBadge>
       <UBadge v-if="wardTotals.unacked" tone="cyan">待核對醫囑 {{ wardTotals.unacked }}</UBadge>
       <span class="tabular ml-auto text-sm text-slate-500">現在 {{ clock.slice(11) }}</span>
+    </div>
+    <!-- 下班時間：這個病房病人各科的值班醫師（找人用） -->
+    <div v-if="onCall?.offHours" class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-900">
+      <span class="font-medium">值班醫師</span>
+      <span v-for="x in wardOnCall" :key="x.deptId">{{ x.deptName }} {{ x.name }}</span>
+      <span v-if="!wardOnCall.length" class="text-amber-800">這個病房病人的科今晚沒有排值班（請找主治）</span>
     </div>
     <!-- 這一班的人力與分床 -->
     <div v-if="asg && ward !== masterApi.staticCodes.obsWard" class="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm">

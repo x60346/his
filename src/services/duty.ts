@@ -132,3 +132,12 @@ export function dutyNotesState(admissionId: string): Promise<{ unread: (Progress
     }
   })
 }
+
+/** 現在誰值班（護理站、櫃台找人）：下班時間列各科值班醫師；上班時間 offHours false（找主治） */
+export function onCallNow(): Promise<{ offHours: boolean; list: { deptId: string; deptName: string; name: string }[] }> {
+  return query(() => {
+    requireUser('doctor', 'nurse', 'admin', 'clerk', 'lab', 'radtech', 'pharmacist')
+    const t = now()
+    return { offHours: isOffHours(t), list: DUTY_DEPTS.flatMap((d) => ((s) => (s ? [{ deptId: d, deptName: nameOf.dept(d), name: nameOf.user(s.userId) }] : []))(onCallFor(db.dutyShifts, d, t))) }
+  })
+}

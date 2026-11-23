@@ -19646,6 +19646,43 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
       ok(d.dutyTonight?.depts.includes('內科') && d.dutyTonight.inpatients >= 1, `今晚值班首頁：${d.dutyTonight?.depts}（住院中 ${d.dutyTonight?.inpatients}）`)
     } finally { setClock(14, 35) }
   }
+  // 交班看值班紀錄；護理站看現在的值班醫師
+  console.log('\n[護理站看值班]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const sn = db().progressNotes.find((n) => n.id === 'PN-SEED-DUTY1')
+    const sa = db().admissions.find((a) => a.id === sn.admissionId)
+    const ward = db().beds.find((b) => b.id === sa.bedId).ward
+    await as('nurse01')
+    let rows = await api.nursingApi.wardDutyNotes(ward)
+    const r0 = rows.find((r) => r.id === sn.id)
+    ok(r0 && !r0.acked && r0.items.length === 3 && r0.bedNo && r0.doctorName, `交班：${ward} ${r0?.bedNo} 昨晚值班紀錄（主治還沒看）`)
+    const other = db().beds.find((b) => b.ward !== ward && db().admissions.some((a) => a.status === 'admitted' && a.bedId === b.id))?.ward
+    if (other) ok(!(await api.nursingApi.wardDutyNotes(other)).some((r) => r.id === sn.id), '別的病房看不到')
+    const att = db().users.find((u) => u.doctorId === sa.doctorId)
+    await as(att.username)
+    await api.dutyApi.ackDutyNotes(sa.id)
+    await as('nurse01')
+    rows = await api.nursingApi.wardDutyNotes(ward)
+    ok(rows.find((r) => r.id === sn.id)?.acked, '主治看過：交班標主治已看')
+    db().progressNotes.find((n) => n.id === sn.id).at = dateUtil.addMinutes(dateUtil.now(), -25 * 60)
+    ok(!(await api.nursingApi.wardDutyNotes(ward)).some((r) => r.id === sn.id), '超過 24 小時不列')
+    // 現在的值班醫師
+    const wd = new Date(`${T}T00:00:00`).getDay()
+    let oc = await api.dutyApi.onCallNow()
+    ok(wd === 0 || wd === 6 ? oc.offHours : !oc.offHours, `14:35：${oc.offHours ? '週末全天值班' : '上班時間（找主治）'}`)
+    setClock(22, 0)
+    try {
+      oc = await api.dutyApi.onCallNow()
+      const d02 = db().dutyShifts.find((s) => s.deptId === 'D02' && s.date === T)
+      ok(oc.offHours && oc.list.some((x) => x.deptId === 'D02' && x.name === db().users.find((u) => u.id === d02.userId).name), `22:00：內科值班 ${oc.list.find((x) => x.deptId === 'D02')?.name}`)
+      await as('clerk01')
+      ok((await api.dutyApi.onCallNow()).list.length === oc.list.length, '櫃台也查得到')
+    } finally { setClock(14, 35) }
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/nursing/NursingPage.vue', 'utf8').includes('dutyApi.onCallNow()') && readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8').includes('wardDutyNotes'), '護理站顯示值班醫師、交班顯示值班紀錄')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

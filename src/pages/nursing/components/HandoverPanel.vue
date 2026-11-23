@@ -37,6 +37,9 @@ const udNote = computed(() => {
   const boxes = ud.value.r.carts.reduce((n, c) => n + c.boxes.length, 0)
   return [boxes && `${ud.value.r.carts.length} 車藥（${boxes} 盒）還沒點收`, ud.value.r.issues.length && `${ud.value.r.issues.length} 盒回報不符、藥局處理中`, stock].filter(Boolean).join('；')
 })
+// 值班紀錄：最近 24 小時夜間值班醫師處理過的事（交班時一起看；主治看過沒有）
+const { data: dn } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardDutyNotes(props.ward) }), [() => props.ward, () => props.clock])
+const dutyRows = computed(() => (dn.value?.ward === props.ward ? dn.value.v : []))
 // 胸管：本班引流、漏氣、提醒（可一鍵帶入交班重點）
 const { data: chest } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardChestTubes(props.ward) }), [() => props.ward, () => props.clock])
 const chestRows = computed(() => (chest.value?.ward === props.ward ? chest.value.v : []))
@@ -67,6 +70,20 @@ async function submit() {
       </div>
       <div class="mt-2 text-right"><UButton size="sm" :loading="save.pending.value" :disabled="!form.admissionId" @click="submit">儲存交班</UButton></div>
     </div>
+
+    <!-- 值班紀錄（最近 24 小時） -->
+    <section v-if="dutyRows.length" class="rounded-md border border-indigo-200 bg-indigo-50/60 p-3 text-sm">
+      <div class="mb-1 font-semibold text-indigo-900">值班紀錄（最近 24 小時）</div>
+      <ul class="space-y-1.5">
+        <li v-for="d in dutyRows" :key="d.id" class="flex flex-wrap items-start gap-2">
+          <span class="tabular w-14 shrink-0 font-medium text-slate-700">{{ d.bedNo }}</span>
+          <div class="min-w-0 flex-[1_1_14rem]">
+            <div><b>{{ d.patientName }}</b> <span class="text-xs text-slate-500">{{ d.at.slice(5) }} {{ d.doctorName }}・{{ d.acked ? '主治已看' : '主治還沒看' }}</span></div>
+            <div class="text-xs text-slate-700">{{ d.items.map((i) => `${i.label} ${i.text}`).join('；') }}</div>
+          </div>
+        </li>
+      </ul>
+    </section>
 
     <!-- 胸管：本班引流量、漏氣、提醒，帶入交班重點 -->
     <section v-if="chestRows.length" class="rounded-md border border-slate-200 p-3 text-sm">
