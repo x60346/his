@@ -964,6 +964,8 @@ export interface ImagingExam {
   contrastMl?: number
   /** 完成的放射師不是這間、這一段排班的人（支援）：寫原因；排班的人是誰 */
   cover?: { note: string; rostered?: string }
+  /** 報到時這間這一段沒有排放射師：櫃台寫誰來做（已聯絡支援） */
+  arriveStaff?: { note: string }
   /** 顯影劑不良反應（完成時記）：嚴重度、症狀、處置；中度以上自動產生不良反應通報（adrId） */
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }

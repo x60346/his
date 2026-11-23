@@ -7,6 +7,7 @@ import { doctorCallApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const props = defineProps<{ admissionId: string }>()
+const emit = defineEmits<{ note: [draft: { focus: string; data: string; action: string }] }>()
 const { data, loading } = useQuery(async () => ({ id: props.admissionId, v: await doctorCallApi.listDoctorCalls(props.admissionId) }), [() => props.admissionId])
 const v = computed(() => (data.value?.id === props.admissionId ? data.value.v : undefined))
 const f = reactive({ toUserId: '' as string | number | undefined, urgency: 'routine' as 'urgent' | 'routine', reason: '' })
@@ -50,7 +51,10 @@ const notes = reactive<Record<string, string>>({})
               <UBadge v-if="c.overdue" tone="red">超過 15 分鐘沒回覆：再找一次或改找主治</UBadge>
             </div>
             <div class="text-xs text-slate-700">{{ c.reason }}</div>
-            <div v-if="c.response" class="text-xs text-slate-600">{{ c.response.at.slice(11) }} {{ c.response.how === 'phone' ? '電話回覆' : '到床邊' }}（等 {{ c.waitMinutes }} 分）{{ c.response.note ? `：${c.response.note}` : '' }}</div>
+            <div v-if="c.response" class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span class="flex-[1_1_12rem]">{{ c.response.at.slice(11) }} {{ c.response.how === 'phone' ? '電話回覆' : '到床邊' }}（等 {{ c.waitMinutes }} 分）{{ c.response.note ? `：${c.response.note}` : '' }}</span>
+              <UButton v-if="c.noteDraft" size="sm" variant="ghost" @click="emit('note', c.noteDraft)">帶入護理紀錄</UButton>
+            </div>
             <div v-else class="flex flex-wrap items-end gap-2">
               <UInput v-model="notes[c.id]" class="min-w-0 flex-[1_1_12rem]" placeholder="醫師怎麼處理（選填，例：電話醫囑給 NS 500 mL）" />
               <UButton size="sm" variant="secondary" :loading="resp.pending.value" @click="resp.run(c.id, { how: 'phone', note: notes[c.id] })">電話回覆了</UButton>

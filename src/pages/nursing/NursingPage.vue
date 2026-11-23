@@ -132,6 +132,9 @@ watch(allPatients, (list) => {
 // 分頁分兩組：沒選病人時是病房層級（本班待辦、交班）；選了病人才有個人的五個分頁。
 // 以前沒選病人時也顯示「給藥紀錄、醫囑…」，點了只會看到同一張待辦清單，看起來能按卻沒作用。
 // 首頁待辦可以直接帶到某個病房層級的分頁（例：本班未點班 → 常備點班）
+// 呼叫醫師回覆了 → 帶入護理紀錄（切到護理紀錄分頁、填好 F／D／A）
+const noteDraft = ref<{ focus: string; data: string; action: string }>()
+function takeCallNote(d: { focus: string; data: string; action: string }) { noteDraft.value = { ...d }; tab.value = 'notes' }
 const tab = ref(['stock', 'handover', 'icuboard', 'code', 'negative'].includes(String(useRoute().query.tab)) ? String(useRoute().query.tab) : 'tasks')
 // 輸血：已發血待輸、輸血中（分頁上的數字）
 const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
@@ -347,7 +350,7 @@ const wardTotals = computed(() => ({
           <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
           <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
           <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" />
-          <DoctorCallPanel v-else-if="tab === 'calls'" :admission-id="adm.id" />
+          <DoctorCallPanel v-else-if="tab === 'calls'" :admission-id="adm.id" @note="takeCallNote" />
           <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
           <TubeFeedPanel v-else-if="tab === 'tube'" :admission-id="adm.id" />
           <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
@@ -366,7 +369,7 @@ const wardTotals = computed(() => ({
           <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
           <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
           <DeathPanel v-else-if="tab === 'death'" :admission-id="adm.id" @changed="reload" />
-          <NursingNotesPanel v-else :admission="adm" />
+          <NursingNotesPanel v-else :admission="adm" :draft="noteDraft" @draft-used="noteDraft = undefined" />
         </UCard>
       </div>
     </div>

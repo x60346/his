@@ -7,6 +7,7 @@ import { audit, fail, failField, mutate, permissionsOf, query, requirePermission
 import { find, nameOf } from './views'
 import { DUTY_DEPTS, dutyDateOf as dutyDateOfNow, dutyHoursText, isOffHours, onCallFor } from './duty-rules'
 import { careRoleOf } from './care-team'
+import { shiftCallStats, shiftDateOf } from './doctor-call-work'
 
 export interface DutyRoster {
   from: string
@@ -15,6 +16,8 @@ export interface DutyRoster {
   days: { date: string; hoursText: string; cells: { deptId: string; userId?: string; name?: string }[] }[]
   /** 現在（下班時間）各科的值班醫師；上班時間是空的 */
   now: { offHours: boolean; onCall: { deptName: string; name: string }[] }
+  /** 這一班（白天看昨晚那一班）各科值班醫師被護理站呼叫幾次：有排值班的科 */
+  shiftCalls: { date: string; hoursText: string; rows: ({ deptName: string; name: string } & ReturnType<typeof shiftCallStats>)[] }
 }
 
 const deptDoctors = (deptId: string) =>
@@ -32,6 +35,10 @@ export function dutyRoster(from: string = today(), days = 7): Promise<DutyRoster
         date, hoursText: dutyHoursText(date),
         cells: DUTY_DEPTS.map((deptId) => ((s) => ({ deptId, ...(s ? { userId: s.userId, name: nameOf.user(s.userId) } : {}) }))(db.dutyShifts.find((x) => x.date === date && x.deptId === deptId))),
       })),
+      shiftCalls: ((date) => ({
+        date, hoursText: dutyHoursText(date),
+        rows: DUTY_DEPTS.flatMap((d) => ((s) => (s ? [{ deptName: nameOf.dept(d), name: nameOf.user(s.userId), ...shiftCallStats(date, d) }] : []))(db.dutyShifts.find((x) => x.date === date && x.deptId === d))),
+      }))(shiftDateOf(t)),
       now: { offHours: isOffHours(t), onCall: DUTY_DEPTS.flatMap((d) => ((s) => (s ? [{ deptName: nameOf.dept(d), name: nameOf.user(s.userId) }] : []))(onCallFor(db.dutyShifts, d, t))) },
     }
   })

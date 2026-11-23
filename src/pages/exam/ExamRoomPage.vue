@@ -40,6 +40,17 @@ async function schedule(key: string) {
 // 改時間（還沒報到的、未到的）
 const moving = ref<string>()
 const arrive = useAction(examApi.arriveExam, { success: (e) => `已報到：${e.patientName}${e.prepItems.length ? '，請逐項確認檢查前準備' : ''}` })
+// 報到：這間現在沒有排放射師 → 先寫誰來做（服務層擋）
+const arriving = ref<ExamView>()
+const arriveOpen = computed({ get: () => !!arriving.value, set: (x) => !x && (arriving.value = undefined) })
+function doArrive(e: ExamView) {
+  if (!board.value?.unstaffedNow.includes(e.room)) return void arrive.run(e.id)
+  arrive.fieldErrors.value = {}
+  arriving.value = e
+}
+async function confirmArrive(note: string) {
+  if (arriving.value && (await arrive.run(arriving.value.id, { staffNote: note }))) arriving.value = undefined
+}
 const done = useAction(examApi.completeExam, { success: (e) => `檢查完成：${e.patientName} ${e.procName}，進判讀清單${e.contrastReaction?.adrId ? '；顯影劑不良反應已通報藥師' : ''}` })
 // 含顯影劑的完成：用量、有沒有不良反應
 const finishing = ref<ExamView>()
@@ -148,6 +159,8 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
         </div>
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <UCard v-for="r in board.rooms" :key="r.room" :title="`${r.name}（${r.hoursText}）${r.staff ? `・放射師 ${r.staff}` : ''}`" :padded="false">
+            <!-- 標題會被截斷：現在沒有放射師另起一行 -->
+            <p v-if="board.unstaffedNow.includes(r.room)" class="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs font-semibold text-amber-800">現在這段沒有排放射師：報到前先聯絡支援</p>
             <p v-if="!r.exams.length" class="px-4 py-3 text-sm text-slate-400">這天沒有排檢查</p>
             <ul v-else class="divide-y divide-slate-100 text-sm">
               <li v-for="e in r.exams" :key="e.id" class="space-y-1 px-4 py-2">
@@ -157,7 +170,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                   <UBadge :tone="e.noShow ? 'red' : TONE[e.stage]">{{ e.stageLabel }}</UBadge>
                 </div>
                 <div v-if="(board.canArrive || board.canSchedule) && e.stage !== 'done'" class="flex flex-wrap justify-end gap-1">
-                  <UButton v-if="e.stage === 'scheduled' && board.canArrive" size="sm" variant="secondary" :loading="arrive.pending.value" @click="arrive.run(e.id)">報到</UButton>
+                  <UButton v-if="e.stage === 'scheduled' && board.canArrive" size="sm" variant="secondary" :loading="arrive.pending.value" @click="doArrive(e)">報到</UButton>
                   <UButton v-else-if="e.stage === 'arrived' && board.canPerform" size="sm" :loading="done.pending.value" @click="finish(e)">完成</UButton>
                   <span v-else-if="e.stage === 'arrived'" class="text-xs text-slate-500">等放射師檢查</span>
                   <UButton v-if="e.stage === 'scheduled' && board.canSchedule" size="sm" variant="ghost" @click="moving = moving === e.id ? undefined : e.id">改時間</UButton>
@@ -165,6 +178,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 </div>
                 <p v-if="e.stage === 'done' && (e.contrastMl || e.contrastReaction || e.cover)" class="text-xs text-slate-600">{{ e.doneByName }} 完成{{ e.cover ? `（支援：${e.cover.note}${e.cover.rostered ? `；排班 ${e.cover.rostered}` : ''}）` : '' }}{{ e.contrastMl ? `・顯影劑 ${e.contrastMl} mL` : '' }}
                   <span v-if="e.contrastReaction" :class="e.contrastReaction.severity === 'mild' ? 'text-amber-800' : 'font-semibold text-red-700'">・不良反應（{{ CONTRAST_REACTION_LABEL[e.contrastReaction.severity].split('（')[0] }}）：{{ e.contrastReaction.symptoms }}，{{ e.contrastReaction.action }}{{ e.contrastReaction.adrId ? '（已通報藥師評估）' : '' }}</span></p>
+                <p v-if="e.arriveStaff && e.stage !== 'done'" class="text-xs text-amber-800">報到時這段沒排放射師：{{ e.arriveStaff.note }}</p>
                 <p v-if="e.mri" :class="['text-xs', e.mri.level === 'unsafe' ? 'font-semibold text-red-700' : 'text-amber-800']">{{ e.mri.level === 'unsafe' ? `MRI 不安全植入物：${e.mri.items.join('、')}（放射科確認：${e.mri.reason}）` : `MRI 有條件植入物：${e.mri.items.join('、')}，照廠商條件掃描` }}</p>
                 <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
                   <UButton v-if="board.canSchedule" size="sm" :loading="resched.pending.value" @click="resched.run(e.id)">排到下一個空檔</UButton></p>
@@ -239,6 +253,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
       </template>
     </UDialog>
     <ContrastClearDialog v-model="clearOpen" :exam-key="clearing?.key ?? ''" :subject="clearing?.subject ?? ''" />
+    <ReasonDialog v-model="arriveOpen" title="這間現在沒有排放射師" :subject="arriving ? `${arriving.roomName}：${arriving.patientName} ${arriving.procName}` : ''" label="誰來做（先聯絡支援再報到）" :presets="['已請別間放射師支援', '放射科組長支援', '加班人員支援']" ok-text="報到" :pending="arrive.pending.value" :error="arrive.fieldErrors.value.staffNote" @confirm="confirmArrive" />
     <ReasonDialog v-model="cancelOpen" title="取消影像檢查" :subject="cancelling ? `${cancelling.patientName} ${cancelling.procName}（${cancelling.start.slice(5)}）` : ''" label="取消原因（影像會回到待排程）" :presets="['病人未禁食，改期', '病人未到', '病人拒絕', '醫師改檢查']" ok-text="取消檢查" danger :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @confirm="confirmCancel" />
     <ReasonDialog v-model="notReadyOpen" title="檢查前準備沒完成" :subject="notReady ? `${notReady.e.patientName}：${notReady.item.label}` : ''" label="原因（沒完成不能做，請取消改期）" :presets="['早上吃過早餐', '同意書還沒簽', '病人拒絕']" ok-text="記錄" :pending="prep.pending.value" :error="prep.fieldErrors.value.note" @confirm="confirmNotReady" />
   </div>

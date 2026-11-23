@@ -19,7 +19,7 @@ import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type
 import { find, nameOf } from './views'
 import { mriRiskOf } from './implant-work'
 import { examStaffMissing, radUnstaffedExams } from './rad-roster-work'
-import { blockNow, RAD_BLOCKS, RAD_ROOMS } from './rad-roster-rules'
+import { blockNow, RAD_BLOCKS, RAD_ROOMS, radBlockLabel, staffMissing } from './rad-roster-rules'
 
 export interface ExamView extends ImagingExam {
   stage: ExamStage
@@ -163,6 +163,8 @@ export interface ExamBoard {
   unstaffed: number
   /** 放射師：現在這一段排在哪幾間（完成別間的要寫支援原因）；不用查的時候沒有 */
   myDutyNow?: string[]
+  /** 今天：現在這一段沒有排放射師的檢查室（報到要寫誰來做） */
+  unstaffedNow: string[]
 }
 
 export function examBoard(date: string): Promise<ExamBoard> {
@@ -193,6 +195,7 @@ export function examBoard(date: string): Promise<ExamBoard> {
       downtimeStats: downtimeHours(db.roomDowntimes, `${addDays(now().slice(0, 10), -30)} 00:00`, now()),
       needsReschedule: needsReschedule().length,
       unstaffed: radUnstaffedExams(now()).length,
+      unstaffedNow: date === now().slice(0, 10) ? RAD_ROOMS.filter((r) => roomUnstaffedNow(r, now())) : [],
       ...((d) => (d ? { myDutyNow: d } : {}))(u ? myDutyNow(u, now()) : undefined),
     }
   })
@@ -303,8 +306,11 @@ export function rescheduleNext(id: string): Promise<ExamView> {
   })
 }
 
-/** 報到（病人到檢查室） */
-export function arriveExam(id: string): Promise<ExamView> {
+/** 這間現在（這一段）有沒有排放射師；不用放射師的檢查室、下班時間回 false */
+const roomUnstaffedNow = (room: ImagingExam['room'], t: string) => RAD_ROOMS.includes(room) && !!blockNow(t) && staffMissing(db.radShifts, room, t.slice(0, 16), 1).length > 0
+
+/** 報到（病人到檢查室）：這間現在沒有排放射師，要寫誰來做（已聯絡支援）——不擋病人，但要先安排好人 */
+export function arriveExam(id: string, opts: { staffNote?: string } = {}): Promise<ExamView> {
   return mutate(() => {
     const u = requireFrontDesk()
     const e = examById(id)
@@ -314,8 +320,11 @@ export function arriveExam(id: string): Promise<ExamView> {
     if (down) fail(`${examRoomName(e.room)}停機中（${downtimeText(down)}），請改期`, 'CONFLICT')
     const al = imagingOf(e.procId)?.contrast ? contrastAllergy(find.patient(e.patientId)?.allergies) : undefined
     if (al && !clearanceOf(e.key)) fail(`病人對顯影劑過敏（${al}）：要開立醫師（或主治、放射科）確認已開前置用藥並放行後才能報到`, 'CONFLICT')
-    Object.assign(e, { arrivedAt: now(), arrivedBy: u.id })
-    audit('影像檢查報到', `${nameOf.patient(e.patientId)} ${find.procedure(e.procId)?.name}`)
+    const t = now()
+    const noStaff = roomUnstaffedNow(e.room, t)
+    if (noStaff && !opts.staffNote?.trim()) failField('staffNote', `${examRoomName(e.room)}現在（${radBlockLabel(blockNow(t)!)}）沒有排放射師：請先聯絡支援，寫誰來做（例：已請一般攝影 王小明支援）`)
+    Object.assign(e, { arrivedAt: t, arrivedBy: u.id, ...(noStaff ? { arriveStaff: { note: opts.staffNote!.trim() } } : {}) })
+    audit('影像檢查報到', `${nameOf.patient(e.patientId)} ${find.procedure(e.procId)?.name}${noStaff ? `（這段沒排放射師：${opts.staffNote!.trim()}）` : ''}`)
     return view(e)
   })
 }

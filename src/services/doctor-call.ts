@@ -18,12 +18,24 @@ export interface DoctorCallView extends DoctorCall {
   overdue: boolean
   /** 等了幾分鐘才回覆（回覆了才有） */
   waitMinutes?: number
+  /** 回覆了：帶入護理紀錄（Focus DAR）的草稿；反應（R）要護理師之後觀察再補 */
+  noteDraft?: { focus: string; data: string; action: string }
 }
 const view = (c: DoctorCall, t: string): DoctorCallView => ({
   ...c, toName: nameOf.user(c.toUserId), calledByName: nameOf.user(c.calledBy), roleLabel: { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole],
   overdue: c.urgency === 'urgent' && !c.response && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
-  ...(c.response ? { waitMinutes: minutesBetween(c.calledAt, c.response.at) } : {}),
+  ...(c.response ? { waitMinutes: minutesBetween(c.calledAt, c.response.at), noteDraft: callNoteDraft(c) } : {}),
 })
+/** 呼叫紀錄 → 護理紀錄草稿：D＝呼叫時間與原因；A＝通知誰、怎麼回覆、醫師處理 */
+function callNoteDraft(c: DoctorCall): { focus: string; data: string; action: string } {
+  const r = c.response!
+  const role = { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole]
+  return {
+    focus: '通知醫師',
+    data: `${c.calledAt.slice(11)} ${c.reason}`,
+    action: `${c.calledAt.slice(11)} ${c.urgency === 'urgent' ? '緊急' : ''}通知${role} ${nameOf.user(c.toUserId)}；${r.at.slice(11)} ${r.how === 'phone' ? '電話回覆' : '到床邊'}${r.note ? `：${r.note}` : ''}`,
+  }
+}
 const attendingUser = (doctorId: string) => db.users.find((u) => u.doctorId === doctorId && u.active)
 
 /** 這位病人的呼叫紀錄（新到舊）、現在建議找誰 */

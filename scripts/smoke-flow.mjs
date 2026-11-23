@@ -90,6 +90,9 @@ try {
   // 放射師完成不是自己這段排班的檢查室要寫支援原因：其他段落測的是完成本身，沒寫就自動補（測試輔助）；要測把關的用 examDoneRaw
   const examDoneRaw = { completeExam: api.examApi.completeExam }
   api.examApi.completeExam = async (id, input = {}) => examDoneRaw.completeExam(id, { coverNote: '測試支援', ...input })
+  // 報到時這間這段沒排放射師要寫誰來做：其他段落測的是報到本身，自動補（測試輔助）；要測把關的用 arriveRaw
+  const arriveRaw = { arriveExam: api.examApi.arriveExam }
+  api.examApi.arriveExam = async (id, opts = {}) => arriveRaw.arriveExam(id, { staffNote: '測試支援', ...opts })
   const labRaw = { reportLab: api.labApi.reportLab, reportCulture: api.labApi.reportCulture }
   for (const k of ['reportLab', 'reportCulture']) {
     api.labApi[k] = async (input) => {
@@ -19747,6 +19750,88 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('nurse01')
     const done = db().admissions.find((a) => a.status === 'discharged')
     ok((await errOf(() => api.doctorCallApi.callDoctor({ admissionId: done.id, toUserId: att.id, urgency: 'routine', reason: 'x' }))).includes('住院中'), '出院的不能記')
+  }
+  // 呼叫醫師帶入護理紀錄、值班被呼叫統計、報到查放射師當班
+  console.log('\n[呼叫帶入護理紀錄與值班統計]')
+  {
+    resetDb('small')
+    const { readFileSync } = await import('node:fs')
+    const db = () => dbm.db
+    const c2 = db().doctorCalls.find((c) => c.id === 'DC-SEED-2')
+    const adm = db().admissions.find((a) => a.id === c2.admissionId)
+    await as('nurse01')
+    let L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    const v2 = L.calls.find((c) => c.id === 'DC-SEED-2')
+    ok(v2.noteDraft?.focus === '通知醫師' && v2.noteDraft.data.includes(c2.reason) && v2.noteDraft.data.startsWith(c2.calledAt.slice(11)) && v2.noteDraft.action.includes('到床邊') && v2.noteDraft.action.includes(c2.response.note) && v2.noteDraft.action.includes('值班醫師'), `回覆了的呼叫有護理紀錄草稿：${v2.noteDraft?.action}`)
+    const att = db().users.find((u) => u.doctorId === adm.doctorId)
+    const c = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: att.id, urgency: 'urgent', reason: '血壓 82/50' })
+    ok(!c.noteDraft, '還沒回覆的沒有草稿')
+    const r = await api.doctorCallApi.respondCall(c.id, { how: 'phone', note: '給 NS 500 mL' })
+    ok(r.noteDraft.action.includes('緊急通知主治') && r.noteDraft.action.includes('電話回覆：給 NS 500 mL'), `主治電話回覆的草稿：${r.noteDraft.action}`)
+    // 帶入後存成護理紀錄（R 留空，之後補）
+    const n = await api.nursingApi.addNursingNote({ admissionId: adm.id, ...r.noteDraft, response: '' })
+    ok(n.focus === '通知醫師' && n.action === r.noteDraft.action && !n.response, '草稿存成護理紀錄、反應之後補')
+    ok(readFileSync('src/components/DoctorCallPanel.vue', 'utf8').includes("emit('note', c.noteDraft)") && readFileSync('src/pages/nursing/NursingPage.vue', 'utf8').includes('@note="takeCallNote"') && readFileSync('src/pages/nursing/components/NursingNotesPanel.vue', 'utf8').includes('props.draft'), '畫面接上：帶入護理紀錄切到護理紀錄分頁')
+    // 值班頁：這一班（白天看昨晚）各科被呼叫幾次
+    const W = await load('/src/services/doctor-call-work.ts')
+    const sd = W.shiftDateOf(dateUtil.now())
+    // 週末白天「這一班」是現在這一班（還沒過完）：把種子昨晚的兩次呼叫搬進這一班，算法一樣
+    if (api.dutyDateOf(c2.calledAt) !== sd) for (const [i, x] of db().doctorCalls.filter((x) => x.id.startsWith('DC-SEED')).entries()) {
+      const w = x.response ? W.minutesBetween(x.calledAt, x.response.at) : 0
+      x.calledAt = dateUtil.addMinutes(dateUtil.now(), -120 + i * 30)
+      if (x.response) x.response.at = dateUtil.addMinutes(x.calledAt, w)
+    }
+    let R = await api.dutyApi.dutyRoster(T, 7)
+    const seedCalls = db().doctorCalls.filter((x) => x.toRole === 'oncall' && api.isOffHours(x.calledAt) && api.dutyDateOf(x.calledAt) === sd && db().admissions.find((a) => a.id === x.admissionId)?.deptId === adm.deptId)
+    const row = () => R.shiftCalls.rows.find((x) => x.deptName === db().departments.find((d) => d.id === adm.deptId).name)
+    const noNote = seedCalls.filter((x) => x.response && !db().progressNotes.some((n) => n.kind === 'duty' && n.admissionId === x.admissionId && n.at >= x.calledAt && n.doctorId === db().users.find((u) => u.id === x.toUserId)?.doctorId)).length
+    const waits = seedCalls.filter((x) => x.response).map((x) => W.minutesBetween(x.calledAt, x.response.at))
+    ok(R.shiftCalls.date === sd && row()?.calls === seedCalls.length && seedCalls.length >= 2 && row().urgent === seedCalls.filter((x) => x.urgency === 'urgent').length && row().open === 0
+      && row().avgWait === Math.round(waits.reduce((s, x) => s + x, 0) / waits.length) && row().withoutNote === noNote && noNote >= 1, `${sd} 那一班 ${row()?.deptName}：被呼叫 ${row()?.calls}、緊急 ${row()?.urgent}、平均等 ${row()?.avgWait} 分、沒寫值班紀錄 ${row()?.withoutNote}`)
+    ok(R.shiftCalls.rows.length === db().dutyShifts.filter((s) => s.date === sd).length && R.shiftCalls.rows.filter((x) => x !== row()).every((x) => x.calls === 0), '有排值班的科都列出來（別科沒被呼叫）')
+    // 找主治的不算值班醫師被呼叫
+    ok(row().calls === seedCalls.length, '白天找主治不算進值班統計')
+    // 補了值班紀錄 → 沒寫的歸零
+    for (const x of seedCalls) db().progressNotes.push({ id: 'PN-T-DUTY61-' + x.id, admissionId: x.admissionId, at: dateUtil.addMinutes(x.calledAt, 30), doctorId: db().users.find((u) => u.id === x.toUserId).doctorId, kind: 'duty', items: [{ label: '事件', text: '失眠' }, { label: '處理', text: 'Lorazepam' }], subjective: '', objective: '', assessment: '', plan: '' })
+    R = await api.dutyApi.dutyRoster(T, 7)
+    ok(row().withoutNote === 0, '補了值班紀錄：沒寫的歸零')
+    // 還沒回覆的算「還沒回覆」
+    db().doctorCalls.find((x) => x.id === seedCalls[0].id).response = undefined
+    R = await api.dutyApi.dutyRoster(T, 7)
+    ok(row().open === 1, '還沒回覆的計入')
+  }
+  console.log('\n[報到查放射師當班]')
+  {
+    resetDb('small')
+    const { readFileSync } = await import('node:fs')
+    const db = () => dbm.db
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    const t0 = dateUtil.now()
+    const block = api.blockNow(t0)
+    // 找兩筆還沒報到的 X 光／CT／MR（沒有顯影劑），改成今天現在
+    const P = await load('/src/services/imaging-work.ts')
+    const cand = db().imagingExams.filter((e) => !e.cancelled && !e.arrivedAt && !e.doneAt && api.RAD_ROOMS.includes(e.room) && !P.imagingOf(e.procId)?.contrast)
+    ok(cand.length >= 2, `有可以報到的檢查（${cand.length} 筆）`)
+    const [ex1, ex2] = cand
+    const tech = db().users.find((u) => u.roles?.includes('radtech'))
+    for (const e of [ex1, ex2]) Object.assign(e, { start: dateUtil.addMinutes(t0, 5), room: 'XR' })
+    db().radShifts = db().radShifts.filter((s) => !(s.date === T && s.room === 'XR'))
+    await as('clerk01')
+    let b = await api.examApi.examBoard(T)
+    if (block) {
+      ok(b.unstaffedNow.includes('XR'), '看板：一般攝影現在這段沒有放射師')
+      ok((await fieldsOf(() => arriveRaw.arriveExam(ex1.id))).staffNote?.includes('沒有排放射師'), '這間這段沒排放射師：報到要寫誰來做')
+      const v = await arriveRaw.arriveExam(ex1.id, { staffNote: '已請 CT 放射師支援' })
+      ok(v.arrivedAt && v.arriveStaff?.note === '已請 CT 放射師支援' && db().auditLogs[0].detail.includes('已請 CT 放射師支援'), '寫了誰來做：報到、記下、稽核')
+      db().radShifts.push({ id: 'RS-T61', date: T, room: 'XR', block, userId: tech.id, by: 'U801', at: t0 })
+      b = await api.examApi.examBoard(T)
+      const v2 = await arriveRaw.arriveExam(ex2.id)
+      ok(!b.unstaffedNow.includes('XR') && v2.arrivedAt && !v2.arriveStaff, '補排了人：直接報到、不必寫')
+      ok(!(await api.examApi.examBoard(dateUtil.addDays(T, 1))).unstaffedNow.length, '別天的看板不列「現在」')
+    } else {
+      ok(!b.unstaffedNow.length && !!(await arriveRaw.arriveExam(ex1.id)).arrivedAt, '下班時間不查排班：直接報到')
+    }
+    ok(readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('@click="doArrive(e)"') && readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('arrive.fieldErrors.value.staffNote') && readFileSync('src/pages/exam/ExamRoomPage.vue', 'utf8').includes('現在這段沒有排放射師：報到前先聯絡支援'), '畫面接上：報到前問誰來做、卡片標現在沒有放射師')
   }
 } catch (e) {
   failed++

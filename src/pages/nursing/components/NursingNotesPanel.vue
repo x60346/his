@@ -8,7 +8,8 @@ import { useAction, useQuery } from '@/composables/useService'
 import { usePhrases } from '@/composables/usePhrases'
 import PhraseHint from '@/components/PhraseHint.vue'
 
-const props = defineProps<{ admission: AdmissionView }>()
+const props = defineProps<{ admission: AdmissionView; /** 從別的分頁帶入的草稿（呼叫醫師） */ draft?: { focus: string; data: string; action: string } }>()
+const emit = defineEmits<{ 'draft-used': [] }>()
 
 const { data, loading } = useQuery(
   async () => {
@@ -23,6 +24,8 @@ const focusPresets = ['體溫過高', '急性疼痛', '跌倒高危險群', '皮
 const blank = () => ({ focus: '', data: '', action: '', response: '' })
 const form = reactive(blank())
 watch(() => props.admission.id, () => Object.assign(form, blank()))
+// 帶入的草稿：填進表單（R 反應留給護理師觀察後寫）
+watch(() => props.draft, (d) => { if (d) { Object.assign(form, { ...blank(), ...d }); emit('draft-used') } }, { immediate: true })
 
 // 片語：D／A／R 輸入「.簡碼」再按空白鍵展開（護理師個人的片語）
 const phrase = usePhrases(() => props.admission.bed?.ward)
