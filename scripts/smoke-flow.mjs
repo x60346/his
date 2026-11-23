@@ -19899,6 +19899,79 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await errOf(() => api.doctorCallApi.myShiftCalls())) !== '', '護理師不能查')
     ok(readFileSync('src/components/DoctorCallPanel.vue', 'utf8').includes('esc.run(c.id)') && readFileSync('src/pages/duty/DutyPage.vue', 'utf8').includes('myShiftCalls') && readFileSync('src/pages/nursing/components/NursingNotesPanel.vue', 'utf8').includes('callId: fromCall.value'), '畫面接上：改找主治、我這一班、帶入連結呼叫')
   }
+  // 主治也沒回覆呼叫快速反應小組、交班呼叫統計、櫃台看放射師空格
+  console.log('\n[呼叫升級快速反應小組與交班統計]')
+  {
+    resetDb('small')
+    const { readFileSync } = await import('node:fs')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const c2 = db().doctorCalls.find((c) => c.id === 'DC-SEED-2')
+    const adm = db().admissions.find((a) => a.id === c2.admissionId)
+    const att = db().users.find((u) => u.doctorId === adm.doctorId)
+    const ward = db().beds.find((b) => b.id === adm.bedId).ward
+    db().rrtCalls = db().rrtCalls.filter((r) => r.admissionId !== adm.id || r.status !== 'pending')
+    await as('nurse01')
+    const S0 = await api.nursingApi.wardCallStats(ward)
+    const oc = db().users.find((u) => u.doctorId && u.id !== att.id && db().doctors.find((x) => x.id === u.doctorId)?.deptId === adm.deptId)
+    const c = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: oc.id, urgency: 'urgent', reason: '血氧 85%' })
+    db().doctorCalls.find((x) => x.id === c.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -20)
+    ok(!(await api.doctorCallApi.listDoctorCalls(adm.id)).calls.find((x) => x.id === c.id).canRrt && (await errOf(() => api.doctorCallApi.callRrtFromCall(c.id))).includes('先改找主治'), '找的不是主治：先改找主治')
+    const e = await api.doctorCallApi.escalateCall(c.id)
+    ok(!e.canRrt && (await errOf(() => api.doctorCallApi.callRrtFromCall(e.id))).includes('才等'), '主治才剛找：還不能呼叫快速反應小組')
+    db().doctorCalls.find((x) => x.id === e.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -16)
+    db().doctorCalls.find((x) => x.id === c.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -36)
+    let L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    ok(L.calls.find((x) => x.id === e.id).canRrt && !L.calls.find((x) => x.id === e.id).canEscalate, '主治 16 分鐘沒回覆：可以呼叫快速反應小組（不能再改找）')
+    const nRrt = db().rrtCalls.length
+    const v = await api.doctorCallApi.callRrtFromCall(e.id)
+    const rr = db().rrtCalls.at(-1)
+    ok(db().rrtCalls.length === nRrt + 1 && v.rrtId === rr.id && rr.trigger === 'manual' && rr.status === 'pending' && rr.reason.includes(`${oc.name} 20 分→${att.name} 16 分`) && rr.reason.endsWith('血氧 85%') && v.rrtStatus === 'pending' && db().auditLogs[0].action === '呼叫醫師升級', `呼叫快速反應小組：${rr.reason}`)
+    L = await api.doctorCallApi.listDoctorCalls(adm.id)
+    ok(!L.calls.find((x) => x.id === e.id).overdue && !L.calls.find((x) => x.id === e.id).canRrt && (await errOf(() => api.doctorCallApi.callRrtFromCall(e.id))).includes('升級過'), '升級後不再提醒、不能重複')
+    // 已經有在等的 RRT：接上那筆
+    const c3 = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: att.id, urgency: 'urgent', reason: '又喘' })
+    db().doctorCalls.find((x) => x.id === c3.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -15)
+    const v3 = await api.doctorCallApi.callRrtFromCall(c3.id)
+    ok(v3.rrtId === rr.id && db().rrtCalls.length === nRrt + 1, '已經有在等的：接上同一筆、不重複叫')
+    // 快速反應小組列表看得到
+    await as('admin')
+    ok((await api.rrtApi.listRrt()).pending.some((x) => x.id === rr.id), '快速反應小組待到場列表有這筆')
+    await as('nurse01')
+    // 加護病房的不用
+    const icuAdm = db().admissions.find((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === '3I')
+    if (icuAdm) {
+      const ia = db().users.find((u) => u.doctorId === icuAdm.doctorId)
+      const ci = await api.doctorCallApi.callDoctor({ admissionId: icuAdm.id, toUserId: ia.id, urgency: 'urgent', reason: 'x' })
+      db().doctorCalls.find((x) => x.id === ci.id).calledAt = dateUtil.addMinutes(dateUtil.now(), -20)
+      ok((await errOf(() => api.doctorCallApi.callRrtFromCall(ci.id))).includes('加護病房'), '加護病房的病人：找加護病房主治')
+    }
+    // 交班：本班呼叫統計
+    const S1 = await api.nursingApi.wardCallStats(ward)
+    const from = S1.from
+    const inShift = db().doctorCalls.filter((x) => x.calledAt >= from && x.calledAt <= dateUtil.now() && db().beds.find((b) => b.id === db().admissions.find((a) => a.id === x.admissionId)?.bedId)?.ward === ward)
+    ok(S1.calls === inShift.length && S1.urgent === inShift.filter((x) => x.urgency === 'urgent').length && S1.escalated === inShift.filter((x) => x.escalatedTo || x.rrtId).length && S1.calls >= S0.calls + 2, `本班 ${S1.from.slice(11)} 起：${S1.calls} 次、緊急 ${S1.urgent}、升級 ${S1.escalated}`)
+    const r4 = await api.doctorCallApi.callDoctor({ admissionId: adm.id, toUserId: att.id, urgency: 'routine', reason: '要軟便劑' })
+    const S2 = await api.nursingApi.wardCallStats(ward)
+    ok(S2.open.some((o) => o.id === r4.id && o.patientName && o.bedNo && !o.urgent) && !S2.open.some((o) => o.id === c.id || o.id === e.id), '還沒回覆的列出來交給下一班（升級過的不列）')
+    await api.doctorCallApi.respondCall(r4.id, { how: 'phone' })
+    const S3 = await api.nursingApi.wardCallStats(ward)
+    ok(!S3.open.some((o) => o.id === r4.id) && S3.avgWait !== undefined, '回覆了就不列、算平均等候')
+    const other = db().beds.find((b) => b.ward !== ward && b.ward !== '3I')?.ward
+    ok(!(await api.nursingApi.wardCallStats(other)).open.some((o) => o.id === r4.id), '別病房看不到')
+    // 櫃台首頁：已排的檢查那段沒有放射師
+    await as('clerk01')
+    const W = await load('/src/services/rad-roster-work.ts')
+    // 做一個空格：明天以後第一筆已排的一般攝影／CT／MR，那天那間的班清掉
+    let ex = db().imagingExams.filter((x) => !x.cancelled && !x.arrivedAt && api.RAD_ROOMS.includes(x.room) && x.start.slice(0, 10) > T).sort((a, b) => a.start.localeCompare(b.start))[0]
+    if (!ex) { ex = db().imagingExams.find((x) => !x.cancelled && !x.doneAt && api.RAD_ROOMS.includes(x.room)); Object.assign(ex, { start: `${dateUtil.addDays(T, 2)} 10:00`, arrivedAt: undefined, arrivedBy: undefined }) }
+    db().radShifts = db().radShifts.filter((r) => !(r.date === ex.start.slice(0, 10) && r.room === ex.room))
+    const dsh = await api.dashboardApi.getDashboard()
+    ok(dsh.radUnstaffedDesk === W.radUnstaffedExams(dateUtil.now()).length && dsh.radUnstaffedDesk >= 1 && dsh.radUnstaffed === undefined, `櫃台首頁：已排的檢查那段沒有放射師 ${dsh.radUnstaffedDesk} 筆（排班的提醒給組長）`)
+    await as('nurse01')
+    ok((await api.dashboardApi.getDashboard()).radUnstaffedDesk === undefined, '護理師沒有這張')
+    ok(readFileSync('src/components/DoctorCallPanel.vue', 'utf8').includes('rrt.run(c.id)') && readFileSync('src/pages/nursing/components/HandoverPanel.vue', 'utf8').includes('wardCallStats') && readFileSync('src/pages/home/HomePage.vue', 'utf8').includes('radUnstaffedDesk'), '畫面接上：呼叫快速反應小組、交班呼叫統計、櫃台首頁')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

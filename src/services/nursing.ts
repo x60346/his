@@ -727,6 +727,25 @@ export function wardDutyNotes(ward: string): Promise<{ id: string; admissionId: 
   })
 }
 
+/** 交班：這個病房本班（班開始到現在）呼叫醫師的統計與還沒結束的（還沒回覆、沒升級） */
+export function wardCallStats(ward: string): Promise<{ from: string; calls: number; urgent: number; escalated: number; avgWait?: number; open: { id: string; bedNo: string; patientName: string; at: string; toName: string; urgent: boolean; waitMin: number }[] }> {
+  return query(() => {
+    requireUser('nurse', 'doctor')
+    const t = now()
+    const from = shiftRange(t).start
+    const ids = new Map(db.admissions.filter((a) => a.status === 'admitted' && wardOf(a) === ward).map((a) => [a.id, a]))
+    const list = db.doctorCalls.filter((c) => ids.has(c.admissionId) && c.calledAt >= from && c.calledAt <= t)
+    const answered = list.filter((c) => c.response)
+    const mins = (a: string, b: string) => Math.round((Date.parse(b.replace(' ', 'T')) - Date.parse(a.replace(' ', 'T'))) / 60000)
+    return {
+      from, calls: list.length, urgent: list.filter((c) => c.urgency === 'urgent').length,
+      escalated: list.filter((c) => c.escalatedTo || c.rrtId).length,
+      ...(answered.length ? { avgWait: Math.round(answered.reduce((s, c) => s + mins(c.calledAt, c.response!.at), 0) / answered.length) } : {}),
+      open: list.filter((c) => !c.response && !c.escalatedTo && !c.rrtId).map((c) => ((a) => ({ id: c.id, bedNo: (a.bedId ? find.bed(a.bedId)?.bedNo : undefined) ?? '', patientName: nameOf.patient(a.patientId), at: c.calledAt, toName: nameOf.user(c.toUserId), urgent: c.urgency === 'urgent', waitMin: mins(c.calledAt, t) }))(ids.get(c.admissionId)!)).sort((x, y) => x.at.localeCompare(y.at)),
+    }
+  })
+}
+
 export interface WardChestTube {
   admissionId: string
   patientName: string

@@ -7,6 +7,8 @@ import { now } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser, sessionRole } from './http'
 import { find, nameOf } from './views'
 import { dutyDateOf, isOffHours, onCallFor } from './duty-rules'
+import { inIcu } from './icu-work'
+import { openRrt, pushManualRrt } from './news-work'
 import { callsWithoutNote, CALL_URGENT_MINUTES, dutyNoteAfter, minutesBetween, shiftDateOf } from './doctor-call-work'
 
 
@@ -23,12 +25,17 @@ export interface DoctorCallView extends DoctorCall {
   /** 緊急沒回覆可以一鍵改找主治（還沒升級過、找的不是主治本人） */
   canEscalate: boolean
   escalatedToName?: string
+  /** 找的是主治也沒回覆：可以改呼叫快速反應小組 */
+  canRrt: boolean
+  rrtStatus?: 'pending' | 'done'
 }
 const view = (c: DoctorCall, t: string): DoctorCallView => ({
   ...c, toName: nameOf.user(c.toUserId), calledByName: nameOf.user(c.calledBy), roleLabel: { oncall: '值班醫師', attending: '主治', other: '醫師' }[c.toRole],
-  overdue: c.urgency === 'urgent' && !c.response && !c.escalatedTo && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  overdue: c.urgency === 'urgent' && !c.response && !c.escalatedTo && !c.rrtId && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
   ...(c.response ? { waitMinutes: minutesBetween(c.calledAt, c.response.at), ...(c.noteId ? {} : { noteDraft: callNoteDraft(c) }) } : {}),
-  canEscalate: c.urgency === 'urgent' && !c.response && !c.escalatedTo && c.toRole !== 'attending' && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  canEscalate: c.urgency === 'urgent' && !c.response && !c.escalatedTo && !c.rrtId && c.toRole !== 'attending' && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  canRrt: c.urgency === 'urgent' && !c.response && !c.escalatedTo && !c.rrtId && c.toRole === 'attending' && minutesBetween(c.calledAt, t) >= CALL_URGENT_MINUTES,
+  ...(c.rrtId ? { rrtStatus: db.rrtCalls.find((r) => r.id === c.rrtId)?.status } : {}),
   ...(c.escalatedTo ? { escalatedToName: nameOf.user(db.doctorCalls.find((x) => x.id === c.escalatedTo)?.toUserId) } : {}),
 })
 /** 呼叫紀錄 → 護理紀錄草稿：D＝呼叫時間與原因；A＝通知誰、怎麼回覆、醫師處理 */
@@ -112,12 +119,42 @@ export function escalateCall(id: string): Promise<DoctorCallView> {
     if (a.status !== 'admitted') fail('病人目前不在住院中', 'CONFLICT')
     const att = attendingUser(a.doctorId)
     if (!att) fail('找不到主治的帳號，請直接聯絡科主任', 'CONFLICT')
-    if (c.toUserId === att!.id) fail('找的已經是主治：請聯絡科主任或啟動快速反應小組', 'CONFLICT')
+    if (c.toUserId === att!.id) fail('找的已經是主治：請改呼叫快速反應小組（或聯絡科主任）', 'CONFLICT')
     const n: DoctorCall = { id: newId('DC'), admissionId: a.id, calledAt: t, calledBy: u.id, toUserId: att!.id, toRole: 'attending', urgency: 'urgent', reason: `（升級：${nameOf.user(c.toUserId)} ${wait} 分鐘沒回覆）${c.reason}`, escalatedFrom: c.id }
     db.doctorCalls.push(n)
     c.escalatedTo = n.id
     audit('呼叫醫師升級', `${a.admitNo} ${nameOf.patient(a.patientId)}：${nameOf.user(c.toUserId)} ${wait} 分鐘沒回覆，改找主治 ${att!.name}`)
     return view(n, t)
+  })
+}
+
+/**
+ * 主治也沒回覆（緊急、15 分鐘）：改呼叫快速反應小組（護理師）。原因註明呼叫醫師沒回覆；
+ * 已經有一筆在等就接上那一筆（不重複叫）。加護病房的病人不用（找加護病房主治）
+ */
+export function callRrtFromCall(id: string): Promise<DoctorCallView> {
+  return mutate(() => {
+    const u = requireUser('nurse')
+    const c = must(db.doctorCalls.find((x) => x.id === id), '呼叫紀錄')
+    const t = now()
+    if (c.response) fail('醫師已經回覆了', 'CONFLICT')
+    if (c.escalatedTo || c.rrtId) fail('這筆已經升級過了', 'CONFLICT')
+    if (c.urgency !== 'urgent') fail('一般呼叫不用升級', 'CONFLICT')
+    if (c.toRole !== 'attending') fail('先改找主治；主治也沒回覆再呼叫快速反應小組', 'CONFLICT')
+    const wait = minutesBetween(c.calledAt, t)
+    if (wait < CALL_URGENT_MINUTES) fail(`才等 ${wait} 分鐘：主治 ${CALL_URGENT_MINUTES} 分鐘沒回覆再呼叫快速反應小組`, 'CONFLICT')
+    const a = must(find.admission(c.admissionId), '住院紀錄')
+    if (a.status !== 'admitted') fail('病人目前不在住院中', 'CONFLICT')
+    if (inIcu(a)) fail('病人在加護病房：直接找加護病房主治', 'CONFLICT')
+    const open = openRrt(a.id)
+    // 原因用最早那一筆（升級過的那筆原因前面有「升級：…」），一路上找過誰都寫出來
+    const chain: DoctorCall[] = [c]
+    while (chain[0].escalatedFrom) { const p = db.doctorCalls.find((x) => x.id === chain[0].escalatedFrom); if (!p) break; chain.unshift(p) }
+    const who = chain.map((x) => `${nameOf.user(x.toUserId)} ${minutesBetween(x.calledAt, x === c ? t : db.doctorCalls.find((y) => y.id === x.escalatedTo)!.calledAt)} 分`).join('→')
+    const r = open ?? pushManualRrt(a.id, `呼叫醫師沒回覆（${who}）：${chain[0].reason}`, u.id, t)
+    c.rrtId = r.id
+    audit('呼叫醫師升級', `${a.admitNo} ${nameOf.patient(a.patientId)}：主治 ${nameOf.user(c.toUserId)} ${wait} 分鐘沒回覆，${open ? '接上已在等的' : '呼叫'}快速反應小組`)
+    return view(c, t)
   })
 }
 

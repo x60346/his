@@ -40,6 +40,9 @@ const udNote = computed(() => {
 // 值班紀錄：最近 24 小時夜間值班醫師處理過的事（交班時一起看；主治看過沒有）
 const { data: dn } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardDutyNotes(props.ward) }), [() => props.ward, () => props.clock])
 const dutyRows = computed(() => (dn.value?.ward === props.ward ? dn.value.v : []))
+// 呼叫醫師：本班幾次、平均等候、還沒回覆的（交班要交代）
+const { data: cs } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardCallStats(props.ward) }), [() => props.ward, () => props.clock])
+const callStats = computed(() => (cs.value?.ward === props.ward ? cs.value.v : undefined))
 // 胸管：本班引流、漏氣、提醒（可一鍵帶入交班重點）
 const { data: chest } = useQuery(async () => ({ ward: props.ward, v: await nursingApi.wardChestTubes(props.ward) }), [() => props.ward, () => props.clock])
 const chestRows = computed(() => (chest.value?.ward === props.ward ? chest.value.v : []))
@@ -81,6 +84,19 @@ async function submit() {
             <div><b>{{ d.patientName }}</b> <span class="text-xs text-slate-500">{{ d.at.slice(5) }} {{ d.doctorName }}・{{ d.acked ? '主治已看' : '主治還沒看' }}</span></div>
             <div class="text-xs text-slate-700">{{ d.items.map((i) => `${i.label} ${i.text}`).join('；') }}</div>
           </div>
+        </li>
+      </ul>
+    </section>
+
+    <!-- 呼叫醫師（本班） -->
+    <section v-if="callStats?.calls" class="rounded-md border border-slate-200 p-3 text-sm">
+      <div class="mb-1 font-semibold text-slate-700">呼叫醫師（本班 {{ callStats.from.slice(11) }} 起）</div>
+      <p class="text-xs text-slate-600">{{ callStats.calls }} 次（緊急 {{ callStats.urgent }}）・平均等 {{ callStats.avgWait !== undefined ? `${callStats.avgWait} 分` : '—' }}{{ callStats.escalated ? `・升級 ${callStats.escalated} 次` : '' }}</p>
+      <ul v-if="callStats.open.length" class="mt-1 space-y-1">
+        <li v-for="o in callStats.open" :key="o.id" class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="tabular w-14 shrink-0 font-medium text-slate-700">{{ o.bedNo }}</span>
+          <b>{{ o.patientName }}</b>
+          <span :class="o.urgent ? 'font-semibold text-red-700' : 'text-amber-800'">{{ o.at.slice(11) }} {{ o.urgent ? '緊急' : '一般' }}找 {{ o.toName }}，等 {{ o.waitMin }} 分還沒回覆：交給下一班追</span>
         </li>
       </ul>
     </section>

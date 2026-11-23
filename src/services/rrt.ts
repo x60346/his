@@ -13,7 +13,7 @@ import { inIcu } from './icu-work'
 import { openRequest } from './icu-move-work'
 import { checkIcuRequest, icuCategoryLabel } from './icu-score-rules'
 import { checkRrtAssessment, checkRrtCall, isNews, newsScore, type NewsLevel, type NewsResult } from './news-rules'
-import { minutesBetween, newsStateOf, openRrt, palliativeEnrolled, rrtStats, scoredVitals } from './news-work'
+import { minutesBetween, newsStateOf, openRrt, palliativeEnrolled, pushManualRrt, rrtStats, scoredVitals } from './news-work'
 
 const admittedOf = (id: string) => {
   const a = must(find.admission(id), '住院紀錄')
@@ -70,8 +70,7 @@ export function callRrt(admissionId: string, input: { reason: string }): Promise
     if (openRrt(a.id)) fail('已經呼叫了，快速反應小組還沒到場評估', 'CONFLICT')
     failFields(checkRrtCall(input))
     const t = now()
-    const c: RrtCall = { id: newId('RRT'), admissionId: a.id, trigger: 'manual', reason: input.reason.trim(), calledBy: u.id, calledAt: t, status: 'pending' }
-    db.rrtCalls.push(c)
+    const c = pushManualRrt(a.id, input.reason.trim(), u.id, t)
     audit('呼叫快速反應小組', `${a.admitNo} ${nameOf.patient(a.patientId)}：${c.reason}`)
     return view(c, t)
   })

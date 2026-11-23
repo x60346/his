@@ -44,6 +44,13 @@ export const palliativeEnrolled = (admissionId: string) => db.palliativeCases.so
 /** 還沒評估的呼叫 */
 export const openRrt = (admissionId: string) => db.rrtCalls.find((c) => c.admissionId === admissionId && c.status === 'pending')
 
+/** 手動呼叫一筆快速反應小組（呼叫前請先檢查：住院中、不在加護病房、沒有在等的） */
+export function pushManualRrt(admissionId: string, reason: string, by: string, t: string): RrtCall {
+  const c: RrtCall = { id: newId('RRT'), admissionId, trigger: 'manual', reason, calledBy: by, calledAt: t, status: 'pending' }
+  db.rrtCalls.push(c)
+  return c
+}
+
 /**
  * 記完一筆生命徵象：NEWS2 ≥7 自動呼叫快速反應小組。
  * 已經有一筆在等（同一件事不重複叫），或已經有轉入加護病房的申請在走（加護病房團隊已經知道）就不叫
