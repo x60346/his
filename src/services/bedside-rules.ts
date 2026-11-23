@@ -87,19 +87,35 @@ export function saagRead(serumAlb?: number, fluidAlb?: number): FluidRead | unde
 export const CSF_WBC_MAX = 5
 export const CSF_PRO_MAX = 45
 export const CSF_GLU_RATIO = 0.4
-export function csfRead(x: { wbc?: number; pmn?: number; glu?: number; proGdl?: number }, serumGlu?: number): FluidRead | undefined {
+/**
+ * 腦脊髓液正常上限依年齡（足月新生兒、小嬰兒比較高）：0–28 天白血球 ≤19/µL、蛋白 ≤115 mg/dL；29–56 天 ≤9、≤89；之後同成人 ≤5、≤45
+ */
+export const CSF_LIMITS: { maxDays: number; label: string; wbc: number; pro: number }[] = [
+  { maxDays: 28, label: '新生兒（0–28 天）', wbc: 19, pro: 115 },
+  { maxDays: 56, label: '小嬰兒（29–56 天）', wbc: 9, pro: 89 },
+  { maxDays: Infinity, label: '', wbc: CSF_WBC_MAX, pro: CSF_PRO_MAX },
+]
+export const csfLimitsFor = (ageDays?: number) => CSF_LIMITS.find((l) => (ageDays ?? Infinity) <= l.maxDays)!
+/** 穿刺出血校正：每 700 個紅血球扣 1 個白血球（周邊血球正常時的經驗值）；紅血球 ≥ 這個數才校正 */
+export const CSF_RBC_PER_WBC = 700
+export function csfRead(x: { wbc?: number; pmn?: number; rbc?: number; glu?: number; proGdl?: number }, serumGlu?: number, ageDays?: number): FluidRead | undefined {
   if (typeof x.wbc !== 'number' || !Number.isFinite(x.wbc)) return undefined
+  const lim = csfLimitsFor(ageDays)
+  const bloody = typeof x.rbc === 'number' && x.rbc >= CSF_RBC_PER_WBC
+  const wbc = bloody ? Math.max(0, Math.round(x.wbc - x.rbc! / CSF_RBC_PER_WBC)) : x.wbc
   const ratio = typeof x.glu === 'number' && typeof serumGlu === 'number' && serumGlu > 0 ? Math.round((x.glu / serumGlu) * 100) / 100 : undefined
   const proMg = typeof x.proGdl === 'number' ? Math.round(x.proGdl * 1000) : undefined
   const reasons = [
-    `白血球 ${x.wbc}/µL${x.wbc > CSF_WBC_MAX ? `（> ${CSF_WBC_MAX}）` : ''}${typeof x.pmn === 'number' ? `、嗜中性球 ${x.pmn}%` : ''}`,
+    lim.label && `依${lim.label}標準`,
+    bloody ? `白血球 ${x.wbc}/µL，扣除穿刺出血（紅血球 ${x.rbc}／${CSF_RBC_PER_WBC}）校正後 ${wbc}${wbc > lim.wbc ? `（> ${lim.wbc}）` : ''}` : `白血球 ${wbc}/µL${wbc > lim.wbc ? `（> ${lim.wbc}）` : ''}`,
+    typeof x.pmn === 'number' && `嗜中性球 ${x.pmn}%`,
     ratio !== undefined && `血糖比 ${ratio}${ratio < CSF_GLU_RATIO ? `（< ${CSF_GLU_RATIO}）` : ''}`,
-    proMg !== undefined && `蛋白 ${proMg} mg/dL${proMg > CSF_PRO_MAX ? `（> ${CSF_PRO_MAX}）` : ''}`,
+    proMg !== undefined && `蛋白 ${proMg} mg/dL${proMg > lim.pro ? `（> ${lim.pro}）` : ''}${bloody ? '（穿刺出血也會讓蛋白偏高）' : ''}`,
   ].filter((r): r is string => !!r)
-  if ((ratio !== undefined && ratio < CSF_GLU_RATIO) || (x.wbc >= 1000 && (x.pmn ?? 0) > 50)) return { kind: 'bacterial', label: '疑似細菌性腦膜炎（盡快給經驗性抗生素，等培養）', reasons, alert: true }
-  if (x.wbc > CSF_WBC_MAX) return { kind: 'pleocytosis', label: '白血球增加（病毒性或其他原因，配合培養與臨床）', reasons }
-  if (proMg !== undefined && proMg > CSF_PRO_MAX) return { kind: 'csfProtein', label: '白血球正常、蛋白偏高', reasons }
-  return { kind: 'csfNormal', label: '腦脊髓液大致正常', reasons }
+  if ((ratio !== undefined && ratio < CSF_GLU_RATIO) || (wbc >= 1000 && (x.pmn ?? 0) > 50)) return { kind: 'bacterial', label: '疑似細菌性腦膜炎（盡快給經驗性抗生素，等培養）', reasons, alert: true }
+  if (wbc > lim.wbc) return { kind: 'pleocytosis', label: '白血球增加（病毒性或其他原因，配合培養與臨床）', reasons }
+  if (proMg !== undefined && proMg > lim.pro) return { kind: 'csfProtein', label: '白血球正常、蛋白偏高', reasons }
+  return { kind: 'csfNormal', label: bloody ? '校正穿刺出血後大致正常' : '腦脊髓液大致正常', reasons }
 }
 
 export const CHEST_TUBE_SIZES = ['20Fr', '24Fr', '28Fr', '32Fr']

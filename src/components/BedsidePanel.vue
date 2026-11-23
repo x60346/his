@@ -12,6 +12,8 @@ import { useAuth } from '@/stores/auth'
 import { now } from '@/utils/date'
 
 const props = defineProps<{ admissionId: string }>()
+// 帶入病程紀錄（住院醫囑頁接）：O＝處置與送檢數值，A＝判讀
+const emit = defineEmits<{ note: [n: { objective: string; assessment: string }] }>()
 const auth = useAuth()
 const isDoctor = computed(() => auth.user?.role === 'doctor')
 const { data, loading } = useQuery(async () => ({ id: props.admissionId, v: await bedsideApi.listBedside(props.admissionId) }), [() => props.admissionId])
@@ -68,6 +70,7 @@ async function submit() {
               <span v-if="p.consentNo" class="text-xs text-slate-500">同意書 {{ p.consentNo }}</span>
               <UBadge v-else-if="p.consentWaiver" tone="gray" :title="p.consentWaiver">無同意書：緊急</UBadge>
               <UBadge v-if="p.complication !== '無'" tone="red">併發症</UBadge>
+              <UButton v-if="isDoctor" size="sm" variant="ghost" class="ml-auto" @click="emit('note', p.note)">帶入病程紀錄</UButton>
             </div>
             <div class="text-xs text-slate-600">適應症：{{ p.indication }}</div>
             <div class="text-xs text-slate-600">

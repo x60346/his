@@ -19277,6 +19277,41 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     v = await viewOf(lp2.id)
     ok(v.readings[0]?.kind === 'csfNormal' && !v.readingWaiting, '只送常規：常規出來就判讀（大致正常）')
   }
+  // 腦脊髓液：穿刺出血校正、依年齡的正常值；床邊處置帶入病程紀錄
+  console.log('\n[腦脊髓液校正與年齡]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    let c = api.csfRead({ wbc: 20, pmn: 10, rbc: 14000, glu: 60, proGdl: 0.04 }, 100)
+    ok(c.kind === 'csfNormal' && c.label.includes('校正') && c.reasons.join().includes('校正後 0'), `規則：白血球 20、紅血球 14000 → 校正後 0，大致正常（${c.reasons.join('；')}）`)
+    c = api.csfRead({ wbc: 60, rbc: 7000, glu: 60 }, 100)
+    ok(c.kind === 'pleocytosis' && c.reasons.join().includes('校正後 50'), '規則：校正後還是 50 → 白血球增加')
+    ok(api.csfRead({ wbc: 15, rbc: 300 }, undefined, 10).kind === 'csfNormal' && api.csfRead({ wbc: 15, rbc: 300 }, undefined, 40).kind === 'pleocytosis' && api.csfRead({ wbc: 15, rbc: 300 }).kind === 'pleocytosis', '規則：白血球 15——新生兒正常、40 天大與成人算增加；紅血球少不校正')
+    ok(api.csfRead({ wbc: 3, proGdl: 0.1 }, undefined, 20).kind === 'csfNormal' && api.csfRead({ wbc: 3, proGdl: 0.1 }, undefined, 3650).kind === 'csfProtein', '規則：蛋白 100——新生兒正常、10 歲偏高')
+    ok(api.csfRead({ wbc: 3 }, undefined, 20).reasons[0] === '依新生兒（0–28 天）標準' && api.csfLimitsFor(50).wbc === 9, '規則：判讀寫出用哪個年齡標準')
+    // 服務層把年齡、紅血球帶進去：把病人生日改成 20 天前
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
+    const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(doc)
+    const t0 = dateUtil.now()
+    const lp = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'lp', indication: '發燒', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '微血性', complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
+    const o = db().ipdOrders.find((x) => x.id === lp.labOrderIds[0])
+    db().labReports.push({ id: 'LR-T-CSF', no: 'LT-CSF', patientId: adm.patientId, procId: 'P072', orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: [{ code: 'F-WBC', name: '白血球', unit: '/µL', value: '16', ref: '', flag: 'N' }, { code: 'F-PMN', name: '嗜中性球', unit: '%', value: '20', ref: '', flag: 'N' }, { code: 'F-RBC', name: '紅血球', unit: '/µL', value: '1400', ref: '', flag: 'N' }], reportedBy: 'U601', reportedAt: dateUtil.now() })
+    let v = (await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === lp.id)
+    ok(v.readings[0].kind === 'pleocytosis' && v.readings[0].reasons.join().includes('校正後 14'), `成人：白血球 16、紅血球 1400 → 校正後 14 仍增加（${v.readings[0].reasons.join('；')}）`)
+    db().patients.find((p) => p.id === adm.patientId).birthDate = dateUtil.addDays(T, -20)
+    v = (await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === lp.id)
+    ok(v.readings[0].kind === 'csfNormal' && v.readings[0].reasons[0].includes('新生兒'), '同一份報告，病人 20 天大 → 新生兒標準大致正常')
+    // 帶入病程紀錄：O 有處置與數值、A 有判讀
+    ok(v.note.objective.includes('床邊腰椎穿刺：外觀 微血性') && v.note.objective.includes('體液常規：白血球 16 /µL、嗜中性球 20 %、紅血球 1400 /µL') && v.note.assessment.startsWith('腦脊髓液：校正穿刺出血後大致正常'), `病程 O：${v.note.objective}／A：${v.note.assessment}`)
+    const sv = (await api.bedsideApi.listBedside(sp.admissionId)).items.find((x) => x.id === sp.id)
+    ok(sv.note.objective.includes('引流 800 mL') && sv.note.objective.includes('體液生化：蛋白 4.2 g/dL') && sv.note.assessment.startsWith('胸水：滲出液'), `種子胸腔穿刺帶入：A ${sv.note.assessment.slice(0, 30)}…`)
+    const np = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'paracentesis', indication: '腹脹', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '淡黃清澈', volumeMl: 1000, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
+    ok(np.note.assessment === '腹水判讀等體液常規報告' && !np.note.objective.includes('體液常規：'), '報告還沒出：A 寫等報告、O 沒有數值')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/ipd/IpdPage.vue', 'utf8').includes('@note="takeBedsideNote"'), '住院醫囑頁接「帶入病程紀錄」')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

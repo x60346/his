@@ -19,6 +19,8 @@ export interface BedsideView extends BedsideProcedure {
   /** 判讀（可能好幾項：腹水嗜中性球＋SAAG）；報告還沒齊＝readingWaiting 寫還缺什麼 */
   readings: FluidRead[]
   readingWaiting?: string
+  /** 帶入病程紀錄的 O、A */
+  note: { objective: string; assessment: string }
 }
 
 const num = (v?: string) => (v === undefined || v === '' ? undefined : Number(v))
@@ -28,6 +30,26 @@ function reportValues(p: BedsideProcedure, procId: string): Record<string, numbe
   const r = o ? db.labReports.find((x) => x.orderId === o.id) : undefined
   return r ? Object.fromEntries(r.values.map((v) => [v.code, num(v.value)])) : undefined
 }
+/** 執行時病人幾天大（腦脊髓液正常值依年齡） */
+const ageDaysAt = (p: BedsideProcedure) => {
+  const b = find.patient(p.patientId)?.birthDate
+  return b ? Math.floor((Date.parse(p.performedAt.slice(0, 10)) - Date.parse(b)) / 86400000) : undefined
+}
+
+/** 帶入病程紀錄：O＝處置與送檢數值，A＝判讀（還沒判讀的寫等哪些報告） */
+function noteOf(p: BedsideProcedure, r: Pick<BedsideView, 'readings' | 'readingWaiting'>): { objective: string; assessment: string } {
+  const title = bedsideTitle(p.kind, p.side)
+  const proc = [`外觀 ${p.appearance}`, p.volumeMl !== undefined && `引流 ${p.volumeMl} mL`, p.openingPressure !== undefined && `開口壓 ${p.openingPressure} cmH2O`, p.complication !== '無' && `併發症：${p.complication}`].filter(Boolean).join('，')
+  const labs = (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)).flatMap((o) => {
+    const rep = o ? db.labReports.find((x) => x.orderId === o.id) : undefined
+    return rep ? [`${find.procedure(rep.procId)?.name.replace(/（[^）]*）$/, '') ?? rep.procId}：${rep.values.map((v) => `${v.name} ${v.value}${v.unit ? ` ${v.unit}` : ''}`).join('、')}`] : []
+  })
+  return {
+    objective: [`${p.performedAt.slice(5)} 床邊${title}：${proc}。`, ...labs.map((l) => `${l}。`)].join(''),
+    assessment: [...r.readings.map((x) => `${BEDSIDE_FLUID[p.kind]}：${x.label}（${x.reasons.join('；')}）`), r.readingWaiting && `${BEDSIDE_FLUID[p.kind]}判讀${r.readingWaiting}`].filter(Boolean).join('；'),
+  }
+}
+
 /** 判讀：胸水（體液生化＋血清：Light's criteria）、腹水（體液常規：嗜中性球；體液生化＋血清：SAAG）、腦脊髓液（體液常規，有生化、血清就加蛋白與血糖比值） */
 function readingOf(p: BedsideProcedure): Pick<BedsideView, 'readings' | 'readingWaiting'> {
   const ordered = (procId: string) => (p.labOrderIds ?? []).some((id) => db.ipdOrders.find((x) => x.id === id)?.procId === procId)
@@ -50,7 +72,7 @@ function readingOf(p: BedsideProcedure): Pick<BedsideView, 'readings' | 'reading
   } else if (p.kind === 'lp') {
     // 腦脊髓液：生化、血清有開就等齊了再判讀（血糖比值是細菌性腦膜炎的重要依據）
     need(routine, 'P072', '體液常規'); need(chem, 'P073', '體液生化'); need(serum, SERUM_PROC, '血清生化')
-    if (routine && !wait.length) { const r = csfRead({ wbc: routine['F-WBC'], pmn: routine['F-PMN'], glu: chem?.['F-GLU'], proGdl: chem?.['F-PRO'] }, serum?.GLU); if (r) out.push(r) }
+    if (routine && !wait.length) { const r = csfRead({ wbc: routine['F-WBC'], pmn: routine['F-PMN'], rbc: routine['F-RBC'], glu: chem?.['F-GLU'], proGdl: chem?.['F-PRO'] }, serum?.GLU, ageDaysAt(p)); if (r) out.push(r) }
   }
   return { readings: out, ...(wait.length ? { readingWaiting: `等${wait.join('、')}報告` } : {}) }
 }
@@ -58,7 +80,7 @@ function readingOf(p: BedsideProcedure): Pick<BedsideView, 'readings' | 'reading
 const view = (p: BedsideProcedure): BedsideView => ({
   ...p, title: bedsideTitle(p.kind, p.side), performedByName: nameOf.user(p.performedBy),
   labs: (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id),
-  ...readingOf(p),
+  ...((r) => ({ ...r, note: noteOf(p, r) }))(readingOf(p)),
   ...((c) => (c ? { consentNo: c.no } : {}))(p.consentId ? db.consents.find((x) => x.id === p.consentId) : undefined),
 })
 

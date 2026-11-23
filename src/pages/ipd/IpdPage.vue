@@ -324,6 +324,13 @@ const phrase = usePhrases()
 const { data: notes } = useQuery(async () => (admissionId.value ? ipdApi.listProgressNotes(admissionId.value) : []), [admissionId])
 const note = reactive({ subjective: '', objective: '', assessment: '', plan: '' })
 const addNote = useAction(ipdApi.addProgressNote, { success: '已新增病程紀錄' })
+// 床邊處置「帶入病程紀錄」：接到今日病程的 O、A 後面，切到病程紀錄分頁（醫師再補 S、P 後存）
+function takeBedsideNote(n: { objective: string; assessment: string }) {
+  const join = (a: string, b: string) => (a.trim() ? `${a.trim()}\n${b}` : b)
+  note.objective = join(note.objective, n.objective)
+  if (n.assessment) note.assessment = join(note.assessment, n.assessment)
+  tab.value = 'notes'
+}
 async function submitNote() {
   if (!admissionId.value) return
   if (await addNote.run({ admissionId: admissionId.value, ...note })) Object.assign(note, { subjective: '', objective: '', assessment: '', plan: '' })
@@ -554,7 +561,7 @@ async function submitNote() {
         <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
         <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
         <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
-        <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" />
+        <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" @note="takeBedsideNote" />
         <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
         <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
         <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
