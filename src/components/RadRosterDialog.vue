@@ -29,6 +29,7 @@ async function sendReq() {
 // 組長：核准、退回（退回寫原因）
 const decide = useAction(radRosterApi.decideRadChange, { success: (x) => (x.status === 'approved' ? '已核准' : '已退回') })
 const rejectNote = reactive<Record<string, string>>({})
+const replaceBy = reactive<Record<string, string>>({})
 const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getDay()]
 </script>
 
@@ -75,8 +76,12 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
             <div class="mb-1 font-semibold text-slate-700">請假、換班待核准</div>
             <ul class="space-y-2">
               <li v-for="q in r.requests" :key="q.id" class="flex flex-wrap items-end gap-2 text-xs">
-                <div class="min-w-0 flex-[1_1_14rem]"><b>{{ q.requesterName }}</b> {{ q.date.slice(5) }} {{ q.roomName }} {{ q.blockLabel }}：{{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}<span class="text-slate-500">（{{ q.reason }}）</span><span v-if="q.kind === 'leave'" class="text-amber-700">・核准後這段沒有人，要再補</span></div>
-                <UButton size="sm" :loading="decide.pending.value" @click="decide.run(q.id, true)">核准</UButton>
+                <div class="min-w-0 flex-[1_1_14rem]"><b>{{ q.requesterName }}</b> {{ q.date.slice(5) }} {{ q.roomName }} {{ q.blockLabel }}：{{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}<span class="text-slate-500">（{{ q.reason }}）</span><span v-if="q.kind === 'leave'" class="text-amber-700">・{{ q.freeTechs?.length ? `這段有空：${q.freeTechs.map((t) => t.name).join('、')}` : '這段沒有人有空，核准後空著' }}</span></div>
+                <select v-if="q.kind === 'leave'" v-model="replaceBy[q.id]" class="form-control w-36 py-0.5 text-xs" :aria-label="`${q.date} ${q.roomName} ${q.blockLabel} 改排`">
+                  <option value="">核准後空著</option>
+                  <option v-for="t in q.freeTechs ?? []" :key="t.id" :value="t.id">改排 {{ t.name }}</option>
+                </select>
+                <UButton size="sm" :loading="decide.pending.value" @click="decide.run(q.id, true, '', replaceBy[q.id] || undefined)">核准</UButton>
                 <UInput v-model="rejectNote[q.id]" class="w-40" placeholder="退回原因" :error="decide.fieldErrors.value.note" />
                 <UButton size="sm" variant="ghost" :loading="decide.pending.value" @click="decide.run(q.id, false, rejectNote[q.id] ?? '')">退回</UButton>
               </li>

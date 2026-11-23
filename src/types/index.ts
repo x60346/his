@@ -990,6 +990,8 @@ export interface RadShiftRequest {
   kind: 'leave' | 'swap'
   /** 換班：接手的人 */
   toUserId?: string
+  /** 請假核准時組長改排的人（沒有＝那一格清掉） */
+  replacedBy?: string
   reason: string
   at: string
   status: 'pending' | 'approved' | 'rejected' | 'cancelled'

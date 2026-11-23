@@ -23,6 +23,10 @@ export interface RadRoster {
   requests: RadRequestView[]
 }
 export interface RadRequestView extends RadShiftRequest {
+  /** 請假待核准：那一段有空的放射師（核准時可以直接改排） */
+  freeTechs?: { id: string; name: string }[]
+  /** 核准請假時改排的人 */
+  replacedByName?: string
   requesterName: string
   toName?: string
   roomName: string
@@ -32,7 +36,12 @@ export interface RadRequestView extends RadShiftRequest {
 const reqView = (r: RadShiftRequest): RadRequestView => ({
   ...r, requesterName: nameOf.user(r.requesterId), ...(r.toUserId ? { toName: nameOf.user(r.toUserId) } : {}), roomName: examRoomName(r.room), blockLabel: radBlockLabel(r.block),
   ...(r.decided ? { decidedByName: nameOf.user(r.decided.by) } : {}),
+  ...(r.kind === 'leave' && r.status === 'pending' ? { freeTechs: freeTechsFor(r.date, r.block, r.requesterId) } : {}),
+  ...(r.replacedBy ? { replacedByName: nameOf.user(r.replacedBy) } : {}),
 })
+/** 某天某一段沒有排班的放射師（except 不算） */
+const freeTechsFor = (date: string, block: RadShift['block'], except?: string) =>
+  db.users.filter((x) => x.active && (x.roles ?? []).includes('radtech') && x.id !== except && !db.radShifts.some((s) => s.date === date && s.block === block && s.userId === x.id)).map((x) => ({ id: x.id, name: x.name }))
 
 /** 排班表（from 起 days 天）：放射師、醫師、櫃台、管理員都能看 */
 export function radRoster(from: string = today(), days = 7): Promise<RadRoster> {
@@ -126,7 +135,7 @@ export function requestRadChange(input: { shiftId: string; kind: RadShiftRequest
 }
 
 /** 核准或退回（組長）：請假核准＝清掉那一格；換班核准＝改成接手的人（接手的人這段又排了別間就不能核准）；退回要寫原因 */
-export function decideRadChange(id: string, approve: boolean, note = ''): Promise<RadRequestView> {
+export function decideRadChange(id: string, approve: boolean, note = '', replaceUserId?: string): Promise<RadRequestView> {
   return mutate(() => {
     const u = requirePermission('radiology.roster')
     const r = db.radShiftRequests.find((x) => x.id === id)
@@ -139,11 +148,16 @@ export function decideRadChange(id: string, approve: boolean, note = ''): Promis
       if (r!.kind === 'swap') {
         if (db.radShifts.some((x) => x !== s && x.date === s!.date && x.block === s!.block && x.userId === r!.toUserId)) fail(`${nameOf.user(r!.toUserId!)}這段已經排在別間，不能核准`, 'CONFLICT')
         Object.assign(s!, { userId: r!.toUserId!, by: u.id, at: now() })
+      } else if (replaceUserId) {
+        // 請假核准時直接改排一位這段有空的放射師
+        if (!freeTechsFor(s!.date, s!.block, r!.requesterId).some((x) => x.id === replaceUserId)) failField('replaceUserId', '這位放射師這段已經有班或不是放射師')
+        Object.assign(s!, { userId: replaceUserId, by: u.id, at: now() })
+        r!.replacedBy = replaceUserId
       } else db.radShifts = db.radShifts.filter((x) => x !== s)
     }
     r!.status = approve ? 'approved' : 'rejected'
     r!.decided = { at: now(), by: u.id, ...(note.trim() ? { note: note.trim() } : {}) }
-    audit(approve ? '放射師班別核准' : '放射師班別退回', `${r!.date} ${examRoomName(r!.room)} ${radBlockLabel(r!.block)}：${nameOf.user(r!.requesterId)} ${r!.kind === 'leave' ? '請假' : `換給 ${nameOf.user(r!.toUserId!)}`}${note.trim() ? `（${note.trim()}）` : ''}`)
+    audit(approve ? '放射師班別核准' : '放射師班別退回', `${r!.date} ${examRoomName(r!.room)} ${radBlockLabel(r!.block)}：${nameOf.user(r!.requesterId)} ${r!.kind === 'leave' ? `請假${r!.replacedBy ? `，改排 ${nameOf.user(r!.replacedBy)}` : '（那一格空著）'}` : `換給 ${nameOf.user(r!.toUserId!)}`}${note.trim() ? `（${note.trim()}）` : ''}`)
     return reqView(r!)
   })
 }

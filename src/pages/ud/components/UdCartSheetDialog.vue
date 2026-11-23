@@ -27,6 +27,8 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
             <div class="text-lg font-bold tracking-wider">藥車簽收單・{{ w.ward }}</div>
             <div class="text-xs text-slate-600">調劑 {{ data.dispensedByName }} {{ when(data.dispensedAt) }}・共 {{ w.boxes.length }} 盒</div>
           </header>
+          <!-- 窄畫面（手機）表格在框內左右捲；列印是 A4，不受影響 -->
+          <div class="overflow-x-auto">
           <table class="tabular mt-2 w-full border-collapse">
             <thead class="whitespace-nowrap text-xs">
               <tr class="border-b border-slate-800">
@@ -54,6 +56,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
               </template>
             </tbody>
           </table>
+          </div>
           <footer class="mt-6 grid grid-cols-3 gap-4 text-sm">
             <div>送藥人：<span class="inline-block w-24 border-b border-slate-600">&nbsp;</span></div>
             <div>病房點收人：<span class="inline-block w-24 border-b border-slate-600">&nbsp;</span></div>

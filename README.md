@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4951 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4961 項） |
 
 ### 展示帳號
 
@@ -125,6 +125,10 @@ npm run dev          # 開發伺服器 http://localhost:5180
    - **侵入性處置同意書（管路）**：登錄放置**中心靜脈導管、胃造口**時，這次住院要有**這種管路還沒用掉的侵入性處置同意書**（醫師在病人資料「同意書」分頁記錄，選 CVC 或胃造口；同一種還沒用的只能一張）。放置時用掉那張（管路列顯示同意書編號；同意書清單標「已放置」、不能撤回），**換新的要重簽**；**緊急狀況**（醫療法第 63 條但書）或**外院已放置的補登**選原因才能登錄（管路列標「無同意書」、稽核寫原因）。導尿管、留置針、鼻胃管不用；氣管內管照舊（急救插管）。示範資料：敗血症那位的 CVC 有放置前簽的同意書。
    - **出院病歷查病程紀錄**：出院病歷的完整性加上**住院期間每天的病程紀錄**（入院隔天到出院前一天；入院、出院當天不要求），缺的列「病程紀錄缺 N 天：日期」。主治在「健保審查回覆」頁的「出院病歷待完成」按「**補寫病程紀錄**」選缺的那天補寫（S／O／A／P；標「補寫 某日的病程」、時間記實際寫的時候，病歷完成時間算到最後一次補寫）；住院中最近 7 天缺的也可以在這裡補寫（照護團隊；今天的在住院醫囑頁寫）。出院的只有主治能補。示範資料：歷史出院病人每天都有查房紀錄，只有 9 天前出院的肺炎病人缺出院前兩天那天（期限還沒到）。
    - **床邊處置紀錄與同意書**：住院醫囑多一個「床邊處置」分頁（護理站同分頁唯讀）：醫師登錄**腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管置放**——適應症、**處置前暫停**（病人身分、部位與側別都勾才能存）、執行時間、外觀、引流量（胸腔、腹腔穿刺、胸管；胸腔穿刺單次超過 1500 mL、腹腔穿刺超過 5000 mL 要寫原因與病人狀況）、開口壓（腰椎穿刺，選填）、併發症（沒有寫「無」）。**出血風險**：最近的血小板 < 50 或使用中的抗凝血／抗血小板藥（Warfarin、Clopidogrel、Heparin 類、新型口服抗凝血劑；Aspirin 不算）會列出，有的話要寫評估才能存。要有這次住院、**這種處置（有側別的要同側）還沒用掉的侵入性處置同意書**（醫師在病患資料「同意書」分頁記錄，胸腔穿刺、胸管要選側別）；登錄時用掉（同意書標「已執行」、不能撤回），**緊急**（張力性氣胸這類，醫療法第 63 條但書）勾原因才能不要同意書。存檔自動開一筆**已執行的處置醫令**（新的四個計費醫令，一般醫囑開不出來），住院帳單、DRG 預估照醫令帶。示範資料：住院中的肺炎病人昨天下午右側胸腔穿刺 800 mL（有事前簽的右側同意書）。
+   - **請假改排、判讀逾時升級、對話框逐一巡檢（第五十六輪）**：
+     - **請假改排**：組長看請假申請時，列出那一段有空的放射師；核准時可以選「改排某某」（那段已經有班的不能選），不選就照舊清掉那一格。
+     - **判讀逾時升級**：異常判讀（滲出液、腹膜炎、細菌性腦膜炎）的報告出來**超過 2 小時**主治還沒知悉，同科醫師（照護團隊）首頁「同科病人判讀異常未知悉」，床邊處置那筆標「已通知同科醫師」，同科醫師可以代為按已知悉；別科、會診醫師不能按。（系統沒有值班表，所以用同科醫師當作值班的人。）
+     - **對話框逐一巡檢**：巡檢腳本改成點遍每個分頁裡的每個按鈕（先備份瀏覽器資料，巡完還原），375 寬抓到兩個：**重印腕帶**的病人姓名、病歷號被條碼擠成一字一行（改成放不下就換到條碼下面，列印仍是 250mm 一行）；**藥車簽收單**的「核對」欄超出框外（改成表格在框內左右捲，列印不受影響）。護理站病人 21 個分頁、門診藥局、住院藥局其他對話框都沒有問題。
    - **放射師當班檢查、請假與換班、其他頁面窄畫面巡檢（第五十五輪）**：
      - **完成檢查要當班**：放射師在 08:00–17:00 完成一般攝影、電腦斷層、磁振造影時，不是這一段排在這間的人要寫**支援原因**（例：本班人員用餐、急件支援）才能完成（不擋，記在檢查上：「支援：…；排班 某某」）；放射科醫師、下班時間不查。
      - **請假與換班**：放射師在「放射師排班」看「我的班（14 天內）」，對自己今天以後的班申請**請假**或**換班**（選接手的人，那段已經有班的不能選；同一格只能一張待核准）。組長首頁「放射師請假換班待核准」，排班表上方核准或退回（退回寫原因）：請假核准＝那一格清掉（那段的檢查變成「沒有排放射師」，要再補人）、換班核准＝改成接手的人；放射師看得到自己申請的結果。
@@ -363,6 +367,7 @@ scripts/smoke-flow.mjs   流程測試
 | 手術同意書側別 | `Consent.side`；`consent-rules`（`consentMissing` 比對側別、`consentSideMismatch`）；`surgery.changeSurgerySide`；`SurgeryView.consentMissing` 標側別不符；`SurgeryConsents.vue` 更正側別 |
 | 侵入性處置同意書（管路） | `Consent.lineKind`、`LineDevice.consentId`／`consentWaiver`；`consent-rules`（`CONSENT_LINE_KINDS`、`LINE_CONSENT_WAIVERS`、`unusedLineConsent`）；`line.addLine` 把關、`listLines().consentReady`；`consent.recordConsent`（`lineKind`）、`consentTargets().admission.lines`、`revokeConsent` 用掉的擋；`LinePanel.vue`、`ConsentPanel.vue` |
 | 床邊處置 | `BedsideProcedure`（`db.bedsideProcedures`）、`Procedure.bedside`（P068–P071）、`IpdOrder.bedsideId`、`Consent.bedsideKind`；`bedside-rules`（`BEDSIDE_KINDS`、`bleedingRisks`、`unusedBedsideConsent`、`checkBedsideInput`、`BEDSIDE_CONSENT_WAIVERS`）；`bedside.ts`（`listBedside`、`recordBedside`）；`consent.recordConsent`（`bedsideKind`、`side`）、`consentTargets().admission.bedside`；`views.usable.procedure`、`master.listProcedures` 擋；`BedsidePanel.vue`（`IpdPage`、`NursingPage`） |
+| 請假改排、判讀升級 | `RadShiftRequest.replacedBy`、`RadRequestView.freeTechs`、`decideRadChange` 第四參數；`bedside-work`（`readyAt`、`READING_ESCALATE_HOURS`、`readingEscalated`）、`BedsideView.alertEscalated`、`ackReading` 照護團隊、`myBedsideAlerts`（`escalated`）、`dashboard.bedsideAlertsEscalated`；`WristbandDialog`、`UdCartSheetDialog` 窄畫面 |
 | 放射師當班、請假換班 | `ImagingExam.cover`；`rad-roster-rules.blockNow`；`exam.completeExam`（`coverNote`）、`ExamBoard.myDutyNow`；`RadShiftRequest`（`db.radShiftRequests`）；`rad-roster.requestRadChange`／`decideRadChange`、`RadRoster.myShifts`／`requests`；`dashboard.radRequestsPending`；`RadRosterDialog.vue`、`ExamRoomPage` 完成對話框 |
 | 判讀異常通知、放射師排班 | `BedsideProcedure.readingAck`；`bedside-work`（`readingOf`、`noteOf`、`readingAlertKinds`、`readingAlertPending`）；`bedside.ackReading`／`myBedsideAlerts`；`dashboard.bedsideAlerts`／`radUnstaffed`；`RadShift`（`db.radShifts`）；`rad-roster-rules`（`RAD_ROOMS`、`RAD_BLOCKS`、`blocksOf`、`staffMissing`）、`rad-roster.ts`（`radRoster`、`setRadShift`、`myRadShifts`）、`rad-roster-work`（`examStaffMissing`、`radUnstaffedExams`）；`ExamView.noStaff`、`ExamBoard.rooms[].staff`／`unstaffed`；權限 `radiology.roster`；`RadRosterDialog.vue`（`ExamRoomPage` `?roster=1`） |
 | 病程帶入、腦脊髓液校正 | `bedside.noteOf`（`BedsideView.note`）、`BedsidePanel` `note` 事件、`IpdPage.takeBedsideNote`；`bedside-rules`（`CSF_LIMITS`、`csfLimitsFor`、`CSF_RBC_PER_WBC`、`csfRead` 的紅血球與年齡） |
@@ -819,6 +824,7 @@ scripts/smoke-flow.mjs   流程測試
 - 侵入性處置同意書：種子的 CVC 有同意書且已用掉；清單標已放置；沒同意書 CVC、胃造口擋；原因要從清單選；外院、緊急選原因可登錄；導尿管不用；可記錄對象與管路清單；留置針不能開、沒住院不能開；記錄綁住院與種類；同一種一張；放置用掉、不能撤回；換新要重簽；稽核；撤回後擋
 - 床邊處置：規則（名稱帶側別、出血風險、欄位、開口壓）；種子右側胸腔穿刺有同側同意書與醫令、帳單帶入；一般醫囑開不出、選單不列；沒同意書擋、護理師不能登錄（看得到）；同意書要選側別、同種同側一張、總覽；側別不符擋、處置前暫停擋；登錄用掉同意書、開醫令、稽核；用掉要重簽、不能撤回、清單標已執行；緊急原因要從清單選、記原因；出血風險列出、沒評估擋、記評估與開口壓；出院了不能登錄
 - 同意書紙本掃描：規則（頁數、格式、大小）；種子今天以前的都掃了；出院病歷缺掃描算缺、種子沒有假的；沒選檔擋；附上記紀錄稽核；補掃後完成時間；看掃描；重新掃描換掉；種子有紀錄沒影像；櫃台不能掃
+- 請假改排與判讀升級：列出有空的、改排已有班的擋、核准並改排；1 小時同科看不到、超過 2 小時同科首頁、紀錄標升級、別科看不到不能按、同科代為知悉、主治首頁消失
 - 放射師當班與請假換班：規則（現在是哪一段）；沒排在這間要寫支援原因、看板告訴畫面、記原因與排班的人、當班不用寫；我的班、請假要原因、不能申請別人的、換給已有班的人擋、送出與不能重複、標申請中、放射師不能核准、組長首頁、退回要原因、請假核准清掉、換班退回不變、看得到被退回、換班核准改人、不能重複處理
 - 判讀異常通知主治：種子已知悉；報告沒出不提醒；腹膜炎待知悉、主治首頁、我的清單、別的醫師沒有；已知悉稽核、首頁消失、不能重複；更正後沒有異常不提醒；護理師不能按
 - 放射師排班：規則（跨 12:30 兩段、下班不算、超音波不用、缺下午）；種子三位、組長、今天沒有人兩間；排班表、組長可改、首頁；清掉一格、看板寫放射師、檢查標沒有放射師、同人同段擋、補人後消失、過去不能改、超音波不用排、一般放射師只能看、我今天的班

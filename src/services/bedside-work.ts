@@ -9,6 +9,8 @@ export interface BedsideReading {
   /** 判讀（可能好幾項：腹水嗜中性球＋SAAG）；報告還沒齊＝readingWaiting 寫還缺什麼 */
   readings: FluidRead[]
   readingWaiting?: string
+  /** 判讀用到的報告最後一份發出的時間（異常判讀從這時候開始算知悉時限） */
+  readyAt?: string
 }
 const num = (v?: string) => (v === undefined || v === '' ? undefined : Number(v))
 /** 這筆處置送檢的某項報告的值（code → 數字） */
@@ -61,7 +63,9 @@ export function readingOf(p: BedsideProcedure): BedsideReading {
     need(routine, 'P072', '體液常規'); need(chem, 'P073', '體液生化'); need(serum, SERUM_PROC, '血清生化')
     if (routine && !wait.length) { const r = csfRead({ wbc: routine['F-WBC'], pmn: routine['F-PMN'], rbc: routine['F-RBC'], glu: chem?.['F-GLU'], proGdl: chem?.['F-PRO'] }, serum?.GLU, ageDaysAt(p)); if (r) out.push(r) }
   }
-  return { readings: out, ...(wait.length ? { readingWaiting: `等${wait.join('、')}報告` } : {}) }
+  const repAt = (procId: string) => { const o = (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((x) => x.id === id)).find((x) => x?.procId === procId); return o ? db.labReports.find((x) => x.orderId === o.id)?.reportedAt : undefined }
+  const readyAt = [repAt('P072'), repAt('P073'), serumRep?.reportedAt].filter((x): x is string => !!x).sort().at(-1)
+  return { readings: out, ...(wait.length ? { readingWaiting: `等${wait.join('、')}報告` } : {}), ...(out.length && readyAt ? { readyAt } : {}) }
 }
 
 
@@ -70,3 +74,11 @@ export function readingAlertKinds(p: BedsideProcedure): string {
   return readingOf(p).readings.filter((r) => r.alert).map((r) => r.kind).join(',')
 }
 export const readingAlertPending = (p: BedsideProcedure) => ((k) => !!k && p.readingAck?.kinds !== k)(readingAlertKinds(p))
+/** 主治幾小時沒知悉就升級給同科醫師（主治不在：下班、開刀） */
+export const READING_ESCALATE_HOURS = 2
+/** 異常判讀待知悉、而且報告出來已經超過 2 小時 */
+export function readingEscalated(p: BedsideProcedure, t: string): boolean {
+  if (!readingAlertPending(p)) return false
+  const at = readingOf(p).readyAt
+  return !!at && Date.parse(t.replace(' ', 'T')) - Date.parse(at.replace(' ', 'T')) >= READING_ESCALATE_HOURS * 3600000
+}

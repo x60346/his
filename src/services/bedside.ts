@@ -8,7 +8,8 @@ import { find, nameOf } from './views'
 import { latestLabValue } from './blood-work'
 import { createOrderInternal } from './ipd'
 import { SERUM_PROC, type FluidRead } from './bedside-rules'
-import { noteOf, readingAlertKinds, readingAlertPending, readingOf } from './bedside-work'
+import { noteOf, readingAlertKinds, readingAlertPending, readingEscalated, readingOf } from './bedside-work'
+import { careRoleOf, requireCare } from './care-team'
 import { BEDSIDE_FLUID, BEDSIDE_LABS, SIDE_TEXT, BEDSIDE_CONSENT_WAIVERS, BEDSIDE_KINDS, bedsideKind, bedsideTitle, bleedingRisks, checkBedsideInput, unusedBedsideConsent, type BedsideInput } from './bedside-rules'
 
 export interface BedsideView extends BedsideProcedure {
@@ -24,6 +25,8 @@ export interface BedsideView extends BedsideProcedure {
   note: { objective: string; assessment: string }
   /** 有異常判讀、還沒知悉 */
   alertPending: boolean
+  /** 報告出來超過 2 小時還沒知悉：已升級給同科醫師 */
+  alertEscalated: boolean
   readingAckByName?: string
 }
 
@@ -32,6 +35,7 @@ const view = (p: BedsideProcedure): BedsideView => ({
   labs: (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id),
   ...((r) => ({ ...r, note: noteOf(p, r) }))(readingOf(p)),
   alertPending: readingAlertPending(p),
+  alertEscalated: readingEscalated(p, now()),
   ...(p.readingAck ? { readingAckByName: nameOf.user(p.readingAck.by) } : {}),
   ...((c) => (c ? { consentNo: c.no } : {}))(p.consentId ? db.consents.find((x) => x.id === p.consentId) : undefined),
 })
@@ -123,6 +127,8 @@ export function ackReading(id: string): Promise<BedsideView> {
   return mutate(() => {
     const u = requireUser('doctor')
     const p = must(db.bedsideProcedures.find((x) => x.id === id), '床邊處置')
+    // 主治或同科醫師（照護團隊）；會診醫師不能
+    requireCare(u.doctorId, must(find.admission(p.admissionId), '住院紀錄'), '確認床邊處置判讀', { consult: false })
     const kinds = readingAlertKinds(p)
     if (!kinds) fail('這筆沒有要確認的異常判讀', 'CONFLICT')
     if (p.readingAck?.kinds === kinds) fail('已經知悉了', 'CONFLICT')
@@ -132,11 +138,15 @@ export function ackReading(id: string): Promise<BedsideView> {
   })
 }
 
-/** 首頁（主治）：我主治的住院病人有異常判讀還沒知悉 */
-export function myBedsideAlerts(): Promise<{ id: string; admissionId: string; patientName: string; title: string; labels: string[] }[]> {
+/** 首頁：我主治的住院病人有異常判讀還沒知悉；同科（照護團隊、不是主治）的病人超過 2 小時沒知悉的也列（escalated） */
+export function myBedsideAlerts(): Promise<{ id: string; admissionId: string; patientName: string; title: string; labels: string[]; escalated: boolean }[]> {
   return query(() => {
     const u = requireUser('doctor')
-    return db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === u.doctorId) && readingAlertPending(p))
-      .map((p) => ({ id: p.id, admissionId: p.admissionId, patientName: nameOf.patient(p.patientId), title: bedsideTitle(p.kind, p.side), labels: readingOf(p).readings.filter((r) => r.alert).map((r) => r.label) }))
+    const t = now()
+    return db.bedsideProcedures.filter((p) => {
+      const a = db.admissions.find((x) => x.id === p.admissionId && x.status === 'admitted')
+      if (!a || !readingAlertPending(p)) return false
+      return a.doctorId === u.doctorId || (careRoleOf(u.doctorId, a)?.kind === 'team' && readingEscalated(p, t))
+    }).map((p) => ({ id: p.id, admissionId: p.admissionId, patientName: nameOf.patient(p.patientId), title: bedsideTitle(p.kind, p.side), labels: readingOf(p).readings.filter((r) => r.alert).map((r) => r.label), escalated: db.admissions.find((a) => a.id === p.admissionId)!.doctorId !== u.doctorId }))
   })
 }

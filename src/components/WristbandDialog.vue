@@ -36,9 +36,10 @@ async function onPrint() {
     <div v-if="view" class="space-y-3">
       <!-- 腕帶本體：長條形，貼在手腕上 -->
       <div class="print-area mx-auto w-[250mm] max-w-full overflow-hidden rounded-xl border-2 border-slate-800 bg-white px-6 py-2 text-black">
-        <div class="flex items-center gap-4">
-          <Barcode39 :value="view.admitNo" :height="44" :module="1.2" />
-          <div class="min-w-0 flex-1 leading-tight">
+        <!-- 換行：畫面窄的時候（手機）文字掉到條碼下面；列印是 250mm，一行放得下 -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <Barcode39 :value="view.admitNo" :height="44" :module="1.2" class="max-w-full" />
+          <div class="min-w-0 flex-[1_1_10rem] leading-tight">
             <div class="flex flex-wrap items-baseline gap-x-3">
               <b class="text-lg">{{ view.patientName }}</b>
               <span class="text-sm">{{ genderLabel[view.gender as keyof typeof genderLabel] ?? view.gender }}・{{ toRoc(view.birthDate) }} 生</span>

@@ -19480,6 +19480,57 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok(ap.status === 'approved' && db().radShifts.find((s) => s.id === s3.id).userId === 'U802', '換班核准：改成接手的人')
     ok((await errOf(() => api.radRosterApi.decideRadChange(sw2.id, true))).includes('處理過'), '不能重複處理')
   }
+  // 請假核准時改排有空的人；異常判讀 2 小時沒知悉升級給同科醫師
+  console.log('\n[請假改排與判讀升級]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    // 找 rt02 的一格，同一段讓另一位放射師空出來
+    const sh = db().radShifts.find((s) => s.userId === 'U802' && s.date > T)
+    const busy = db().radShifts.filter((s) => s.date === sh.date && s.block === sh.block && s.userId !== 'U802')
+    const freeOne = busy[0]
+    db().radShifts = db().radShifts.filter((s) => s !== freeOne)
+    await as('rt02')
+    const lv = await api.radRosterApi.requestRadChange({ shiftId: sh.id, kind: 'leave', reason: '看診' })
+    await as('rt01')
+    const q = (await api.radRosterApi.radRoster(T, 7)).requests.find((r) => r.id === lv.id)
+    ok(q.freeTechs?.map((t) => t.id).join() === freeOne.userId, `待核准列出這段有空的：${q.freeTechs?.map((t) => t.name).join('、')}`)
+    const stillBusy = busy[1].userId
+    ok((await fieldsOf(() => api.radRosterApi.decideRadChange(lv.id, true, '', stillBusy))).replaceUserId, '改排這段已經有班的人 → 擋')
+    const ap = await api.radRosterApi.decideRadChange(lv.id, true, '', freeOne.userId)
+    ok(ap.status === 'approved' && ap.replacedByName && db().radShifts.find((s) => s.id === sh.id)?.userId === freeOne.userId && db().auditLogs[0].detail.includes('改排'), `核准並改排 ${ap.replacedByName}：那一格不會空`)
+    // 異常判讀升級
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId && db().admissions.some((b) => b.id !== a.id && b.status === 'admitted') && db().users.some((u) => u.doctorId && u.doctorId !== a.doctorId && db().doctors.find((d) => d.id === u.doctorId)?.deptId === a.deptId))
+    const att = db().users.find((u) => u.doctorId === adm.doctorId)
+    const mate = db().users.find((u) => u.doctorId && u.doctorId !== adm.doctorId && db().doctors.find((d) => d.id === u.doctorId)?.deptId === adm.deptId)
+    const outsider = db().users.find((u) => u.doctorId && db().doctors.find((d) => d.id === u.doctorId)?.deptId !== adm.deptId && !db().consults.some((c) => c.admissionId === adm.id && c.toDoctorId === u.doctorId) && !u.passwordExpired)
+    await as(att.username)
+    const t0 = dateUtil.now()
+    const pa = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'paracentesis', indication: '腹水', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '混濁', volumeMl: 800, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
+    const o = db().ipdOrders.find((x) => x.id === pa.labOrderIds[0])
+    db().labReports.push({ id: 'LR-T-ESC', no: 'LT-ESC', patientId: adm.patientId, procId: 'P072', orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: [{ code: 'F-WBC', name: '白血球', value: '900', ref: '', flag: 'N' }, { code: 'F-PMN', name: '嗜中性球', value: '60', ref: '', flag: 'N' }], reportedBy: 'U601', reportedAt: dateUtil.addMinutes(t0, -60) })
+    await as(mate.username)
+    let d = await api.dashboardApi.getDashboard()
+    ok(!d.bedsideAlertsEscalated && !(await api.bedsideApi.myBedsideAlerts()).some((x) => x.id === pa.id), '報告出來 1 小時：同科醫師還看不到')
+    db().labReports.find((r) => r.id === 'LR-T-ESC').reportedAt = dateUtil.addMinutes(t0, -130)
+    d = await api.dashboardApi.getDashboard()
+    const mine = await api.bedsideApi.myBedsideAlerts()
+    ok(d.bedsideAlertsEscalated === 1 && mine.find((x) => x.id === pa.id)?.escalated, `超過 2 小時：${mate.username} 首頁「同科病人判讀異常未知悉」1`)
+    ok((await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === pa.id).alertEscalated, '紀錄標已升級')
+    ok(!!outsider, '找得到別科醫師')
+    if (outsider) {
+      await as(outsider.username)
+      ok(!(await api.dashboardApi.getDashboard()).bedsideAlertsEscalated && (await errOf(() => api.bedsideApi.ackReading(pa.id))) !== '', `別科醫師 ${outsider.username}：看不到、不能按已知悉`)
+    }
+    await as(mate.username)
+    const ack = await api.bedsideApi.ackReading(pa.id)
+    ok(!ack.alertPending && ack.readingAckByName === mate.name, '同科醫師代為知悉')
+    await as(att.username)
+    ok(!(await api.dashboardApi.getDashboard()).bedsideAlerts, '主治首頁也消失')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

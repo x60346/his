@@ -1,7 +1,7 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { commitIfPossible, db } from '@/mock/db'
 import { consentScanOverdue } from './consent-rules'
-import { readingAlertPending } from './bedside-work'
+import { readingAlertPending, readingEscalated } from './bedside-work'
 import { radUnstaffedExams } from './rad-roster-work'
 import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
@@ -164,6 +164,8 @@ export interface DashboardStats {
   radRequestsPending?: number
   /** 主治：床邊處置送檢的異常判讀（滲出液、腹膜炎、細菌性腦膜炎）還沒知悉 */
   bedsideAlerts?: number
+  /** 同科醫師：別人主治的病人異常判讀超過 2 小時沒知悉（升級） */
+  bedsideAlertsEscalated?: number
   /** 加護病房重症流程表超過 75 分鐘沒記的病人（護理師，我的病人範圍） */
   icuHourlyLate?: number
   /** 主治：加護病房病人最近一次 RASS 超出鎮靜目標、插管接呼吸器今天還沒做脫離評估 */
@@ -525,7 +527,10 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length, clustersOpen: currentClusters().filter((c) => !c.decision).length, notifiableOverdue: db.admissions.flatMap(pendingNotifiable).filter((p) => p.dueAt < t).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { mdroAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult' && mdroAlertsOf(a.patientId, t).length > 0).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
-          ...(sessionRole() === 'doctor' && me?.doctorId ? { bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? {
+            bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length,
+            bedsideAlertsEscalated: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId !== me.doctorId && careRoleOf(me.doctorId, a)?.kind === 'team') && readingEscalated(p, t)).length,
+          } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { consentUnscanned: db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)) && db.consents.some((c) => c.admissionId === a.id && consentScanOverdue(c, t))).length } : {}),
           ...(sessionRole() === 'nurse' ? { nursingRecordMissing: db.admissions.filter((a) => (!scope || scope.has(a.id)) && nursingGapsOf(a, t).length).length } : {}),
