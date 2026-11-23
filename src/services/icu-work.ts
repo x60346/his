@@ -6,6 +6,7 @@ import { find } from './views'
 import { isIcuBed } from './bed-work'
 import { hourlyState } from './icu-rules'
 import { infusedIn } from './infusion-work'
+import { drainBetween } from './line-work'
 
 /** 住院中、目前的床在加護病房 */
 export const inIcu = (a: Pick<Admission, 'status' | 'bedId'>) => a.status === 'admitted' && isIcuBed(find.bed(a.bedId ?? ''))
@@ -41,15 +42,16 @@ export function icuTodosOf(a: Admission, t: string): IcuTodo[] {
 export const icuLateCount = (t: string) => db.admissions.filter((a) => a.status === 'admitted').filter((a) => !!icuHourly(a, t)?.late).length
 
 /**
- * 某段時間 [from, to) 的輸入輸出：護理師記的輸入量、點滴（依流速自動算）、管灌、輸出量。
- * 點滴不用護理師再記一次（記了會重複算）
+ * 某段時間 [from, to) 的輸入輸出：護理師記的輸入量、點滴（依流速自動算）、管灌、輸出量（護理師記的＋胸管引流、穿刺放出的量）。
+ * 點滴、引流不用護理師再記一次（記了會重複算）
  */
 export function ioBetween(admissionId: string, from: string, to: string, t: string) {
   const vs = db.vitals.filter((v) => v.admissionId === admissionId && v.at >= from && v.at < to)
   const manual = vs.reduce((n, v) => n + (v.intake ?? 0), 0)
   const iv = Math.round(infusedIn(admissionId, from, to, t))
   const tube = db.tubeFeeds.filter((r) => r.admissionId === admissionId && r.at >= from && r.at < to).reduce((n, r) => n + r.givenMl, 0)
-  const output = vs.reduce((n, v) => n + (v.output ?? 0), 0)
+  const drain = drainBetween(admissionId, from, to)
+  const output = vs.reduce((n, v) => n + (v.output ?? 0), 0) + drain
   const intake = manual + iv + tube
-  return { manual, iv, tube, intake, output, balance: intake - output }
+  return { manual, iv, tube, intake, drain, output, balance: intake - output }
 }

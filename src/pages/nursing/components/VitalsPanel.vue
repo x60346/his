@@ -98,7 +98,7 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
     <form class="rounded-md border border-slate-200 bg-slate-50 p-3" @submit.prevent="submit">
       <div class="mb-2 flex flex-wrap items-baseline gap-x-3 text-sm">
         <span class="font-semibold text-slate-700">記錄生命徵象</span>
-        <span v-if="io?.id === admission.id" class="tabular text-xs text-slate-500">今日輸入 {{ io.v.intake }} ml<template v-if="io.v.tubeMl || io.v.ivMl">（含{{ [io.v.ivMl && `點滴 ${io.v.ivMl}`, io.v.tubeMl && `管灌 ${io.v.tubeMl}`].filter(Boolean).join('、') }}）</template>・輸出 {{ io.v.output }} ml</span>
+        <span v-if="io?.id === admission.id" class="tabular text-xs text-slate-500">今日輸入 {{ io.v.intake }} ml<template v-if="io.v.tubeMl || io.v.ivMl">（含{{ [io.v.ivMl && `點滴 ${io.v.ivMl}`, io.v.tubeMl && `管灌 ${io.v.tubeMl}`].filter(Boolean).join('、') }}）</template>・輸出 {{ io.v.output }} ml<template v-if="io.v.drainMl">（含引流 {{ io.v.drainMl }}）</template></span>
       </div>
       <!-- 欄數依「這個區塊實際的寬度」決定（auto-fill），不看視窗寬：護理站右側在病人清單旁邊，視窗寬不代表這裡寬 -->
       <div class="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-x-3 gap-y-2">

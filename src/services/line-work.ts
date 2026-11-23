@@ -35,6 +35,16 @@ export function lineTodosOf(admissionId: string, t: string): LineTodo[] {
   return out
 }
 
+/**
+ * [from, to) 的引流輸出量（不用護理師在生命徵象再記一次，記了會重複算）：
+ * 胸管每一筆引流紀錄＋胸腔、腹腔穿刺放出的量（胸管置放的量已經是胸管第一筆引流）
+ */
+export function drainBetween(admissionId: string, from: string, to: string): number {
+  const chest = db.lines.filter((l) => l.admissionId === admissionId && l.kind === 'chest').flatMap((l) => l.drainage ?? []).filter((d) => d.at >= from && d.at < to).reduce((n, d) => n + d.ml, 0)
+  const tap = db.bedsideProcedures.filter((p) => p.admissionId === admissionId && p.kind !== 'chestTube' && p.volumeMl && p.performedAt >= from && p.performedAt < to).reduce((n, p) => n + (p.volumeMl ?? 0), 0)
+  return chest + tap
+}
+
 /** 出院、結束留觀：還在身上的管路一起移除（原因「出院」） */
 export function closeLines(a: Admission, by: string, t: string, reason = '出院'): void {
   for (const l of activeLines(a.id)) Object.assign(l, { removedAt: t, removedBy: by, removeReason: reason })

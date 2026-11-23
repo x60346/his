@@ -42,6 +42,13 @@ export function staffingOf(ward: string, s: ShiftRef) {
 }
 
 /** 「我的病人」：這位護理師這一班分到的病人；這班沒有分到任何人＝不限（看全部） */
+/** 這位護理師這一班排在哪個病房（護理排班）；沒排班回 undefined */
+export const myWardOf = (nurseId: string | undefined, t: string): string | undefined => {
+  if (!nurseId) return undefined
+  const s = shiftNow(t)
+  return db.nurseShifts.find((x) => x.nurseId === nurseId && x.date === s.date && x.shift === s.shift)?.ward
+}
+
 export function myScope(nurseId: string | undefined, t: string): Set<string> | undefined {
   if (!nurseId) return undefined
   const s = shiftNow(t)

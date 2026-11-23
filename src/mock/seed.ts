@@ -4002,7 +4002,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       lines.push({ id: 'LN-SEED-CT1', admissionId: pn.id, kind: 'chest', site: '右側胸', size: '28Fr', insertedAt: ct, placedBy: doc.name, recordedBy: doc.id, recordedAt: addMinutes(ct, 20), bedsideId: 'BP-SEED-2',
         drainage: [{ at: ct, by: doc.id, ml: 450, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 120), by: 'U201', ml: 90, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 300), by: 'U201', ml: 60, appearance: '混濁', airLeak: false }] })
       bedsideProcedures.push({ id: 'BP-SEED-2', admissionId: pn.id, patientId: pn.patientId, kind: 'chestTube', side: 'right', indication: '右側肋膜積液混濁（昨日胸腔穿刺），疑似膿胸，放胸管引流', timeOutAt: addMinutes(ct, -5), performedAt: ct, performedBy: doc.id, appearance: '混濁', volumeMl: 450, complication: '無', consentId: 'CN-SEED-BP2', orderId: 'IO-BP-2', tubeSize: '28Fr', airLeak: false, lineId: 'LN-SEED-CT1', recordedAt: addMinutes(ct, 20) })
-      bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30) })
+      bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30), labOrderIds: ['IO-BP-L1', 'IO-BP-L2', 'IO-BP-L3'] })
+      // 送檢（體液常規、生化＋同時抽血清）：昨天晚上報告都出來了——蛋白比 0.62、LDH 比 3.2，滲出液（之後改放胸管）
+      const pt = patients.find((p) => p.id === pn.patientId)!
+      const done = addMinutes(at, 30)
+      const lab = (oid: string, procId: string, content: string, input: Record<string, string>, k: number) => {
+        ipdOrders.push({ id: oid, admissionId: pn.id, type: 'stat', category: 'procedure', procId, content, startAt: addMinutes(at, 30), stopAt: done, status: 'done', doctorId: pn.doctorId, createdAt: addMinutes(at, 30), ackAt: addMinutes(at, 35), ackBy: 'U201' })
+        const rat = addMinutes(at, 180 + k * 10)
+        labReports.push({ id: `LR-BP-${k}`, no: `L${rat.slice(0, 10).replace(/-/g, '')}95${k}`, patientId: pn.patientId, procId, orderId: oid, admissionId: pn.id, doctorId: pn.doctorId, orderedAt: addMinutes(at, 30), values: buildLabValues(procMap.get(procId)!.labItems!, input, pt.gender).values, reportedBy: 'U601', reportedAt: rat })
+      }
+      lab('IO-BP-L1', 'P072', '體液常規（胸水・床邊胸腔穿刺）', { 'F-WBC': '3200', 'F-PMN': '78', 'F-RBC': '1500' }, 1)
+      lab('IO-BP-L2', 'P073', '體液生化（胸水・床邊胸腔穿刺）', { 'F-PRO': '4.2', 'F-GLU': '45', 'F-LDH': '680' }, 2)
+      lab('IO-BP-L3', 'P074', '血清總蛋白、LDH（胸水判讀・床邊胸腔穿刺）', { TP: '6.8', LDH: '210' }, 3)
     }
   }
   // 同意書紙本：今天以前簽的都已掃描（示範資料只有掃描紀錄、沒有影像）；今天簽的還沒掃

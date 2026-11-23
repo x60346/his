@@ -19081,12 +19081,12 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const nl = db().lines.find((l) => l.id === p.lineId)
     ok(nl && nl.kind === 'chest' && nl.site === '左側胸' && nl.size === '24Fr' && nl.drainage[0].ml === 150 && nl.drainage[0].airLeak && nl.bedsideId === p.id, '登錄胸管：自動建管路、放置的引流算第一筆')
     const los = p.labOrderIds.map((id) => db().ipdOrders.find((o) => o.id === id))
-    ok(los.length === 3 && los.every((o) => o.status === 'active' && o.type === 'stat' && o.content.includes('胸水・床邊胸管置放')) && los.map((o) => o.procId).join() === 'P072,P073,P059', `送檢：開 3 筆臨時檢驗（${los.map((o) => o.content).join('、')}）`)
-    ok(p.labs.length === 3, '處置紀錄列出送檢')
+    ok(los.length === 4 && los.every((o) => o.status === 'active' && o.type === 'stat' && o.content.includes('胸水')) && los.map((o) => o.procId).join() === 'P072,P073,P059,P074', `送檢：開 3 筆臨時檢驗＋血清（${los.map((o) => o.content).join('、')}）`)
+    ok(p.labs.length === 4, '處置紀錄列出送檢')
     await as('nurse01')
     const ws = await api.specimenApi.wardSpecimens(pn.id)
     const fluid = ws.toPrint.find((g) => g.tube === 'fluid')
-    ok(fluid && fluid.orders.length === 2 && !ws.toPrint.find((g) => g.tube === 'red')?.orders.some((o) => o.content.includes('胸水')) && ws.toPrint.find((g) => g.tube === 'culture')?.orders.some((o) => o.content.includes('胸水')), '檢體：體液常規、生化同一支無菌體液管（不和血清合管），培養另一支')
+    ok(fluid && fluid.orders.length === 2 && !ws.toPrint.find((g) => g.tube === 'red')?.orders.some((o) => o.content.includes('胸水・')) && ws.toPrint.find((g) => g.tube === 'culture')?.orders.some((o) => o.content.includes('胸水')), '檢體：體液常規、生化同一支無菌體液管（不和血清合管），培養另一支')
     ok(api.SPECIMENS.some((x) => x.key === 'fluid'), '培養檢體多了體液')
     // 腰椎穿刺送檢寫腦脊髓液
     await as(doc)
@@ -19121,6 +19121,89 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await (async () => { try { await api.consentApi.unscannedConsents(); return false } catch { return true } })()), '醫師不看病房清單')
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/pages/patients/PatientsPage.vue', 'utf8').includes('route.query.tab') && readFileSync('src/pages/nursing/components/WardTasksPanel.vue', 'utf8').includes("tab: 'consents'"), '本班待辦連到病患資料「同意書」分頁')
+  }
+  // 輸入輸出算進引流、胸水與腹水判讀、護理站預設開這班排的病房
+  console.log('\n[引流與輸出量]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const t0 = dateUtil.now()
+    const sl = db().lines.find((l) => l.id === 'LN-SEED-CT1')
+    const pn = db().admissions.find((a) => a.id === sl.admissionId)
+    await as('nurse01')
+    const io0 = await api.nursingApi.ioToday(pn.id)
+    const todayDrain = sl.drainage.filter((d) => d.at.startsWith(T)).reduce((n, d) => n + d.ml, 0) + db().bedsideProcedures.filter((p) => p.admissionId === pn.id && p.kind !== 'chestTube' && p.performedAt.startsWith(T)).reduce((n, p) => n + (p.volumeMl ?? 0), 0)
+    ok(io0.drainMl === todayDrain, `今日輸出含引流 ${io0.drainMl} mL（胸管今天的紀錄＋今天的穿刺）`)
+    await api.lineApi.recordDrainage(sl.id, { ml: 130, appearance: '混濁', airLeak: false })
+    const io1 = await api.nursingApi.ioToday(pn.id)
+    ok(io1.drainMl === io0.drainMl + 130 && io1.output === io0.output + 130, '記一筆 130 mL：輸出跟著加，不用在生命徵象再記')
+    const W = await load('/src/services/icu-work.ts')
+    const b = W.ioBetween(pn.id, `${T} 00:00`, dateUtil.addMinutes(t0, 5), t0)
+    ok(b.drain === io1.drainMl && b.output >= b.drain && b.balance === b.intake - b.output, `流程表算法同一份：引流 ${b.drain}、平衡 ${b.balance}`)
+    const LW = await load('/src/services/line-work.ts')
+    const yd = dateUtil.addDays(T, -1)
+    ok(LW.drainBetween(pn.id, `${yd} 00:00`, `${T} 00:00`) >= 800, '昨天：胸腔穿刺放 800 mL 算昨天的輸出')
+  }
+  console.log('\n[胸水與腹水判讀]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    let r = api.lightCriteria({ pro: 4.2, ldh: 680 }, { pro: 6.8, ldh: 210 })
+    ok(r.kind === 'exudate' && r.reasons.length === 3, `規則：滲出液（${r.reasons.join('；')}）`)
+    r = api.lightCriteria({ pro: 1.5, ldh: 90 }, { pro: 7.0, ldh: 200 })
+    ok(r.kind === 'transudate', `規則：漏出液（${r.reasons[0]}）`)
+    ok(api.lightCriteria({ pro: 3.0, ldh: 100 }, { pro: 7.0, ldh: 200 }).kind === 'transudate' && api.lightCriteria({ pro: 3.6, ldh: 100 }, { pro: 7.0, ldh: 200 }).kind === 'exudate', '規則：只有蛋白比 > 0.5 也算滲出液')
+    ok(api.lightCriteria({ pro: 3 }, { pro: 7, ldh: 200 }) === undefined, '規則：缺值不判讀')
+    ok(api.ascitesPmn(800, 40).kind === 'sbp' && api.ascitesPmn(300, 50).kind === 'noSbp', '規則：腹水嗜中性球 ≥250 疑似自發性細菌性腹膜炎')
+    // 種子：昨天胸腔穿刺的報告齊了 → 滲出液
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    await as('nurse01')
+    let list = await api.bedsideApi.listBedside(sp.admissionId)
+    const v = list.items.find((x) => x.id === sp.id)
+    ok(v.reading?.kind === 'exudate' && v.labs.length === 3, `種子：昨天胸腔穿刺判讀 ${v.reading?.label}（${v.reading?.reasons.join('；')}）`)
+    // 新的胸腔穿刺送體液生化：自動加血清；報告沒齊寫等什麼
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
+    const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(doc)
+    const t0 = dateUtil.now()
+    const p = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'thoracentesis', side: 'left', indication: '左側肋膜積液', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '淡黃清澈', volumeMl: 500, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P073'] })
+    const os = p.labOrderIds.map((id) => db().ipdOrders.find((o) => o.id === id))
+    ok(os.map((o) => o.procId).join() === 'P073,P074' && os[1].content.includes('胸水判讀'), '胸水送生化：同時開血清總蛋白、LDH')
+    ok(p.readingWaiting === '等體液生化、血清總蛋白、LDH報告', `報告沒出：${p.readingWaiting}`)
+    // 發報告（檢驗科）→ 判讀出來
+    const rep = (o, values) => db().labReports.push({ id: `LR-T-${o.id}`, no: `LT${o.id}`, patientId: adm.patientId, procId: o.procId, orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: Object.entries(values).map(([code, value]) => ({ code, name: code, value })), reportedBy: 'U601', reportedAt: dateUtil.now() })
+    rep(os[0], { 'F-PRO': '1.2', 'F-GLU': '110', 'F-LDH': '80' })
+    list = await api.bedsideApi.listBedside(adm.id)
+    ok(list.items.find((x) => x.id === p.id).readingWaiting === '等血清總蛋白、LDH報告', '只有體液生化：等血清')
+    rep(os[1], { TP: '6.5', LDH: '190' })
+    list = await api.bedsideApi.listBedside(adm.id)
+    ok(list.items.find((x) => x.id === p.id).reading?.kind === 'transudate', '血清也出來：漏出液')
+    // 腹腔穿刺送常規
+    const pa = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'paracentesis', indication: '腹水', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '混濁', volumeMl: 1000, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
+    ok(pa.labOrderIds.length === 1 && pa.readingWaiting === '等體液常規報告', '腹腔穿刺送常規：不加血清、等報告')
+    rep(db().ipdOrders.find((o) => o.id === pa.labOrderIds[0]), { 'F-WBC': '900', 'F-PMN': '60', 'F-RBC': '100' })
+    list = await api.bedsideApi.listBedside(adm.id)
+    ok(list.items.find((x) => x.id === pa.id).reading?.kind === 'sbp', '腹水嗜中性球 540 → 疑似自發性細菌性腹膜炎')
+    ok((await errOf(() => api.ipdApi.addOrder({ admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P074', content: '' }))) === '', '血清總蛋白、LDH 一般醫囑也能開')
+  }
+  console.log('\n[護理站預設病房]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const S = await load('/src/services/nursing-rules.ts')
+    const t0 = dateUtil.now()
+    const icuNurse = db().nurseShifts.find((x) => x.ward === api.masterApi.staticCodes.icuWard && x.date === t0.slice(0, 10) && x.shift === S.shiftOf(t0))
+    const u = db().users.find((x) => x.id === icuNurse?.nurseId)
+    ok(u, `這班加護病房有排 ${u?.username}`)
+    await as(u.username)
+    ok((await api.nursingApi.myWard()) === api.masterApi.staticCodes.icuWard, '加護病房護理師：預設開加護病房')
+    const off = db().users.find((x) => x.role === 'nurse' && !db().nurseShifts.some((s) => s.nurseId === x.id && s.date === t0.slice(0, 10) && s.shift === S.shiftOf(t0)) && !x.passwordExpired)
+    if (off) { await as(off.username); ok((await api.nursingApi.myWard()) === undefined, `這班沒排的 ${off.username}：沒有（照舊開第一個病房）`) }
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/pages/nursing/NursingPage.vue', 'utf8').includes('nursingApi.myWard()'), '護理站沒指定病房時用 myWard')
+    // 加護病房沒有病房常備：本班待辦、交班的常備提醒不能報錯（以前一開加護病房就跳「沒有病房常備」）
+    ok((await api.wardStockApi.wardStockIfAny(api.masterApi.staticCodes.icuWard)) === undefined && (await api.wardStockApi.wardStockIfAny(api.masterApi.staticCodes.wards[0]))?.rows.length > 0, '沒有常備的病房回空、不報錯；一般病房照常')
   }
 } catch (e) {
   failed++

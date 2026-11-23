@@ -68,6 +68,10 @@ const dayWard = masterApi.staticCodes.dayWard
 const wards = [...masterApi.staticCodes.wards, icuWard, masterApi.staticCodes.obsWard, dayWard]
 // 從急診看板點過來帶 ?ward=急診留觀區&admission=…
 const ward = ref(wards.includes(String(useRoute().query.ward)) ? String(useRoute().query.ward) : wards[0])
+// 沒指定病房（從首頁待辦點進來）：開這位護理師這一班排的病房（加護病房護理師不會先看到 5A）
+if (!wards.includes(String(useRoute().query.ward)) && useAuth().user?.role === 'nurse') {
+  nursingApi.myWard().then((w) => { if (w && wards.includes(w) && ward.value === wards[0]) ward.value = w }).catch(() => {})
+}
 
 const { data, loading, reload } = useQuery(
   async () => {

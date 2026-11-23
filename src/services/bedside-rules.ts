@@ -36,6 +36,38 @@ export const BEDSIDE_LABS = [
   { procId: 'P073', label: '體液生化（蛋白、糖、LDH）' },
   { procId: 'P059', label: '細菌培養' },
 ]
+/** 胸水（胸腔穿刺、胸管）送體液生化時，同時抽血清總蛋白、LDH（Light's criteria 要用） */
+export const SERUM_PROC = 'P074'
+export const PLEURAL_KINDS: BedsideKind[] = ['thoracentesis', 'chestTube']
+/** 血清 LDH 參考值上限（Light's criteria 第三項：胸水 LDH > 上限的 2/3） */
+export const SERUM_LDH_ULN = 280
+/** 血清和胸水同一次判讀：抽血時間和穿刺相差幾小時內才算 */
+export const SERUM_PAIR_HOURS = 24
+
+export interface FluidRead {
+  kind: 'exudate' | 'transudate' | 'sbp' | 'noSbp'
+  label: string
+  reasons: string[]
+}
+/** 胸水 Light's criteria：任一項成立＝滲出液（蛋白比 > 0.5、LDH 比 > 0.6、胸水 LDH > 血清上限 2/3）；缺值回 undefined */
+export function lightCriteria(f: { pro?: number; ldh?: number }, s: { pro?: number; ldh?: number }, uln = SERUM_LDH_ULN): FluidRead | undefined {
+  if (![f.pro, f.ldh, s.pro, s.ldh].every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0)) return undefined
+  const pr = f.pro! / s.pro!
+  const lr = f.ldh! / s.ldh!
+  const r = (x: number) => Math.round(x * 100) / 100
+  const reasons = [pr > 0.5 && `蛋白比 ${r(pr)}（> 0.5）`, lr > 0.6 && `LDH 比 ${r(lr)}（> 0.6）`, f.ldh! > (uln * 2) / 3 && `胸水 LDH ${f.ldh}（> 血清上限 2/3＝${Math.round((uln * 2) / 3)}）`].filter((x): x is string => !!x)
+  return reasons.length
+    ? { kind: 'exudate', label: '滲出液', reasons }
+    : { kind: 'transudate', label: '漏出液', reasons: [`蛋白比 ${r(pr)}、LDH 比 ${r(lr)}、胸水 LDH ${f.ldh}，三項都沒超過`] }
+}
+/** 腹水嗜中性球數（白血球 × 嗜中性球 %）≥ 250/µL：疑似自發性細菌性腹膜炎 */
+export const SBP_PMN = 250
+export function ascitesPmn(wbc?: number, pmnPct?: number): FluidRead | undefined {
+  if (typeof wbc !== 'number' || typeof pmnPct !== 'number' || !Number.isFinite(wbc) || !Number.isFinite(pmnPct)) return undefined
+  const n = Math.round((wbc * pmnPct) / 100)
+  return n >= SBP_PMN ? { kind: 'sbp', label: '疑似自發性細菌性腹膜炎', reasons: [`嗜中性球 ${n}/µL（≥ ${SBP_PMN}）`] } : { kind: 'noSbp', label: '嗜中性球未達腹膜炎標準', reasons: [`嗜中性球 ${n}/µL（< ${SBP_PMN}）`] }
+}
+
 export const CHEST_TUBE_SIZES = ['20Fr', '24Fr', '28Fr', '32Fr']
 
 /** 沒有同意書也能執行的原因（張力性氣胸這類來不及） */

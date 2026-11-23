@@ -19,13 +19,13 @@ import { scanRequired, scanText, settleScan, type ScanInput } from './scan-work'
 import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, wardOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
-import { activeLines, lineTodosOf, painStateOf } from './line-work'
+import { activeLines, drainBetween, lineTodosOf, painStateOf } from './line-work'
 import { lineKind } from './line-rules'
 import { screenable, screenStateOf } from './nutrition-work'
 import { highResidual, tubeSlotsOf } from './tube-work'
 import { activeRestraints, deliriumStateOf, restraintTodosOf } from './delirium-work'
 import { restraintState } from './delirium-rules'
-import { assignedNurse, nextShift, onDuty, shiftNow } from './staffing-work'
+import { assignedNurse, myWardOf, nextShift, onDuty, shiftNow } from './staffing-work'
 import { planOf, plannable, planScreenStateOf } from './discharge-plan-work'
 import { openPca, pcaOpenAlert, pcaRecordState, runningPca } from './pca-work'
 import { infusedToday, infusionOrders, infusionTodosOf } from './infusion-work'
@@ -706,14 +706,21 @@ export function addHandover(input: { ward: string; shift: Shift; admissionId: st
   })
 }
 
+/** 我這一班排在哪個病房（護理站沒指定病房時先開這個；首頁的待辦大多依責任分床算） */
+export function myWard(): Promise<string | undefined> {
+  return query(() => myWardOf(requireUser('nurse').id, now()))
+}
+
 // ---------- 今日輸入輸出（生命徵象的輸入量＋管灌灌入量；輸出量） ----------
-export function ioToday(admissionId: string): Promise<{ date: string; intake: number; tubeMl: number; ivMl: number; output: number }> {
+export function ioToday(admissionId: string): Promise<{ date: string; intake: number; tubeMl: number; ivMl: number; output: number; drainMl: number }> {
   return query(() => {
     requireUser('nurse', 'doctor')
     const d = today()
     const vs = db.vitals.filter((v) => v.admissionId === admissionId && v.at.startsWith(d))
     const tubeMl = db.tubeFeeds.filter((r) => r.admissionId === admissionId && r.at.startsWith(d)).reduce((n, r) => n + r.givenMl, 0)
     const ivMl = infusedToday(admissionId, now())
-    return { date: d, intake: vs.reduce((n, v) => n + (v.intake ?? 0), 0) + tubeMl + ivMl, tubeMl, ivMl, output: vs.reduce((n, v) => n + (v.output ?? 0), 0) }
+    // 胸管引流、穿刺放出的量自動算進輸出（今天 00:00 到現在）
+    const drainMl = drainBetween(admissionId, `${d} 00:00`, '9999')
+    return { date: d, intake: vs.reduce((n, v) => n + (v.intake ?? 0), 0) + tubeMl + ivMl, tubeMl, ivMl, output: vs.reduce((n, v) => n + (v.output ?? 0), 0) + drainMl, drainMl }
   })
 }

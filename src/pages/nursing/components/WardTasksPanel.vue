@@ -7,7 +7,7 @@ import { nursingApi, type WardTask } from '@/services'
 import { useQuery } from '@/composables/useService'
 import WardSendBack from './WardSendBack.vue'
 import WardUdCarts from './WardUdCarts.vue'
-import { consentApi, masterApi, recordAuditApi, wardStockApi } from '@/services'
+import { consentApi, recordAuditApi, wardStockApi } from '@/services'
 
 // only：只看這些病人（責任分床的「我的病人」）；沒給＝全病房
 const props = defineProps<{ ward: string; clock: string; only?: string[] }>()
@@ -22,7 +22,7 @@ const tasks = computed(() => (data.value?.ward === props.ward ? data.value.tasks
 // 同意書紙本未掃描（簽超過 24 小時）：服務層 consent.unscannedConsents
 const { data: unscanned } = useQuery(async () => (await consentApi.unscannedConsents()).filter((x) => x.ward === props.ward), [() => props.ward, () => props.clock])
 const { data: gaps } = useQuery(async () => (await recordAuditApi.missingNursingNotes()).filter((x) => x.ward === props.ward), [() => props.ward, () => props.clock])
-const { data: ws } = useQuery(async () => ({ ward: props.ward, v: props.ward === masterApi.staticCodes.dayWard ? undefined : await wardStockApi.getWardStock(props.ward) }), [() => props.ward, () => props.clock])
+const { data: ws } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.wardStockIfAny(props.ward) }), [() => props.ward, () => props.clock])
 const stockNote = computed(() => {
   const v = ws.value?.ward === props.ward ? ws.value.v : undefined
   if (!v) return ''

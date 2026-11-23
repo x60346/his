@@ -163,7 +163,7 @@ const sign = (n: number) => (n > 0 ? `+${n}` : String(n))
               </tr>
               <tr class="border-t border-slate-100 bg-sky-50/40">
                 <th class="sticky left-0 z-10 whitespace-nowrap bg-sky-50 px-2 py-1 text-left font-medium text-slate-600">輸出</th>
-                <td v-for="h in fs.hours" :key="h.hour" :class="['px-1 py-1 text-center', h.hour === '08' || h.hour === '16' ? 'border-l-2 border-slate-300' : 'border-l border-slate-100']">{{ h.io.output || '' }}</td>
+                <td v-for="h in fs.hours" :key="h.hour" :class="['px-1 py-1 text-center', h.hour === '08' || h.hour === '16' ? 'border-l-2 border-slate-300' : 'border-l border-slate-100']" :title="h.io.drain ? `手記 ${h.io.output - h.io.drain}・引流 ${h.io.drain}` : undefined">{{ h.io.output || '' }}</td>
               </tr>
             </tbody>
           </table>

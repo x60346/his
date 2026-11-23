@@ -113,6 +113,14 @@ export function getWardStock(ward: string): Promise<WardStockView> {
   })
 }
 
+/** 本班待辦、交班的提醒用：這個病房沒有病房常備（加護病房、留觀區、日間手術）就回 undefined，不報錯 */
+export function wardStockIfAny(ward: string): Promise<WardStockView | undefined> {
+  return query(() => {
+    requireUser('nurse', 'pharmacist', 'admin')
+    return stockLoc.ward(ward) ? wardView(ward) : undefined
+  })
+}
+
 /** 全部病房（藥師的維護與補充畫面） */
 export function listWardStocks(): Promise<WardStockView[]> {
   return query(() => {

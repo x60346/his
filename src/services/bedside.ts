@@ -7,6 +7,7 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { find, nameOf } from './views'
 import { latestLabValue } from './blood-work'
 import { createOrderInternal } from './ipd'
+import { ascitesPmn, lightCriteria, PLEURAL_KINDS, SERUM_PAIR_HOURS, SERUM_PROC, type FluidRead } from './bedside-rules'
 import { BEDSIDE_FLUID, BEDSIDE_LABS, SIDE_TEXT, BEDSIDE_CONSENT_WAIVERS, BEDSIDE_KINDS, bedsideKind, bedsideTitle, bleedingRisks, checkBedsideInput, unusedBedsideConsent, type BedsideInput } from './bedside-rules'
 
 export interface BedsideView extends BedsideProcedure {
@@ -15,10 +16,43 @@ export interface BedsideView extends BedsideProcedure {
   consentNo?: string
   /** 送檢的醫囑內容 */
   labs: string[]
+  /** 判讀：胸水（Light's criteria）、腹水（嗜中性球數）；報告還沒齊＝waiting 寫還缺什麼 */
+  reading?: FluidRead
+  readingWaiting?: string
+}
+
+const num = (v?: string) => (v === undefined || v === '' ? undefined : Number(v))
+/** 這筆處置送檢的某項報告的值（code → 數字） */
+function reportValues(p: BedsideProcedure, procId: string): Record<string, number | undefined> | undefined {
+  const o = (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((x) => x.id === id)).find((x) => x?.procId === procId)
+  const r = o ? db.labReports.find((x) => x.orderId === o.id) : undefined
+  return r ? Object.fromEntries(r.values.map((v) => [v.code, num(v.value)])) : undefined
+}
+/** 判讀：胸水要體液生化＋前後 24 小時內的血清總蛋白、LDH；腹水要體液常規 */
+function readingOf(p: BedsideProcedure): Pick<BedsideView, 'reading' | 'readingWaiting'> {
+  if (PLEURAL_KINDS.includes(p.kind)) {
+    const f = reportValues(p, 'P073')
+    if (!f && !(p.labOrderIds ?? []).some((id) => db.ipdOrders.find((x) => x.id === id)?.procId === 'P073')) return {}
+    const ms = SERUM_PAIR_HOURS * 3600000
+    const at = Date.parse(p.performedAt.replace(' ', 'T'))
+    const serum = db.labReports.filter((r) => r.patientId === p.patientId && r.procId === SERUM_PROC && Math.abs(Date.parse((db.ipdOrders.find((o) => o.id === r.orderId)?.createdAt ?? r.orderedAt).replace(' ', 'T')) - at) <= ms).sort((x, y) => y.reportedAt.localeCompare(x.reportedAt))[0]
+    const s = serum ? Object.fromEntries(serum.values.map((v) => [v.code, num(v.value)])) : undefined
+    if (!f || !s) return { readingWaiting: `等${[!f && '體液生化', !s && '血清總蛋白、LDH'].filter(Boolean).join('、')}報告` }
+    const r = lightCriteria({ pro: f['F-PRO'], ldh: f['F-LDH'] }, { pro: s.TP, ldh: s.LDH })
+    return r ? { reading: r } : { readingWaiting: '報告缺蛋白或 LDH' }
+  }
+  if (p.kind === 'paracentesis') {
+    const f = reportValues(p, 'P072')
+    if (!f) return (p.labOrderIds ?? []).some((id) => db.ipdOrders.find((x) => x.id === id)?.procId === 'P072') ? { readingWaiting: '等體液常規報告' } : {}
+    const r = ascitesPmn(f['F-WBC'], f['F-PMN'])
+    return r ? { reading: r } : { readingWaiting: '報告缺白血球或嗜中性球' }
+  }
+  return {}
 }
 const view = (p: BedsideProcedure): BedsideView => ({
   ...p, title: bedsideTitle(p.kind, p.side), performedByName: nameOf.user(p.performedBy),
   labs: (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id),
+  ...readingOf(p),
   ...((c) => (c ? { consentNo: c.no } : {}))(p.consentId ? db.consents.find((x) => x.id === p.consentId) : undefined),
 })
 
@@ -89,7 +123,9 @@ export function recordBedside(input: BedsideInput & { admissionId: string; conse
     }
     // 送檢：開臨時檢驗醫囑（寫明是哪一種體液），護理師貼條碼送檢
     const labs = [...new Set(input.labs ?? [])].sort((x, y) => BEDSIDE_LABS.findIndex((l) => l.procId === x) - BEDSIDE_LABS.findIndex((l) => l.procId === y))
-    if (labs.length) p.labOrderIds = labs.map((procId) => createOrderInternal(u, a.id, { admissionId: a.id, type: 'stat', category: 'procedure', procId, content: `${find.procedure(procId)!.name.replace(/（[^）]*）$/, '')}（${BEDSIDE_FLUID[m.kind]}・床邊${m.label}）` }, t).id)
+    // 胸水送體液生化：同時抽血清總蛋白、LDH（Light's criteria 判讀用）
+    if (labs.includes('P073') && PLEURAL_KINDS.includes(m.kind)) labs.push(SERUM_PROC)
+    if (labs.length) p.labOrderIds = labs.map((procId) => procId === SERUM_PROC ? createOrderInternal(u, a.id, { admissionId: a.id, type: 'stat', category: 'procedure', procId, content: `${find.procedure(procId)!.name}（胸水判讀・床邊${m.label}）` }, t).id : createOrderInternal(u, a.id, { admissionId: a.id, type: 'stat', category: 'procedure', procId, content: `${find.procedure(procId)!.name.replace(/（[^）]*）$/, '')}（${BEDSIDE_FLUID[m.kind]}・床邊${m.label}）` }, t).id)
     // 胸管：建一條管路（之後護理師在「管路」記引流量、漏氣，移除也在那裡）；放好時的引流算第一筆
     if (m.kind === 'chestTube') {
       const l: LineDevice = { id: newId('LN'), admissionId: a.id, kind: 'chest', site: chestSite, size: input.tubeSize!.trim(), insertedAt: p.performedAt, placedBy: u.name, recordedBy: u.id, recordedAt: t, bedsideId: id, drainage: [{ at: p.performedAt, by: u.id, ml: p.volumeMl ?? 0, appearance: p.appearance, airLeak: !!input.airLeak }] }

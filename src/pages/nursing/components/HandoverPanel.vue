@@ -4,7 +4,7 @@
 // 新增時預設「正要結束的班別」（handoverShiftOf），病人預設為清單上選取的那一位。
 import { computed, reactive, watch } from 'vue'
 import { UButton, UQueryState, USelect, UTextarea } from '@/components/ui'
-import { handoverShiftOf, masterApi, nursingApi, shiftOf, SHIFT_ORDER, udApi, wardStockApi, type Shift, type WardPatient } from '@/services'
+import { handoverShiftOf, nursingApi, shiftOf, SHIFT_ORDER, udApi, wardStockApi, type Shift, type WardPatient } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { usePhrases } from '@/composables/usePhrases'
 import PhraseHint from '@/components/PhraseHint.vue'
@@ -30,7 +30,7 @@ const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.b
 const phrase = usePhrases(() => props.ward)
 // 交班時提醒：還沒點收的藥車、回報不符藥局還沒處理的藥盒（和「本班待辦」同一個查詢）
 const { data: ud } = useQuery(async () => ({ ward: props.ward, r: await udApi.listWardUdCarts(props.ward) }), [() => props.ward])
-const { data: ws } = useQuery(async () => ({ ward: props.ward, v: props.ward === masterApi.staticCodes.dayWard ? undefined : await wardStockApi.getWardStock(props.ward) }), [() => props.ward])
+const { data: ws } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.wardStockIfAny(props.ward) }), [() => props.ward])
 const udNote = computed(() => {
   const stock = ws.value?.ward === props.ward && ws.value.v && !ws.value.v.shift.counted ? `本班病房常備還沒點班` : ''
   if (ud.value?.ward !== props.ward) return stock
