@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, RadShift, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -63,6 +63,7 @@ import { buildLabValues } from '@/services/lab-rules'
 import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { laneOf, priorityOf } from '@/services/lab-queue-rules'
 import { CONSENT_LINE_KINDS, consentsForSurgery } from '@/services/consent-rules'
+import { blocksOf, RAD_BLOCKS, RAD_ROOMS } from '@/services/rad-roster-rules'
 import { recentShifts } from '@/services/nursing-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
@@ -271,7 +272,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     { id: 'U601', username: 'lab01', password: '1234', name: '何宜蓁', roles: ['lab'], active: true, grants: ['lab.limits', 'pathology'] },
     { id: 'U602', username: 'lab02', password: '1234', name: '鄭宇翔', roles: ['lab'], active: true },
     { id: 'U701', username: 'diet01', password: '1234', name: '溫若瑜', roles: ['diet'], active: true },
-    { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true },
+    { id: 'U801', username: 'rt01', password: '1234', name: '鍾承翰', roles: ['radtech'], active: true, grants: ['radiology.roster'] },
+    { id: 'U802', username: 'rt02', password: '1234', name: '廖婉婷', roles: ['radtech'], active: true },
+    { id: 'U803', username: 'rt03', password: '1234', name: '洪偉倫', roles: ['radtech'], active: true },
   ]
   // 密碼設定日：展示帳號都是今天（一開就要求改密碼會干擾展示）；nurse02 示範「快到期」——80 天前設定，90 天期限還剩 10 天，
   // 系統管理把期限改成 60 天就會變成「已過期」，登入後要先改密碼
@@ -4002,7 +4005,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       lines.push({ id: 'LN-SEED-CT1', admissionId: pn.id, kind: 'chest', site: '右側胸', size: '28Fr', insertedAt: ct, placedBy: doc.name, recordedBy: doc.id, recordedAt: addMinutes(ct, 20), bedsideId: 'BP-SEED-2',
         drainage: [{ at: ct, by: doc.id, ml: 450, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 120), by: 'U201', ml: 90, appearance: '混濁', airLeak: false }, { at: addMinutes(ct, 300), by: 'U201', ml: 60, appearance: '混濁', airLeak: false }] })
       bedsideProcedures.push({ id: 'BP-SEED-2', admissionId: pn.id, patientId: pn.patientId, kind: 'chestTube', side: 'right', indication: '右側肋膜積液混濁（昨日胸腔穿刺），疑似膿胸，放胸管引流', timeOutAt: addMinutes(ct, -5), performedAt: ct, performedBy: doc.id, appearance: '混濁', volumeMl: 450, complication: '無', consentId: 'CN-SEED-BP2', orderId: 'IO-BP-2', tubeSize: '28Fr', airLeak: false, lineId: 'LN-SEED-CT1', recordedAt: addMinutes(ct, 20) })
-      bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30), labOrderIds: ['IO-BP-L1', 'IO-BP-L2', 'IO-BP-L3'] })
+      bedsideProcedures.push({ id: 'BP-SEED-1', admissionId: pn.id, patientId: pn.patientId, kind: 'thoracentesis', side: 'right', indication: '右側肋膜積液（胸部 X 光），肺炎併肋膜積液待排除膿胸', timeOutAt: addMinutes(at, -5), performedAt: at, performedBy: doc.id, appearance: '淡黃微混濁', volumeMl: 800, complication: '無', consentId: 'CN-SEED-BP1', orderId: 'IO-BP-1', recordedAt: addMinutes(at, 30), labOrderIds: ['IO-BP-L1', 'IO-BP-L2', 'IO-BP-L3'], readingAck: { kinds: 'exudate', at: addMinutes(at, 240), by: doc.id } })
       // 送檢（體液常規、生化＋同時抽血清）：昨天晚上報告都出來了——蛋白比 0.62、LDH 比 3.2，滲出液（之後改放胸管）
       const pt = patients.find((p) => p.id === pn.patientId)!
       const done = addMinutes(at, 30)
@@ -4022,6 +4025,27 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   {
     const old = consents.filter((c) => c.scan && c.signedAt <= addMinutes(nowStr, -48 * 60) && admissions.some((a) => a.id === c.admissionId && a.status === 'admitted')).sort((a, b) => a.id.localeCompare(b.id))[0]
     if (old) delete old.scan
+  }
+
+  // ---------- 放射師排班（示範）：7 天前到 13 天後，一般攝影、電腦斷層、磁振造影每天上午、下午各一位（三位輪流）；
+  // 電腦斷層週日不開、週六只開上午，10 天後全院影像休診（和開放時段設定一致）。
+  // 留一個空格：最近一筆已排、還沒報到的一般攝影／電腦斷層／磁振造影檢查那一段沒排人（沒有的話留明天下午磁振造影）
+  const radShifts: RadShift[] = []
+  {
+    const techs = ['U801', 'U802', 'U803']
+    // 空格挑明天以後（今天已經做完的檢查不能沒有放射師）
+    const gapExam = imagingExams.filter((e) => !e.cancelled && !e.arrivedAt && e.start.slice(0, 10) > T && RAD_ROOMS.includes(e.room)).sort((a, b) => a.start.localeCompare(b.start))[0]
+    const gap = gapExam ? { date: gapExam.start.slice(0, 10), room: gapExam.room, block: blocksOf(gapExam.start, gapExam.minutes)[0] } : { date: addDays(T, 1), room: 'MR' as const, block: 'pm' as const }
+    for (let i = -7; i <= 13; i++) {
+      const date = addDays(T, i)
+      if (i === 10) continue
+      const wd = new Date(`${date}T00:00:00`).getDay()
+      RAD_ROOMS.forEach((room, r) => RAD_BLOCKS.forEach((b, k) => {
+        if (room === 'CT' && (wd === 0 || (wd === 6 && b.key === 'pm'))) return
+        if (gap.date === date && gap.room === room && gap.block === b.key) return
+        radShifts.push({ id: `RS-SEED-${radShifts.length + 1}`, date, room, block: b.key, userId: techs[(r + k + i + 21) % 3], by: 'U801', at: notFuture(`${addDays(date, -7)} 10:00`, 60) })
+      }))
+    }
   }
 
   // ---------- 事前審查（示範）----------
@@ -4213,6 +4237,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     analyzerResults,
     contrastClearances: [],
     roomDowntimes,
+    radShifts,
     // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],
     followUpAdvices,

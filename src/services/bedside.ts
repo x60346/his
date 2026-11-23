@@ -7,7 +7,8 @@ import { audit, fail, failField, failFields, must, mutate, query, requireUser } 
 import { find, nameOf } from './views'
 import { latestLabValue } from './blood-work'
 import { createOrderInternal } from './ipd'
-import { ascitesPmn, csfRead, lightCriteria, PLEURAL_KINDS, saagRead, SERUM_PAIR_HOURS, SERUM_PROC, type FluidRead } from './bedside-rules'
+import { SERUM_PROC, type FluidRead } from './bedside-rules'
+import { noteOf, readingAlertKinds, readingAlertPending, readingOf } from './bedside-work'
 import { BEDSIDE_FLUID, BEDSIDE_LABS, SIDE_TEXT, BEDSIDE_CONSENT_WAIVERS, BEDSIDE_KINDS, bedsideKind, bedsideTitle, bleedingRisks, checkBedsideInput, unusedBedsideConsent, type BedsideInput } from './bedside-rules'
 
 export interface BedsideView extends BedsideProcedure {
@@ -21,66 +22,17 @@ export interface BedsideView extends BedsideProcedure {
   readingWaiting?: string
   /** 帶入病程紀錄的 O、A */
   note: { objective: string; assessment: string }
-}
-
-const num = (v?: string) => (v === undefined || v === '' ? undefined : Number(v))
-/** 這筆處置送檢的某項報告的值（code → 數字） */
-function reportValues(p: BedsideProcedure, procId: string): Record<string, number | undefined> | undefined {
-  const o = (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((x) => x.id === id)).find((x) => x?.procId === procId)
-  const r = o ? db.labReports.find((x) => x.orderId === o.id) : undefined
-  return r ? Object.fromEntries(r.values.map((v) => [v.code, num(v.value)])) : undefined
-}
-/** 執行時病人幾天大（腦脊髓液正常值依年齡） */
-const ageDaysAt = (p: BedsideProcedure) => {
-  const b = find.patient(p.patientId)?.birthDate
-  return b ? Math.floor((Date.parse(p.performedAt.slice(0, 10)) - Date.parse(b)) / 86400000) : undefined
-}
-
-/** 帶入病程紀錄：O＝處置與送檢數值，A＝判讀（還沒判讀的寫等哪些報告） */
-function noteOf(p: BedsideProcedure, r: Pick<BedsideView, 'readings' | 'readingWaiting'>): { objective: string; assessment: string } {
-  const title = bedsideTitle(p.kind, p.side)
-  const proc = [`外觀 ${p.appearance}`, p.volumeMl !== undefined && `引流 ${p.volumeMl} mL`, p.openingPressure !== undefined && `開口壓 ${p.openingPressure} cmH2O`, p.complication !== '無' && `併發症：${p.complication}`].filter(Boolean).join('，')
-  const labs = (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)).flatMap((o) => {
-    const rep = o ? db.labReports.find((x) => x.orderId === o.id) : undefined
-    return rep ? [`${find.procedure(rep.procId)?.name.replace(/（[^）]*）$/, '') ?? rep.procId}：${rep.values.map((v) => `${v.name} ${v.value}${v.unit ? ` ${v.unit}` : ''}`).join('、')}`] : []
-  })
-  return {
-    objective: [`${p.performedAt.slice(5)} 床邊${title}：${proc}。`, ...labs.map((l) => `${l}。`)].join(''),
-    assessment: [...r.readings.map((x) => `${BEDSIDE_FLUID[p.kind]}：${x.label}（${x.reasons.join('；')}）`), r.readingWaiting && `${BEDSIDE_FLUID[p.kind]}判讀${r.readingWaiting}`].filter(Boolean).join('；'),
-  }
-}
-
-/** 判讀：胸水（體液生化＋血清：Light's criteria）、腹水（體液常規：嗜中性球；體液生化＋血清：SAAG）、腦脊髓液（體液常規，有生化、血清就加蛋白與血糖比值） */
-function readingOf(p: BedsideProcedure): Pick<BedsideView, 'readings' | 'readingWaiting'> {
-  const ordered = (procId: string) => (p.labOrderIds ?? []).some((id) => db.ipdOrders.find((x) => x.id === id)?.procId === procId)
-  const routine = reportValues(p, 'P072')
-  const chem = reportValues(p, 'P073')
-  const ms = SERUM_PAIR_HOURS * 3600000
-  const at = Date.parse(p.performedAt.replace(' ', 'T'))
-  const serumRep = db.labReports.filter((r) => r.patientId === p.patientId && r.procId === SERUM_PROC && Math.abs(Date.parse((db.ipdOrders.find((o) => o.id === r.orderId)?.createdAt ?? r.orderedAt).replace(' ', 'T')) - at) <= ms).sort((x, y) => y.reportedAt.localeCompare(x.reportedAt))[0]
-  const serum = serumRep ? Object.fromEntries(serumRep.values.map((v) => [v.code, num(v.value)])) : undefined
-  const wait: string[] = []
-  const need = (have: unknown, procId: string, label: string) => { if (!have && ordered(procId)) wait.push(label) }
-  const out: FluidRead[] = []
-  if (PLEURAL_KINDS.includes(p.kind)) {
-    if (chem && serum) { const r = lightCriteria({ pro: chem['F-PRO'], ldh: chem['F-LDH'] }, { pro: serum.TP, ldh: serum.LDH }); if (r) out.push(r) }
-    need(chem, 'P073', '體液生化'); need(serum, SERUM_PROC, '血清生化')
-  } else if (p.kind === 'paracentesis') {
-    if (routine) { const r = ascitesPmn(routine['F-WBC'], routine['F-PMN']); if (r) out.push(r) }
-    if (chem && serum) { const r = saagRead(serum.ALB, chem['F-ALB']); if (r) out.push(r) }
-    need(routine, 'P072', '體液常規'); need(chem, 'P073', '體液生化'); need(serum, SERUM_PROC, '血清生化')
-  } else if (p.kind === 'lp') {
-    // 腦脊髓液：生化、血清有開就等齊了再判讀（血糖比值是細菌性腦膜炎的重要依據）
-    need(routine, 'P072', '體液常規'); need(chem, 'P073', '體液生化'); need(serum, SERUM_PROC, '血清生化')
-    if (routine && !wait.length) { const r = csfRead({ wbc: routine['F-WBC'], pmn: routine['F-PMN'], rbc: routine['F-RBC'], glu: chem?.['F-GLU'], proGdl: chem?.['F-PRO'] }, serum?.GLU, ageDaysAt(p)); if (r) out.push(r) }
-  }
-  return { readings: out, ...(wait.length ? { readingWaiting: `等${wait.join('、')}報告` } : {}) }
+  /** 有異常判讀、還沒知悉 */
+  alertPending: boolean
+  readingAckByName?: string
 }
 
 const view = (p: BedsideProcedure): BedsideView => ({
   ...p, title: bedsideTitle(p.kind, p.side), performedByName: nameOf.user(p.performedBy),
   labs: (p.labOrderIds ?? []).map((id) => db.ipdOrders.find((o) => o.id === id)?.content ?? id),
   ...((r) => ({ ...r, note: noteOf(p, r) }))(readingOf(p)),
+  alertPending: readingAlertPending(p),
+  ...(p.readingAck ? { readingAckByName: nameOf.user(p.readingAck.by) } : {}),
   ...((c) => (c ? { consentNo: c.no } : {}))(p.consentId ? db.consents.find((x) => x.id === p.consentId) : undefined),
 })
 
@@ -163,5 +115,28 @@ export function recordBedside(input: BedsideInput & { admissionId: string; conse
     db.bedsideProcedures.push(p)
     audit('床邊處置', `${a.admitNo} ${nameOf.patient(a.patientId)}：${title} ${p.performedAt}（${u.name}）${'consentId' in consent ? `；同意書 ${db.consents.find((c) => c.id === consent.consentId)?.no}` : `；無同意書：${consent.consentWaiver}`}${risks.length ? `；出血風險：${risks.join('、')}` : ''}${labs.length ? `；送檢 ${labs.length} 項` : ''}`)
     return view(p)
+  })
+}
+
+/** 異常判讀已知悉（醫師）：記下當時的異常判讀；之後報告更正、判讀變了會再提醒 */
+export function ackReading(id: string): Promise<BedsideView> {
+  return mutate(() => {
+    const u = requireUser('doctor')
+    const p = must(db.bedsideProcedures.find((x) => x.id === id), '床邊處置')
+    const kinds = readingAlertKinds(p)
+    if (!kinds) fail('這筆沒有要確認的異常判讀', 'CONFLICT')
+    if (p.readingAck?.kinds === kinds) fail('已經知悉了', 'CONFLICT')
+    p.readingAck = { kinds, at: now(), by: u.id }
+    audit('床邊處置判讀知悉', `${nameOf.patient(p.patientId)} ${bedsideTitle(p.kind, p.side)}：${readingOf(p).readings.filter((r) => r.alert).map((r) => r.label).join('、')}`)
+    return view(p)
+  })
+}
+
+/** 首頁（主治）：我主治的住院病人有異常判讀還沒知悉 */
+export function myBedsideAlerts(): Promise<{ id: string; admissionId: string; patientName: string; title: string; labels: string[] }[]> {
+  return query(() => {
+    const u = requireUser('doctor')
+    return db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === u.doctorId) && readingAlertPending(p))
+      .map((p) => ({ id: p.id, admissionId: p.admissionId, patientName: nameOf.patient(p.patientId), title: bedsideTitle(p.kind, p.side), labels: readingOf(p).readings.filter((r) => r.alert).map((r) => r.label) }))
   })
 }

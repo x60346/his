@@ -38,6 +38,7 @@ export type PermKey =
   | 'palliative'
   | 'mortality.review'
   | 'lab.limits'
+  | 'radiology.roster'
   | 'incident.review'
   | 'charge.approveDiscount'
   | 'order.write'
@@ -79,6 +80,7 @@ export const PERMISSIONS: PermDef[] = [
   { key: 'record.copy', group: '病歷', label: '病歷影本申請', covers: '受理病歷影本申請（核對申請人、選範圍）、收費、列印與補印、當天作廢', candidates: ['clerk'], defaults: ['clerk'], grantable: true, note: '病人個資：可以只交給病歷組的櫃台人員（先指定給個人，再把角色取消）' },
   { key: 'incident.review', group: '系統', label: '病安事件審查', covers: '看全院的病安事件通報（匿名的看不到通報人）、評定嚴重度、寫原因分析與改善措施、結案、看統計', candidates: ['admin', 'nurse', 'doctor'], defaults: ['admin'], grantable: true, note: '品管審查：預設管理員，可以指定給個人（示範 nurse02 護理長）' },
   { key: 'lab.limits', group: '系統', label: '檢驗時限設定', covers: '依檢驗醫令設定急件與一般時效、危急值通報時限、不計時效（修改要寫原因、留紀錄）', candidates: ['admin', 'lab'], defaults: ['admin'], grantable: true, note: '影響檢驗科的逾時與危急值通報判斷：預設只有管理員，可以指定給檢驗科主管（示範 lab01）' },
+  { key: 'radiology.roster', group: '系統', label: '放射師排班', covers: '排一般攝影、電腦斷層、磁振造影每天上午、下午由哪位放射師負責；看哪些已排的檢查沒有放射師', candidates: ['admin', 'radtech'], defaults: ['admin'], grantable: true, note: '交給放射科組長：指定給個人（示範 rt01）' },
   { key: 'report.management', group: '系統', label: '經營月報', covers: '看全院的門診人次、住院佔床、收入、藥費占比、檢驗影像量，匯出 Excel', candidates: ['admin', 'doctor', 'nurse', 'pharmacist', 'clerk'], defaults: ['admin'], grantable: true, note: '全院營運與財務數字：預設只有管理員，可以指定給院長、主任等個人' },
   { key: 'surgery.schedule', group: '住院', label: '手術排程', covers: '排手術房間與時間、改期', candidates: ['nurse', 'admin'], defaults: ['nurse'], grantable: true, note: '預設所有護理師；要只交給手術室護理長：先指定給個人，再把角色取消' },
   { key: 'nursing.schedule', group: '住院', label: '護理排班', covers: '排各病房每天三班的護理師、複製上個月', candidates: ['nurse', 'admin'], defaults: ['admin'], grantable: true, note: '交給護理長：指定給個人（示範 nurse02）；所有護理師都看得到班表' },

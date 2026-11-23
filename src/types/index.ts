@@ -966,6 +966,17 @@ export interface ImagingExam {
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
+/** 放射師排班：某一天、某一間（一般攝影、電腦斷層、磁振造影）、上午或下午由誰負責 */
+export interface RadShift {
+  id: string
+  date: string
+  room: ExamRoom
+  block: 'am' | 'pm'
+  userId: string
+  by: string
+  at: string
+}
+
 /** 檢查室開放時段（每間、每週幾；沒列的＝預設 08:00–17:00）：closed＝這天不開 */
 export interface ExamRoomHours {
   room: ExamRoom
@@ -2843,6 +2854,8 @@ export interface BedsideProcedure {
   airLeak?: boolean
   lineId?: string
   recordedAt: string
+  /** 主治（或照護團隊醫師）已知悉的異常判讀（kinds 是當時的異常判讀；判讀變了要重新知悉） */
+  readingAck?: { kinds: string; at: string; by: string }
 }
 
 export interface OpdRecordReview {

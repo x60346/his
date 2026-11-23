@@ -1,6 +1,8 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { commitIfPossible, db } from '@/mock/db'
 import { consentScanOverdue } from './consent-rules'
+import { readingAlertPending } from './bedside-work'
+import { radUnstaffedExams } from './rad-roster-work'
 import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
 import { addDays, now, today, addMinutes } from '@/utils/date'
@@ -156,6 +158,10 @@ export interface DashboardStats {
   infusionOverdue: number
   /** 傷口 2 週沒變小（醫師，本科住院病人） */
   woundStall?: number
+  /** 放射師排班（權限 radiology.roster）：未來 14 天已排、沒有放射師的檢查 */
+  radUnstaffed?: number
+  /** 主治：床邊處置送檢的異常判讀（滲出液、腹膜炎、細菌性腦膜炎）還沒知悉 */
+  bedsideAlerts?: number
   /** 加護病房重症流程表超過 75 分鐘沒記的病人（護理師，我的病人範圍） */
   icuHourlyLate?: number
   /** 主治：加護病房病人最近一次 RASS 超出鎮靜目標、插管接呼吸器今天還沒做脫離評估 */
@@ -511,11 +517,13 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('surgery.schedule') ? ((xs) => ({ emergencyWaiting: xs.length, emergencyOverdue: xs.filter((s) => emergencyState(s, t)?.state === 'overdue').length }))(db.surgeries.filter((s) => s.urgency && !s.sentAt && (s.status === 'requested' || s.status === 'scheduled') && db.admissions.find((a) => a.id === s.admissionId)?.status === 'admitted')) : {}),
           ...(me && sessionRole() === 'lab' && permissionsOf({ ...me, role: 'lab' }).includes('pathology') ? ((c) => ({ pathToReceive: c.toReceive, pathOverdue: c.overdue }))(pathCounts(t)) : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('incident.review') ? { incidentPending: db.incidents.filter((x) => x.status !== 'closed').length, rcaOverdue: db.incidents.flatMap((x) => x.rca?.plans ?? []).filter((p) => planOverdue(p, today())).length } : {}),
+          ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('radiology.roster') ? { radUnstaffed: radUnstaffedExams(t).length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('nursing.schedule') ? { shiftRequestsToApprove: db.shiftRequests.filter((r) => r.status === 'pending').length } : {}),
           ...(me && sessionRole() === 'doctor' && permissionsOf({ ...me, role: sessionRole()! }).includes('icu.attending') ? { icuRequestsPending: db.icuRequests.filter((r) => r.status === 'pending' || r.status === 'accepted').length } : {}),
           ...(me && permissionsOf({ ...me, role: sessionRole()! }).includes('infection.control') ? { infectionToDecide: db.infectionCases.filter((c) => c.status === 'reported').length, clustersOpen: currentClusters().filter((c) => !c.decision).length, notifiableOverdue: db.admissions.flatMap(pendingNotifiable).filter((p) => p.dueAt < t).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { mdroAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult' && mdroAlertsOf(a.patientId, t).length > 0).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
+          ...(sessionRole() === 'doctor' && me?.doctorId ? { bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { consentUnscanned: db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)) && db.consents.some((c) => c.admissionId === a.id && consentScanOverdue(c, t))).length } : {}),
           ...(sessionRole() === 'nurse' ? { nursingRecordMissing: db.admissions.filter((a) => (!scope || scope.has(a.id)) && nursingGapsOf(a, t).length).length } : {}),

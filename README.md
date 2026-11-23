@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4905 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4931 項） |
 
 ### 展示帳號
 
@@ -125,6 +125,10 @@ npm run dev          # 開發伺服器 http://localhost:5180
    - **侵入性處置同意書（管路）**：登錄放置**中心靜脈導管、胃造口**時，這次住院要有**這種管路還沒用掉的侵入性處置同意書**（醫師在病人資料「同意書」分頁記錄，選 CVC 或胃造口；同一種還沒用的只能一張）。放置時用掉那張（管路列顯示同意書編號；同意書清單標「已放置」、不能撤回），**換新的要重簽**；**緊急狀況**（醫療法第 63 條但書）或**外院已放置的補登**選原因才能登錄（管路列標「無同意書」、稽核寫原因）。導尿管、留置針、鼻胃管不用；氣管內管照舊（急救插管）。示範資料：敗血症那位的 CVC 有放置前簽的同意書。
    - **出院病歷查病程紀錄**：出院病歷的完整性加上**住院期間每天的病程紀錄**（入院隔天到出院前一天；入院、出院當天不要求），缺的列「病程紀錄缺 N 天：日期」。主治在「健保審查回覆」頁的「出院病歷待完成」按「**補寫病程紀錄**」選缺的那天補寫（S／O／A／P；標「補寫 某日的病程」、時間記實際寫的時候，病歷完成時間算到最後一次補寫）；住院中最近 7 天缺的也可以在這裡補寫（照護團隊；今天的在住院醫囑頁寫）。出院的只有主治能補。示範資料：歷史出院病人每天都有查房紀錄，只有 9 天前出院的肺炎病人缺出院前兩天那天（期限還沒到）。
    - **床邊處置紀錄與同意書**：住院醫囑多一個「床邊處置」分頁（護理站同分頁唯讀）：醫師登錄**腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管置放**——適應症、**處置前暫停**（病人身分、部位與側別都勾才能存）、執行時間、外觀、引流量（胸腔、腹腔穿刺、胸管；胸腔穿刺單次超過 1500 mL、腹腔穿刺超過 5000 mL 要寫原因與病人狀況）、開口壓（腰椎穿刺，選填）、併發症（沒有寫「無」）。**出血風險**：最近的血小板 < 50 或使用中的抗凝血／抗血小板藥（Warfarin、Clopidogrel、Heparin 類、新型口服抗凝血劑；Aspirin 不算）會列出，有的話要寫評估才能存。要有這次住院、**這種處置（有側別的要同側）還沒用掉的侵入性處置同意書**（醫師在病患資料「同意書」分頁記錄，胸腔穿刺、胸管要選側別）；登錄時用掉（同意書標「已執行」、不能撤回），**緊急**（張力性氣胸這類，醫療法第 63 條但書）勾原因才能不要同意書。存檔自動開一筆**已執行的處置醫令**（新的四個計費醫令，一般醫囑開不出來），住院帳單、DRG 預估照醫令帶。示範資料：住院中的肺炎病人昨天下午右側胸腔穿刺 800 mL（有事前簽的右側同意書）。
+   - **判讀異常通知主治、放射師排班、對話框窄畫面巡檢（第五十四輪）**：
+     - **判讀異常通知主治**：床邊處置送檢判讀為**滲出液、疑似自發性細菌性腹膜炎、疑似細菌性腦膜炎**時，主治首頁「床邊處置判讀異常」（只算自己主治、住院中的），床邊處置那筆標「判讀異常待知悉」，醫師按「已知悉異常判讀」（記人、時間、稽核）；之後報告更正、判讀變了會再提醒。示範資料：昨天的滲出液主治已知悉（之後放了胸管）。
+     - **放射師排班**：新增放射師 `rt02`、`rt03`；權限「放射師排班」（預設管理員，示範 `rt01` 是組長）。影像檢查室「放射師排班」：一般攝影、電腦斷層、磁振造影每天上午（08:00–12:30）、下午（12:30–17:00）各排一位（超音波由醫師做、心電圖由技術員做，不用排）；同一人同一段不能排兩間、不能改過去的班；不開的時段（週日、週六下午的電腦斷層、休診）顯示「不開」。**排程不擋**（緊急檢查還是要做）：沒排人的時段，已排的檢查標「沒有排放射師」，各檢查室標題寫當天的放射師，看板與組長首頁「檢查沒有放射師」（未來 14 天）點進去直接打開排班。示範資料：7 天前到 13 天後三位輪流，明天下午磁振造影留一個空格。
+     - **窄畫面巡檢（對話框）**：375 寬逐一打開住院醫囑 27 個分頁（41 個開立、登錄、申請對話框）、影像檢查室三個對話框、病患資料同意書的三個對話框，量有沒有撐出寬度或被擠成 0 寬的文字，這輪都沒有問題（排班表在框內左右捲動）。
    - **體液判讀帶入病程紀錄、腦脊髓液出血校正與年齡標準（第五十三輪）**：
      - **帶入病程紀錄**：床邊處置每一筆有「帶入病程紀錄」（醫師）：O 帶入處置摘要（時間、外觀、引流量、開口壓、併發症）和每份送檢報告的數值，A 帶入判讀（還沒判讀的寫「等○○報告」），接在今日病程 SOAP 的後面並切到病程紀錄分頁；醫師補 S、P 再存。
      - **穿刺出血校正**：腦脊髓液紅血球 ≥700/µL 時，白血球每 700 個紅血球扣 1 個再判讀（判讀寫出原始值與校正後的值；蛋白偏高時註明穿刺出血也會讓蛋白偏高），校正後正常的寫「校正穿刺出血後大致正常」。
@@ -355,6 +359,7 @@ scripts/smoke-flow.mjs   流程測試
 | 手術同意書側別 | `Consent.side`；`consent-rules`（`consentMissing` 比對側別、`consentSideMismatch`）；`surgery.changeSurgerySide`；`SurgeryView.consentMissing` 標側別不符；`SurgeryConsents.vue` 更正側別 |
 | 侵入性處置同意書（管路） | `Consent.lineKind`、`LineDevice.consentId`／`consentWaiver`；`consent-rules`（`CONSENT_LINE_KINDS`、`LINE_CONSENT_WAIVERS`、`unusedLineConsent`）；`line.addLine` 把關、`listLines().consentReady`；`consent.recordConsent`（`lineKind`）、`consentTargets().admission.lines`、`revokeConsent` 用掉的擋；`LinePanel.vue`、`ConsentPanel.vue` |
 | 床邊處置 | `BedsideProcedure`（`db.bedsideProcedures`）、`Procedure.bedside`（P068–P071）、`IpdOrder.bedsideId`、`Consent.bedsideKind`；`bedside-rules`（`BEDSIDE_KINDS`、`bleedingRisks`、`unusedBedsideConsent`、`checkBedsideInput`、`BEDSIDE_CONSENT_WAIVERS`）；`bedside.ts`（`listBedside`、`recordBedside`）；`consent.recordConsent`（`bedsideKind`、`side`）、`consentTargets().admission.bedside`；`views.usable.procedure`、`master.listProcedures` 擋；`BedsidePanel.vue`（`IpdPage`、`NursingPage`） |
+| 判讀異常通知、放射師排班 | `BedsideProcedure.readingAck`；`bedside-work`（`readingOf`、`noteOf`、`readingAlertKinds`、`readingAlertPending`）；`bedside.ackReading`／`myBedsideAlerts`；`dashboard.bedsideAlerts`／`radUnstaffed`；`RadShift`（`db.radShifts`）；`rad-roster-rules`（`RAD_ROOMS`、`RAD_BLOCKS`、`blocksOf`、`staffMissing`）、`rad-roster.ts`（`radRoster`、`setRadShift`、`myRadShifts`）、`rad-roster-work`（`examStaffMissing`、`radUnstaffedExams`）；`ExamView.noStaff`、`ExamBoard.rooms[].staff`／`unstaffed`；權限 `radiology.roster`；`RadRosterDialog.vue`（`ExamRoomPage` `?roster=1`） |
 | 病程帶入、腦脊髓液校正 | `bedside.noteOf`（`BedsideView.note`）、`BedsidePanel` `note` 事件、`IpdPage.takeBedsideNote`；`bedside-rules`（`CSF_LIMITS`、`csfLimitsFor`、`CSF_RBC_PER_WBC`、`csfRead` 的紅血球與年齡） |
 | 交班胸管、SAAG、腦脊髓液 | `nursing.wardChestTubes`（`HandoverPanel`「帶入交班」）；`bedside-rules`（`saagRead`、`SAAG_CUT`、`csfRead`、`CSF_WBC_MAX`、`CSF_PRO_MAX`、`CSF_GLU_RATIO`、`FluidRead.alert`）；`BedsideView.readings`（陣列）；P073 加白蛋白、P074 加白蛋白與血糖 |
 | 引流輸出、體液判讀、預設病房 | `line-work.drainBetween`；`icu-work.ioBetween`（`drain`）、`nursing.ioToday`（`drainMl`）；`bedside-rules`（`lightCriteria`、`ascitesPmn`、`SERUM_PROC` P074、`PLEURAL_KINDS`、`SERUM_PAIR_HOURS`）、`BedsideView.reading`／`readingWaiting`；`staffing-work.myWardOf`、`nursing.myWard`、`NursingPage`；`ward-stock.wardStockIfAny`（`WardTasksPanel`、`HandoverPanel`） |
@@ -809,6 +814,8 @@ scripts/smoke-flow.mjs   流程測試
 - 侵入性處置同意書：種子的 CVC 有同意書且已用掉；清單標已放置；沒同意書 CVC、胃造口擋；原因要從清單選；外院、緊急選原因可登錄；導尿管不用；可記錄對象與管路清單；留置針不能開、沒住院不能開；記錄綁住院與種類；同一種一張；放置用掉、不能撤回；換新要重簽；稽核；撤回後擋
 - 床邊處置：規則（名稱帶側別、出血風險、欄位、開口壓）；種子右側胸腔穿刺有同側同意書與醫令、帳單帶入；一般醫囑開不出、選單不列；沒同意書擋、護理師不能登錄（看得到）；同意書要選側別、同種同側一張、總覽；側別不符擋、處置前暫停擋；登錄用掉同意書、開醫令、稽核；用掉要重簽、不能撤回、清單標已執行；緊急原因要從清單選、記原因；出血風險列出、沒評估擋、記評估與開口壓；出院了不能登錄
 - 同意書紙本掃描：規則（頁數、格式、大小）；種子今天以前的都掃了；出院病歷缺掃描算缺、種子沒有假的；沒選檔擋；附上記紀錄稽核；補掃後完成時間；看掃描；重新掃描換掉；種子有紀錄沒影像；櫃台不能掃
+- 判讀異常通知主治：種子已知悉；報告沒出不提醒；腹膜炎待知悉、主治首頁、我的清單、別的醫師沒有；已知悉稽核、首頁消失、不能重複；更正後沒有異常不提醒；護理師不能按
+- 放射師排班：規則（跨 12:30 兩段、下班不算、超音波不用、缺下午）；種子三位、組長、今天沒有人兩間；排班表、組長可改、首頁；清掉一格、看板寫放射師、檢查標沒有放射師、同人同段擋、補人後消失、過去不能改、超音波不用排、一般放射師只能看、我今天的班
 - 腦脊髓液校正與年齡：規則（校正後正常、校正後仍增加、新生兒與小嬰兒與成人、蛋白依年齡、寫出標準）；服務層帶入紅血球與年齡；帶入病程紀錄（O 數值、A 判讀、種子胸腔穿刺、報告沒出）
 - 交班胸管：本班量與摘要、記血性漏氣後的提醒、別的病房沒有、移除後不列、帶入交班
 - 腹水 SAAG 與腦脊髓液：規則（SAAG 兩種、細菌性、白血球增加、正常、蛋白偏高、沒有血清不算比值）；腹腔穿刺送生化加血清、等報告、常規先出、都出來兩項判讀；腰椎穿刺加血清、等齊再判讀、細菌性腦膜炎；只送常規直接判讀

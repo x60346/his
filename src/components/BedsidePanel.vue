@@ -40,6 +40,7 @@ function openAdd() {
   act.fieldErrors.value = {}
   open.value = true
 }
+const ack = useAction(bedsideApi.ackReading, { success: '已知悉' })
 const act = useAction(bedsideApi.recordBedside, { success: (p) => `已登錄${p.title}` })
 async function submit() {
   const m = meta.value
@@ -70,6 +71,7 @@ async function submit() {
               <span v-if="p.consentNo" class="text-xs text-slate-500">同意書 {{ p.consentNo }}</span>
               <UBadge v-else-if="p.consentWaiver" tone="gray" :title="p.consentWaiver">無同意書：緊急</UBadge>
               <UBadge v-if="p.complication !== '無'" tone="red">併發症</UBadge>
+              <UBadge v-if="p.alertPending" tone="red">判讀異常待知悉</UBadge>
               <UButton v-if="isDoctor" size="sm" variant="ghost" class="ml-auto" @click="emit('note', p.note)">帶入病程紀錄</UButton>
             </div>
             <div class="text-xs text-slate-600">適應症：{{ p.indication }}</div>
@@ -81,6 +83,8 @@ async function submit() {
             <div v-if="p.labs.length" class="text-xs text-slate-600">送檢：{{ p.labs.join('、') }}</div>
             <div v-for="r in p.readings" :key="r.kind" :class="['text-xs', r.alert ? 'text-red-700' : 'text-slate-700']"><b>判讀：{{ r.label }}</b>（{{ r.reasons.join('；') }}）</div>
             <div v-if="p.readingWaiting" class="text-xs text-slate-500">判讀：{{ p.readingWaiting }}</div>
+            <div v-if="p.alertPending && isDoctor"><UButton size="sm" variant="danger" :loading="ack.pending.value" @click="ack.run(p.id)">已知悉異常判讀</UButton></div>
+            <div v-else-if="p.readingAck && !p.alertPending" class="text-xs text-slate-500">異常判讀已知悉：{{ p.readingAckByName }} {{ p.readingAck.at.slice(5) }}</div>
             <div v-if="p.bleedingRisks?.length" class="text-xs text-amber-700">出血風險 {{ p.bleedingRisks.join('、') }}：{{ p.bleedingNote }}</div>
           </li>
         </ul>

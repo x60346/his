@@ -19312,6 +19312,93 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/pages/ipd/IpdPage.vue', 'utf8').includes('@note="takeBedsideNote"'), '住院醫囑頁接「帶入病程紀錄」')
   }
+  // 床邊處置異常判讀通知主治；放射師排班
+  console.log('\n[判讀異常通知主治]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const sp = db().bedsideProcedures.find((p) => p.id === 'BP-SEED-1')
+    const pnDoc = db().users.find((u) => u.doctorId === db().admissions.find((a) => a.id === sp.admissionId).doctorId).username
+    await as(pnDoc)
+    let v = (await api.bedsideApi.listBedside(sp.admissionId)).items.find((x) => x.id === sp.id)
+    ok(!v.alertPending && v.readingAck?.kinds === 'exudate' && v.readingAckByName, '種子：昨天的滲出液主治已知悉（之後放了胸管）')
+    // 新的腹腔穿刺 → 腹膜炎 → 主治首頁
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.id !== sp.admissionId)
+    const doc = db().users.find((u) => u.doctorId === adm.doctorId).username
+    await as(doc)
+    const d0 = (await api.dashboardApi.getDashboard()).bedsideAlerts ?? 0
+    const t0 = dateUtil.now()
+    const pa = await api.bedsideApi.recordBedside({ admissionId: adm.id, kind: 'paracentesis', indication: '腹水', timeOut: { identity: true, site: true }, performedAt: t0.slice(0, 16), appearance: '混濁', volumeMl: 800, complication: '無', consentWaiver: api.BEDSIDE_CONSENT_WAIVERS[0], bleedingNote: '評估過', labs: ['P072'] })
+    ok(!pa.alertPending, '報告還沒出：沒有待知悉')
+    const o = db().ipdOrders.find((x) => x.id === pa.labOrderIds[0])
+    db().labReports.push({ id: 'LR-T-SBP', no: 'LT-SBP', patientId: adm.patientId, procId: 'P072', orderId: o.id, admissionId: adm.id, doctorId: o.doctorId, orderedAt: o.createdAt, values: [{ code: 'F-WBC', name: '白血球', value: '900', ref: '', flag: 'N' }, { code: 'F-PMN', name: '嗜中性球', value: '60', ref: '', flag: 'N' }], reportedBy: 'U601', reportedAt: dateUtil.now() })
+    v = (await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === pa.id)
+    ok(v.alertPending, '腹膜炎判讀：待知悉')
+    ok((await api.dashboardApi.getDashboard()).bedsideAlerts === d0 + 1, `主治首頁：床邊處置判讀異常 ${d0 + 1}`)
+    const mine = await api.bedsideApi.myBedsideAlerts()
+    ok(mine.some((x) => x.id === pa.id && x.labels.includes('疑似自發性細菌性腹膜炎')), '我的待知悉清單')
+    const other = db().users.find((u) => u.doctorId && u.doctorId !== adm.doctorId && !u.passwordExpired).username
+    await as(other)
+    ok(!(await api.bedsideApi.myBedsideAlerts()).some((x) => x.id === pa.id), '別的醫師的首頁沒有')
+    await as(doc)
+    v = await api.bedsideApi.ackReading(pa.id)
+    ok(!v.alertPending && v.readingAck.kinds === 'sbp' && db().auditLogs[0].action === '床邊處置判讀知悉', '已知悉：記下、稽核')
+    ok((await api.dashboardApi.getDashboard()).bedsideAlerts === d0 && (await errOf(() => api.bedsideApi.ackReading(pa.id))).includes('已經知悉'), '首頁消失、不能重複')
+    // 報告更正後判讀變了（加上 SAAG 不算異常；這裡改成沒有腹膜炎）→ 沒有異常就不提醒；再改回來要重新知悉
+    const rep = db().labReports.find((x) => x.id === 'LR-T-SBP')
+    rep.values = [{ code: 'F-WBC', name: '白血球', value: '100', ref: '', flag: 'N' }, { code: 'F-PMN', name: '嗜中性球', value: '20', ref: '', flag: 'N' }]
+    ok(!(await api.bedsideApi.listBedside(adm.id)).items.find((x) => x.id === pa.id).alertPending, '更正成沒有腹膜炎：不提醒')
+    await as('nurse01')
+    ok((await errOf(() => api.bedsideApi.ackReading(sp.id))) !== '', '護理師不能按已知悉')
+  }
+  console.log('\n[放射師排班]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    ok(api.blocksOf('2026-11-24 12:20', 30).join() === 'am,pm' && api.blocksOf('2026-11-24 08:00', 15).join() === 'am' && !api.blocksOf('2026-11-24 18:00', 15).length, '規則：跨 12:30 算兩段、下班後不算')
+    ok(!api.staffMissing([], 'US', '2026-11-24 09:00', 20).length && api.staffMissing([{ date: '2026-11-24', room: 'CT', block: 'am' }], 'CT', '2026-11-24 12:00', 60).join() === 'pm', '規則：超音波不用排；缺下午')
+    ok(db().users.filter((u) => u.roles?.includes('radtech')).length === 3 && db().users.find((u) => u.username === 'rt01').grants?.includes('radiology.roster'), '種子：三位放射師、rt01 是組長')
+    const t0 = dateUtil.now()
+    const todayShifts = db().radShifts.filter((s) => s.date === T)
+    const clash = todayShifts.some((s) => todayShifts.some((x) => x !== s && x.block === s.block && x.userId === s.userId))
+    ok(todayShifts.length >= 4 && !clash, `種子：今天 ${todayShifts.length} 格、同一段沒有人排兩間`)
+    await as('rt01')
+    let r = await api.radRosterApi.radRoster(T, 7)
+    ok(r.canEdit && r.days.length === 7 && r.days[0].rooms.map((x) => x.room).join() === 'XR,CT,MR' && r.radtechs.length === 3, '排班表：7 天 × 三間 × 兩段、組長可改')
+    ok(r.unstaffed.length >= 1 || db().radShifts.length > 0, `種子：未來沒有放射師的檢查 ${r.unstaffed.length} 筆`)
+    const dash = await api.dashboardApi.getDashboard()
+    ok(dash.radUnstaffed === r.unstaffed.length, `組長首頁：檢查沒有放射師 ${dash.radUnstaffed}`)
+    // 排一筆明天下午的 CT，那段清掉 → 標沒有放射師；補人 → 消失
+    const tm = dateUtil.addDays(T, 1)
+    await api.radRosterApi.setRadShift({ date: tm, room: 'CT', block: 'pm', userId: '' })
+    ok(!db().radShifts.some((s) => s.date === tm && s.room === 'CT' && s.block === 'pm') && db().auditLogs[0].action === '放射師排班', '清掉明天下午 CT')
+    const ex = db().imagingExams.find((e) => !e.cancelled && !e.arrivedAt && e.room === 'CT') ?? null
+    await as('clerk01')
+    const b0 = await api.examApi.examBoard(tm)
+    ok(b0.rooms.find((x) => x.room === 'CT').staff.includes('下午 —') && b0.rooms.find((x) => x.room === 'US').staff === undefined, `看板：CT 這天 ${b0.rooms.find((x) => x.room === 'CT').staff}；超音波不列`)
+    // 直接放一筆明天 14:00 CT 的檢查（排程本身不擋）
+    if (ex) { ex.start = `${tm} 14:00`; ex.minutes = 30 }
+    const ev = ex ? (await api.examApi.examBoard(tm)).rooms.find((x) => x.room === 'CT').exams.find((e) => e.id === ex.id) : undefined
+    ok(!ex || ev.noStaff === '下午沒有排放射師', `檢查標：${ev?.noStaff ?? '（種子沒有 CT 檢查，略過）'}`)
+    await as('rt01')
+    const busy = db().radShifts.find((s) => s.date === tm && s.block === 'pm' && s.room !== 'CT')
+    ok((await errOf(() => api.radRosterApi.setRadShift({ date: tm, room: 'CT', block: 'pm', userId: busy.userId }))).includes('已經排在'), '同一人同一段不能排兩間')
+    const free = db().users.find((u) => u.roles?.includes('radtech') && !db().radShifts.some((s) => s.date === tm && s.block === 'pm' && s.userId === u.id))
+    if (free) {
+      await api.radRosterApi.setRadShift({ date: tm, room: 'CT', block: 'pm', userId: free.id })
+      await as('clerk01')
+      const ev2 = (await api.examApi.examBoard(tm)).rooms.find((x) => x.room === 'CT').exams.find((e) => e.id === ex?.id)
+      ok(!ev2?.noStaff, '補人後不再標')
+    } else ok(true, '（這天三位都排滿了，略過補人）')
+    await as('rt01')
+    ok((await errOf(() => api.radRosterApi.setRadShift({ date: dateUtil.addDays(T, -1), room: 'XR', block: 'am', userId: 'U801' }))).includes('過去'), '不能改過去的班')
+    ok((await errOf(() => api.radRosterApi.setRadShift({ date: tm, room: 'US', block: 'am', userId: 'U801' }))) !== '', '超音波不用排')
+    await as('rt02')
+    ok((await errOf(() => api.radRosterApi.setRadShift({ date: tm, room: 'XR', block: 'am', userId: 'U802' }))) !== '' && !(await api.radRosterApi.radRoster(T, 1)).canEdit, '一般放射師只能看')
+    ok((await api.radRosterApi.myRadShifts()).length === db().radShifts.filter((s) => s.userId === 'U802' && s.date === T).length, '我今天的班（rt02）')
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

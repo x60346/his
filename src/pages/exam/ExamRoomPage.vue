@@ -10,6 +10,8 @@ import { UBadge, UButton, UCard, UCheckbox, UDialog, UInput, UPageHeader, UQuery
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import ContrastClearDialog from '@/components/ContrastClearDialog.vue'
 import ExamHoursDialog from '@/components/ExamHoursDialog.vue'
+import RadRosterDialog from '@/components/RadRosterDialog.vue'
+import { useRoute } from 'vue-router'
 import { CONTRAST_REACTION_LABEL, DOWNTIME_REASON_LABEL, EXAM_DAY, EXAM_ROOMS, examApi, type ExamBoard, type ExamView } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 import { addDays, now, today } from '@/utils/date'
@@ -56,6 +58,8 @@ async function confirmFinish() {
 }
 // 停機：登記（放射師、放射科醫師）、提早結束；排在停機時段的一鍵排到下一個空檔（櫃台）
 const hoursOpen = ref(false)
+// 放射師排班（首頁「檢查沒有放射師」帶 ?roster=1 直接打開）
+const rosterOpen = ref(useRoute().query.roster === '1')
 const dtOpen = ref(false)
 const dt = reactive({ room: 'XR', fromD: today(), fromT: '', toD: today(), toT: '', reason: 'maintenance' as 'maintenance' | 'breakdown', note: '' })
 function openDowntime() {
@@ -98,6 +102,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
   <div class="space-y-4">
     <UPageHeader title="影像檢查室" :description="`排程（依各檢查室開放時段，同一間不能撞期）、報到、確認檢查前準備、完成；完成後才進判讀清單`">
       <UButton variant="secondary" @click="hoursOpen = true">開放時段</UButton>
+      <UButton variant="secondary" @click="rosterOpen = true">放射師排班</UButton>
       <UButton v-if="board?.canPerform" variant="secondary" :icon="Wrench" @click="openDowntime">登記停機</UButton>
       <input v-model="date" type="date" class="form-control w-44" aria-label="日期" />
     </UPageHeader>
@@ -129,6 +134,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
           </ul>
           <p v-if="!board.canSchedule" class="px-4 pb-2 text-xs text-slate-500">排程由櫃台處理（放射科醫師可支援）；報到後由放射師確認準備、完成檢查。</p>
         </UCard>
+        <p v-if="board.unstaffed" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">未來 14 天有 {{ board.unstaffed }} 筆已排的檢查，那段時間沒有排放射師（「放射師排班」）</p>
         <div v-if="board.downtimes.length || board.downtimeStats.some((x) => x.count)" class="space-y-1 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
           <div v-for="d in board.downtimes" :key="d.id" class="flex flex-wrap items-center gap-2">
             <Wrench class="h-4 w-4 text-amber-700" /><b>{{ d.roomName }}</b><span>{{ d.text }}</span><UBadge v-if="d.active" tone="red">停機中</UBadge>
@@ -139,7 +145,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
           <p class="text-xs text-slate-500">近 30 天停機：{{ board.downtimeStats.filter((x) => x.count).map((x) => `${x.name} ${x.hours} 小時（${x.count} 次）`).join('、') || '沒有' }}</p>
         </div>
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <UCard v-for="r in board.rooms" :key="r.room" :title="`${r.name}（${r.hoursText}）`" :padded="false">
+          <UCard v-for="r in board.rooms" :key="r.room" :title="`${r.name}（${r.hoursText}）${r.staff ? `・放射師 ${r.staff}` : ''}`" :padded="false">
             <p v-if="!r.exams.length" class="px-4 py-3 text-sm text-slate-400">這天沒有排檢查</p>
             <ul v-else class="divide-y divide-slate-100 text-sm">
               <li v-for="e in r.exams" :key="e.id" class="space-y-1 px-4 py-2">
@@ -160,6 +166,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 <p v-if="e.mri" :class="['text-xs', e.mri.level === 'unsafe' ? 'font-semibold text-red-700' : 'text-amber-800']">{{ e.mri.level === 'unsafe' ? `MRI 不安全植入物：${e.mri.items.join('、')}（放射科確認：${e.mri.reason}）` : `MRI 有條件植入物：${e.mri.items.join('、')}，照廠商條件掃描` }}</p>
                 <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
                   <UButton v-if="board.canSchedule" size="sm" :loading="resched.pending.value" @click="resched.run(e.id)">排到下一個空檔</UButton></p>
+                <p v-if="e.noStaff && e.stage === 'scheduled'" class="text-xs font-semibold text-amber-800">{{ e.noStaff }}（請放射科組長在「放射師排班」補人）</p>
                 <p v-if="e.noShow" class="text-xs text-red-700">過了排程 30 分鐘還沒報到{{ e.where === '門診' ? '（開立醫師首頁看得到）' : '（請聯絡病房）' }}：改時間或取消</p>
                 <div v-if="moving === e.id" class="flex flex-wrap items-end gap-2">
                   <UInput v-model="slotOf(e.key).d" type="date" class="w-40" label="新日期" />
@@ -190,6 +197,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
       </template>
     </UQueryState>
     <ExamHoursDialog v-model="hoursOpen" />
+    <RadRosterDialog v-model="rosterOpen" />
     <UDialog v-model="dtOpen" title="登記檢查室停機" size="md">
       <div class="space-y-3 text-sm">
         <div class="grid grid-cols-2 gap-3">

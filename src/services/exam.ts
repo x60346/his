@@ -18,6 +18,8 @@ import { addDays } from '@/utils/date'
 import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type ImagingWorkItem } from './imaging-work'
 import { find, nameOf } from './views'
 import { mriRiskOf } from './implant-work'
+import { examStaffMissing, radUnstaffedExams } from './rad-roster-work'
+import { RAD_BLOCKS, RAD_ROOMS } from './rad-roster-rules'
 
 export interface ExamView extends ImagingExam {
   stage: ExamStage
@@ -39,6 +41,8 @@ export interface ExamView extends ImagingExam {
   metforminAlertText?: string
   /** 還沒報到、排在停機時段裡：要改期（停機的說明） */
   downtimeClash?: string
+  /** 一般攝影、電腦斷層、磁振造影：這段時間沒有排放射師（不擋，提醒排班） */
+  noStaff?: string
 }
 /** 有效的停機（提早結束成零長度的不算） */
 const liveDowntimes = () => db.roomDowntimes.filter((d) => downtimeEnd(d) > d.from)
@@ -108,6 +112,7 @@ function view(e: ImagingExam): ExamView {
     prepItems: prepDefs(e.procId).map((d) => ({ ...d, ...(e.prep?.[d.id] ? { ok: e.prep[d.id].ok, ...(e.prep[d.id].note ? { note: e.prep[d.id].note } : {}) } : {}) })),
     ...(!e.doneAt && contrastOf(e) ? { contrast: contrastOf(e) } : {}),
     safety: e.doneAt ? {} : safetyOf(e),
+    ...(!e.arrivedAt && !e.cancelled ? ((m) => (m ? { noStaff: m } : {}))(examStaffMissing(e)) : {}),
     ...(!e.arrivedAt && !e.cancelled ? ((why) => (why ? { downtimeClash: `${examRoomName(e.room)}${why}，請改期` } : {}))(rescheduleWhy(e)) : {}),
     ...(e.metforminAlert ? { metforminAlertText: `暫停 Metformin 到 ${e.metforminAlert.until.slice(5)}（${METFORMIN_HOLD_HOURS} 小時），複查腎功能再恢復${e.metforminAlert.ackAt ? `；${nameOf.user(e.metforminAlert.ackBy!)} 已處理` : ''}` } : {}),
   }
@@ -153,7 +158,9 @@ export interface ExamBoard {
   toSchedule: (ImagingWorkItem & { room: string; roomName: string; minutes: number; prep: string[]; contrast?: ExamView['contrast']; safety: ContrastSafety; cancelledReason?: string })[]
   /** 放射科醫師可以放行顯影劑過敏 */
   canClear: boolean
-  rooms: { room: string; name: string; hoursText: string; exams: ExamView[] }[]
+  rooms: { room: string; name: string; hoursText: string; exams: ExamView[]; /** 這天的放射師（要放射師的檢查室）：上午 某某・下午 — */ staff?: string }[]
+  /** 未來 14 天已排、沒有放射師的檢查筆數 */
+  unstaffed: number
 }
 
 export function examBoard(date: string): Promise<ExamBoard> {
@@ -179,10 +186,11 @@ export function examBoard(date: string): Promise<ExamBoard> {
       canClear: sessionRole() === 'doctor' && isRadiologist(u?.doctorId),
       toSchedule,
       canEditHours: canEditHours(),
-      rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, hoursText: examDayText(dayOf(r.id, date)), exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
+      rooms: EXAM_ROOMS.map((r) => ({ room: r.id, name: r.name, hoursText: examDayText(dayOf(r.id, date)), ...(RAD_ROOMS.includes(r.id) ? { staff: RAD_BLOCKS.map((b) => `${b.label} ${((s) => (s ? nameOf.user(s.userId) : '—'))(db.radShifts.find((x) => x.date === date && x.room === r.id && x.block === b.key))}`).join('・') } : {}), exams: liveExams().filter((e) => e.room === r.id && e.start.slice(0, 10) === date).sort((x, y) => x.start.localeCompare(y.start)).map(view) })),
       downtimes: liveDowntimes().filter((d) => d.from.slice(0, 10) <= date && downtimeEnd(d).slice(0, 10) >= date).sort((a, b) => a.from.localeCompare(b.from)).map((d) => dtView(d)),
       downtimeStats: downtimeHours(db.roomDowntimes, `${addDays(now().slice(0, 10), -30)} 00:00`, now()),
       needsReschedule: needsReschedule().length,
+      unstaffed: radUnstaffedExams(now()).length,
     }
   })
 }
