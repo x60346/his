@@ -6905,7 +6905,8 @@ try {
     ok(msg.includes('月份'), '月份格式')
     const r = await M.managementReport(month)
     const c = r.current
-    ok(r.partial && r.to === T && c.hasData, `本月（算到 ${r.to}）有資料`)
+    // 月底最後一天：本月已經完整（partial 是 false）
+    ok((r.partial || T === dateUtil.addDays(`${api.shiftMonth(month, 1)}-01`, -1)) && r.to === T && c.hasData, `本月（算到 ${r.to}）有資料`)
 
     // 收入和日結同一份
     const rep = await api.chargeApi.dailyReport(r.from, r.to)
@@ -6918,7 +6919,8 @@ try {
     ok(r.opdByDept.reduce((n, d) => n + d.visits, 0) === c.opdVisits && r.opdByDoctor.reduce((n, d) => n + d.visits, 0) === c.opdVisits && r.opdByDept.every((d, i, a) => i === 0 || a[i - 1].visits >= d.visits), '科別、醫師加總＝門診人次，多的在前')
     const days = dateUtil.diffDays(r.from, r.to) + 1
     ok(c.occupancy === Math.round((c.patientDays / (r.beds * days)) * 1000) / 10 && r.ipdByDept.reduce((n, d) => n + d.patientDays, 0) === c.patientDays, `佔床率 ${c.occupancy}%＝住院人日 ${c.patientDays}÷（${r.beds} 床 × ${days} 天）；科別加總一致`)
-    const todayCensus = db().admissions.filter((a) => a.status === 'admitted' && a.admittedAt && a.admittedAt.slice(0, 10) <= T).length
+    // 急診留觀（沒轉住院的）不算住院人日：月初第一天住院人日只有今天一天，算進去就會比較出錯
+    const todayCensus = db().admissions.filter((a) => a.status === 'admitted' && a.admittedAt && a.admittedAt.slice(0, 10) <= T && (!a.obs || a.obs.outcome === 'admit')).length
     ok(c.patientDays >= todayCensus, `今天在院 ${todayCensus} 人有算進住院人日`)
     ok(c.labReports === db().labReports.filter((x) => x.reportedAt.slice(0, 10) >= r.from && x.reportedAt.slice(0, 10) <= r.to).length, `檢驗報告 ${c.labReports} 份、影像 ${c.imagingReports} 份、門診處方 ${c.prescriptions} 張`)
 
@@ -8056,7 +8058,8 @@ try {
     ok(cell.nurses.length === 1 && db().nurseShifts.filter((x) => x.date === d2 && x.ward === W && x.shift === '大夜').length === 1, '整班取代：大夜改成 1 人')
     const cell0 = await S.setShiftNurses(W, d2, '大夜', [])
     ok(cell0.ratio.over === db().admissions.some((a) => a.status === 'admitted' && db().beds.find((b) => b.id === a.bedId)?.ward === W), '不排人：有病人就標紅（不擋）')
-    const r = await S.copyPreviousMonth(W, today0.slice(0, 7))
+    // 複製到兩天後那一天所在的月份（月底時兩天後已經是下個月）
+    const r = await S.copyPreviousMonth(W, d2.slice(0, 7))
     ok(r.copied >= 1 && db().nurseShifts.some((x) => x.date === d2 && x.ward === W && x.shift === '大夜'), `複製上個月：補上沒排的班（${r.copied} 人次）`)
     // 護病比上限
     await expectError(() => S.saveRatio({ 白班: 3, 小夜: 11, 大夜: 15 }), '護理長改護病比上限（管理員）')
@@ -17027,9 +17030,11 @@ try {
     await as('clerk01')
     await api.ipdChargeApi.payIpd('A-DAY-1', { payMethod: 'card', received: 0 })
     await as('clerk02')
-    let b0 = await C.claimBoard('ipd', M0)
+    // 日間手術昨天出院：每月 1 號時昨天是上個月，看出院那個月的申報
+    const DM = db().admissions.find((a) => a.id === 'A-DAY-1').dischargedAt.slice(0, 7)
+    let b0 = await C.claimBoard('ipd', DM)
     const day = b0.rows.find((r) => r.refId === 'A-DAY-1')
-    ok(day && day.caseType === 'DAY' && day.caseLabel === '日間手術' && day.categories.implant > 0 && day.categories.surgery > 0 && !day.categories.ward && day.problems.length === 1 && day.problems[0].includes('編碼'), '這個月：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘；剛出院還沒編碼審查）')
+    ok(day && day.caseType === 'DAY' && day.caseLabel === '日間手術' && day.categories.implant > 0 && day.categories.surgery > 0 && !day.categories.ward && (DM === M0 ? day.problems.length === 1 && day.problems[0].includes('編碼') : !day.problems.length), DM === M0 ? '這個月：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘；剛出院還沒編碼審查）' : '上個月（每月 1 號）：日間手術（沒有病房費、手術麻醉與網膜歸類、不用出院病摘；上個月出院的種子已編碼）')
     // 檢核（測試輔助製造問題）
     const r1 = b.rows[0]
     const a1 = db().admissions.find((a) => a.id === r1.refId)
@@ -17046,7 +17051,7 @@ try {
     const sg = db().surgeries.find((s) => s.id === 'SG-DAY-1')
     const keep = sg.implants
     sg.implants = []
-    b0 = await C.claimBoard('ipd', M0)
+    b0 = await C.claimBoard('ipd', DM)
     ok(b0.rows.find((r) => r.refId === 'A-DAY-1').problems.some((p) => p.includes('批號')), '用了植入物沒登記批號')
     sg.implants = keep
     // 送出、匯出
@@ -17503,7 +17508,8 @@ try {
     await as('clerk01')
     await api.ipdChargeApi.payIpd('A-DAY-1', { payMethod: 'card', received: 0 })
     await as('clerk02')
-    const b0 = await api.claimApi.claimBoard('ipd', T.slice(0, 7))
+    // 日間手術昨天出院：每月 1 號時是上個月
+    const b0 = await api.claimApi.claimBoard('ipd', db().admissions.find((a) => a.id === 'A-DAY-1').dischargedAt.slice(0, 7))
     const day = b0.rows.find((x) => x.refId === 'A-DAY-1')
     ok(day.drgExempt === '日間手術' && !day.drg && day.claim === api.claimOf(day.points, day.copay) && b0.totals.drg.exempt >= 1, '日間手術不適用 DRG：照實申報、合計算不適用')
     const csv = (await api.claimApi.claimCsvOf('ipd', M)).csv
@@ -17693,6 +17699,9 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     await as('clerk01')
     const before = (await C.codingQueue()).done.find((x) => x.admissionId === cand.id) ?? null
     const curCode = cand.coding.mainDiagnosis.split(' ')[0]
+    // 原本的次診斷（改回去時要原樣帶回）：原本沒有次診斷欄位的，DRG 是看病史的合併症——改回去要帶入那幾個，不然會變成「沒有合併症」
+    const DR = await load('/src/services/drg-rules.ts')
+    const sec0 = cand.coding.secondary ? [...cand.coding.secondary] : DR.ccCodesIn(DR.historyFrom(db().encounters, db().admissions, cand.patientId, cand.id), DR.mainDiagnosisFrom(cand)).map((c) => ({ icd: c, name: db().icdCodes.find((k) => k.code === c)?.name ?? '' }))
     // 找一個會換 DRG 組的主診斷
     let alt
     const base0 = await C.previewCoding(cand.id, { mainIcd: curCode, secondary: cand.coding.secondary ?? [] })
@@ -17724,7 +17733,7 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok((await load('/src/services/claim-work.ts')).supplementNoteOf([{ diagnosis: 'A01 x', drg: { code: '1' } }], { diagnosis: 'A01 x', drg: { code: '1' } }) === undefined, '補收、作廢的補報：不寫改碼')
     await as('clerk01')
     // 再更正回原來的：差額歸零（不列補報）
-    const back = await C.recodeCoding(cand.id, { mainIcd: curCode, secondary: before?.secondary ?? [], reason: '再複審：維持原診斷' })
+    const back = await C.recodeCoding(cand.id, { mainIcd: curCode, secondary: sec0, reason: '再複審：維持原診斷' })
     ok(back.item.coded.revisions.length === 2 && back.item.claimed && back.item.claimed.delta === 0, '改回原本的：更正紀錄 2 筆、補報差額 0')
     const { readFileSync } = await import('node:fs')
     ok(!/supplementDelta|claimSubmissions|db\./.test(readFileSync('src/pages/claim/CodingPage.vue', 'utf8')), '補報差額由服務層算')
@@ -17936,10 +17945,12 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok(pvS.code.startsWith('D167') && !pvN.code.startsWith('D167') && pvN.code !== 'D999S' && pvO.code === 'D999S', `試算：闌尾切除 ${pvS.code}、只有呼吸器（非手術室）${pvN.code}、膽囊切除（不在分組表）${pvO.code}`)
     ok((await fieldsOf(() => C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [{ code: 'NOPE' }] }))).procedures?.includes('不在主檔'), '處置碼不在主檔：擋')
     ok((await fieldsOf(() => C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [...it.suggestedProcedures, { code: '5A1955Z' }] }))).reason, '加了處置碼＝修改，要寫理由')
+    // 比較基準：同樣的主診斷、次診斷、建議處置碼，只差沒加呼吸器（確認前的 DRG 可能因為主診斷改用別的碼而不同）
+    const pvBase = await C.previewCoding(a.id, { mainIcd, secondary: it.secondary, procedures: it.suggestedProcedures })
     const r = await C.confirmCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [...it.suggestedProcedures, { code: '5A1955Z' }], reason: '補登呼吸器使用' })
     const a2 = db().admissions.find((x) => x.id === a.id)
     ok(a2.coding.procedures.some((p) => p.code === '5A1955Z') && a2.coding.before.procedures && r.item.procedures.find((p) => p.code === '5A1955Z').or === false && db().auditLogs[0].detail.includes('處置：'), '登錄：處置碼存在編碼、修改前留著、標非手術室、稽核')
-    ok(r.drgAfter.code === r.drgBefore.code, '只加非手術室處置：DRG 不變')
+    ok(r.drgAfter.code === pvBase.code, `只加非手術室處置：DRG 不變（${pvBase.code}）`)
     // 更正：只改處置碼也算更正
     const r2 = await C.recodeCoding(a.id, { mainIcd, secondary: it.secondary, procedures: [{ code: '0DTJ4ZZ' }], reason: '複審手術紀錄：有做腹腔鏡闌尾切除' })
     ok(r2.drgAfter.code.startsWith('D167') && a2.coding.revisions.at(-1).procedures.some((p) => p.code === '5A1955Z'), `更正處置碼：DRG ${r2.drgBefore.code} → ${r2.drgAfter.code}、舊的處置碼留在更正前`)

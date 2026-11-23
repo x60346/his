@@ -935,8 +935,13 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 已出院（歷史）
   for (let k = 0; k < 4; k++) {
     const pt = patients[int(0, 23)]
-    const admitDate = addDays(T, -int(20, 90))
-    const dischargeDate = addDays(admitDate, int(3, 8))
+    // 第一位固定 70–89 天前入院：出院在已經申報的月份（上上個月以前），健保申報、編碼更正才有資料（全部亂數的話，月底有時四位都在最近兩個月出院）。
+    // 照樣抽一次亂數，後面的資料不受影響
+    const back = int(20, 90)
+    const admitDate = addDays(T, -(k === 0 ? 70 + (back % 20) : back))
+    const stay = int(3, 8)
+    // 第一位住 5–8 天：DRG 落在定額給付（住太短會低於下限）
+    const dischargeDate = addDays(admitDate, k === 0 ? 5 + (stay % 4) : stay)
     admissions.push({
       id: id('A'), admitNo: `I${admitDate.replace(/-/g, '').slice(2)}${String(next('admitNo')).padStart(3, '0')}`,
       patientId: pt.id, deptId: 'D02', doctorId: 'DR02', preferBedClass: '健保床', reason: '肺炎', diagnosis: 'J18.9 肺炎',
@@ -3022,7 +3027,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   {
     const dr11 = users.find((u) => u.doctorId === 'DR11')!.id
     // 建議（入院後約 74 小時送出）要落在抗生素指標的最近 30 天內：只看出院日的話，依日期可能挑到 30 天前送出的那位
-    const pn = admissions.find((a) => a.status === 'discharged' && a.diagnosis.startsWith('J18') && a.dischargedAt! >= `${addDays(T, -28)} 00:00` && a.dischargedAt! > addMinutes(a.admittedAt!, 4 * 24 * 60) && addMinutes(a.admittedAt!, 74 * 60) >= `${addDays(T, -28)} 00:00`)
+    const pn = admissions.find((a) => a.status === 'discharged' && a.diagnosis.startsWith('J18') && a.dischargedAt! >= `${addDays(T, -28)} 00:00` && a.dischargedAt! > addMinutes(a.admittedAt!, 4 * 24 * 60) && addMinutes(a.admittedAt!, 74 * 60) >= `${addDays(T, -28)} 00:00`
+      // 這位之後吃 Augmentin 起紅疹、會加 Penicillin 過敏：住院之後的門診不能已經開過 Penicillin 類（歷史門診比這裡早產生，不知道之後的過敏）
+      && !encounters.some((e) => e.patientId === a.patientId && e.date >= a.admittedAt!.slice(0, 10) && checkAllergies(['Penicillin'], e.medications.map((m) => drugMap.get(m.drugId)!)).length > 0))
     if (pn) {
       const start = addMinutes(pn.admittedAt!, 60)
       const sentAt = addMinutes(start, 73 * 60)
@@ -3546,7 +3553,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         const tpl = visits.find((x) => x.deptId === d.v.deptId && x.date > T && x.status === 'registered' && !x.er)
         if (!tpl) continue
         const seq = Math.max(0, ...visits.filter((x) => x.sessionId === tpl.sessionId).map((x) => x.seqNo)) + 1
-        visits.push({ id: 'V-FA-1', date: tpl.date, sessionId: tpl.sessionId, deptId: tpl.deptId, doctorId: tpl.doctorId, patientId: d.v.patientId, seqNo: seq, identityCode: d.v.identityCode, caseType: d.v.caseType, cardSeq: tpl.cardSeq, status: 'registered', firstVisit: false, preventItems: [], createdAt: notFuture(addMinutes(d.e!.completedAt ?? nowStr, 10), 5) })
+        // 號碼要依時間先後（流程測試 B11）：掛號時間不早於那一診已經掛的、就醫序號接這位病人最後一號
+        const lastAt = [addMinutes(d.e!.completedAt ?? nowStr, 10), ...visits.filter((x) => x.sessionId === tpl.sessionId).map((x) => addMinutes(x.createdAt, 1))].sort().at(-1)!
+        const cardSeq = String(Math.max(0, ...visits.filter((x) => x.patientId === d.v.patientId).map((x) => Number(x.cardSeq) || 0)) + 1).padStart(4, '0')
+        visits.push({ id: 'V-FA-1', date: tpl.date, sessionId: tpl.sessionId, deptId: tpl.deptId, doctorId: tpl.doctorId, patientId: d.v.patientId, seqNo: seq, identityCode: d.v.identityCode, caseType: d.v.caseType, cardSeq, status: 'registered', firstVisit: false, preventItems: [], createdAt: notFuture(lastAt, 5) })
         booked = d
         break
       }
@@ -3561,7 +3571,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     if (rest[0]) followUpAdvices.push(mk('FA-SEED-2', rest[0].v, { weeks: 2, reason: '追蹤血壓' }))
     const other = rest[1] && codes.departments.find((d) => d.id !== rest[1].v.deptId && d.code !== 'ER' && codes.doctors.some((x) => x.deptId === d.id))
     if (rest[1] && other) followUpAdvices.push(mk('FA-SEED-3', rest[1].v, { weeks: 4, reason: '心臟功能評估', deptId: other.id, doctorId: codes.doctors.find((x) => x.deptId === other.id)!.id }))
-    const old = visits.filter((v) => v.date >= addDays(T, -20) && v.date <= addDays(T, -15)).sort((a, b) => b.date.localeCompare(a.date)).find((v) => !v.er && ['charged', 'dispensed'].includes(v.status) && !visits.some((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.date > v.date && x.status !== 'cancelled'))
+    // 建議一週後回診、過了一週還沒掛才算過期：就診要在 14 天前以前；只找 15–20 天前的話，有些日期那幾天剛好沒有符合的就診
+    const old = visits.filter((v) => v.date >= addDays(T, -30) && v.date <= addDays(T, -15)).sort((a, b) => b.date.localeCompare(a.date)).find((v) => !v.er && ['charged', 'dispensed'].includes(v.status) && !visits.some((x) => x.patientId === v.patientId && x.deptId === v.deptId && x.date > v.date && x.status !== 'cancelled'))
     if (old) followUpAdvices.push(mk('FA-SEED-4', old, { weeks: 1, reason: '藥物調整後複診' }))
   }
 
