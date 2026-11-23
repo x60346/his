@@ -262,8 +262,8 @@ const wardTotals = computed(() => ({
             <li v-for="p in patients" :key="p.id">
               <button :class="['w-full px-3 py-2.5 text-left hover:bg-slate-50', p.id === admissionId && '!bg-brand-50']" @click="admissionId = p.id">
                 <div class="flex items-center gap-2">
-                  <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ p.bed?.bedNo ?? '日間' }}</span>
-                  <span class="font-medium text-slate-800">{{ p.patientName }}</span>
+                  <span class="tabular shrink-0 whitespace-nowrap rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ p.bed?.bedNo ?? '日間' }}</span>
+                  <span class="shrink-0 whitespace-nowrap font-medium text-slate-800">{{ p.patientName }}</span>
                   <!-- 責任護理師：自己的不寫（「我的病人」時每一列都是自己，只會擠壓姓名）；別人的寫名字、沒分的標「未分床」 -->
                   <span v-if="asg && ward !== masterApi.staticCodes.obsWard && p.nurseId !== auth.user?.id" :class="['shrink-0 whitespace-nowrap text-xs', p.nurseId ? 'text-slate-500' : 'text-amber-700']">{{ p.nurseName ?? '未分床' }}</span>
                   <AlertTriangle v-if="p.allergies.length" class="h-3.5 w-3.5 text-red-600" :title="`過敏：${p.allergies.join('、')}`" />

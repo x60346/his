@@ -6,7 +6,7 @@ import { checkAllergies } from './allergy'
 import { checkRxAlerts, RX_ALERT_KIND_LABEL } from './interaction-rules'
 import { drugRefs, ipdInUse } from './rx-alert-work'
 import { doseLevel, doseNote } from './dose-rules'
-import { renalAlertOf } from './renal-work'
+import { renalAlertOf, renalOf } from './renal-work'
 import { openPharmQuery } from './pharm-rules'
 import { find } from './views'
 
@@ -38,6 +38,11 @@ export function pharmIssuesOf(o: IpdOrder): PharmIssue[] {
   if (lv === 'high' || lv === 'absurd') out.push({ level: lv === 'absurd' ? 'severe' : 'caution', kind: '劑量', text: doseNote(d, o.dose!) })
   const r = renalAlertOf(o)
   if (r) out.push({ level: r.includes('停用') ? 'severe' : 'caution', kind: '腎功能', text: r })
+  // 要依腎功能調整的藥、但算不出 CrCl：不能說「腎功能沒問題」，列出來請藥師確認（例：建議抽肌酸酐）
+  else if (d.renal?.length && o.category === 'medication') {
+    const ri = renalOf(o.admissionId)
+    if (ri.crcl === null && ri.text) out.push({ level: 'caution', kind: '腎功能', text: `要依腎功能調整劑量，但 ${ri.text}（請確認，或建議抽血）` })
+  }
   if (o.abx?.status === 'rejected') out.push({ level: 'caution', kind: '管制性抗生素', text: '感染科審核未通過' })
   else if (o.abx?.status === 'pending') out.push({ level: 'caution', kind: '管制性抗生素', text: '待感染科審核（先用後審）' })
   return out.sort((x, y) => Number(x.level === 'caution') - Number(y.level === 'caution'))

@@ -397,7 +397,7 @@ async function submitNote() {
             <button :class="['w-full px-3 py-2.5 text-left hover:bg-slate-50', a.id === admissionId && '!bg-brand-50']" @click="admissionId = a.id">
               <div class="flex items-center gap-2">
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
-                <span class="font-medium text-slate-800">{{ a.patientName }}</span>
+                <span class="shrink-0 whitespace-nowrap font-medium text-slate-800">{{ a.patientName }}</span>
                 <UBadge v-if="a.lastTransfer?.status === 'pending'" tone="blue" :title="`已申請轉${a.lastTransfer.toDeptName}`">轉科中</UBadge>
                 <span class="ml-auto" />
                 <UBadge v-if="a.consultOrdersUnseen" tone="purple" :title="`會診醫師新開了 ${a.consultOrdersUnseen} 筆醫囑，待已閱`">會診醫囑 {{ a.consultOrdersUnseen }}</UBadge>
