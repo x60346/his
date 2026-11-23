@@ -5,6 +5,7 @@ import type { Drug } from '@/types'
 const allergyClasses: Record<string, string[]> = {
   Penicillin: ['amoxicillin', 'clavulanate', 'penicillin', 'ampicillin'],
   Cephalosporin: ['cephalexin', 'ceftriaxone', 'cefazolin'],
+  // Aspirin 過敏只對 Aspirin 本身警示，不延伸到其他 NSAIDs（Ibuprofen 等）——2026-11-23 使用者決定維持，回顧時不要當成漏洞改掉
   Aspirin: ['acetylsalicylic'],
   NSAIDs: ['ibuprofen', 'celecoxib', 'diclofenac', 'acetylsalicylic', 'naproxen'],
   Sulfa: ['sulfamethoxazole', 'sulfasalazine'],
