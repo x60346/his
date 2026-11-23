@@ -2,6 +2,7 @@
 import { commitIfPossible, db } from '@/mock/db'
 import { consentScanOverdue } from './consent-rules'
 import { escalateTo, readingAlertPending, readingEscalated } from './bedside-work'
+import { dutyDateOf, isOffHours } from './duty-rules'
 import { radUnstaffedExams } from './rad-roster-work'
 import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
@@ -164,6 +165,10 @@ export interface DashboardStats {
   radRequestsPending?: number
   /** 主治：床邊處置送檢的異常判讀（滲出液、腹膜炎、細菌性腦膜炎）還沒知悉 */
   bedsideAlerts?: number
+  /** 主治：夜間值班醫師寫的值班紀錄還沒看（我主治、住院中） */
+  dutyNotesUnread?: number
+  /** 醫師：今晚（下班時間就是這一班）我值班的科、住院中幾位 */
+  dutyTonight?: { depts: string; inpatients: number }
   /** 同科醫師：別人主治的病人異常判讀超過 2 小時沒知悉（升級） */
   bedsideAlertsEscalated?: number
   /** 加護病房重症流程表超過 75 分鐘沒記的病人（護理師，我的病人範圍） */
@@ -528,6 +533,8 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { mdroAlerts: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult' && mdroAlertsOf(a.patientId, t).length > 0).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? {
+            ...((mine) => (mine.length ? { dutyTonight: { depts: mine.map((s) => nameOf.dept(s.deptId)).join('、'), inpatients: db.admissions.filter((a) => a.status === 'admitted' && !a.obs && mine.some((s) => s.deptId === a.deptId)).length } } : {}))(db.dutyShifts.filter((s) => s.userId === me.id && s.date === (isOffHours(t) ? dutyDateOf(t) : t.slice(0, 10)))),
+            dutyNotesUnread: db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === me.doctorId && db.progressNotes.some((n) => n.admissionId === a.id && n.kind === 'duty' && !n.dutyAck)).length,
             bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length,
             bedsideAlertsEscalated: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId !== me.doctorId && ((to) => (to.kind === 'oncall' ? to.userId === me.id : careRoleOf(me.doctorId, a)?.kind === 'team'))(escalateTo(a.id, t))) && readingEscalated(p, t)).length,
           } : {}),

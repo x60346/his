@@ -19601,6 +19601,51 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const { readFileSync } = await import('node:fs')
     ok(readFileSync('src/router/routes.ts', 'utf8').includes("name: 'duty'"), '有「醫師值班」頁')
   }
+  // 值班紀錄：下班時間值班醫師寫、隔天主治看；今晚值班首頁提醒
+  console.log('\n[值班紀錄]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    // 種子：昨晚值班紀錄、主治還沒看
+    const sn = db().progressNotes.find((n) => n.id === 'PN-SEED-DUTY1')
+    const sa = db().admissions.find((a) => a.id === sn?.admissionId)
+    ok(sn && sn.kind === 'duty' && !sn.dutyAck && sa.doctorId !== sn.doctorId && sn.items.length === 3, '種子：昨晚值班醫師幫別人主治的病人寫了值班紀錄')
+    const att = db().users.find((u) => u.doctorId === sa.doctorId)
+    await as(att.username)
+    ok((await api.dashboardApi.getDashboard()).dutyNotesUnread >= 1, `主治 ${att.username} 首頁：值班紀錄待看`)
+    let st = await api.dutyApi.dutyNotesState(sa.id)
+    ok(st.unread.length === 1 && st.canAck, '住院醫囑：看到值班紀錄、可以按已看')
+    const outsider = db().users.find((u) => u.doctorId && db().doctors.find((d) => d.id === u.doctorId)?.deptId !== sa.deptId && !u.passwordExpired)
+    await as(outsider.username)
+    ok((await errOf(() => api.dutyApi.ackDutyNotes(sa.id))).includes('主治或同科'), '別科醫師不能按已看')
+    await as(att.username)
+    const r = await api.dutyApi.ackDutyNotes(sa.id)
+    ok(r.count === 1 && db().progressNotes.find((n) => n.id === sn.id).dutyAck?.by === att.id && db().auditLogs[0].action === '值班紀錄已看', '主治已看：記人、稽核')
+    ok(!(await api.dashboardApi.getDashboard()).dutyNotesUnread && (await errOf(() => api.dutyApi.ackDutyNotes(sa.id))).includes('沒有要確認'), '首頁消失、不能重複')
+    // 寫值班紀錄：上班時間不行；晚上 22:00 只有那一科的值班醫師
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.deptId === 'D02')
+    const wd = new Date(`${T}T00:00:00`).getDay()
+    const onCall = db().users.find((u) => u.id === db().dutyShifts.find((s) => s.deptId === 'D02' && s.date === T).userId)
+    await as(onCall.username)
+    if (wd !== 0 && wd !== 6) ok((await errOf(() => api.dutyApi.addDutyNote({ admissionId: adm.id, event: 'x', action: 'y' }))).includes('上班時間'), '上班時間：請寫一般病程')
+    else ok(true, '（週末全天值班，略過上班時間的測試）')
+    setClock(22, 0)
+    try {
+      ok((await fieldsOf(() => api.dutyApi.addDutyNote({ admissionId: adm.id, event: ' ', action: 'y' }))).event, '要寫發生什麼事')
+      const n = await api.dutyApi.addDutyNote({ admissionId: adm.id, event: '21:40 血氧 88%', action: '給氧氣 3 L，復測 95%', handover: '明早胸部 X 光' })
+      ok(n.kind === 'duty' && n.items.map((i) => i.label).join() === '事件,處理,交代主治' && db().auditLogs[0].action === '值班紀錄', '值班醫師寫值班紀錄：事件、處理、交代主治')
+      ok((await api.dutyApi.dutyNotesState(adm.id)).canWrite, '值班醫師看得到「寫值班紀錄」')
+      const other = db().users.find((u) => u.doctorId && u.id !== onCall.id && !u.passwordExpired)
+      await as(other.username)
+      ok((await errOf(() => api.dutyApi.addDutyNote({ admissionId: adm.id, event: 'x', action: 'y' }))).includes('不是'), '不是這一科值班醫師：擋')
+      ok(!(await api.dutyApi.dutyNotesState(adm.id)).canWrite, '別人看不到「寫值班紀錄」')
+      await as(onCall.username)
+      const d = await api.dashboardApi.getDashboard()
+      ok(d.dutyTonight?.depts.includes('內科') && d.dutyTonight.inpatients >= 1, `今晚值班首頁：${d.dutyTonight?.depts}（住院中 ${d.dutyTonight?.inpatients}）`)
+    } finally { setClock(14, 35) }
+  }
 } catch (e) {
   failed++
   console.error('\n未預期的錯誤：', e)

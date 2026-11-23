@@ -4075,6 +4075,18 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // 值班紀錄（示範）：昨晚的值班醫師凌晨處理了別人主治的住院病人（發燒），寫了值班紀錄，主治還沒看
+  {
+    const at = `${T} 02:10`
+    const pick2 = admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && ((s) => s && users.find((u) => u.id === s.userId)?.doctorId !== a.doctorId)(dutyShifts.find((s) => s.deptId === a.deptId && s.date === addDays(T, -1))))
+    const s = pick2 && dutyShifts.find((x) => x.deptId === pick2.deptId && x.date === addDays(T, -1))
+    if (pick2 && s && nowStr > `${T} 03:00`) {
+      progressNotes.push({ id: 'PN-SEED-DUTY1', admissionId: pick2.id, at: addMinutes(at, 50), doctorId: users.find((u) => u.id === s.userId)!.doctorId!, kind: 'duty',
+        items: [{ label: '事件', text: '02:10 發燒 38.6°C，心跳 108，血壓 112/70，意識清楚' }, { label: '處理', text: '抽血培養兩套、給 Acetaminophen 500 mg，03:00 復測 37.9°C' }, { label: '交代主治', text: '早上追蹤培養與白血球，評估抗生素是否要調整' }],
+        subjective: '', objective: '', assessment: '', plan: '' })
+    }
+  }
+
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
   // 明天骨折那台的鎖定骨板：主刀申請、已核准

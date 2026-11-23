@@ -54,7 +54,7 @@ import RequestConsultDialog from './components/RequestConsultDialog.vue'
 import AnswerConsultDialog from './components/AnswerConsultDialog.vue'
 import { bloodApi, consultApi, drgApi, imagingApi, labApi, type ConsultView, type IncomingConsult } from '@/services'
 import type { IncomingTransfer } from '@/services/admission'
-import { abxApi, abxStewardApi, pharmApi, medrecApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
+import { abxApi, abxStewardApi, dutyApi, pharmApi, medrecApi, admissionApi, type AbxAdviceView, DISCHARGE_RX_CHRONIC_DAYS, DISCHARGE_RX_DAYS, doseLevel, doseNote, ipdApi, isAbnormal, masterApi, nursingApi, opdApi, type VitalKey } from '@/services'
 import type { OrderView } from '@/services/ipd'
 import { useAction, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -116,7 +116,7 @@ const cancelConsultOpen = computed({ get: () => !!cancelling.value, set: (v) => 
 async function confirmCancelConsult(reason: string) {
   if (cancelling.value && (await cancelConsult.run(cancelling.value.id, reason))) cancelling.value = null
 }
-const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', consult: '會診申請', consultReply: '會診回覆', icuOut: '加護病房轉出摘要' } as const
+const noteKind = { transferOut: '轉出摘要', transferIn: '接收評估', consult: '會診申請', consultReply: '會診回覆', icuOut: '加護病房轉出摘要', duty: '值班紀錄' } as const
 
 // ---------- 醫囑 ----------
 const { data: orders, loading: ordersLoading } = useQuery(async () => (admissionId.value ? ipdApi.listOrders(admissionId.value) : []), [admissionId])
@@ -324,6 +324,20 @@ const phrase = usePhrases()
 const { data: notes } = useQuery(async () => (admissionId.value ? ipdApi.listProgressNotes(admissionId.value) : []), [admissionId])
 const note = reactive({ subjective: '', objective: '', assessment: '', plan: '' })
 const addNote = useAction(ipdApi.addProgressNote, { success: '已新增病程紀錄' })
+// 值班紀錄（夜間值班醫師寫、隔天主治看）
+const { data: duty } = useQuery(async () => (admissionId.value ? { id: admissionId.value, v: await dutyApi.dutyNotesState(admissionId.value) } : undefined), [admissionId])
+const ackDuty = useAction(dutyApi.ackDutyNotes, { success: (r) => `已看 ${r.count} 筆值班紀錄` })
+const dutyOpen = ref(false)
+const dutyForm = reactive({ event: '', action: '', handover: '' })
+const writeDuty = useAction(dutyApi.addDutyNote, { success: '已寫值班紀錄（主治明天看得到）' })
+function openDutyNote() {
+  Object.assign(dutyForm, { event: '', action: '', handover: '' })
+  writeDuty.fieldErrors.value = {}
+  dutyOpen.value = true
+}
+async function submitDutyNote() {
+  if (adm.value && (await writeDuty.run({ admissionId: adm.value.id, ...dutyForm }))) dutyOpen.value = false
+}
 // 床邊處置「帶入病程紀錄」：接到今日病程的 O、A 後面，切到病程紀錄分頁（醫師再補 S、P 後存）
 function takeBedsideNote(n: { objective: string; assessment: string }) {
   const join = (a: string, b: string) => (a.trim() ? `${a.trim()}\n${b}` : b)
@@ -404,6 +418,14 @@ async function submitNote() {
         <UButton v-if="!isAdmin" size="sm" variant="secondary" class="ml-auto" :icon="Stethoscope" @click="consultOpen = true">會診</UButton>
         <UButton v-if="!isAdmin && transfer?.status !== 'pending' && !adm.dischargeReady" size="sm" variant="secondary" :icon="ArrowRightLeft" @click="openTransfer()">申請轉科</UButton>
       </PatientBanner>
+      <!-- 值班紀錄：昨晚值班醫師處理的事，主治看過按「已看」；值班醫師（下班時間）在這裡寫 -->
+      <div v-if="duty?.id === adm.id && (duty.v.unread.length || duty.v.canWrite)" class="space-y-1 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm text-indigo-900">
+        <div v-for="n in duty.v.unread" :key="n.id"><b>值班紀錄 {{ n.at.slice(5) }} {{ n.doctorName }}：</b>{{ (n.items ?? []).map((i) => `${i.label} ${i.text}`).join('；') }}</div>
+        <div class="flex flex-wrap gap-2">
+          <UButton v-if="duty.v.unread.length && duty.v.canAck" size="sm" :loading="ackDuty.pending.value" @click="ackDuty.run(adm.id)">已看（接手後續）</UButton>
+          <UButton v-if="duty.v.canWrite" size="sm" variant="secondary" @click="openDutyNote">寫值班紀錄</UButton>
+        </div>
+      </div>
       <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <FlaskConical class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
@@ -694,6 +716,18 @@ async function submitNote() {
       </template>
     </UDialog>
     <OrderDialog v-model="orderOpen" :admission="adm" :preset="orderPreset" />
+    <UDialog v-model="dutyOpen" :title="`值班紀錄：${adm?.patientName ?? ''}`" size="md" @submit="submitDutyNote">
+      <div class="space-y-3 text-sm">
+        <UTextarea v-model="dutyForm.event" label="發生什麼事" :rows="2" placeholder="例：02:10 發燒 38.9°C、血壓 88/50" :error="writeDuty.fieldErrors.value.event" />
+        <UTextarea v-model="dutyForm.action" label="怎麼處理" :rows="2" placeholder="例：抽血培養兩套、給 NS 500 mL、血壓回到 110/62" :error="writeDuty.fieldErrors.value.action" />
+        <UTextarea v-model="dutyForm.handover" label="交代主治（選填）" :rows="2" placeholder="例：早上看培養結果、評估換抗生素" />
+        <p class="text-xs text-slate-500">寫進病程紀錄（值班紀錄），主治明天首頁會看到、按「已看」。</p>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="dutyOpen = false">取消</UButton>
+        <UButton type="submit" :loading="writeDuty.pending.value">儲存</UButton>
+      </template>
+    </UDialog>
     <ReviseOrderDialog :order="revising" @close="revising = null" />
     <RequestTransferDialog v-model="requestOpen" :admission="adm" :from-consult="transferFromConsult" />
     <RequestConsultDialog v-model="consultOpen" :admission="adm" />

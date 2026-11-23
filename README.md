@@ -25,7 +25,7 @@ npm run dev          # 開發伺服器 http://localhost:5180
 | `npm run build` | 型別檢查 + 正式建置（輸出到 `dist/`，可放在任何靜態主機或子目錄） |
 | `npm run preview` | 預覽建置結果 |
 | `npm run typecheck` | 只做型別檢查 |
-| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4975 項） |
+| `npm run smoke` | 流程測試：在 Node 中直接呼叫服務層，跑完整就醫流程與各項規則（4987 項） |
 
 ### 展示帳號
 
@@ -125,6 +125,10 @@ npm run dev          # 開發伺服器 http://localhost:5180
    - **侵入性處置同意書（管路）**：登錄放置**中心靜脈導管、胃造口**時，這次住院要有**這種管路還沒用掉的侵入性處置同意書**（醫師在病人資料「同意書」分頁記錄，選 CVC 或胃造口；同一種還沒用的只能一張）。放置時用掉那張（管路列顯示同意書編號；同意書清單標「已放置」、不能撤回），**換新的要重簽**；**緊急狀況**（醫療法第 63 條但書）或**外院已放置的補登**選原因才能登錄（管路列標「無同意書」、稽核寫原因）。導尿管、留置針、鼻胃管不用；氣管內管照舊（急救插管）。示範資料：敗血症那位的 CVC 有放置前簽的同意書。
    - **出院病歷查病程紀錄**：出院病歷的完整性加上**住院期間每天的病程紀錄**（入院隔天到出院前一天；入院、出院當天不要求），缺的列「病程紀錄缺 N 天：日期」。主治在「健保審查回覆」頁的「出院病歷待完成」按「**補寫病程紀錄**」選缺的那天補寫（S／O／A／P；標「補寫 某日的病程」、時間記實際寫的時候，病歷完成時間算到最後一次補寫）；住院中最近 7 天缺的也可以在這裡補寫（照護團隊；今天的在住院醫囑頁寫）。出院的只有主治能補。示範資料：歷史出院病人每天都有查房紀錄，只有 9 天前出院的肺炎病人缺出院前兩天那天（期限還沒到）。
    - **床邊處置紀錄與同意書**：住院醫囑多一個「床邊處置」分頁（護理站同分頁唯讀）：醫師登錄**腰椎穿刺、胸腔穿刺、腹腔穿刺、胸管置放**——適應症、**處置前暫停**（病人身分、部位與側別都勾才能存）、執行時間、外觀、引流量（胸腔、腹腔穿刺、胸管；胸腔穿刺單次超過 1500 mL、腹腔穿刺超過 5000 mL 要寫原因與病人狀況）、開口壓（腰椎穿刺，選填）、併發症（沒有寫「無」）。**出血風險**：最近的血小板 < 50 或使用中的抗凝血／抗血小板藥（Warfarin、Clopidogrel、Heparin 類、新型口服抗凝血劑；Aspirin 不算）會列出，有的話要寫評估才能存。要有這次住院、**這種處置（有側別的要同側）還沒用掉的侵入性處置同意書**（醫師在病患資料「同意書」分頁記錄，胸腔穿刺、胸管要選側別）；登錄時用掉（同意書標「已執行」、不能撤回），**緊急**（張力性氣胸這類，醫療法第 63 條但書）勾原因才能不要同意書。存檔自動開一筆**已執行的處置醫令**（新的四個計費醫令，一般醫囑開不出來），住院帳單、DRG 預估照醫令帶。示範資料：住院中的肺炎病人昨天下午右側胸腔穿刺 800 mL（有事前簽的右側同意書）。
+   - **值班紀錄、今晚值班提醒（第五十八輪）**：
+     - **值班紀錄**：下班時間，這一科的值班醫師在住院醫囑上方按「寫值班紀錄」：發生什麼事、怎麼處理、交代主治（選填），寫進病程紀錄（標「值班紀錄」，不算每日病程）。上班時間、不是這一科值班醫師的不能寫。隔天主治首頁「值班紀錄待看」，住院醫囑上方列出還沒看的值班紀錄，主治或同科醫師按「已看（接手後續）」（記人、稽核）。示範資料：昨晚值班醫師凌晨處理了別人主治的住院病人發燒，主治還沒看。
+     - **今晚值班提醒**：醫師首頁「今晚你值班：某科」（下班時間就是這一班），數字是那幾科住院中的人數，點進去是醫師值班頁。
+     - **對話框巡檢（續）**：375 寬把住院醫囑（加護病房病人，29 個分頁）每個分頁的按鈕點一遍：病人資料列的會診、申請轉科、撤回對話框都沒有問題；各分頁裡面的按鈕受每頁 30 個的上限，這次沒點到（第五十四輪用另一種方法看過 41 個對話框）。
    - **醫師值班、升級找值班醫師、櫃台與檢驗頁巡檢（第五十七輪）**：
      - **醫師值班**：新頁「醫師值班」（醫師、護理師、櫃台、檢驗、管理員都看得到）：家醫科到復健科每天一位值班醫師（平日 17:00 到隔天 08:00、週六日全天；凌晨 08:00 前算前一天那班），上方寫現在誰值班。權限「醫師值班排班」（預設管理員，示範 `dr02`）可以改，只能排那一科的醫師、不能改過去。示範資料：7 天前到 13 天後，內科兩位輪流。
      - **升級找值班醫師**：床邊處置判讀異常超過 2 小時沒知悉，下班時間改通知那一科的值班醫師（值班的就是主治本人、或沒排值班，才退回同科醫師），紀錄標「已通知值班醫師 某某」；檢驗危急值通報畫面，住院病人在下班時間提示「通報病房護理師或值班醫師 某某」，升級後「改通報值班醫師」。
@@ -372,6 +376,7 @@ scripts/smoke-flow.mjs   流程測試
 | 手術同意書側別 | `Consent.side`；`consent-rules`（`consentMissing` 比對側別、`consentSideMismatch`）；`surgery.changeSurgerySide`；`SurgeryView.consentMissing` 標側別不符；`SurgeryConsents.vue` 更正側別 |
 | 侵入性處置同意書（管路） | `Consent.lineKind`、`LineDevice.consentId`／`consentWaiver`；`consent-rules`（`CONSENT_LINE_KINDS`、`LINE_CONSENT_WAIVERS`、`unusedLineConsent`）；`line.addLine` 把關、`listLines().consentReady`；`consent.recordConsent`（`lineKind`）、`consentTargets().admission.lines`、`revokeConsent` 用掉的擋；`LinePanel.vue`、`ConsentPanel.vue` |
 | 床邊處置 | `BedsideProcedure`（`db.bedsideProcedures`）、`Procedure.bedside`（P068–P071）、`IpdOrder.bedsideId`、`Consent.bedsideKind`；`bedside-rules`（`BEDSIDE_KINDS`、`bleedingRisks`、`unusedBedsideConsent`、`checkBedsideInput`、`BEDSIDE_CONSENT_WAIVERS`）；`bedside.ts`（`listBedside`、`recordBedside`）；`consent.recordConsent`（`bedsideKind`、`side`）、`consentTargets().admission.bedside`；`views.usable.procedure`、`master.listProcedures` 擋；`BedsidePanel.vue`（`IpdPage`、`NursingPage`） |
+| 值班紀錄 | `ProgressNote.kind 'duty'`、`dutyAck`；`duty.ts`（`addDutyNote`、`dutyNotesState`、`ackDutyNotes`、`unreadDutyNotes`、`myDutyTonight`）；`dashboard.dutyNotesUnread`／`dutyTonight`；`IpdPage` 值班紀錄橫幅與對話框 |
 | 醫師值班 | `DutyShift`（`db.dutyShifts`）；`duty-rules`（`DUTY_DEPTS`、`isOffHours`、`dutyDateOf`、`onCallFor`、`dutyHoursText`）；`duty.ts`（`dutyRoster`、`setDuty`）；權限 `duty.schedule`；`bedside-work.escalateTo`、`BedsideView.escalatedToName`；`callout-rules.calloutTarget`（`onCallName`）；`DutyPage.vue`（路由 `duty`） |
 | 請假改排、判讀升級 | `RadShiftRequest.replacedBy`、`RadRequestView.freeTechs`、`decideRadChange` 第四參數；`bedside-work`（`readyAt`、`READING_ESCALATE_HOURS`、`readingEscalated`）、`BedsideView.alertEscalated`、`ackReading` 照護團隊、`myBedsideAlerts`（`escalated`）、`dashboard.bedsideAlertsEscalated`；`WristbandDialog`、`UdCartSheetDialog` 窄畫面 |
 | 放射師當班、請假換班 | `ImagingExam.cover`；`rad-roster-rules.blockNow`；`exam.completeExam`（`coverNote`）、`ExamBoard.myDutyNow`；`RadShiftRequest`（`db.radShiftRequests`）；`rad-roster.requestRadChange`／`decideRadChange`、`RadRoster.myShifts`／`requests`；`dashboard.radRequestsPending`；`RadRosterDialog.vue`、`ExamRoomPage` 完成對話框 |
@@ -830,6 +835,7 @@ scripts/smoke-flow.mjs   流程測試
 - 侵入性處置同意書：種子的 CVC 有同意書且已用掉；清單標已放置；沒同意書 CVC、胃造口擋；原因要從清單選；外院、緊急選原因可登錄；導尿管不用；可記錄對象與管路清單；留置針不能開、沒住院不能開；記錄綁住院與種類；同一種一張；放置用掉、不能撤回；換新要重簽；稽核；撤回後擋
 - 床邊處置：規則（名稱帶側別、出血風險、欄位、開口壓）；種子右側胸腔穿刺有同側同意書與醫令、帳單帶入；一般醫囑開不出、選單不列；沒同意書擋、護理師不能登錄（看得到）；同意書要選側別、同種同側一張、總覽；側別不符擋、處置前暫停擋；登錄用掉同意書、開醫令、稽核；用掉要重簽、不能撤回、清單標已執行；緊急原因要從清單選、記原因；出血風險列出、沒評估擋、記評估與開口壓；出院了不能登錄
 - 同意書紙本掃描：規則（頁數、格式、大小）；種子今天以前的都掃了；出院病歷缺掃描算缺、種子沒有假的；沒選檔擋；附上記紀錄稽核；補掃後完成時間；看掃描；重新掃描換掉；種子有紀錄沒影像；櫃台不能掃
+- 值班紀錄：種子昨晚值班紀錄；主治首頁、住院醫囑看到可按已看；別科不能按；已看稽核、首頁消失、不能重複；上班時間不能寫；要寫事件；值班醫師寫（事件、處理、交代主治）、看得到按鈕；不是值班醫師擋、看不到按鈕；今晚值班首頁
 - 醫師值班：規則（上班下班、週末、凌晨算前一天、誰值班）；種子每科都有；護理師看不能改；有權限可改；不能排別科、不能改過去；排班稽核；沒權限不能改；下班時間升級給值班、值班是主治本人退回同科；危急值提示值班醫師
 - 請假改排與判讀升級：列出有空的、改排已有班的擋、核准並改排；1 小時同科看不到、超過 2 小時同科首頁、紀錄標升級、別科看不到不能按、同科代為知悉、主治首頁消失
 - 放射師當班與請假換班：規則（現在是哪一段）；沒排在這間要寫支援原因、看板告訴畫面、記原因與排班的人、當班不用寫；我的班、請假要原因、不能申請別人的、換給已有班的人擋、送出與不能重複、標申請中、放射師不能核准、組長首頁、退回要原因、請假核准清掉、換班退回不變、看得到被退回、換班核准改人、不能重複處理

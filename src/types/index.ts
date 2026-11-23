@@ -3133,8 +3133,10 @@ export interface ProgressNote {
    * 特殊紀錄（系統依動作寫入，內容在 items）：轉出摘要、接收評估、會診申請、會診回覆。
    * 沒有 kind 的是一般 SOAP 病程紀錄
    */
-  kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply' | 'icuOut'
+  kind?: 'transferOut' | 'transferIn' | 'consult' | 'consultReply' | 'icuOut' | 'duty'
   items?: { label: string; text: string }[]
+  /** 值班紀錄（kind duty）：主治（或同科）隔天看過 */
+  dutyAck?: { at: string; by: string }
   /** 補寫（事後補記某一天的病程）：補的是哪一天（YYYY-MM-DD）；at 是實際寫的時間 */
   lateFor?: string
   subjective: string
