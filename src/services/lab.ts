@@ -14,6 +14,7 @@ import { find, nameOf } from './views'
 import { buildLabValues, labNeedsAck, labRefText } from './lab-rules'
 import { issueLabReport, labTarget, nextLabNo } from './lab-issue'
 import { calloutEscalated, calloutRate, calloutStatus, calloutTarget, checkCallout, checkCalloutAttempt, CALLOUT_ROLE_LABEL } from './callout-rules'
+import { onCallFor } from './duty-rules'
 import { addDays } from '@/utils/date'
 import { calloutMinutesOf, canAckLab, pendingLabWork, procItems, type LabWorkItem } from './lab-work'
 
@@ -98,7 +99,7 @@ function reportView(r: LabReport): LabReportView {
     calloutMinutes: calloutMinutesOf(r.procId),
     calloutTries: r.calloutAttempts?.length ?? 0,
     calloutEscalated: calloutEscalated(r),
-    calloutTarget: calloutTarget(r.orderId ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}) }),
+    calloutTarget: calloutTarget(r.orderId ? 'ipd' : 'opd', calloutEscalated(r), { doctorName: nameOf.doctor(r.doctorId), ...(att ? { attendingName: nameOf.doctor(att) } : {}), ...((s) => (s ? { onCallName: nameOf.user(s.userId) } : {}))(r.admissionId ? ((a) => (a ? onCallFor(db.dutyShifts, a.deptId, now()) : undefined))(find.admission(r.admissionId)) : undefined) }),
     calloutSuggest: suggestOf(r),
     where: whereOf(r),
     items: procItems(r.procId).map((d) => ({ ...d, ref: labRefText(d, p?.gender ?? 'M') })),

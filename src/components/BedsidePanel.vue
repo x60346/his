@@ -71,7 +71,7 @@ async function submit() {
               <span v-if="p.consentNo" class="text-xs text-slate-500">同意書 {{ p.consentNo }}</span>
               <UBadge v-else-if="p.consentWaiver" tone="gray" :title="p.consentWaiver">無同意書：緊急</UBadge>
               <UBadge v-if="p.complication !== '無'" tone="red">併發症</UBadge>
-              <UBadge v-if="p.alertPending" tone="red">{{ p.alertEscalated ? '判讀異常超過 2 小時未知悉（已通知同科醫師）' : '判讀異常待知悉' }}</UBadge>
+              <UBadge v-if="p.alertPending" tone="red">{{ p.alertEscalated ? `判讀異常超過 2 小時未知悉（已通知${p.escalatedToName}）` : '判讀異常待知悉' }}</UBadge>
               <UButton v-if="isDoctor" size="sm" variant="ghost" class="ml-auto" @click="emit('note', p.note)">帶入病程紀錄</UButton>
             </div>
             <div class="text-xs text-slate-600">適應症：{{ p.indication }}</div>

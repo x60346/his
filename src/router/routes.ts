@@ -62,6 +62,7 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
   { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },
   { path: 'incidents', name: 'incidents', component: () => import('@/pages/incident/IncidentPage.vue'), meta: { title: '病安通報', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'pharmacist', 'lab', 'radtech', 'clerk', 'diet', 'admin'] } },
+  { path: 'duty', name: 'duty', component: () => import('@/pages/duty/DutyPage.vue'), meta: { title: '醫師值班', icon: Users, group: '其他', roles: ['doctor', 'nurse', 'admin', 'clerk', 'lab'] } },
   { path: 'exam', name: 'exam', component: () => import('@/pages/exam/ExamRoomPage.vue'), meta: { title: '影像檢查室', icon: ScanLine, group: '其他', roles: ['clerk', 'radtech', 'doctor', 'nurse'] } },
   { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '其他', roles: ['doctor'] } },
   { path: 'abx', name: 'abx', component: () => import('@/pages/abx/AbxReviewPage.vue'), meta: { title: '抗生素審核', icon: Bug, group: '其他', roles: ['doctor'] } },

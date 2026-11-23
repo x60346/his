@@ -16,7 +16,9 @@ export const CALLOUT_FAIL_REASONS = ['電話沒人接', '忙線中', '不在單�
 /** 要升級了沒：沒聯絡上的次數到門檻 */
 export const calloutEscalated = (r: Pick<LabReport, 'calloutAttempts'>) => (r.calloutAttempts?.length ?? 0) >= CALLOUT_ESCALATE_AFTER
 /** 這次要通報誰（畫面提示）：住院—病房護理師或主治，升級後只能主治；門診—開立醫師，升級後同科其他醫師 */
-export function calloutTarget(source: 'opd' | 'ipd', escalated: boolean, x: { attendingName?: string; doctorName: string }): string {
+export function calloutTarget(source: 'opd' | 'ipd', escalated: boolean, x: { attendingName?: string; doctorName: string; onCallName?: string }): string {
+  // 下班時間住院：主治不在，找這一科的值班醫師
+  if (source === 'ipd' && x.onCallName) return escalated ? `已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上：改通報值班醫師 ${x.onCallName}` : `住院（下班時間）：通報病房護理師或值班醫師 ${x.onCallName}${x.attendingName ? `（主治 ${x.attendingName}）` : ''}`
   if (source === 'ipd') return escalated ? `已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上：改通報主治醫師${x.attendingName ? ` ${x.attendingName}` : ''}` : `住院：通報病房護理師或主治醫師${x.attendingName ? ` ${x.attendingName}` : ''}`
   return escalated ? `開立醫師 ${x.doctorName} 已 ${CALLOUT_ESCALATE_AFTER} 次沒聯絡上：改通報同科其他醫師` : `門診：通報開立醫師 ${x.doctorName}`
 }

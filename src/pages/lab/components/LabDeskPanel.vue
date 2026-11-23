@@ -138,7 +138,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
               </ul>
               <ul v-if="p.specimens.length" class="space-y-0.5 text-xs">
                 <li v-for="s in p.specimens" :key="s.id" class="flex flex-wrap items-center gap-2">
-                  <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube as keyof typeof TUBE_COLOR]]" /><span class="tabular">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
+                  <span :class="['h-3 w-3 rounded-full', TUBE_COLOR[s.tube as keyof typeof TUBE_COLOR]]" /><span class="tabular">{{ s.barcode }}</span><span class="min-w-0 flex-[1_1_10rem]">{{ s.tests.join('、') }}</span>
                   <UBadge :tone="TONE[s.stage] ?? 'gray'">{{ s.stageLabel }}</UBadge>
                   <UBadge v-if="s.fastingLabel" :tone="s.fastingLabel === '空腹' ? 'gray' : 'yellow'">{{ s.fastingLabel }}</UBadge>
                   <FastingCollect v-if="s.stage === 'printed'" :needs-fasting="s.needsFasting" :label="s.selfCollect ? '收回' : '採檢'" :pending="collect.pending.value" @collect="(o) => collect.run(s.barcode, o)" />

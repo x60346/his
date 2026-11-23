@@ -2,7 +2,7 @@
 // 使用固定種子的亂數，每次重置結果相同。所有人名、證號皆為虛構。
 import type {
   SerumIndices, RoomDowntime, ScanMismatch, FollowUpAdvice, Incident, DispenseMismatch, AbxIntervention, CultureSpecimen, CultureIsolate, SirResult, AdrReport, HomeMed, DischargeSummary, PharmCareNote, Specimen, QcRun, ImagingExam, LabCheckin, AnalyzerResult,
-  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, RadShift, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
+  DnrRecord, Isolation, BloodUnit, BloodRequest, Abo, BloodProduct, Surgery, SurgeryPrepMark, SterileBatch, InstrumentPack, PackSet, ImplantLot, LabWindowSession, ClaimSubmission, ClaimExclusion, ClaimCut, ClaimItem, OpdRecordReview, Consent, BedsideProcedure, RadShift, DutyShift, PreAuth, ImplantCardPrint, PreAnesthesia, AnesEntry, PacuScore, TeamShift, PostopSet, PadssScore, LineDevice, NutritionScreen, NutritionAssessment, DeliriumAssessment, Restraint, NurseShift, NurseAssignment, DischargePlan, ShiftRequest, PcaOrder, PcaRecord, InfectionCase, InfusionRun, Wound, WoundCare, WeanTrial, IcuRequest, RrtCall, CodeBlue, PalliativeCase, PressureLog, ClusterDecision, NotifiableReport,
   RiskAssessment, RiskReason, RiskScale,
   Room,
   Admission,
@@ -64,6 +64,7 @@ import { SELF_COLLECT_TUBES } from '@/services/specimen-rules'
 import { laneOf, priorityOf } from '@/services/lab-queue-rules'
 import { CONSENT_LINE_KINDS, consentsForSurgery } from '@/services/consent-rules'
 import { blocksOf, RAD_BLOCKS, RAD_ROOMS } from '@/services/rad-roster-rules'
+import { DUTY_DEPTS } from '@/services/duty-rules'
 import { recentShifts } from '@/services/nursing-rules'
 import { riskLevel, riskScore } from '@/services/risk-rules'
 import { dietKindOfText, nutritionScore } from '@/services/nutrition-rules'
@@ -247,7 +248,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       // dr03（內科）：被指定「加護病房主治」，同意轉入、排加護病房的床
       ...(d.id === 'DR03' ? { grants: ['icu.attending', 'rrt', 'anesthesia'] } : {}),
       // dr02（內科主任）：被指定「死亡病例審查」
-      ...(d.id === 'DR02' ? { grants: ['mortality.review'] } : {}),
+      ...(d.id === 'DR02' ? { grants: ['mortality.review', 'duty.schedule'] } : {}),
       // dr10（放射科）：沒有病理科，被指定「病理」代表病理醫師發報告
       ...(d.id === 'DR10' ? { grants: ['pathology'] } : {}),
     })),
@@ -2438,7 +2439,9 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const first = `${addDays(`${T.slice(0, 7)}-01`, -1).slice(0, 7)}-01`
     const nextMonth = addDays(`${T.slice(0, 7)}-28`, 7).slice(0, 7)
     let k = 0
-    for (let d = first; d < `${nextMonth}-01`; d = addDays(d, 1)) {
+    // 排到這個月底；月底前後至少排到 15 天後（換班請假示範要有未來的班，月底建的種子才不會缺）
+    const until = [`${nextMonth}-01`, addDays(T, 15)].sort().at(-1)!
+    for (let d = first; d < until; d = addDays(d, 1)) {
       const r = ((diffDays(T, d) % 12) + 12) % 12
       slots.forEach(([ward, shift], i) => {
         if (d === addDays(T, 1) && ward === codes.wards[1] && shift === '小夜') return
@@ -2447,11 +2450,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
     // 換班請假示範：nurse04 想和 nurse01 換 3 天後的班（等 nurse01 同意）；nurse05 申請 5 天後（那天休就再往後）那班特休（等護理長核准）
     const on = (nid: string, d: string) => nurseShifts.find((x) => x.nurseId === nid && x.date === d)
-    const d3 = addDays(T, 3)
+    // 3 天後兩人都有班就用那天；月底時班表只排到這個月底，往前找兩人都有班的那天（不然月底建的種子沒有這筆）
+    const d3 = [3, 2, 1, 4, 5, 6].map((k) => addDays(T, k)).find((d) => on('U204', d) && on('U201', d)) ?? addDays(T, 3)
     const s4 = on('U204', d3)
     const s1 = on('U201', d3)
     if (s4 && s1) shiftRequests.push({ id: 'SRQ-SEED-1', kind: 'swap', requesterId: 'U204', shiftId: s4.id, ward: s4.ward, date: d3, shift: s4.shift, reason: '那天要帶小孩回診', targetId: 'U201', targetShiftId: s1.id, target: { ward: s1.ward, date: d3, shift: s1.shift }, status: 'pending-peer', createdAt: addMinutes(nowStr, -120) })
-    const s5 = [5, 6, 7, 8].map((k) => on('U205', addDays(T, k))).find(Boolean)
+    const s5 = [5, 6, 7, 8, 4, 3, 2, 1].map((k) => on('U205', addDays(T, k))).find((s) => s && s.date !== d3) ?? [5, 6, 7, 8, 4, 3, 2, 1].map((k) => on('U205', addDays(T, k))).find(Boolean)
     if (s5) shiftRequests.push({ id: 'SRQ-SEED-2', kind: 'leave', requesterId: 'U205', shiftId: s5.id, ward: s5.ward, date: s5.date, shift: s5.shift, leaveType: '特休', reason: '家族旅遊', status: 'pending', createdAt: addMinutes(nowStr, -26 * 60) })
     const cur = { date: nowStr.slice(0, 10), shift: (Number(nowStr.slice(11, 13)) >= 16 ? '小夜' : Number(nowStr.slice(11, 13)) >= 8 ? '白班' : '大夜') as NurseShift['shift'] }
     const duty = nurseShifts.filter((x) => x.ward === codes.wards[0] && x.date === cur.date && x.shift === cur.shift).map((x) => x.nurseId)
@@ -4049,6 +4053,17 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     }
   }
 
+  // ---------- 醫師值班（示範）：7 天前到 13 天後，各科每天一位（有兩位醫師的科輪流）----------
+  const dutyShifts: DutyShift[] = []
+  for (let i = -7; i <= 13; i++) {
+    const date = addDays(T, i)
+    for (const deptId of DUTY_DEPTS) {
+      const docs = users.filter((u) => u.doctorId && codes.doctors.find((d) => d.id === u.doctorId)?.deptId === deptId)
+      if (!docs.length) continue
+      dutyShifts.push({ id: `DT-SEED-${dutyShifts.length + 1}`, date, deptId, userId: docs[(i + 7) % docs.length].id, by: 'U001', at: notFuture(`${addDays(date, -7)} 10:00`, 60) })
+    }
+  }
+
   // ---------- 事前審查（示範）----------
   // 泌尿道感染那位（重症、免疫低下）今天開 IVIG：主治已填好、待申報組送審（核准前護理站不能給）；
   // 明天骨折那台的鎖定骨板：主刀申請、已核准
@@ -4239,6 +4254,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     contrastClearances: [],
     roomDowntimes,
     radShifts,
+    dutyShifts,
     radShiftRequests: [],
     // 檢查室開放時段（示範）：電腦斷層週六只開上午、週日不開；其他照預設 08:00–17:00。10 天後全院影像休診一天（消防演練）
     examHours: [{ room: 'CT', weekday: 6, start: '08:00', end: '12:00' }, { room: 'CT', weekday: 0, closed: true }],

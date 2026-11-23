@@ -1,7 +1,7 @@
 // 首頁儀表板：今日營運指標與近 7 日門診人次趨勢。
 import { commitIfPossible, db } from '@/mock/db'
 import { consentScanOverdue } from './consent-rules'
-import { readingAlertPending, readingEscalated } from './bedside-work'
+import { escalateTo, readingAlertPending, readingEscalated } from './bedside-work'
 import { radUnstaffedExams } from './rad-roster-work'
 import { riskStateOf } from './risk-work'
 import { adviceState, isImportantNoShow, isNoShow, NO_SHOW_TRACK_DAYS, noShowClosed } from './followup-rules'
@@ -529,7 +529,7 @@ export function getDashboard(): Promise<DashboardStats> {
           ...(sessionRole() === 'doctor' && me?.doctorId ? { notifiablePending: db.admissions.filter((a) => a.status === 'admitted' && (careRoleOf(me.doctorId, a)?.kind ?? 'consult') !== 'consult').flatMap(pendingNotifiable).length } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? {
             bedsideAlerts: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId === me.doctorId) && readingAlertPending(p)).length,
-            bedsideAlertsEscalated: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId !== me.doctorId && careRoleOf(me.doctorId, a)?.kind === 'team') && readingEscalated(p, t)).length,
+            bedsideAlertsEscalated: db.bedsideProcedures.filter((p) => db.admissions.some((a) => a.id === p.admissionId && a.status === 'admitted' && a.doctorId !== me.doctorId && ((to) => (to.kind === 'oncall' ? to.userId === me.id : careRoleOf(me.doctorId, a)?.kind === 'team'))(escalateTo(a.id, t))) && readingEscalated(p, t)).length,
           } : {}),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { woundStall: woundStallCount(me.doctorId, t), rassOut: rassOutCount(me.doctorId, t), weanDue: weanDueCount(me.doctorId, t) } : {}),
           ...(sessionRole() === 'nurse' ? { consentUnscanned: db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)) && db.consents.some((c) => c.admissionId === a.id && consentScanOverdue(c, t))).length } : {}),

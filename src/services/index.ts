@@ -50,6 +50,7 @@ import * as consent from './consent'
 import * as line from './line'
 import * as bedside from './bedside'
 import * as radRoster from './rad-roster'
+import * as duty from './duty'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
 import * as delirium from './delirium'
@@ -148,6 +149,7 @@ export const anesthesiaApi = overNetwork(anesthesia)
 export const lineApi = overNetwork(line)
 export const bedsideApi = overNetwork(bedside)
 export const radRosterApi = overNetwork(radRoster)
+export const dutyApi = overNetwork(duty)
 export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)
 export const deliriumApi = overNetwork(delirium)
@@ -281,6 +283,7 @@ export * from './opd-review-rules'
 export * from './consent-rules'
 export * from './bedside-rules'
 export * from './rad-roster-rules'
+export * from './duty-rules'
 export * from './day-rules'
 export * from './line-rules'
 export * from './nutrition-rules'
@@ -370,6 +373,7 @@ export type { OpdReviewBoard, OpdReviewView } from './opd-review'
 export type { ConsentView } from './consent'
 export type { BedsideView } from './bedside'
 export type { RadRoster, RadRequestView } from './rad-roster'
+export type { DutyRoster } from './duty'
 export type { PreAuthView } from './preauth'
 export type { DrgEstimate } from './drg'
 export type { CodingItem } from './coding'

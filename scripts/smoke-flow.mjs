@@ -12139,6 +12139,7 @@ try {
   console.log('\n[危急值沒聯絡上與升級]')
   {
     resetDb('small')
+    dbm.db.dutyShifts = [] // 這段測主治、同科醫師（沒有值班表時）的規則：週末跑也不受值班影響
     const db = () => dbm.db
     const L = api.labApi
     const errOf = async (fn) => {
@@ -18323,7 +18324,8 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const S0 = db().claimSubmissions.filter((s) => s.kind === 'opd').sort((a, b) => b.month.localeCompare(a.month))[0]
     const cn = (id) => db().patients.find((x) => x.id === id).chartNo
     const left = (x) => x.claim - db().claimCuts.filter((c) => c.submissionId === S0.id && c.refId === x.refId).reduce((n, c) => n + c.points, 0)
-    const uniq = S0.items.filter((x) => !x.supplementOf && S0.items.filter((y) => y.date === x.date && y.patientId === x.patientId).length === 1 && left(x) >= 20)
+    // 挑還沒有核減紀錄的（種子的核減依日期落在不同筆；已有核減的不能再退件）
+    const uniq = S0.items.filter((x) => !x.supplementOf && S0.items.filter((y) => y.date === x.date && y.patientId === x.patientId).length === 1 && left(x) >= 20 && !db().claimCuts.some((c) => c.submissionId === S0.id && c.refId === x.refId))
     const [a1, a2] = uniq
     await as('clerk02')
     await api.claimApi.rejectClaimItem('opd', S0.month, a2.refId, { code: 'R01' })
@@ -19023,17 +19025,25 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const files = []
     const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); if (fs.statSync(p).isDirectory()) walk(p); else if (p.endsWith('.vue')) files.push(p) } }
     walk('src')
+    // 依標籤開合找父元素（同一行裡的子元素也算；以前用縮排判斷，漏掉寫在同一行的）
+    const VOID = new Set(['input', 'img', 'br', 'hr', 'meta', 'link', 'col', 'source'])
     const bad = []
     for (const f of files) {
+      const src = fs.readFileSync(f, 'utf8')
+      const t0 = src.indexOf('<template>'), t1 = src.lastIndexOf('</template>')
+      if (t0 < 0) continue
+      const tpl = src.slice(t0, t1)
+      const re = /<!--[\s\S]*?-->|<\/?([A-Za-z][\w-]*)((?:\s+(?:[^\s"'>\/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>/g
       const stack = []
-      fs.readFileSync(f, 'utf8').split('\n').forEach((ln, i) => {
-        const ind = ln.search(/\S/)
-        if (ind < 0) return
-        while (stack.length && stack.at(-1).ind >= ind) stack.pop()
-        const cls = (ln.match(/class="([^"]*)"/) || [])[1] || ''
-        if (stack.at(-1)?.wrap && /(^|\s)min-w-0 flex-1(\s|$)/.test(cls)) bad.push(`${f}:${i + 1}`)
-        if (/<\w/.test(ln) && !/\/>\s*$/.test(ln) && !/<\/\w+>\s*$/.test(ln)) stack.push({ ind, wrap: /(^|\s)flex-wrap(\s|$)/.test(cls) && /(^|\s)flex(\s|$)/.test(cls) })
-      })
+      let m
+      while ((m = re.exec(tpl))) {
+        if (m[0].startsWith('<!--')) continue
+        const tag = m[1].toLowerCase()
+        if (m[0].startsWith('</')) { const i = stack.map((x) => x.tag).lastIndexOf(tag); if (i >= 0) stack.length = i; continue }
+        const cls = (m[2].match(/\sclass="([^"]*)"/) || [])[1] || ''
+        if (stack.at(-1)?.wrap && /(^|\s)min-w-0 flex-1(\s|$)/.test(cls)) bad.push(`${f}:${src.slice(0, t0 + m.index).split('\n').length}`)
+        if (m[3] !== '/' && !VOID.has(tag)) stack.push({ tag, wrap: /(^|\s)flex-wrap(\s|$)/.test(cls) && /(^|\s)flex(\s|$)/.test(cls) })
+      }
     }
     ok(!bad.length, `flex-wrap 列裡沒有 min-w-0 flex-1（${files.length} 個檔${bad.length ? `；還有 ${bad.slice(0, 5).join('、')}` : ''}）`)
   }
@@ -19377,7 +19387,9 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const dash = await api.dashboardApi.getDashboard()
     ok(dash.radUnstaffed === r.unstaffed.length, `組長首頁：檢查沒有放射師 ${dash.radUnstaffed}`)
     // 排一筆明天下午的 CT，那段清掉 → 標沒有放射師；補人 → 消失
-    const tm = dateUtil.addDays(T, 1)
+    // 下一個平日（週六跑的話明天是週日，電腦斷層不開、沒有那一格）；10 天後全院休診也跳過
+    let tm = dateUtil.addDays(T, 1)
+    while ([0, 6].includes(new Date(tm + 'T00:00:00').getDay()) || tm === dateUtil.addDays(T, 10)) tm = dateUtil.addDays(tm, 1)
     await api.radRosterApi.setRadShift({ date: tm, room: 'CT', block: 'pm', userId: '' })
     ok(!db().radShifts.some((s) => s.date === tm && s.room === 'CT' && s.block === 'pm') && db().auditLogs[0].action === '放射師排班', '清掉明天下午 CT')
     const ex = db().imagingExams.find((e) => !e.cancelled && !e.arrivedAt && e.room === 'CT') ?? null
@@ -19487,11 +19499,13 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
   console.log('\n[請假改排與判讀升級]')
   {
     resetDb('small')
+    dbm.db.dutyShifts = [] // 這段測主治、同科醫師（沒有值班表時）的規則：週末跑也不受值班影響
     const db = () => dbm.db
     const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
     const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
     // 找 rt02 的一格，同一段讓另一位放射師空出來
-    const sh = db().radShifts.find((s) => s.userId === 'U802' && s.date > T)
+    // 挑 rt02 的一格、同一段另外兩位都有班（週六下午電腦斷層不開，那段只有兩個人）
+    const sh = db().radShifts.find((s) => s.userId === 'U802' && s.date > T && db().radShifts.filter((x) => x.date === s.date && x.block === s.block && x.userId !== 'U802').length >= 2)
     const busy = db().radShifts.filter((s) => s.date === sh.date && s.block === sh.block && s.userId !== 'U802')
     const freeOne = busy[0]
     db().radShifts = db().radShifts.filter((s) => s !== freeOne)
@@ -19533,6 +19547,48 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     ok(!ack.alertPending && ack.readingAckByName === mate.name, '同科醫師代為知悉')
     await as(att.username)
     ok(!(await api.dashboardApi.getDashboard()).bedsideAlerts, '主治首頁也消失')
+  }
+  // 醫師值班：值班表、判讀升級找值班醫師、危急值通報提示值班醫師
+  console.log('\n[醫師值班]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
+    const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
+    // 規則：2026-11-24 是週二、11-28 週六
+    ok(!api.isOffHours('2026-11-24 10:00') && api.isOffHours('2026-11-24 17:00') && api.isOffHours('2026-11-24 07:59') && api.isOffHours('2026-11-28 10:00'), '規則：平日 08–17 上班、其餘值班；週六日全天值班')
+    ok(api.dutyDateOf('2026-11-25 03:00') === '2026-11-24' && api.dutyDateOf('2026-11-25 08:00') === '2026-11-25', '規則：凌晨 08:00 前算前一天那一班')
+    const shifts = [{ date: '2026-11-24', deptId: 'D02', userId: 'U' }]
+    ok(api.onCallFor(shifts, 'D02', '2026-11-25 02:00') && !api.onCallFor(shifts, 'D02', '2026-11-24 10:00') && !api.onCallFor(shifts, 'D01', '2026-11-25 02:00'), '規則：現在誰值班（上班時間沒有、別科沒有）')
+    // 種子、值班表
+    ok(api.DUTY_DEPTS.every((d) => db().dutyShifts.some((s) => s.deptId === d && s.date === T)), '種子：今天每一科都有值班醫師')
+    await as('nurse01')
+    let r = await api.dutyApi.dutyRoster(T, 7)
+    ok(r.days.length === 7 && r.depts.length === api.DUTY_DEPTS.length && !r.canEdit && r.days[0].cells.every((c) => c.name), '值班表：護理師看得到、不能改')
+    await as('dr02')
+    r = await api.dutyApi.dutyRoster(T, 7)
+    ok(r.canEdit && r.depts.find((d) => d.id === 'D02').doctors.length === 2, 'dr02（有權限）可以改；內科兩位醫師可選')
+    const tm = dateUtil.addDays(T, 1)
+    const dr03 = db().users.find((u) => u.doctorId === 'DR03')
+    ok((await fieldsOf(() => api.dutyApi.setDuty({ date: tm, deptId: 'D01', userId: dr03.id }))).userId, '不能排別科的醫師')
+    ok((await errOf(() => api.dutyApi.setDuty({ date: dateUtil.addDays(T, -1), deptId: 'D02', userId: dr03.id }))).includes('過去'), '不能改過去的值班')
+    await api.dutyApi.setDuty({ date: tm, deptId: 'D02', userId: dr03.id })
+    ok(db().dutyShifts.find((s) => s.date === tm && s.deptId === 'D02').userId === dr03.id && db().auditLogs[0].action === '醫師值班', '排明天內科值班 dr03、稽核')
+    await as('dr01')
+    ok((await errOf(() => api.dutyApi.setDuty({ date: tm, deptId: 'D01', userId: '' }))) !== '', '沒權限不能改')
+    // 判讀升級：內科病人（主治 dr02），下班時間值班醫師是 dr03 → 只給 dr03
+    const adm = db().admissions.find((a) => a.status === 'admitted' && !a.obs && !a.day && a.deptId === 'D02' && a.doctorId === 'DR02')
+    const W = await load('/src/services/bedside-work.ts')
+    const night = `${T} 22:00`
+    db().dutyShifts = db().dutyShifts.filter((s) => !(s.date === T && s.deptId === 'D02'))
+    db().dutyShifts.push({ id: 'DT-T1', date: T, deptId: 'D02', userId: dr03.id, by: 'U001', at: dateUtil.now() })
+    ok(W.escalateTo(adm.id, night).kind === 'oncall' && W.escalateTo(adm.id, night).userId === dr03.id && W.escalateTo(adm.id, `${T} 10:00`).kind === 'team' || api.isOffHours(`${T} 10:00`), '下班時間升級給值班醫師；上班時間給同科')
+    db().dutyShifts.find((s) => s.id === 'DT-T1').userId = db().users.find((u) => u.doctorId === 'DR02').id
+    ok(W.escalateTo(adm.id, night).kind === 'team', '值班的就是主治本人：退回同科醫師')
+    // 危急值通報提示：下班時間住院寫值班醫師
+    ok(api.calloutTarget('ipd', false, { doctorName: 'A', attendingName: '陳映如', onCallName: '黃柏翰' }).includes('值班醫師 黃柏翰') && api.calloutTarget('ipd', true, { doctorName: 'A', onCallName: '黃柏翰' }).includes('改通報值班醫師 黃柏翰') && !api.calloutTarget('ipd', false, { doctorName: 'A', attendingName: '陳映如' }).includes('值班'), '危急值提示：下班時間找值班醫師（升級後也是）；上班時間照舊')
+    const { readFileSync } = await import('node:fs')
+    ok(readFileSync('src/router/routes.ts', 'utf8').includes("name: 'duty'"), '有「醫師值班」頁')
   }
 } catch (e) {
   failed++

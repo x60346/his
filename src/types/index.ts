@@ -968,6 +968,17 @@ export interface ImagingExam {
   contrastReaction?: { severity: 'mild' | 'moderate' | 'severe'; symptoms: string; action: string; at: string; by: string; adrId?: string }
 }
 
+/** 醫師值班：某一天、某一科由誰值班（平日 17:00 到隔天 08:00、週六日全天）；主治不在時接急事（判讀異常升級、危急值通報） */
+export interface DutyShift {
+  id: string
+  date: string
+  deptId: string
+  /** 值班醫師（使用者 id） */
+  userId: string
+  by: string
+  at: string
+}
+
 /** 放射師排班：某一天、某一間（一般攝影、電腦斷層、磁振造影）、上午或下午由誰負責 */
 export interface RadShift {
   id: string

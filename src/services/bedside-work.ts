@@ -2,6 +2,7 @@
 // 規則在 bedside-rules；API 在 bedside.ts
 import type { BedsideProcedure } from '@/types'
 import { db } from '@/mock/db'
+import { onCallFor } from './duty-rules'
 import { find } from './views'
 import { ascitesPmn, BEDSIDE_FLUID, bedsideTitle, csfRead, lightCriteria, PLEURAL_KINDS, saagRead, SERUM_PAIR_HOURS, SERUM_PROC, type FluidRead } from './bedside-rules'
 
@@ -76,6 +77,15 @@ export function readingAlertKinds(p: BedsideProcedure): string {
 export const readingAlertPending = (p: BedsideProcedure) => ((k) => !!k && p.readingAck?.kinds !== k)(readingAlertKinds(p))
 /** 主治幾小時沒知悉就升級給同科醫師（主治不在：下班、開刀） */
 export const READING_ESCALATE_HOURS = 2
+/**
+ * 升級給誰（主治以外）：下班時間這一科有排值班 → 只給值班醫師（值班的就是主治本人時，退回同科其他醫師）；
+ * 上班時間或沒排值班 → 同科醫師（照護團隊）
+ */
+export function escalateTo(admissionId: string, t: string): { kind: 'oncall'; userId: string } | { kind: 'team' } {
+  const a = db.admissions.find((x) => x.id === admissionId)
+  const s = a ? onCallFor(db.dutyShifts, a.deptId, t) : undefined
+  return s && db.users.find((u) => u.id === s.userId)?.doctorId !== a!.doctorId ? { kind: 'oncall', userId: s.userId } : { kind: 'team' }
+}
 /** 異常判讀待知悉、而且報告出來已經超過 2 小時 */
 export function readingEscalated(p: BedsideProcedure, t: string): boolean {
   if (!readingAlertPending(p)) return false

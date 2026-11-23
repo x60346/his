@@ -8,7 +8,7 @@ import { find, nameOf } from './views'
 import { latestLabValue } from './blood-work'
 import { createOrderInternal } from './ipd'
 import { SERUM_PROC, type FluidRead } from './bedside-rules'
-import { noteOf, readingAlertKinds, readingAlertPending, readingEscalated, readingOf } from './bedside-work'
+import { escalateTo, noteOf, readingAlertKinds, readingAlertPending, readingEscalated, readingOf } from './bedside-work'
 import { careRoleOf, requireCare } from './care-team'
 import { BEDSIDE_FLUID, BEDSIDE_LABS, SIDE_TEXT, BEDSIDE_CONSENT_WAIVERS, BEDSIDE_KINDS, bedsideKind, bedsideTitle, bleedingRisks, checkBedsideInput, unusedBedsideConsent, type BedsideInput } from './bedside-rules'
 
@@ -25,8 +25,10 @@ export interface BedsideView extends BedsideProcedure {
   note: { objective: string; assessment: string }
   /** 有異常判讀、還沒知悉 */
   alertPending: boolean
-  /** 報告出來超過 2 小時還沒知悉：已升級給同科醫師 */
+  /** 報告出來超過 2 小時還沒知悉：已升級（值班醫師或同科醫師） */
   alertEscalated: boolean
+  /** 升級給誰（畫面顯示） */
+  escalatedToName?: string
   readingAckByName?: string
 }
 
@@ -36,6 +38,7 @@ const view = (p: BedsideProcedure): BedsideView => ({
   ...((r) => ({ ...r, note: noteOf(p, r) }))(readingOf(p)),
   alertPending: readingAlertPending(p),
   alertEscalated: readingEscalated(p, now()),
+  ...(readingEscalated(p, now()) ? ((to) => ({ escalatedToName: to.kind === 'oncall' ? `值班醫師 ${nameOf.user(to.userId)}` : '同科醫師' }))(escalateTo(p.admissionId, now())) : {}),
   ...(p.readingAck ? { readingAckByName: nameOf.user(p.readingAck.by) } : {}),
   ...((c) => (c ? { consentNo: c.no } : {}))(p.consentId ? db.consents.find((x) => x.id === p.consentId) : undefined),
 })
@@ -146,7 +149,10 @@ export function myBedsideAlerts(): Promise<{ id: string; admissionId: string; pa
     return db.bedsideProcedures.filter((p) => {
       const a = db.admissions.find((x) => x.id === p.admissionId && x.status === 'admitted')
       if (!a || !readingAlertPending(p)) return false
-      return a.doctorId === u.doctorId || (careRoleOf(u.doctorId, a)?.kind === 'team' && readingEscalated(p, t))
+      if (a.doctorId === u.doctorId) return true
+      if (!readingEscalated(p, t)) return false
+      const to = escalateTo(a.id, t)
+      return to.kind === 'oncall' ? to.userId === u.id : careRoleOf(u.doctorId, a)?.kind === 'team'
     }).map((p) => ({ id: p.id, admissionId: p.admissionId, patientName: nameOf.patient(p.patientId), title: bedsideTitle(p.kind, p.side), labels: readingOf(p).readings.filter((r) => r.alert).map((r) => r.label), escalated: db.admissions.find((a) => a.id === p.admissionId)!.doctorId !== u.doctorId }))
   })
 }

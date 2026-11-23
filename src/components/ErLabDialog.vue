@@ -42,7 +42,7 @@ const title = computed(() => (data.value ? `急診檢驗：${data.value.patientN
         <b>檢體</b>
         <ul class="space-y-1 text-xs">
           <li v-for="s in data.specimens" :key="s.id" class="flex flex-wrap items-center gap-2">
-            <span :class="['h-3 w-3 rounded-full', tubeColor(s.tube)]" /><span class="tabular">{{ s.barcode }}</span><span class="min-w-0 flex-1">{{ s.tests.join('、') }}</span>
+            <span :class="['h-3 w-3 rounded-full', tubeColor(s.tube)]" /><span class="tabular">{{ s.barcode }}</span><span class="min-w-0 flex-[1_1_10rem]">{{ s.tests.join('、') }}</span>
             <UBadge :tone="TONE[s.stage] ?? 'gray'">{{ s.stageLabel }}{{ s.rejectedReason ? `：${s.rejectedReason}` : '' }}</UBadge>
             <UButton v-if="data.canCollect && s.stage === 'printed'" size="sm" variant="secondary" :icon="Syringe" :loading="collect.pending.value" @click="collect.run(s.barcode)">採檢</UButton>
           </li>
