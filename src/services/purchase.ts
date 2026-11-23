@@ -117,7 +117,7 @@ export function purchaseCandidates(): Promise<PurchaseCandidate[]> {
       const low = stockStatus(usable, safety) !== 'ok'
       if (!freeReq && !low) continue
       // 近 30 天這個地點的用量（發藥＋撥出，和庫存頁同一個定義）
-      const since = addDays(t, -30)
+      const since = addDays(t, -29) // 含今天共 30 天
       const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === loc && (x.type === 'dispense' || x.type === 'transfer-out') && x.at >= since).reduce((n, x) => n + x.qty, 0)
       const waiting = freeReq ? freeReq.dispenseIds.map((id) => db.dispenses.find((x) => x.id === id)).filter((x) => x && dispenseOpen(x)).length : 0
       const sug = suggestRestockQty({ usable, need: 0, safetyStock: safety, used30, onOrder: onOrder(d.id) })

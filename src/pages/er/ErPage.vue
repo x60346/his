@@ -50,6 +50,8 @@ function openTri() {
   Object.assign(tri, { complaint: '', reason: '', level: undefined })
   for (const k of Object.keys(vitals) as (keyof TriageVitals)[]) delete vitals[k]
   register.fieldErrors.value = {}
+  // 建議級數沒變時 watch 不會觸發：開新的檢傷就先帶入目前的建議（不然級數空白、按鈕不能按）
+  tri.level = sug.value.level
   triOpen.value = true
 }
 /** 即時建議：和服務層同一個 suggestLevel（送出時服務層會再判斷一次） */

@@ -12,7 +12,9 @@ import { addDays, now, today } from '@/utils/date'
 const props = defineProps<{ x: IncidentView }>()
 const ro = () => props.x.status === 'closed'
 const form = reactive({ timeline: [] as { at: string; event: string }[], causes: [] as RcaCause[], rootCause: '', plans: [] as { id?: string; action: string; owner: string; due: string; status?: string; doneAt?: string }[] })
-watch(() => props.x, (x) => {
+// 只在換了通報、或存檔後內容真的變了才重新帶入：任何存檔都會重新查詢、給新的物件，不能蓋掉還沒存的編輯
+watch(() => `${props.x.id}|${props.x.status}|${JSON.stringify(props.x.rca ?? null)}`, () => {
+  const x = props.x
   const r = x.rca
   Object.assign(form, {
     timeline: r ? r.timeline.map((t) => ({ ...t })) : [{ at: x.occurredAt, event: '' }],

@@ -16,7 +16,8 @@ function edit(r: LabLimitRow) {
   save.fieldErrors.value = {}
 }
 const save = useAction(labLimitApi.setLabLimits, { success: (r) => `已更新：${r.name}` })
-const n = (v: string | number) => (v === '' ? null : Number(v))
+// 數字欄清空時會是 '' 或 undefined（UInput type=number）：都當「空白＝預設」，不能變成 NaN
+const n = (v: string | number | null | undefined) => (v === '' || v === null || v === undefined ? null : Number(v))
 async function submit() {
   if (editing.value && (await save.run(editing.value.procId, { stat: n(form.stat), routine: n(form.routine), callout: n(form.callout), noTat: form.noTat, reason: form.reason }))) editing.value = undefined
 }

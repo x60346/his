@@ -10,7 +10,8 @@ import { useAction, useQuery } from '@/composables/useService'
 import type { Drug } from '@/types'
 
 const { data: wards, loading } = useQuery(() => wardStockApi.listWardStocks())
-const pars = reactive<Record<string, number | undefined>>({})
+// '' ＝正在改、欄位清空了（不能當 0：基準量 0 是「移除品項」）
+const pars = reactive<Record<string, number | '' | undefined>>({})
 const key = (w: string, d: string) => `${w}|${d}`
 // 效期收回：有管制藥要病房護理師或另一位藥師當場見證（服務層 returnWardExpiry 沒有見證就擋）
 const retWard = ref<{ ward: string; name: string; lotIds: string[]; ctrl: string }>()
@@ -29,8 +30,9 @@ const ret = useAction(wardStockApi.returnWardExpiry, { success: (r) => `已收�
 const save = useAction(wardStockApi.saveWardStockItem, { success: (r) => (r ? `已設定基準量 ${r.par}` : '已移除常備品項') })
 async function onSave(w: WardStockView, drugId: string) {
   const v = pars[key(w.ward, drugId)]
-  if (v === undefined || String(v) === '') return
-  if (await save.run(w.ward, drugId, Number(v))) delete pars[key(w.ward, drugId)]
+  if (v === undefined || v === '') return
+  // 移除品項回傳 null（成功），失敗才是 undefined
+  if ((await save.run(w.ward, drugId, Number(v))) !== undefined) delete pars[key(w.ward, drugId)]
 }
 // 新增品項
 const adding = ref<string>()
@@ -66,9 +68,9 @@ const totalBelow = computed(() => (wards.value ?? []).reduce((n, w) => n + w.row
               <span class="block text-xs text-slate-500">現有 {{ r.onHand }} {{ r.unit }}<template v-if="r.onHand !== r.usable">（可用 {{ r.usable }}）</template></span>
             </span>
             <label class="flex items-center gap-1 text-xs text-slate-500">基準
-              <input :value="pars[key(w.ward, r.drugId)] ?? r.par" type="number" min="0" step="1" class="form-control w-16 text-right" :aria-label="`${w.locationName} ${r.drugName} 基準量`" @input="pars[key(w.ward, r.drugId)] = Number(($event.target as HTMLInputElement).value)" />
+              <input :value="pars[key(w.ward, r.drugId)] ?? r.par" type="number" min="0" step="1" class="form-control w-16 text-right" :aria-label="`${w.locationName} ${r.drugName} 基準量`" @input="pars[key(w.ward, r.drugId)] = (($v) => ($v === '' ? '' : Number($v)))(($event.target as HTMLInputElement).value)" />
             </label>
-            <UButton v-if="pars[key(w.ward, r.drugId)] !== undefined && pars[key(w.ward, r.drugId)] !== r.par" size="sm" variant="secondary" :loading="save.pending.value" @click="onSave(w, r.drugId)">儲存</UButton>
+            <UButton v-if="pars[key(w.ward, r.drugId)] !== undefined && pars[key(w.ward, r.drugId)] !== '' && pars[key(w.ward, r.drugId)] !== r.par" size="sm" variant="secondary" :loading="save.pending.value" @click="onSave(w, r.drugId)">儲存</UButton>
           </li>
         </ul>
         <div v-if="w.expiryLots.length" class="border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">

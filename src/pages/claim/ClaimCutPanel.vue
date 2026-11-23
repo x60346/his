@@ -2,7 +2,7 @@
 // 核減與申復（申報組）：每月申報、核減、補付點數與核減率；輸入健保署的核減（送出過的月份的一筆）；
 // 主治回覆後，申復的記結果（補付幾點或維持）；維持或只補付一部分的，60 天內可申請爭議審議、記審議結果。
 // 能不能輸入、點數上限、期限由服務層判斷（claim-cut.ts、claim-rules）
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import { UBadge, UButton, UDialog, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { CLAIM_KIND_LABEL, claimCutApi, CUT_REASONS, CUT_STATUS_TONE as TONE, type CutFilePreview, type CutItem } from '@/services'
@@ -41,6 +41,8 @@ async function submitRes() {
 const fOpen = ref(false)
 const ff = reactive({ submissionId: '' as string | number | undefined, text: '' })
 const fPv = ref<CutFilePreview>()
+// 預覽只代表預覽當時的內容：內容或申報批改了就要重新預覽（匯入送的是目前的內容）
+watch(() => [ff.text, ff.submissionId], () => (fPv.value = undefined))
 function openFile() {
   Object.assign(ff, { submissionId: v.value?.submissions[0]?.id ?? '', text: '' })
   fPv.value = undefined

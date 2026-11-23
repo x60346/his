@@ -20,13 +20,15 @@ const picked = ref<Record<string, boolean>>({})
 watch(() => v.value?.draft, (d) => (picked.value = Object.fromEntries((d ?? []).map((x) => [x.id, true]))), { immediate: true })
 const outside = ref<{ name: string; dose?: number; freq: string }[]>([])
 const addOutside = () => outside.value.push({ name: '', freq: '' })
+// 院外的藥是這位病人的：換病人清掉
+watch(() => props.admissionId, () => (outside.value = []))
 const build = useAction(medrecApi.buildMedRec, { success: (r) => (r.items.length ? `已建立居家用藥清單（${r.items.length} 項），等主治整合` : '已記錄：無居家用藥') })
 function submitBuild(empty = false) {
   const items: HomeMedInput[] = empty ? [] : [
     ...(v.value?.draft ?? []).filter((x) => picked.value[x.id]).map((x) => ({ drugId: x.drugId, dose: x.dose, freq: x.freq, route: x.route, source: 'opd' as const, lastDate: x.lastDate })),
     ...outside.value.filter((x) => x.name.trim()).map((x) => ({ name: x.name, ...(x.dose ? { dose: Number(x.dose) } : {}), ...(x.freq ? { freq: x.freq } : {}), source: 'outside' as const })),
   ]
-  build.run(props.admissionId, items)
+  build.run(props.admissionId, items).then((r) => r && (outside.value = []))
 }
 
 // 醫師決定

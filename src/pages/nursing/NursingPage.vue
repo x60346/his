@@ -343,33 +343,33 @@ const wardTotals = computed(() => ({
           <IcuBoardPanel v-else-if="!adm && tab === 'icuboard' && ward === icuWard" @open="openTask" />
           <NegativeRoomPanel v-else-if="!adm && tab === 'negative'" :ward="ward" :can-record="auth.user?.role === 'nurse'" />
           <WardTasksPanel v-else-if="!adm" :ward="ward" :clock="clock" :only="taskScope" @open="openTask" />
-          <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
-          <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" @open-flowsheet="tab = 'flowsheet'" />
-          <MarPanel v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
-          <OrdersPanel v-else-if="tab === 'orders'" :admission="adm" />
-          <RiskPanel v-else-if="tab === 'risk'" :admission="adm" />
-          <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
-          <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" />
-          <DoctorCallPanel v-else-if="tab === 'calls'" :admission-id="adm.id" @note="takeCallNote" />
-          <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
-          <TubeFeedPanel v-else-if="tab === 'tube'" :admission-id="adm.id" />
-          <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
-          <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
-          <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
-          <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
-          <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
-          <div v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" /></div>
-          <div v-else-if="tab === 'exams'" class="p-4"><AdmissionExams :admission-id="adm.id" /></div>
-          <div v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
-          <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
-          <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" @open-risk="tab = 'risk'" />
-          <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
-          <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
-          <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
-          <VitalsPanel v-else-if="tab === 'vitals'" :admission="adm" />
-          <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
-          <DeathPanel v-else-if="tab === 'death'" :admission-id="adm.id" @changed="reload" />
-          <NursingNotesPanel v-else :admission="adm" :draft="noteDraft" @draft-used="noteDraft = undefined" />
+          <FlowsheetPanel :key="adm.id" v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
+          <VentPanel :key="adm.id" v-else-if="tab === 'vent'" :admission-id="adm.id" @open-flowsheet="tab = 'flowsheet'" />
+          <MarPanel :key="adm.id" v-else-if="tab === 'mar'" :admission="adm" :clock="clock" />
+          <OrdersPanel :key="adm.id" v-else-if="tab === 'orders'" :admission="adm" />
+          <RiskPanel :key="adm.id" v-else-if="tab === 'risk'" :admission="adm" />
+          <LinePanel :key="adm.id" v-else-if="tab === 'lines'" :admission-id="adm.id" />
+          <BedsidePanel :key="adm.id" v-else-if="tab === 'bedside'" :admission-id="adm.id" />
+          <DoctorCallPanel :key="adm.id" v-else-if="tab === 'calls'" :admission-id="adm.id" @note="takeCallNote" />
+          <NutritionPanel :key="adm.id" v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
+          <TubeFeedPanel :key="adm.id" v-else-if="tab === 'tube'" :admission-id="adm.id" />
+          <SafetyPanel :key="adm.id" v-else-if="tab === 'safety'" :admission-id="adm.id" />
+          <DischargePlanPanel :key="adm.id" v-else-if="tab === 'plan'" :admission-id="adm.id" />
+          <PcaPanel :key="adm.id" v-else-if="tab === 'pca'" :admission-id="adm.id" />
+          <InfectionPanel :key="adm.id" v-else-if="tab === 'infection'" :admission-id="adm.id" />
+          <div :key="adm.id" v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
+          <div :key="adm.id" v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" /></div>
+          <div :key="adm.id" v-else-if="tab === 'exams'" class="p-4"><AdmissionExams :admission-id="adm.id" /></div>
+          <div :key="adm.id" v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
+          <InfusionPanel :key="adm.id" v-else-if="tab === 'infusion'" :admission-id="adm.id" />
+          <WoundPanel :key="adm.id" v-else-if="tab === 'wounds'" :admission-id="adm.id" @open-risk="tab = 'risk'" />
+          <BloodPanel :key="adm.id" v-else-if="tab === 'blood'" :admission-id="adm.id" />
+          <SurgeryPanel :key="adm.id" v-else-if="tab === 'surgery'" :admission-id="adm.id" />
+          <PatientFlagsPanel :key="adm.id" v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
+          <VitalsPanel :key="adm.id" v-else-if="tab === 'vitals'" :admission="adm" />
+          <CodeBluePanel :key="adm.id" v-else-if="tab === 'code'" :admission-id="adm.id" />
+          <DeathPanel :key="adm.id" v-else-if="tab === 'death'" :admission-id="adm.id" @changed="reload" />
+          <NursingNotesPanel :key="adm.id" v-else :admission="adm" :draft="noteDraft" @draft-used="noteDraft = undefined" />
         </UCard>
       </div>
     </div>

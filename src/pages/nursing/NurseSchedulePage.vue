@@ -31,7 +31,8 @@ const editing = ref<{ date: string; shift: ShiftName }>()
 const editOpen = computed({ get: () => !!editing.value, set: (x) => !x && (editing.value = undefined) })
 const picked = ref<string[]>([])
 function openCell(date: string, c: ScheduleCell) {
-  if (!data.value?.canEdit || date < today()) return
+  // 剛換病房或月份、新的班表還沒讀回來：畫面上的是上一個病房的護理師，不能拿來排這個病房
+  if (!data.value?.canEdit || data.value.ward !== q.ward || data.value.month !== q.month || date < today()) return
   picked.value = c.nurses.map((n) => n.id)
   setAct.fieldErrors.value = {}
   editing.value = { date, shift: c.shift }

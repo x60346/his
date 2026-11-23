@@ -302,9 +302,12 @@ const setPlan = (id: string, resume: boolean) => (dsPlan.value = { ...dsPlan.val
 // 列印給病人的出院用藥清單（存檔後的內容）
 const medList = ref<DischargeMedList>()
 const doPrint = () => window.print()
+// 走 useAction：沒權限、資料衝突時要有錯誤提示（以前直接 await，失敗什麼都沒顯示）
+const loadMedList = useAction(medrecApi.dischargeMedList)
 async function printMedList() {
   if (!adm.value) return
-  medList.value = await medrecApi.dischargeMedList(adm.value.id)
+  const r = await loadMedList.run(adm.value.id)
+  if (r) medList.value = r
 }
 const cancelOpen = ref(false)
 const cancelReason = ref('')
@@ -323,6 +326,8 @@ const phrase = usePhrases()
 // ---------- 病程紀錄 ----------
 const { data: notes } = useQuery(async () => (admissionId.value ? ipdApi.listProgressNotes(admissionId.value) : []), [admissionId])
 const note = reactive({ subjective: '', objective: '', assessment: '', plan: '' })
+// 換病人：還沒存的病程紀錄是上一位的，清掉（不然會存進這一位的病歷）
+watch(admissionId, () => Object.assign(note, { subjective: '', objective: '', assessment: '', plan: '' }))
 const addNote = useAction(ipdApi.addProgressNote, { success: '已新增病程紀錄' })
 // 值班紀錄（夜間值班醫師寫、隔天主治看）
 const { data: duty } = useQuery(async () => (admissionId.value ? { id: admissionId.value, v: await dutyApi.dutyNotesState(admissionId.value) } : undefined), [admissionId])
@@ -571,32 +576,32 @@ async function submitNote() {
         </div>
 
         <!-- 出院病摘：醫師撰寫；簽署＝准予出院 -->
-        <div v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
-        <div v-else-if="tab === 'exams'" class="p-4"><AdmissionExams :admission-id="adm.id" /></div>
-        <div v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
-        <div v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
-        <div v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
-        <div v-else-if="tab === 'pharmcare'" class="p-4"><PharmCareList :admission-id="adm.id" /></div>
-        <div v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" @order="(p) => { orderPreset = p; orderOpen = true }" /></div>
-        <div v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
-        <BloodPanel v-else-if="tab === 'blood'" :admission-id="adm.id" />
-        <SurgeryPanel v-else-if="tab === 'surgery'" :admission-id="adm.id" />
-        <PatientFlagsPanel v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
-        <LinePanel v-else-if="tab === 'lines'" :admission-id="adm.id" />
-        <BedsidePanel v-else-if="tab === 'bedside'" :admission-id="adm.id" @note="takeBedsideNote" />
-        <SafetyPanel v-else-if="tab === 'safety'" :admission-id="adm.id" />
-        <DischargePlanPanel v-else-if="tab === 'plan'" :admission-id="adm.id" />
-        <PcaPanel v-else-if="tab === 'pca'" :admission-id="adm.id" />
-        <InfectionPanel v-else-if="tab === 'infection'" :admission-id="adm.id" />
-        <InfusionPanel v-else-if="tab === 'infusion'" :admission-id="adm.id" />
-        <WoundPanel v-else-if="tab === 'wounds'" :admission-id="adm.id" />
-        <FlowsheetPanel v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
-        <VentPanel v-else-if="tab === 'vent'" :admission-id="adm.id" />
-        <IcuCarePanel v-else-if="tab === 'icu'" :admission-id="adm.id" />
-        <CodeBluePanel v-else-if="tab === 'code'" :admission-id="adm.id" />
-        <DeathPanel v-else-if="tab === 'death'" :admission-id="adm.id" />
-        <PalliativePanel v-else-if="tab === 'palliative'" :admission-id="adm.id" />
-        <NutritionPanel v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
+        <div :key="adm.id" v-else-if="tab === 'labs'" class="p-4"><LabReportList :patient-id="adm.patientId" /></div>
+        <div :key="adm.id" v-else-if="tab === 'exams'" class="p-4"><AdmissionExams :admission-id="adm.id" /></div>
+        <div :key="adm.id" v-else-if="tab === 'specimen'" class="p-4"><SpecimenPanel :admission-id="adm.id" /></div>
+        <div :key="adm.id" v-else-if="tab === 'abx'" class="p-4"><AbxTimeline :admission-id="adm.id" /></div>
+        <div :key="adm.id" v-else-if="tab === 'adr'" class="p-4"><AdrPanel :admission-id="adm.id" /></div>
+        <div :key="adm.id" v-else-if="tab === 'pharmcare'" class="p-4"><PharmCareList :admission-id="adm.id" /></div>
+        <div :key="adm.id" v-else-if="tab === 'medrec'" class="p-4"><MedRecPanel :admission-id="adm.id" @order="(p) => { orderPreset = p; orderOpen = true }" /></div>
+        <div :key="adm.id" v-else-if="tab === 'imaging'" class="p-4"><ImagingReportList :patient-id="adm.patientId" /></div>
+        <BloodPanel :key="adm.id" v-else-if="tab === 'blood'" :admission-id="adm.id" />
+        <SurgeryPanel :key="adm.id" v-else-if="tab === 'surgery'" :admission-id="adm.id" />
+        <PatientFlagsPanel :key="adm.id" v-else-if="tab === 'flags'" :patient-id="adm.patientId" />
+        <LinePanel :key="adm.id" v-else-if="tab === 'lines'" :admission-id="adm.id" />
+        <BedsidePanel :key="adm.id" v-else-if="tab === 'bedside'" :admission-id="adm.id" @note="takeBedsideNote" />
+        <SafetyPanel :key="adm.id" v-else-if="tab === 'safety'" :admission-id="adm.id" />
+        <DischargePlanPanel :key="adm.id" v-else-if="tab === 'plan'" :admission-id="adm.id" />
+        <PcaPanel :key="adm.id" v-else-if="tab === 'pca'" :admission-id="adm.id" />
+        <InfectionPanel :key="adm.id" v-else-if="tab === 'infection'" :admission-id="adm.id" />
+        <InfusionPanel :key="adm.id" v-else-if="tab === 'infusion'" :admission-id="adm.id" />
+        <WoundPanel :key="adm.id" v-else-if="tab === 'wounds'" :admission-id="adm.id" />
+        <FlowsheetPanel :key="adm.id" v-else-if="tab === 'flowsheet'" :admission-id="adm.id" />
+        <VentPanel :key="adm.id" v-else-if="tab === 'vent'" :admission-id="adm.id" />
+        <IcuCarePanel :key="adm.id" v-else-if="tab === 'icu'" :admission-id="adm.id" />
+        <CodeBluePanel :key="adm.id" v-else-if="tab === 'code'" :admission-id="adm.id" />
+        <DeathPanel :key="adm.id" v-else-if="tab === 'death'" :admission-id="adm.id" />
+        <PalliativePanel :key="adm.id" v-else-if="tab === 'palliative'" :admission-id="adm.id" />
+        <NutritionPanel :key="adm.id" v-else-if="tab === 'nutrition'" :admission-id="adm.id" />
         <div v-else-if="tab === 'discharge'" class="space-y-3 p-4">
           <!-- 出院準備：收案、有需求卻還沒送出轉介——簽准出院前提醒（不擋） -->
           <p v-if="adm.planUnreferred" class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">出院準備：已收案、評估有需求（長照、居家護理等），還沒有送出轉介。准予出院前請和出院準備個管師確認（「出院準備」分頁）；不擋出院。</p>

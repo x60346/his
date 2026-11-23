@@ -58,7 +58,8 @@ const isUsage = (x: StockTxn) => x.type === 'dispense' || x.type === 'transfer-o
 function inventoryRow(d: Drug, t: string, locationId: string): InventoryRow {
   const lots = stockLoc.lots(d.id, locationId).filter((l) => l.qty > 0)
   const usable = usableQty(lots, t)
-  const since = addDays(t, -USAGE_DAYS)
+  // 含今天共 30 天（和每日圖表同一個範圍；addDays(t, -30) 起算會是 31 天）
+  const since = addDays(t, -USAGE_DAYS + 1)
   const used30 = -db.stockTxns.filter((x) => x.drugId === d.id && x.locationId === locationId && isUsage(x) && x.at >= since).reduce((s, x) => s + x.qty, 0)
   const safetyStock = stockLoc.safety(d, locationId)
   const nearestExpiry = lots.filter((l) => l.expiry >= t).map((l) => l.expiry).sort()[0]
@@ -371,7 +372,7 @@ export function requestRestock(input: RestockInput): Promise<RestockView> {
     let disp: Dispense | undefined
     if (input.dispenseId) {
       disp = must(db.dispenses.find((x) => x.id === input.dispenseId), '調劑單')
-      if (disp.status === 'dispensed') fail(`領藥號 ${disp.pickupNo} 已發藥，不需為它補貨`)
+      if (!dispenseOpen(disp)) fail(`領藥號 ${disp.pickupNo} ${disp.status === 'returned' ? '已退藥' : '已發藥'}，不需為它補貨`)
       if (!medsOf(disp).some((m) => m.drugId === drug.id)) fail(`領藥號 ${disp.pickupNo} 的處方沒有 ${drug.name}`)
     }
     const addsPatient = !!disp && !open?.dispenseIds.includes(disp.id)

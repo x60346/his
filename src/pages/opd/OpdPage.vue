@@ -75,7 +75,9 @@ const freqs = computed(() => freqList.value ?? [])
 const visitId = ref<string>()
 useRevealOnNarrow(visitId) // 窄螢幕點選後把明細捲進畫面
 const visit = computed(() => queue.value?.find((v) => v.id === visitId.value))
-const { data: encounter } = useQuery(async () => (visitId.value ? (await opdApi.getEncounterByVisit(visitId.value)) ?? null : null), [visitId])
+// 病歷和查詢時的掛號配對：剛換病人、新的還沒讀回來時不能顯示（或存到）上一位的病歷
+const { data: encRaw } = useQuery(async () => ({ id: visitId.value, v: visitId.value ? (await opdApi.getEncounterByVisit(visitId.value)) ?? null : null }), [visitId])
+const encounter = computed(() => (encRaw.value && encRaw.value.id === visitId.value ? encRaw.value.v : undefined))
 const { data: history } = useQuery(async () => (visit.value ? opdApi.patientHistory(visit.value.patientId, visit.value.id) : []), [() => visit.value?.patientId])
 
 type Draft = Omit<EncounterDraft, 'medications'> & { medications: MedRow[] }
@@ -379,8 +381,10 @@ function mergeIntoDraft(src: ExpandedOrders, title: string, only?: 'medications'
 const expandEncounter = useAction(opdApi.expandEncounter)
 async function copyFrom(h: HistoryItem, only?: 'medications') {
   if (!visit.value) return
+  const vid = visitId.value
   const x = await expandEncounter.run(h.id, visit.value.patientId)
-  if (!x) return
+  // 等的時候換了病人：不要把上一位的前次處方帶進這一位
+  if (!x || visitId.value !== vid) return
   const from = x.refillFrom ? `（${x.refillFrom} 是慢箋調劑，帶入 ${x.date} 原處方）` : ''
   mergeIntoDraft(x, (only ? '已帶入處方' : '已帶入前次') + from, only)
 }

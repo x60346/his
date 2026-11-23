@@ -46,7 +46,7 @@ export const noShowClosed = (v: Pick<Visit, 'noShow'>) => {
 
 // ---------- 出院後回診 ----------
 
-/** 出院後幾天內的回診，基本部分負擔比照經轉診（含出院當天起算的第 30 天） */
+/** 出院後幾天內的回診，基本部分負擔比照經轉診（出院日到出院日 +30 天，含兩端） */
 export const AFTER_DISCHARGE_COPAY_DAYS = 30
 
 /**

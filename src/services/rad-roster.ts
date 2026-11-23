@@ -142,6 +142,8 @@ export function decideRadChange(id: string, approve: boolean, note = '', replace
     if (!r) fail('找不到申請', 'NOT_FOUND')
     if (r!.status !== 'pending') fail('這張申請已經處理過了', 'CONFLICT')
     if (!approve && !note.trim()) failField('note', '退回請寫原因')
+    // 過去的班不能再改（和直接排班一樣）：已經過了的請假換班只能退回，誰上了那班的紀錄不會被改寫
+    if (approve && r!.date < today()) fail('這一班已經過了，不能核准（請退回）', 'CONFLICT')
     const s = db.radShifts.find((x) => x.id === r!.shiftId)
     if (approve) {
       if (!s || s.userId !== r!.requesterId) fail('這一格已經改過了，請重新整理', 'CONFLICT')

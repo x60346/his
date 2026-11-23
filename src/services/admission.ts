@@ -108,7 +108,10 @@ export function cancelReservation(id: string): Promise<Admission> {
     if (a.status !== 'reserved') fail('只有預約中的住院可以取消', 'CONFLICT')
     a.status = 'cancelled'
     releaseReservedBeds(a.id)
-    audit('取消住院預約', find.patient(a.patientId)?.name ?? '')
+    // 急診收住院、留觀的預約被取消：那次急診回到「待決定去向」，醫師重新決定（不然看板永遠停在待床、待排留觀床）
+    const v = db.visits.find((x) => x.er?.disposition?.admissionId === a.id && !x.er.obsEnd)
+    if (v) delete v.er!.disposition
+    audit('取消住院預約', `${find.patient(a.patientId)?.name ?? ''}${v ? '（急診去向退回待決定）' : ''}`)
     return a
   })
 }

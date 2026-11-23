@@ -137,6 +137,9 @@ watch(patient, (p) => {
   caseType.value = '01'
   preventItems.value = []
   refOn.value = false
+  // 預收是上一位病人的估計金額：換人要重新勾
+  prepayOn.value = false
+  prepayAmount.value = undefined
 })
 // 外院轉診單（選填）：病人持轉診單來，基本部分負擔收經轉診的金額；有效期依就醫日（referral-rules）
 const refOn = ref(false)

@@ -24,7 +24,10 @@ const grouped = computed(() => (data.value?.ward === props.ward ? data.value.gro
 const shifts: Shift[] = SHIFT_ORDER
 
 const form = reactive({ shift: handoverShiftOf(props.clock) as string | number | undefined, admissionId: props.selectedId as string | number | undefined, content: '' })
-watch(() => props.selectedId, (id) => id && (form.admissionId = id))
+// 預設是清單上選的病人；已經在寫某一位的交班內容時不跟著換（不然 A 的內容會存到 B）
+watch(() => props.selectedId, (id) => id && !form.content.trim() && (form.admissionId = id))
+// 分頁開著跨過換班：預設班別跟著換（不然很快寫的交班會存成上一班）
+watch(currentShift, () => (form.shift = handoverShiftOf(props.clock)))
 const patientOptions = computed(() => props.patients.map((p) => ({ label: `${p.bed?.bedNo ?? '日間'} ${p.patientName}`, value: p.id })))
 
 const phrase = usePhrases(() => props.ward)

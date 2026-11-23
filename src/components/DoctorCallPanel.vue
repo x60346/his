@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 呼叫醫師（護理站病人分頁）：記打給誰（預設下班時間找那一科的值班醫師、上班時間找主治）、緊急或一般、為什麼；
 // 醫師回覆了記方式（電話醫囑、到床邊）。緊急 15 分鐘沒回覆標紅、提醒再找。服務層 doctor-call.ts
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { UBadge, UButton, UInput, UQueryState, USelect, UTextarea } from '@/components/ui'
 import { doctorCallApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
@@ -11,6 +11,8 @@ const emit = defineEmits<{ note: [draft: { callId: string; focus: string; data: 
 const { data, loading } = useQuery(async () => ({ id: props.admissionId, v: await doctorCallApi.listDoctorCalls(props.admissionId) }), [() => props.admissionId])
 const v = computed(() => (data.value?.id === props.admissionId ? data.value.v : undefined))
 const f = reactive({ toUserId: '' as string | number | undefined, urgency: 'routine' as 'urgent' | 'routine', reason: '' })
+// 換病人：表單是上一位的（父層也會依住院重建這個元件，這裡再保險一次）
+watch(() => props.admissionId, () => Object.assign(f, { toUserId: '', urgency: 'routine', reason: '' }))
 const call = useAction(doctorCallApi.callDoctor, { success: (c) => `已記錄：${c.urgency === 'urgent' ? '緊急' : '一般'}找 ${c.toName}` })
 async function submit() {
   const to = f.toUserId || v.value?.suggest?.userId

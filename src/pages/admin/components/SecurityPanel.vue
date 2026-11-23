@@ -33,7 +33,11 @@ const savePolicy = useAction(pharmacyApi.saveDispensePolicy, { success: (p) => (
 // 風險評估切點（Morse 越高越危險、Braden 越低越危險）
 const { data: riskSet } = useQuery(() => riskApi.getRiskSettings())
 const rk = reactive({ fallHigh: 45, fallModerate: 25, pressureHigh: 16, pressureModerate: 18 })
-watch(riskSet, (s) => s && Object.assign(rk, s), { immediate: true })
+// 只在第一次讀到時帶入：之後每次存檔（含別的開關、解鎖）都會重新查詢，不能蓋掉正在改的數字
+let rkLoaded = false
+watch(riskSet, (s) => {
+  if (s && !rkLoaded) { Object.assign(rk, s); rkLoaded = true }
+}, { immediate: true })
 const saveRisk = useAction(riskApi.saveRiskSettings, { success: (s) => `已儲存：Morse ≥${s.fallHigh} 高風險、≥${s.fallModerate} 中度；Braden ≤${s.pressureHigh} 高風險、≤${s.pressureModerate} 中度` })
 
 // 給藥條碼核對：勾了立即儲存

@@ -131,7 +131,8 @@ function dropFutureEmptySessions(slotId: string): number {
   let kept = 0
   db.sessions = db.sessions.filter((s) => {
     if (!isFromSlot(s, slotId) || s.date <= t) return true
-    const hasVisits = db.visits.some((v) => v.sessionId === s.id)
+    // 取消的掛號不算（否則有人掛了又取消，那一診就一直留在舊的醫師、診間）
+    const hasVisits = db.visits.some((v) => v.sessionId === s.id && v.status !== 'cancelled')
     if (hasVisits || s.suspended || s.originalDoctorId) {
       kept++
       return true

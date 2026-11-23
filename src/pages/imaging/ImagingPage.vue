@@ -61,7 +61,8 @@ async function onSubmit() {
   if (await submit.run({ key, ...form.value })) selKey.value = work.value?.find((w) => w.key !== key && !w.awaitingExam)?.key
 }
 async function onAddendum() {
-  if (report.value && (await addendum.run(report.value.id, add.value))) adding.value = false
+  // 成功就清掉：不然下一次補充會帶著上次的內容與「重要發現」，一按又通知一次
+  if (report.value && (await addendum.run(report.value.id, add.value))) { adding.value = false; add.value = { text: '', significant: false } }
 }
 const when = (s: string) => s.slice(5, 16).replace('-', '/')
 </script>

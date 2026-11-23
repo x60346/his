@@ -38,6 +38,8 @@ async function submitLeave() {
 const swOpen = ref(false)
 const sw = reactive({ shiftId: '' as string | number | undefined, date: '', targetShiftId: '', reason: '' })
 watch(() => sw.shiftId, (id) => (sw.date = myShifts.value?.find((x) => x.id === id)?.date ?? ''))
+// 我的班或日期改了，候選名單就變了：之前勾的對象看不到了，不能還留著被送出
+watch([() => sw.shiftId, () => sw.date], () => (sw.targetShiftId = ''))
 const { data: cands } = useQuery(async () => (swOpen.value && sw.shiftId && sw.date ? shiftRequestApi.swapCandidates(String(sw.shiftId), sw.date) : []), [swOpen, () => sw.shiftId, () => sw.date])
 const pickedCand = computed(() => cands.value?.find((x) => x.id === sw.targetShiftId))
 const swap = useAction(shiftRequestApi.requestSwap, { success: '已送出換班申請，等對方同意' })

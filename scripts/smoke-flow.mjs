@@ -7277,7 +7277,7 @@ try {
     const v1 = await E.triageAndRegister({ patientId: p1.id, complaint: '呼吸困難', vitals: { ...N, spo2: 86, pulse: 126 }, level: 1, reason: '冒冷汗、意識變差' })
     ok(v1.er.level === 1 && v1.er.suggested === 2 && v1.er.reason && v1.caseType === 'E1' && v1.checkedInAt && v1.period === 'ER', '檢傷掛號：建議 2 級、調升 1 級（有原因），急診案件、已報到')
     msg = await errOf(() => E.triageAndRegister({ patientId: p1.id, complaint: '胸痛', vitals: N, level: 2 }))
-    ok(msg.includes('已經在急診'), '同一位病人在急診中不能重複掛')
+    ok(msg.includes('還在急診'), '同一位病人在急診中不能重複掛')
     const v2 = await E.triageAndRegister({ patientId: p2.id, complaint: '外傷：撕裂傷', vitals: N, level: 4 })
     const v3 = await E.triageAndRegister({ patientId: p3.id, complaint: '腹痛', vitals: { ...N, temp: 38.2 }, level: 3 })
 

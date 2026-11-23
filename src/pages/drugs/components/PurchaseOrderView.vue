@@ -30,8 +30,11 @@ const editable = computed(() => role.value === 'pharmacist' && (!props.orderId |
 // ---------- 草稿表單 ----------
 type FormLine = { drugId: string | number; qty?: number; unitCost?: number; restockId?: string }
 const form = reactive({ supplierId: '' as string | number, expectedDate: '', note: '', lines: [] as FormLine[] })
+// 換了一張採購單才帶入：同一張的重新查詢（任何存檔、解鎖都會觸發）不能蓋掉還沒存的修改
+let loadedId = ''
 watch(po, (p) => {
-  if (!p) return
+  if (!p || p.id === loadedId) return
+  loadedId = p.id
   Object.assign(form, { supplierId: p.supplierId, expectedDate: p.expectedDate ?? '', note: p.note ?? '', lines: p.lines.map((l) => ({ drugId: l.drugId, qty: l.qty, unitCost: l.unitCost, restockId: l.restockId })) })
 }, { immediate: true })
 const { data: drugs } = useQuery(() => masterApi.listDrugs())

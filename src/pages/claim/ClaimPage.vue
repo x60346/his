@@ -58,6 +58,8 @@ async function submitRj() {
 const fileOpen = ref(false)
 const fileText = ref('')
 const filePv = ref<RejectFilePreview>()
+// 預覽只代表預覽當時的內容：改了就要重新預覽（匯入送的是目前的內容）
+watch(fileText, () => (filePv.value = undefined))
 function openFile() {
   fileText.value = '病歷號,日期,代碼,說明\n'
   filePv.value = undefined

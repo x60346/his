@@ -6,7 +6,7 @@ import { db, newId, nextCounter } from '@/mock/db'
 import { now } from '@/utils/date'
 import { audit, fail, failField, failFields, must, mutate, query, requireUser } from './http'
 import { checkTriageInput, ER_DISPOSITION_LABEL, suggestLevel, TRIAGE_LABEL } from './er-rules'
-import { erItem, erSessionFor, erVisits, isErDoctor, type ErBoardItem } from './er-work'
+import { erItem, erSessionFor, erStageOf, erVisits, isErDoctor, type ErBoardItem } from './er-work'
 import { admissionView, find, nameOf, visitView, type AdmissionView, type VisitView } from './views'
 import { admitInto, bedStatusLabel, closeOrders, isObsBed, obsOpen, releaseBed, takeBed } from './bed-work'
 import { transfusionOpen } from './blood-work'
@@ -70,7 +70,8 @@ export function triageAndRegister(input: TriageInput): Promise<VisitView> {
     const e = checkTriageInput({ complaint: input.complaint, vitals: input.vitals, level: input.level, reason: input.reason })
     failFields(e)
     const t = now()
-    if (erVisits(t).some((v) => v.patientId === p.id && ['registered', 'in-consult'].includes(v.status))) fail(`${p.name} 已經在急診候診或看診中`, 'CONFLICT')
+    // 還在急診的（候診、看診、待決定去向、留觀、待床）不能再掛一次；看完待批價、已離院、已住院的可以
+    if (erVisits(t).some((v) => v.patientId === p.id && ['waiting', 'seeing', 'deciding', 'obs-bed', 'obs', 'bed'].includes(erStageOf(v)))) fail(`${p.name} 還在急診（候診、看診、留觀或待床）`, 'CONFLICT')
     if (db.admissions.some((a) => a.patientId === p.id && a.status === 'admitted')) fail(`${p.name} 正在住院中`, 'CONFLICT')
     const identityCode = input.identityCode && find.identity(input.identityCode) ? input.identityCode : p.defaultIdentity
     const s = erSessionFor(t.slice(0, 10))
@@ -130,6 +131,7 @@ export function setDisposition(visitId: string, input: DispositionInput): Promis
     if (!isErDoctor(u.doctorId)) fail('急診去向由急診醫師決定', 'FORBIDDEN')
     const v = must(find.visit(visitId), '急診就醫')
     if (!v.er) fail('這不是急診就醫')
+    if (v.status === 'cancelled') fail('這次急診已取消', 'CONFLICT')
     if (v.er.disposition) fail(`已經決定去向（${ER_DISPOSITION_LABEL[v.er.disposition.kind]}）`, 'CONFLICT')
     if (v.status === 'registered' || v.status === 'in-consult') fail('請先完成看診（病歷、處方），再決定去向', 'CONFLICT')
     const t = now()

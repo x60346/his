@@ -10,8 +10,15 @@ import { useAction, useQuery } from '@/composables/useService'
 const { data: wards } = useQuery(() => wardStockApi.listWardStocks())
 const needs = computed(() => (wards.value ?? []).map((w) => ({ ...w, rows: w.rows.filter((r) => r.below) })).filter((w) => w.rows.length))
 const qty = reactive<Record<string, number | undefined>>({})
+// 建議量 = 基準量 − 可用量；使用者改過的不覆蓋（任何存檔都會重新查詢），還是上次建議值的才跟著更新
+const lastSug: Record<string, number> = {}
 watch(needs, (ns) => {
-  for (const w of ns) for (const r of w.rows) qty[`${w.ward}|${r.drugId}`] = r.par - r.usable
+  for (const w of ns) for (const r of w.rows) {
+    const k = `${w.ward}|${r.drugId}`
+    const sug = r.par - r.usable
+    if (qty[k] === undefined || qty[k] === lastSug[k]) qty[k] = sug
+    lastSug[k] = sug
+  }
 }, { immediate: true })
 const refill = useAction(wardStockApi.refillWard, { success: (r) => `已補充 ${r.no}：${r.lines} 項` })
 // 欄位錯誤只屬於剛送出的那個病房（不同病房可能有同一種藥）

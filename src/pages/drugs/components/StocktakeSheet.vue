@@ -31,6 +31,9 @@ watch(s, (v) => {
 watch(() => props.sheetId, () => {
   for (const k of Object.keys(drafts)) delete drafts[k]
   for (const k of Object.keys(lineErr)) delete lineErr[k]
+  // 差異原因與過帳錯誤也是這一張的（每張單的品項編號都從 L1 起，不清會帶到下一張）
+  for (const k of Object.keys(reasons)) delete reasons[k]
+  post.fieldErrors.value = {}
 })
 // 存檔排隊、一列一列送：清點時手很快（填完按 Enter 或 Tab 馬上下一列），
 // 以前共用一個 useAction，上一列還在存時下一列的存檔被「進行中」擋掉——數字留在格子裡、其實沒存，送出時才發現少一列
