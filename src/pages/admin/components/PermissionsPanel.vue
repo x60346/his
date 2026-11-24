@@ -99,7 +99,7 @@ const groups = computed(() => [...new Set((rows.value ?? []).map((r) => r.group)
             <tbody v-for="g in groups" :key="g" class="divide-y divide-slate-100 border-t border-slate-200">
               <tr><td :colspan="roles.length + 3" class="bg-slate-50/60 px-3 py-1 text-xs font-semibold text-slate-500">{{ g }}</td></tr>
               <tr v-for="p in rows!.filter((x) => x.group === g)" :key="p.key" :class="p.changed && 'bg-amber-50/50'">
-                <td class="px-3 py-1.5">
+                <td class="min-w-[12rem] px-3 py-1.5">
                   <div class="flex items-center gap-1 font-medium text-slate-800">
                     <Lock v-if="p.fixed" class="h-3.5 w-3.5 text-slate-400" />{{ p.label }}
                     <UBadge v-if="p.changed" tone="yellow">已調整</UBadge>
@@ -111,12 +111,12 @@ const groups = computed(() => [...new Set((rows.value ?? []).map((r) => r.group)
                   <span v-else-if="p.candidates.includes(r)" class="mx-auto block h-4 w-4 rounded border border-slate-300" :title="`可以開放給${roleLabel[r]}`" />
                   <Minus v-else class="mx-auto h-4 w-4 text-slate-200" :aria-label="`${roleLabel[r]}不在法規範圍`" />
                 </td>
-                <td class="px-3 py-1.5 text-xs">
+                <td class="min-w-[7rem] px-3 py-1.5 text-xs">
                   <template v-if="p.grantable || p.grantOnly">
-                    <span v-for="u in p.grantees" :key="u.userId" class="mr-1 inline-flex items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-sky-800">
+                    <span v-for="u in p.grantees" :key="u.userId" class="mb-0.5 mr-1 inline-flex items-center gap-0.5 whitespace-nowrap rounded bg-sky-100 px-1.5 py-0.5 text-sky-800">
                       {{ u.name }}<button type="button" class="text-sky-600 hover:text-red-600" :aria-label="`收回 ${u.name}`" @click="revoking = { row: p, user: u }"><X class="h-3 w-3" /></button>
                     </span>
-                    <button type="button" class="inline-flex items-center gap-0.5 text-brand-600 hover:underline" @click="openGrant(p)"><UserPlus class="h-3.5 w-3.5" />指定</button>
+                    <button type="button" class="inline-flex items-center gap-0.5 whitespace-nowrap text-brand-600 hover:underline" @click="openGrant(p)"><UserPlus class="h-3.5 w-3.5" />指定</button>
                   </template>
                   <span v-else class="text-slate-300">—</span>
                 </td>

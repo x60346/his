@@ -122,16 +122,16 @@ async function submitEx() {
               <tr>
                 <th class="px-2 py-1.5 text-left">{{ b.kind === 'ipd' ? '出院日' : '就醫日' }}</th><th class="px-2 text-left">案件</th><th class="px-2 text-left">病人</th><th class="px-2 text-left">醫師</th><th class="px-2 text-left">主診斷</th>
                 <th v-if="b.kind === 'ipd'" class="px-2 text-right">天數</th>
-                <th class="px-2 text-right">健保點數</th><th class="px-2 text-right">部分負擔</th><th class="px-2 text-right">申請點數</th><th class="px-2" />
+                <th class="whitespace-nowrap px-2 text-right">健保點數</th><th class="whitespace-nowrap px-2 text-right">部分負擔</th><th class="whitespace-nowrap px-2 text-right">申請點數</th><th class="px-2" />
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
               <template v-for="r in rows" :key="r.refId + (r.supplementOf ?? '')">
                 <tr :class="r.excluded ? 'text-slate-400' : r.problems.length ? 'bg-red-50/50' : ''">
-                  <td class="tabular px-2 py-1.5">{{ r.date }}</td>
-                  <td class="px-2"><span class="text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div><UBadge v-if="r.interim" tone="blue" class="ml-1">期中（住院中，到 {{ r.interim.through.slice(5) }}）</UBadge><div v-if="r.interimPrior" class="text-xs text-blue-800">期中已報 {{ fmt(r.interimPrior) }} 點，這筆報差額</div></td>
-                  <td class="px-2">{{ r.patientName }}<span class="ml-1 text-xs text-slate-400">{{ r.chartNo }}</span></td>
-                  <td class="px-2 text-xs">{{ r.doctorName }}</td>
+                  <td class="tabular whitespace-nowrap px-2 py-1.5">{{ r.date }}</td>
+                  <td class="px-2"><span class="whitespace-nowrap text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div><UBadge v-if="r.interim" tone="blue" class="ml-1">期中（住院中，到 {{ r.interim.through.slice(5) }}）</UBadge><div v-if="r.interimPrior" class="text-xs text-blue-800">期中已報 {{ fmt(r.interimPrior) }} 點，這筆報差額</div></td>
+                  <td class="whitespace-nowrap px-2">{{ r.patientName }}<span class="ml-1 text-xs text-slate-400">{{ r.chartNo }}</span></td>
+                  <td class="whitespace-nowrap px-2 text-xs">{{ r.doctorName }}</td>
                   <td class="px-2 text-xs">{{ r.diagnosis || '—' }}</td>
                   <td v-if="b.kind === 'ipd'" class="tabular px-2 text-right">{{ r.days ?? '' }}</td>
                   <td class="tabular px-2 text-right">{{ fmt(r.points) }}</td>
