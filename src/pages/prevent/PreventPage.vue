@@ -189,8 +189,8 @@ const dataText = (d: Record<string, string>) => Object.entries(d).map(([k, v]) =
                 </template>
                 <template #cell-data="{ row }">
                   <span :class="row.voided ? 'text-slate-400 line-through' : 'text-slate-600'">{{ dataText(row.data) }}</span>
-                  <span v-if="row.reportedAt" class="tabular ml-1 text-xs text-slate-400">（{{ toRoc(row.reportedAt) }} 補登）</span>
-                  <p v-if="row.voided" class="mt-0.5 text-xs text-slate-500">作廢：{{ row.voided.reason }}（{{ row.voidedByName }}・{{ toRoc(row.voided.at) }}）</p>
+                  <span v-if="row.reportedAt" class="tabular ml-1 text-xs text-slate-400">（{{ row.reportedAt.slice(5, 16).replace('-', '/') }} 補登）</span>
+                  <p v-if="row.voided" class="mt-0.5 text-xs text-slate-500">作廢：{{ row.voided.reason }}（{{ row.voidedByName }}・{{ row.voided.at.slice(5, 16).replace('-', '/') }}）</p>
                 </template>
                 <!-- slot 內容全部被 v-if 掉時，Vue 會改顯示預設內容（—），所以用空 span 佔位 -->
                 <template #cell-act="{ row }">

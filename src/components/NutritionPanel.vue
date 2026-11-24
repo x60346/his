@@ -47,7 +47,7 @@ async function applyTube(id: string) {
         <section class="rounded-md border border-slate-200 p-3">
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <span class="font-semibold text-slate-700">營養篩檢</span>
-            <UBadge v-if="v.screenable && v.due.status !== 'done'" :tone="v.due.status === 'overdue' ? 'red' : v.due.status === 'due' ? 'yellow' : 'cyan'">{{ dueText[v.due.status] }}（{{ v.due.dueAt.slice(5) }} 前）</UBadge>
+            <UBadge v-if="v.screenable && v.due.status !== 'done'" :tone="v.due.status === 'overdue' ? 'red' : v.due.status === 'due' ? 'yellow' : 'cyan'">{{ dueText[v.due.status] }}（{{ v.due.dueAt.slice(5).replace('-', '/') }} 前）</UBadge>
             <UBadge v-if="v.needsDietitian" tone="purple">營養師待評估</UBadge>
             <UButton v-if="v.canScreen" class="ml-auto" size="sm" variant="secondary" :icon="ClipboardCheck" @click="openScreen">{{ v.screens.length ? '重新篩檢' : '篩檢' }}</UButton>
           </div>
@@ -55,7 +55,7 @@ async function applyTube(id: string) {
           <p v-else-if="!v.screens.length" class="text-xs text-slate-500">還沒篩檢：入院 48 小時內要做。</p>
           <ul v-else class="space-y-1 text-xs text-slate-600">
             <li v-for="s in v.screens" :key="s.id">
-              <span class="tabular">{{ s.at.slice(5) }}</span> {{ s.byName }}・<b :class="s.risk ? 'text-red-700' : 'text-slate-800'">{{ s.score }} 分</b>（營養狀態 {{ s.impaired }}＋疾病 {{ s.severity }}{{ s.age70 ? '＋70 歲以上 1' : '' }}）<template v-if="s.bmi">・BMI {{ s.bmi }}</template>
+              <span class="tabular">{{ s.at.slice(5).replace('-', '/') }}</span> {{ s.byName }}・<b :class="s.risk ? 'text-red-700' : 'text-slate-800'">{{ s.score }} 分</b>（營養狀態 {{ s.impaired }}＋疾病 {{ s.severity }}{{ s.age70 ? '＋70 歲以上 1' : '' }}）<template v-if="s.bmi">・BMI {{ s.bmi }}</template>
             </li>
           </ul>
         </section>
@@ -66,7 +66,7 @@ async function applyTube(id: string) {
           <ul v-else class="divide-y divide-slate-100">
             <li v-for="x in v.assessments" :key="x.id" class="space-y-0.5 py-2">
               <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span class="tabular">{{ x.at.slice(5) }}</span>{{ x.byName }}<template v-if="x.kcal || x.protein">・建議 {{ x.kcal ? `${x.kcal} kcal` : '' }}{{ x.kcal && x.protein ? '、' : '' }}{{ x.protein ? `蛋白質 ${x.protein} g` : '' }}／日</template>
+                <span class="tabular">{{ x.at.slice(5).replace('-', '/') }}</span>{{ x.byName }}<template v-if="x.kcal || x.protein">・建議 {{ x.kcal ? `${x.kcal} kcal` : '' }}{{ x.kcal && x.protein ? '、' : '' }}{{ x.protein ? `蛋白質 ${x.protein} g` : '' }}／日</template>
                 <UBadge v-if="x.seenAt" tone="green">{{ x.seenByName }} 已閱</UBadge>
                 <UBadge v-else tone="yellow">主治未閱</UBadge>
                 <UButton v-if="v.canAck && !x.seenAt" size="sm" class="ml-auto" :loading="ack.pending.value" @click="ack.run(x.id)">已閱</UButton>

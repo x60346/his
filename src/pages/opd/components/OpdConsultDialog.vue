@@ -32,8 +32,8 @@ async function submit() {
         <div class="flex flex-wrap items-center gap-2 font-medium text-slate-800">
           {{ item.consult.fromDeptName }} {{ item.consult.fromDoctorName }} → {{ item.consult.toDeptName }}<template v-if="item.consult.toDoctorName">（指定 {{ item.consult.toDoctorName }}）</template>
           <UBadge v-if="item.consult.urgent" tone="red">急會診</UBadge>
-          <UBadge v-if="item.overdue" tone="yellow">逾期（{{ item.consult.requestedAt.slice(5, 10) }} 申請）</UBadge>
-          <span class="text-xs font-normal text-slate-500">{{ item.consult.requestedAt.slice(5, 16) }} 申請</span>
+          <UBadge v-if="item.overdue" tone="yellow">逾期（{{ item.consult.requestedAt.slice(5, 10).replace('-', '/') }} 申請）</UBadge>
+          <span class="text-xs font-normal text-slate-500">{{ item.consult.requestedAt.slice(5, 16).replace('-', '/') }} 申請</span>
         </div>
         <div class="mt-1 text-slate-800">{{ item.consult.question }}</div>
       </div>

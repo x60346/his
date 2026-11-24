@@ -39,12 +39,12 @@ const sel = computed(() => [...(data.value?.pending ?? []), ...(data.value?.deci
             <p v-if="!data.pending.length" class="px-3 py-4 text-center text-slate-400">沒有待判定的個案</p>
             <button v-for="c in data.pending" :key="c.id" :class="['w-full border-b border-slate-100 px-3 py-2 text-left hover:bg-slate-50', c.admissionId === picked && '!bg-brand-50']" @click="picked = c.admissionId">
               <div class="flex flex-wrap items-center gap-1.5"><UBadge tone="yellow">{{ c.label }}</UBadge><b>{{ c.patientName }}</b><span class="text-xs text-slate-500">{{ c.ward }} {{ c.bedNo }}</span></div>
-              <div class="text-xs text-slate-600">發生 {{ c.onsetAt.slice(5) }}・{{ c.culture }}</div>
+              <div class="text-xs text-slate-600">發生 {{ c.onsetAt.slice(5).replace('-', '/') }}・{{ c.culture }}</div>
             </button>
             <details v-if="data.decided.length" class="px-3 py-2">
               <summary class="cursor-pointer text-slate-600">最近 30 天判定過 {{ data.decided.length }} 筆</summary>
               <button v-for="c in data.decided" :key="c.id" class="block w-full py-1 text-left text-xs text-slate-600 hover:bg-slate-50" @click="picked = c.admissionId">
-                {{ c.onsetAt.slice(5) }} {{ c.patientName }}・{{ c.label }}・{{ c.status === 'confirmed' ? '成立' : '不成立' }}
+                {{ c.onsetAt.slice(5).replace('-', '/') }} {{ c.patientName }}・{{ c.label }}・{{ c.status === 'confirmed' ? '成立' : '不成立' }}
               </button>
             </details>
           </div>

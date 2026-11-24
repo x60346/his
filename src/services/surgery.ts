@@ -51,7 +51,7 @@ export function patientSurgeries(admissionId: string): Promise<PatientSurgeries>
       canRequest: u.role === 'doctor' && a.status === 'admitted' && careRoleOf(u.doctorId, a)?.kind === 'team',
       list: db.surgeries.filter((s) => s.admissionId === a.id).sort((x, y) => y.createdAt.localeCompare(x.createdAt)).map(surgeryView),
       bloodOptions: db.bloodRequests.filter((r) => r.admissionId === a.id && !r.cancelled).map((r) => ({ id: r.id, text: `${r.no}（${requestStatus(r) === 'done' ? '已輸完' : '有效'}）` })),
-      npoOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'active' && dietOf(o).kind === 'npo').map((o) => ({ id: o.id, text: `${o.content}（${o.startAt.slice(5)} 起）` })),
+      npoOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'diet' && o.status === 'active' && dietOf(o).kind === 'npo').map((o) => ({ id: o.id, text: `${o.content}（${o.startAt.slice(5).replace('-', '/')} 起）` })),
       abxOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.category === 'medication' && o.status !== 'stopped' && isAntibiotic(find.drug(o.drugId ?? ''))).map((o) => ({ id: o.id, text: `${o.content} ${o.dose ?? ''} ${o.freq ?? ''}`.trim() })),
     }
   })
@@ -245,7 +245,7 @@ export function ackDelay(id: string): Promise<SurgeryView> {
     if (!xs.length) fail('沒有還沒讀的順延通知', 'CONFLICT')
     const t = now()
     for (const d of xs) d[key] = { by: u.id, at: t }
-    audit('順延已讀', `${audText(s)}：${who === 'surgeon' ? '主刀' : '病房'}已讀 ${xs.length} 則（現排 ${s.schedule?.room ?? ''} ${s.schedule?.start.slice(5) ?? ''}）`)
+    audit('順延已讀', `${audText(s)}：${who === 'surgeon' ? '主刀' : '病房'}已讀 ${xs.length} 則（現排 ${s.schedule?.room ?? ''} ${s.schedule?.start.slice(5).replace('-', '/') ?? ''}）`)
     return surgeryView(s)
   })
 }
@@ -261,7 +261,7 @@ export function pullBackSurgery(id: string): Promise<SurgeryView> {
     const d = pullBackOf(s, surgeryOf)
     if (!d) fail('這台不能拉回（插台的急刀還在原位，或這台之後改過時間）', 'CONFLICT')
     const t = now()
-    if (d!.from < t) fail(`原時間 ${d!.from.slice(5)} 已經過了，請改期`, 'CONFLICT')
+    if (d!.from < t) fail(`原時間 ${d!.from.slice(5).replace('-', '/')} 已經過了，請改期`, 'CONFLICT')
     const room = s.schedule!.room
     const clash = db.surgeries.find((x) => x.id !== s.id && x.schedule?.room === room && x.status !== 'cancelled' && x.status !== 'done' && overlaps(x.schedule.start, x.estMinutes, d!.from, s.estMinutes))
     if (clash) fail(`原時間 ${room} ${d!.from.slice(11)} 已經排了 ${clash.no} ${nameOf.patient(clash.patientId)}（${clash.schedule!.start.slice(11)} 起）`, 'CONFLICT')
@@ -281,7 +281,7 @@ export function acceptOvertime(id: string): Promise<SurgeryView> {
     const s = must(surgeryOf(id), '手術')
     if (!delayOverflow(s)) fail(s.overtime ? '已經同意加班了' : '這台沒有被順延到開放時段外', 'CONFLICT')
     s.overtime = { by: u.id, at: now() }
-    audit('順延同意加班', `${audText(s)}：${s.schedule!.room} ${s.schedule!.start.slice(5)} 起，超過 ${OR_DAY.end}`)
+    audit('順延同意加班', `${audText(s)}：${s.schedule!.room} ${s.schedule!.start.slice(5).replace('-', '/')} 起，超過 ${OR_DAY.end}`)
     return surgeryView(s)
   })
 }
@@ -342,7 +342,7 @@ export function sendToOr(id: string): Promise<SurgeryView> {
     if (miss.length) fail(`術前準備還沒完成：${miss.map((k) => PREP_ITEMS.find((x) => x.key === k)!.label).join('、')}`, 'CONFLICT')
     const t = now()
     // 排在之後幾天的不能今天就送（送了病人就算在手術室，病房的給藥、交班都不再列）：手術當天再送
-    if (s.schedule && s.schedule.start.slice(0, 10) > t.slice(0, 10)) fail(`這台排在 ${s.schedule.start.slice(5, 16)}：手術當天再送手術室`, 'CONFLICT')
+    if (s.schedule && s.schedule.start.slice(0, 10) > t.slice(0, 10)) fail(`這台排在 ${s.schedule.start.slice(5, 16).replace('-', '/')}：手術當天再送手術室`, 'CONFLICT')
     Object.assign(s, { status: 'sent', sentAt: t, sentBy: u.id })
     audit('送手術室', audText(s))
     return surgeryView(s)
@@ -440,7 +440,7 @@ export function finishSurgery(id: string, input: { items: string[]; spongeBefore
 // ---------- 手術團隊 ----------
 
 const clashText = (userId: string, x: Surgery, urgent: boolean) =>
-  `${nameOf.user(userId)} 同時段在 ${x.schedule!.room} ${x.no} ${nameOf.patient(x.patientId)}（${x.schedule!.start.slice(5)} 起）${urgent ? '：急刀可以寫原因放行' : '，不能重複排'}`
+  `${nameOf.user(userId)} 同時段在 ${x.schedule!.room} ${x.no} ${nameOf.patient(x.patientId)}（${x.schedule!.start.slice(5).replace('-', '/')} 起）${urgent ? '：急刀可以寫原因放行' : '，不能重複排'}`
 
 /** 這個人能不能擔任這個角色（醫師：助手；有「麻醉」權限的醫師：麻醉醫師；護理師：刷手、流動） */
 function fitsRole(u: User, role: TeamRole): boolean {

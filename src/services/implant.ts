@@ -55,20 +55,20 @@ function lotItem(l: ImplantLot, d: string): LotItem {
   const st = lotState(l, used, d)
   return {
     id: l.id, procId: l.procId, name: p?.name ?? l.procId, vendor: p?.implant?.vendor ?? '', selfPay: isSelfPayImplant(p), lot: l.lot, expiresOn: l.expiresOn, qty: l.qty, left: lotLeft(l, used),
-    state: st, stateLabel: LOT_STATE_LABEL[st], expiring: st === 'available' && l.expiresOn <= addDays(d, 30), receivedText: `${l.receivedAt.slice(5)} ${nameOf.user(l.receivedBy)}`,
+    state: st, stateLabel: LOT_STATE_LABEL[st], expiring: st === 'available' && l.expiresOn <= addDays(d, 30), receivedText: `${l.receivedAt.slice(5).replace('-', '/')} ${nameOf.user(l.receivedBy)}`,
   }
 }
 
 function recallItem(l: ImplantLot): LotRecallItem {
   return {
-    lotId: l.id, name: find.procedure(l.procId)?.name ?? '', lot: l.lot, reason: l.recall!.reason, recalledText: `${l.recall!.at.slice(5)} ${nameOf.user(l.recall!.by)}`, left: lotLeft(l, usedOf(l.id)),
+    lotId: l.id, name: find.procedure(l.procId)?.name ?? '', lot: l.lot, reason: l.recall!.reason, recalledText: `${l.recall!.at.slice(5).replace('-', '/')} ${nameOf.user(l.recall!.by)}`, left: lotLeft(l, usedOf(l.id)),
     affected: lotSurgeries(l.id).map((s) => {
       const us = (s.implants ?? []).filter((u) => u.lotId === l.id)
       const n = l.recall!.notified.find((x) => x.surgeryId === s.id)
       return {
         surgeryId: s.id, no: s.no, patientName: nameOf.patient(s.patientId), chartNo: find.patient(s.patientId)?.chartNo ?? '', procName: find.procedure(s.procId)?.name ?? '', doctorName: nameOf.doctor(s.doctorId),
         date: (s.endAt ?? us[0].at).slice(0, 10), qty: us.reduce((a, u) => a + u.qty, 0), site: us.map((u) => u.site).join('、'),
-        ...(n ? { notified: `${nameOf.user(n.by)} ${n.at.slice(5)}：${n.note}` } : {}),
+        ...(n ? { notified: `${nameOf.user(n.by)} ${n.at.slice(5).replace('-', '/')}：${n.note}` } : {}),
       }
     }),
   }

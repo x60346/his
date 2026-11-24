@@ -74,7 +74,7 @@ async function onRecord() {
           </p>
           <ul v-if="x.contacts.length" class="tabular text-xs text-slate-500">
             <li v-for="(c, i) in x.contacts" :key="i">
-              {{ c.at.slice(5) }} {{ c.byName }}：<b :class="c.result === 'unreachable' ? 'text-amber-700' : ''">{{ c.resultLabel }}</b>
+              {{ c.at.slice(5).replace('-', '/') }} {{ c.byName }}：<b :class="c.result === 'unreachable' ? 'text-amber-700' : ''">{{ c.resultLabel }}</b>
               <template v-if="c.rebooked">→ {{ md(c.rebooked.date) }} {{ periodLabel[c.rebooked.period] }} {{ c.rebooked.doctorName }} #{{ c.rebooked.seqNo }}</template>
               <template v-if="c.note">（{{ c.note }}）</template>
             </li>

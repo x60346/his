@@ -100,7 +100,7 @@ function openFinding(orderId: string, kind: AbxAdviceKind) {
   const f = stewardOf(o.admissionId, now()).findings.find((x) => x.orderId === orderId && x.kind === kind)
   if (!f) fail(`這筆醫囑目前沒有「${ABX_ADVICE_LABEL[kind]}」的建議（狀況可能已經改變，請重新整理）`, 'CONFLICT')
   const h = handledBy(f)
-  if (h) fail(`這條建議已經處理過了（${nameOf.user(h.by)} ${h.at.slice(5)}：${ABX_INTERVENTION_STATUS[h.status]}）`, 'CONFLICT')
+  if (h) fail(`這條建議已經處理過了（${nameOf.user(h.by)} ${h.at.slice(5).replace('-', '/')}：${ABX_INTERVENTION_STATUS[h.status]}）`, 'CONFLICT')
   return { u, o, f }
 }
 

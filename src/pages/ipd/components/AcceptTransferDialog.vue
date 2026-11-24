@@ -74,7 +74,7 @@ async function onDecline() {
         </div>
         <div class="text-slate-600">{{ item.admission.bed?.bedNo }}・{{ item.admission.diagnosis }}・第 {{ item.admission.days }} 天</div>
         <div class="mt-1 text-slate-700">原因：{{ item.transfer.reason }}</div>
-        <div class="text-xs text-slate-500">{{ item.transfer.requestedAt.slice(5) }} {{ item.transfer.requestedByName }} 申請</div>
+        <div class="text-xs text-slate-500">{{ item.transfer.requestedAt.slice(5).replace('-', '/') }} {{ item.transfer.requestedByName }} 申請</div>
       </div>
       <!-- 轉出摘要：原科寫的交接（決定接不接之前先看） -->
       <section v-if="item.transfer.summary" class="space-y-1 rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2">
@@ -97,7 +97,7 @@ async function onDecline() {
                 </div>
                 <div v-if="o.category === 'medication'" class="tabular text-xs">每次 {{ o.dose }} {{ o.unit }}・{{ o.freqLabel }}・{{ o.route }}<template v-if="o.timingShort">・{{ o.timingShort }}</template></div>
               </div>
-              <span class="text-xs text-slate-500">{{ o.startAt.slice(5, 10) }} {{ o.doctorName }}</span>
+              <span class="text-xs text-slate-500">{{ o.startAt.slice(5, 10).replace('-', '/') }} {{ o.doctorName }}</span>
               <UBadge :tone="stops[o.id] ? 'red' : 'green'">{{ stops[o.id] ? '停止' : '延續' }}</UBadge>
             </li>
           </ul>

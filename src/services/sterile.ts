@@ -53,7 +53,7 @@ function batchItem(b: SterileBatch, t: string): BatchItem {
     contents: PACK_SETS.map((s) => [s, packs.filter((p) => p.set === s).length] as const).filter(([, n]) => n).map(([s, n]) => `${PACK_SET_LABEL[s]} ${n}`).join('、'),
     packCount: packs.length,
     biState: b.bi ? b.bi.result : biDueAt(b) <= t ? 'due' : 'pending', biText: biText(b, t),
-    ...(b.bi ? { biByName: `${nameOf.user(b.bi.by)} ${b.bi.at.slice(5)}` } : {}),
+    ...(b.bi ? { biByName: `${nameOf.user(b.bi.by)} ${b.bi.at.slice(5).replace('-', '/')}` } : {}),
   }
 }
 
@@ -68,7 +68,7 @@ function recallItem(b: SterileBatch): RecallItem {
       return {
         surgeryId: p.used!.surgeryId, no: s?.no ?? '', patientName: s ? nameOf.patient(s.patientId) : '', chartNo: s ? (find.patient(s.patientId)?.chartNo ?? '') : '',
         procName: s ? (find.procedure(s.procId)?.name ?? '') : '', doctorName: s ? nameOf.doctor(s.doctorId) : '', usedAt: p.used!.at, packNo: p.no,
-        ...(n ? { notified: `${nameOf.user(n.by)} ${n.at.slice(5)}：${n.note}` } : {}),
+        ...(n ? { notified: `${nameOf.user(n.by)} ${n.at.slice(5).replace('-', '/')}：${n.note}` } : {}),
       }
     }),
   }
@@ -120,7 +120,7 @@ export function recordBi(batchId: string, result: 'negative' | 'positive'): Prom
     if (b.bi) fail('這鍋已經判讀過了', 'CONFLICT')
     if (result !== 'negative' && result !== 'positive') failField('result', '請選陰性或陽性')
     const t = now()
-    if (biDueAt(b) > t) fail(`培養還不到 24 小時（${biDueAt(b).slice(5)} 才能判讀）`, 'CONFLICT')
+    if (biDueAt(b) > t) fail(`培養還不到 24 小時（${biDueAt(b).slice(5).replace('-', '/')} 才能判讀）`, 'CONFLICT')
     b.bi = { result, at: t, by: u.id }
     if (result === 'positive') b.recall = { at: t, by: u.id, notified: [] }
     const used = db.instrumentPacks.filter((p) => p.batchId === b.id && p.used).length

@@ -10,7 +10,7 @@ import { nameOf } from './views'
 import { LEAVE_TYPES, restProblems } from './staffing-rules'
 
 const shiftOf = (id: string) => db.nurseShifts.find((x) => x.id === id)
-const label = (s: Pick<NurseShift, 'ward' | 'date' | 'shift'>) => `${s.ward.split(' ')[0]} ${s.date.slice(5)} ${s.shift}`
+const label = (s: Pick<NurseShift, 'ward' | 'date' | 'shift'>) => `${s.ward.split(' ')[0]} ${s.date.slice(5).replace('-', '/')} ${s.shift}`
 
 /** 換完以後兩人的班：檢查同一天一人一班（擋）、休息不到 8 小時（提醒） */
 function swapCheck(a: NurseShift, b: NurseShift): { block?: string; warnings: string[] } {
@@ -20,7 +20,7 @@ function swapCheck(a: NurseShift, b: NurseShift): { block?: string; warnings: st
   for (const [id, list] of [[a.nurseId, aAfter], [b.nurseId, bAfter]] as const) {
     const days = list.map((x) => x.date)
     const dup = days.find((d, i) => days.indexOf(d) !== i)
-    if (dup) return { block: `${nameOf.user(id)} 換完後 ${dup.slice(5)} 會有兩班（同一天只能上一班）`, warnings: [] }
+    if (dup) return { block: `${nameOf.user(id)} 換完後 ${dup.slice(5).replace('-', '/')} 會有兩班（同一天只能上一班）`, warnings: [] }
   }
   const near = (list: NurseShift[], d: string) => list.filter((x) => x.date >= addDays(d, -1) && x.date <= addDays(d, 1))
   const warnings = [...restProblems(near(aAfter, b.date)).map((w) => `${nameOf.user(a.nurseId)}：${w}`), ...restProblems(near(bAfter, a.date)).map((w) => `${nameOf.user(b.nurseId)}：${w}`)]

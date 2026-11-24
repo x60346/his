@@ -181,7 +181,7 @@ async function onStop(o: OrderView) {
   const extra = o.category === 'medication' && o.type === 'long' ? '\n尚未執行的給藥排程會一併刪除。' : ''
   // 同一種藥可能有兩筆醫囑：帶上劑量、頻率、途徑與開立時間，才分得出要停的是哪一筆
   const detail = o.category === 'medication' ? `\n每次 ${o.dose} ${o.unit}・${o.freq}・${o.route}` : ''
-  const message = `確定停止「${o.content}」？${detail}\n（${o.startAt.slice(5)} 開立，${o.doctorName}）${extra}`
+  const message = `確定停止「${o.content}」？${detail}\n（${o.startAt.slice(5).replace('-', '/')} 開立，${o.doctorName}）${extra}`
   const q = o.pendingQuery ? `\n\n護理師的疑問「${o.pendingQuery.reason}」會一併結案（記為「已停止此醫囑」）；只改劑量、頻率的話請用「修改」。` : ''
   if (await ui.confirm({ title: '停止醫囑', message: message + q, okText: '停止', danger: true })) stop.run(o.id)
 }
@@ -463,7 +463,7 @@ async function submitNote() {
       </PatientBanner>
       <!-- 值班紀錄：昨晚值班醫師處理的事，主治看過按「已看」；值班醫師（下班時間）在這裡寫 -->
       <div v-if="duty?.id === adm.id && (duty.v.unread.length || duty.v.canWrite)" class="space-y-1 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm text-indigo-900">
-        <div v-for="n in duty.v.unread" :key="n.id"><b>值班紀錄 {{ n.at.slice(5) }} {{ n.doctorName }}：</b>{{ (n.items ?? []).map((i) => `${i.label} ${i.text}`).join('；') }}</div>
+        <div v-for="n in duty.v.unread" :key="n.id"><b>值班紀錄 {{ n.at.slice(5).replace('-', '/') }} {{ n.doctorName }}：</b>{{ (n.items ?? []).map((i) => `${i.label} ${i.text}`).join('；') }}</div>
         <div class="flex flex-wrap gap-2">
           <UButton v-if="duty.v.unread.length && duty.v.canAck" size="sm" :loading="ackDuty.pending.value" @click="ackDuty.run(adm.id)">已看（接手後續）</UButton>
           <UButton v-if="duty.v.canWrite" size="sm" variant="secondary" @click="openDutyNote">寫值班紀錄</UButton>
@@ -486,11 +486,11 @@ async function submitNote() {
       </div>
       <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <ArrowRightLeft class="h-4 w-4" />
-        <span class="min-w-0 flex-[1_1_10rem]">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5) }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
+        <span class="min-w-0 flex-[1_1_10rem]">已申請轉 <b>{{ transfer.toDeptName }}</b><template v-if="transfer.toDoctorName">（指定 {{ transfer.toDoctorName }}）</template>・{{ transfer.requestedAt.slice(5).replace('-', '/') }}・{{ transfer.reason }}。等新科醫師接受；期間仍由您負責。</span>
         <UButton v-if="!isAdmin" size="sm" variant="secondary" :loading="cancelTransfer.pending.value" @click="onCancelTransfer">撤回申請</UButton>
       </div>
       <div v-else-if="transfer?.status === 'declined'" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
-        轉 {{ transfer.toDeptName }} 的申請被婉拒（{{ transfer.decidedByName }} {{ transfer.decidedAt?.slice(5) }}）：{{ transfer.decisionNote }}
+        轉 {{ transfer.toDeptName }} 的申請被婉拒（{{ transfer.decidedByName }} {{ transfer.decidedAt?.slice(5).replace('-', '/') }}）：{{ transfer.decisionNote }}
       </div>
       <!-- 這位病人的會診單：待回覆的可撤回；已回覆的看建議，建議轉科就一鍵帶入轉科申請 -->
       <div v-if="consults?.some((c) => c.status !== 'cancelled')" class="space-y-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
@@ -498,9 +498,9 @@ async function submitNote() {
         <div v-for="c in consults.filter((x) => x.status !== 'cancelled')" :key="c.id" class="flex flex-wrap items-start gap-2">
           <UBadge :tone="c.status === 'answered' ? 'green' : c.urgent ? 'red' : 'yellow'">{{ c.status === 'answered' ? '已回覆' : c.urgent ? '急・待回覆' : '待回覆' }}</UBadge>
           <div class="min-w-0 flex-[1_1_10rem]">
-            <div class="text-slate-800">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }} <span class="text-xs text-slate-400">{{ c.requestedAt.slice(5) }}</span></div>
+            <div class="text-slate-800">{{ c.toDeptName }}<template v-if="c.toDoctorName">（{{ c.toDoctorName }}）</template>：{{ c.question }} <span class="text-xs text-slate-400">{{ c.requestedAt.slice(5).replace('-', '/') }}</span></div>
             <div v-if="c.status === 'answered'" class="text-xs text-slate-700">
-              {{ c.answeredByName }} {{ c.answeredAt?.slice(5) }}：{{ c.findings }}／<b>建議</b> {{ c.recommendation }}
+              {{ c.answeredByName }} {{ c.answeredAt?.slice(5).replace('-', '/') }}：{{ c.findings }}／<b>建議</b> {{ c.recommendation }}
               <UBadge v-if="c.suggestTransfer" tone="blue" class="ml-1">建議轉{{ c.toDeptName }}</UBadge>
             </div>
           </div>
@@ -511,7 +511,7 @@ async function submitNote() {
       <div class="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
         <span class="text-slate-500">入院診斷</span><span class="text-slate-800">{{ adm.diagnosis }}</span>
         <template v-if="latestVital">
-          <span class="text-slate-500">最新生命徵象（{{ latestVital.at.slice(5) }}）</span>
+          <span class="text-slate-500">最新生命徵象（{{ latestVital.at.slice(5).replace('-', '/') }}）</span>
           <!-- 異常與否用護理站同一條規則 isAbnormal（以前這裡寫死體溫 ≥38、SpO2 <94，37.8°C 護理站標紅、醫師頁不標） -->
           <span class="tabular text-slate-800">
             <template v-for="(f, i) in vitalFields" :key="f.label">
@@ -540,7 +540,7 @@ async function submitNote() {
           <UButton v-if="!isAdmin" size="sm" variant="secondary" @click="abxResubmit = { order: o, kind: 'extend' }">申請續用</UButton>
         </div>
         <div v-for="o in pharmQueried" :key="`pq-${o.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
-          <span class="min-w-0 flex-[1_1_10rem]"><b>藥師疑義（{{ o.pharmQuery!.byName }} {{ o.pharmQuery!.at.slice(5) }}）：</b>{{ o.content }}—{{ o.pharmQuery!.text }}。回覆前暫停給藥。</span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>藥師疑義（{{ o.pharmQuery!.byName }} {{ o.pharmQuery!.at.slice(5).replace('-', '/') }}）：</b>{{ o.content }}—{{ o.pharmQuery!.text }}。回覆前暫停給藥。</span>
           <template v-if="!isAdmin">
             <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改</UButton>
             <UButton size="sm" variant="danger" @click="onStop(o)">停止</UButton>
@@ -555,7 +555,7 @@ async function submitNote() {
           </template>
         </div>
         <div v-for="x in abxAdvice" :key="`abxa-${x.advice.id}`" class="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900" role="status">
-          <span class="min-w-0 flex-[1_1_10rem]"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5) }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
+          <span class="min-w-0 flex-[1_1_10rem]"><b>感染科抗生素建議（{{ x.advice.kindLabel }}）：</b>{{ x.order.content }}—{{ x.advice.byName }} {{ x.advice.at.slice(5).replace('-', '/') }}：{{ x.advice.note }}<span class="block text-xs text-sky-800">系統：{{ x.advice.finding }}。停止或修改這筆醫囑就是接受；不接受請寫原因。</span></span>
           <template v-if="!isAdmin">
             <UButton size="sm" variant="danger" @click="onStop(x.order)">停止</UButton>
             <UButton v-if="canRevise(x.order)" size="sm" variant="secondary" @click="revising = x.order">修改</UButton>
@@ -583,7 +583,7 @@ async function submitNote() {
                       <UBadge v-if="o.consultLabel" :tone="o.consultUnseen ? 'purple' : 'gray'" class="ml-1">{{ o.consultLabel }}</UBadge>
                     </div>
                     <div v-if="o.abxInfo" :class="['text-xs', o.abx?.status === 'rejected' || o.abxInfo.overdue ? 'font-semibold text-red-700' : o.abx?.status === 'pending' ? 'text-amber-800' : 'text-emerald-700']" :title="o.abxInfo.reasonText">管制性抗生素・{{ o.abxInfo.text }}</div>
-                    <div v-if="o.labDraws" class="tabular text-xs text-sky-800">長期檢驗：已採檢 {{ o.labDraws.collected }} 次<template v-if="o.labDraws.next">・下一次 {{ o.labDraws.next.slice(5) }}</template></div>
+                    <div v-if="o.labDraws" class="tabular text-xs text-sky-800">長期檢驗：已採檢 {{ o.labDraws.collected }} 次<template v-if="o.labDraws.next">・下一次 {{ o.labDraws.next.slice(5).replace('-', '/') }}</template></div>
                     <div v-if="o.renalAlert" class="text-xs font-medium text-amber-800">腎功能：{{ o.renalAlert }}</div>
                     <div v-if="o.tdm" :class="['flex flex-wrap items-center gap-2 text-xs', o.tdm.status === 'high' || o.tdm.status === 'low' ? 'font-semibold text-red-700' : o.tdm.status === 'due' ? 'text-amber-800' : 'text-slate-600']">
                       {{ o.tdm.text }}
@@ -594,8 +594,8 @@ async function submitNote() {
                     <div v-if="o.replacedByText" class="text-xs no-underline">已修改為：{{ o.replacedByText }}</div>
                   </div>
                   <div class="tabular text-right text-xs">
-                    <div>{{ o.startAt.slice(5) }} 開立</div>
-                    <div v-if="o.stopAt">{{ o.stopAt.slice(5) }} 停止</div>
+                    <div>{{ o.startAt.slice(5).replace('-', '/') }} 開立</div>
+                    <div v-if="o.stopAt">{{ o.stopAt.slice(5).replace('-', '/') }} 停止</div>
                   </div>
                   <span class="w-12 text-xs">{{ statusLabel[o.status] }}</span>
                   <UButton v-if="canRevise(o)" size="sm" variant="ghost" :icon="Pencil" @click="revising = o">修改</UButton>
@@ -603,7 +603,7 @@ async function submitNote() {
                   <span v-else class="w-[4.25rem]" />
                   <!-- 護理師的疑問：回覆前這筆暫停執行。確認無誤就回覆；要改就停止再另開 -->
                   <div v-if="o.pendingQuery" class="flex w-full items-center gap-2 text-xs text-amber-900">
-                    <span class="min-w-0 flex-1">護理師疑問（{{ o.pendingQuery.byName }} {{ o.pendingQuery.at.slice(5) }}）：{{ o.pendingQuery.reason }}・回覆前暫停執行</span>
+                    <span class="min-w-0 flex-1">護理師疑問（{{ o.pendingQuery.byName }} {{ o.pendingQuery.at.slice(5).replace('-', '/') }}）：{{ o.pendingQuery.reason }}・回覆前暫停執行</span>
                     <UButton size="sm" @click="replying = o">回覆：確認無誤</UButton>
                     <UButton v-if="canRevise(o)" size="sm" variant="secondary" @click="revising = o">修改醫囑</UButton>
                   </div>
@@ -658,7 +658,7 @@ async function submitNote() {
           <template v-else>
             <p class="text-xs text-slate-500">
               寫好並「簽署並准予出院」後，住院中心才能辦理出院（轉歸以這裡為準）。可先存草稿。
-              <template v-if="ds">上次儲存：{{ ds.writtenAt }}・{{ adm.summaryDoctorName }}</template>
+              <template v-if="ds">上次儲存：{{ ds.writtenAt?.slice(5).replace('-', '/') }}・{{ adm.summaryDoctorName }}</template>
             </p>
             <div class="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-3">
               <UTextarea v-model="dsForm.diagnosis" label="出院診斷" :rows="2" :error="saveDs.fieldErrors.value.diagnosis" @keydown="phrase.onKey($event, (v) => (dsForm.diagnosis = v))" />
@@ -723,7 +723,7 @@ async function submitNote() {
             <div class="mt-2 text-right"><UButton size="sm" :loading="addNote.pending.value" @click="submitNote">儲存病程紀錄</UButton></div>
           </div>
           <article v-for="n in notes" :key="n.id" class="rounded-md border border-slate-200 p-3 text-sm">
-            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at }}<UBadge v-if="n.kind" tone="blue" class="ml-2">{{ noteKind[n.kind] }}</UBadge><UBadge v-if="n.lateFor" tone="yellow" class="ml-2">補寫 {{ n.lateFor.slice(5) }} 的病程</UBadge></span><span>{{ n.doctorName }}</span></header>
+            <header class="mb-1.5 flex justify-between text-xs text-slate-500"><span class="tabular font-medium text-slate-700">{{ n.at?.slice(5).replace('-', '/') }}<UBadge v-if="n.kind" tone="blue" class="ml-2">{{ noteKind[n.kind] }}</UBadge><UBadge v-if="n.lateFor" tone="yellow" class="ml-2">補寫 {{ n.lateFor.slice(5).replace('-', '/') }} 的病程</UBadge></span><span>{{ n.doctorName }}</span></header>
             <!-- 轉科、會診的紀錄：系統依動作寫入，逐項列出 -->
             <dl v-if="n.kind" class="grid gap-1">
               <div v-for="it in n.items ?? []" :key="it.label" class="flex gap-2">

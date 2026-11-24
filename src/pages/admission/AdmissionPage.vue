@@ -19,7 +19,7 @@ import { useAction, useQuery } from '@/composables/useService'
 import { useUi } from '@/stores/ui'
 import { diffDays } from '@/utils/date'
 import { useToday } from '@/composables/useClock'
-import { bedStatus } from '@/utils/labels'
+import { bedStatus, money } from '@/utils/labels'
 import type { BedStatus } from '@/types'
 
 const ui = useUi()
@@ -198,7 +198,7 @@ const reserveOpen = ref(false)
         <div class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 2xl:grid-cols-3">
           <section v-for="r in rooms" :key="r.roomNo" class="rounded-lg border border-slate-200 p-2">
             <div class="mb-1.5 flex justify-between px-1 text-xs text-slate-500">
-              <span class="font-medium">{{ r.roomNo }} 房</span><span>{{ r.beds[0].bedClass }}<template v-if="r.beds[0].extraFee">・差額 ${{ r.beds[0].extraFee }}/日</template></span>
+              <span class="font-medium">{{ r.roomNo }} 房</span><span>{{ r.beds[0].bedClass }}<template v-if="r.beds[0].extraFee">・差額 {{ money(r.beds[0].extraFee) }}/日</template></span>
             </div>
             <div class="grid grid-cols-2 gap-2">
               <BedCard
@@ -229,7 +229,7 @@ const reserveOpen = ref(false)
               <div class="flex gap-2"><dt class="w-16 text-slate-500">住院號</dt><dd class="tabular">{{ occupied.admitNo }}</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">診斷</dt><dd>{{ occupied.diagnosis }}</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">主治</dt><dd>{{ occupied.deptName }}・{{ occupied.doctorName }}</dd></div>
-              <div class="flex gap-2"><dt class="w-16 text-slate-500">入院</dt><dd class="tabular">{{ occupied.admittedAt }}（第 {{ occupied.days }} 天）</dd></div>
+              <div class="flex gap-2"><dt class="w-16 text-slate-500">入院</dt><dd class="tabular">{{ occupied.admittedAt?.slice(5).replace('-', '/') }}（第 {{ occupied.days }} 天）</dd></div>
               <div class="flex gap-2"><dt class="w-16 text-slate-500">出院</dt><dd :class="occupied.dischargeReady ? 'font-medium text-emerald-700' : 'text-slate-500'">{{ occupied.dischargeReady ? `醫師已准予出院（${occupied.dischargeSummary?.dischargeType}）` : '醫師尚未准予出院' }}</dd></div>
               <div v-if="occupied.flags.isolations.length || occupied.flags.dnr" class="flex gap-2"><dt class="w-16 text-slate-500">標記</dt><dd><PatientFlags :flags="occupied.flags" /></dd></div>
               <div v-if="occupied.allergies.length" class="flex gap-2"><dt class="w-16 text-slate-500">過敏</dt><dd class="font-medium text-red-600">{{ occupied.allergies.join('、') }}</dd></div>
@@ -250,7 +250,7 @@ const reserveOpen = ref(false)
           <p class="mb-3 text-sm text-slate-600">空床可直接用於報到；若預留給特定病人，可先保留——那位病人報到時可以直接選這床。</p>
           <div class="flex items-end gap-2">
             <div class="min-w-0 flex-1">
-              <USelect v-model="reserveFor" label="保留給" placeholder="選擇待報到的病人" :options="(sortedReservations ?? []).map((a) => ({ label: `${a.patientName}（${a.expectedDate.slice(5)}）`, value: a.id }))" :error="setStatus.fieldErrors.value.reservedFor" />
+              <USelect v-model="reserveFor" label="保留給" placeholder="選擇待報到的病人" :options="(sortedReservations ?? []).map((a) => ({ label: `${a.patientName}（${a.expectedDate.slice(5).replace('-', '/')}）`, value: a.id }))" :error="setStatus.fieldErrors.value.reservedFor" />
             </div>
             <UButton size="sm" variant="secondary" :disabled="!reserveFor" :loading="setStatus.pending.value" @click="setStatus.run(selectedBed.id, 'reserved', String(reserveFor))">設為保留</UButton>
           </div>

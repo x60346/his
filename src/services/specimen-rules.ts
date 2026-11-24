@@ -39,7 +39,7 @@ export function addonCheck(sp: Pick<Specimen, 'tube' | 'collectedAt' | 'received
   if (!sp || sp.rejected || !sp.receivedAt || !sp.collectedAt) return { ok: false, reason: `這位病人沒有已收件的${TUBE_LABEL[tube]}檢體可以加做` }
   if (sp.tube !== tube) return { ok: false, reason: `管別不符（檢體是${TUBE_LABEL[sp.tube]}，這項要${TUBE_LABEL[tube]}）` }
   const until = addMinutes(sp.collectedAt, h * 60)
-  if (t > until) return { ok: false, reason: `超過可加做時限（${TUBE_LABEL[tube]} ${h} 小時，採檢 ${sp.collectedAt.slice(5)}）：要重新採檢` }
+  if (t > until) return { ok: false, reason: `超過可加做時限（${TUBE_LABEL[tube]} ${h} 小時，採檢 ${sp.collectedAt.slice(5).replace('-', '/')}）：要重新採檢` }
   return { ok: true, until }
 }
 

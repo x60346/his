@@ -43,7 +43,7 @@ const md = (s: string) => `${s.slice(5, 10).replace('-', '/')} ${s.slice(11)}`
       <div v-if="!ready" class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
         <div class="font-medium">醫師尚未准予出院</div>
         <p class="mt-1 text-xs">出院病摘與轉歸由醫師在「住院醫囑」頁撰寫並簽署（主治：{{ admission?.doctorName }}）。簽署後這裡才能辦理出院。</p>
-        <p v-if="admission?.dischargeSummary" class="mt-1 text-xs">目前病摘為草稿（{{ admission.dischargeSummary.writtenAt }} 儲存，未簽署）。</p>
+        <p v-if="admission?.dischargeSummary" class="mt-1 text-xs">目前病摘為草稿（{{ admission.dischargeSummary.writtenAt?.slice(5).replace('-', '/') }} 儲存，未簽署）。</p>
       </div>
 
       <template v-else>

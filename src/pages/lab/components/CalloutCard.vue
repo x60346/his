@@ -54,7 +54,7 @@ const crit = (r: LabReportView) => r.values.filter((v) => v.critical).map((v) =>
           <b>{{ r.patientName }}</b><span class="text-xs text-slate-500">{{ r.where }}・{{ r.procName }}</span>
           <span class="min-w-0 flex-[1_1_10rem] text-xs font-semibold text-red-700">{{ crit(r) }}</span>
           <UBadge v-if="r.calloutTries" :tone="r.calloutEscalated ? 'red' : 'yellow'">沒聯絡上 {{ r.calloutTries }} 次{{ r.calloutEscalated ? '・要升級' : '' }}</UBadge>
-          <span :class="['tabular text-xs', r.calloutState === 'late' ? 'font-semibold text-red-700' : 'text-slate-500']">{{ r.calloutState === 'late' ? '已逾時' : '期限' }} {{ r.calloutDue?.slice(5) }}（{{ r.calloutMinutes }} 分）</span>
+          <span :class="['tabular text-xs', r.calloutState === 'late' ? 'font-semibold text-red-700' : 'text-slate-500']">{{ r.calloutState === 'late' ? '已逾時' : '期限' }} {{ r.calloutDue?.slice(5).replace('-', '/') }}（{{ r.calloutMinutes }} 分）</span>
           <UButton size="sm" variant="secondary" :icon="PhoneMissed" @click="start(r, 'fail')">沒聯絡上</UButton>
           <UButton size="sm" :icon="PhoneCall" @click="start(r, 'ok')">通報</UButton>
         </li>

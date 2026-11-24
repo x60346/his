@@ -165,11 +165,11 @@ const send = useAction(surgeryApi.sendToOr, { success: '已送手術室' })
           <!-- 手術室 -->
           <div v-if="['sent', 'in-progress', 'done'].includes(s.status)" class="space-y-0.5 text-xs text-slate-600">
             <div v-for="c in s.checkRows" :key="c.stage">{{ c.title }}：{{ c.done ? `完成・${c.text}` : '—' }}</div>
-            <div v-if="s.startAt" class="tabular">手術 {{ s.startAt.slice(5) }}{{ s.endAt ? ` – ${s.endAt.slice(11)}` : '（進行中）' }}</div>
+            <div v-if="s.startAt" class="tabular">手術 {{ s.startAt.slice(5).replace('-', '/') }}{{ s.endAt ? ` – ${s.endAt.slice(11)}` : '（進行中）' }}</div>
             <div v-if="s.counts" :class="s.countMismatch ? 'font-semibold text-red-700' : ''">紗布 {{ s.counts.spongeBefore }}／{{ s.counts.spongeAfter }}、器械 {{ s.counts.instrumentBefore }}／{{ s.counts.instrumentAfter }}<template v-if="s.counts.mismatchReason">：計數不符 {{ s.counts.mismatchReason }}</template></div>
           </div>
           <div v-if="s.record" class="rounded bg-slate-50 px-3 py-2 text-xs text-slate-700">
-            <div class="font-medium">手術紀錄（{{ s.recordByName }} {{ s.record.at.slice(5) }}）</div>
+            <div class="font-medium">手術紀錄（{{ s.recordByName }} {{ s.record.at.slice(5).replace('-', '/') }}）</div>
             <div>術式：{{ s.record.performed }}・失血 {{ s.record.bloodLoss }} ml・併發症 {{ s.record.complications }}・檢體 {{ s.record.specimen }}</div>
             <div class="whitespace-pre-line">術中發現：{{ s.record.findings }}</div>
           </div>

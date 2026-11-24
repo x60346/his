@@ -59,7 +59,7 @@ async function print() {
       <p class="mt-1.5 border-t border-dashed border-black pt-1.5 text-[11px]">請於叫號前至診間外候診；過號請洽診間護理師。看診後請至批價櫃台結帳。</p>
       <footer class="mt-1 flex justify-between text-[10px]">
         <span>{{ auth.user?.name }}</span>
-        <span class="tabular">{{ printedAt ? `列印 ${printedAt.slice(5)}` : `掛號 ${visit.createdAt.slice(5)}` }}</span>
+        <span class="tabular">{{ printedAt ? `列印 ${printedAt.slice(5).replace('-', '/')}` : `掛號 ${visit.createdAt.slice(5).replace('-', '/')}` }}</span>
       </footer>
     </div>
     <template #footer>

@@ -59,7 +59,7 @@ const t = today()
         <input v-model="p.action" class="form-control min-w-[12rem] flex-1 px-1 py-0.5 text-xs" :disabled="ro() || p.status === 'done'" placeholder="改善行動" :aria-label="`計畫 ${i + 1}`" />
         <input v-model="p.owner" class="form-control w-28 px-1 py-0.5 text-xs" :disabled="ro() || p.status === 'done'" placeholder="負責人" :aria-label="`計畫 ${i + 1} 負責人`" />
         <input v-model="p.due" type="date" class="form-control w-36 px-1 py-0.5 text-xs" :disabled="ro() || p.status === 'done'" :aria-label="`計畫 ${i + 1} 期限`" />
-        <UBadge v-if="p.status === 'done'" tone="green">已完成 {{ p.doneAt?.slice(5, 10) }}</UBadge>
+        <UBadge v-if="p.status === 'done'" tone="green">已完成 {{ p.doneAt?.slice(5, 10).replace('-', '/') }}</UBadge>
         <UBadge v-else-if="p.id && p.due < t" tone="red">過期</UBadge>
         <UButton v-if="!ro() && p.id && p.status !== 'done'" size="sm" variant="secondary" :loading="done.pending.value" @click="done.run(x.id, p.id)">完成</UButton>
         <UButton v-if="!ro() && !p.id && form.plans.length > 1" size="sm" variant="ghost" :icon="Trash2" @click="form.plans.splice(i, 1)" />

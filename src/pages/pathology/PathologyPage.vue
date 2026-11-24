@@ -86,7 +86,7 @@ async function reportFrozen() {
               <b>{{ x.patientName }}</b><span class="text-xs text-slate-500">{{ x.chartNo }}・{{ x.no }}</span>
               <span class="text-slate-700">{{ x.procName }}・主刀 {{ x.surgeonName }}</span>
               <span class="text-xs text-slate-600">{{ x.specimens.length }} 件：{{ x.specimens.map((s) => s.text).join('；') }}</span>
-              <span class="tabular text-xs" :class="x.overdue ? 'font-semibold text-red-700' : 'text-slate-500'">{{ x.sentAt.slice(5) }} 送出・已 {{ wait(x.minutes) }}</span>
+              <span class="tabular text-xs" :class="x.overdue ? 'font-semibold text-red-700' : 'text-slate-500'">{{ x.sentAt.slice(5).replace('-', '/') }} 送出・已 {{ wait(x.minutes) }}</span>
               <UButton v-if="x.canReceive" size="sm" class="ml-auto" @click="openReceive(x)">收件</UButton>
             </li>
           </ul>
@@ -115,7 +115,7 @@ async function reportFrozen() {
                 <UBadge :tone="x.stage === 'acked' ? 'green' : x.critical ? 'red' : 'purple'">{{ x.critical && x.stage === 'reported' ? '主刀待確認' : PATH_STAGE_LABEL[x.stage] }}</UBadge>
                 <b>{{ x.patientName }}</b><span class="text-xs text-slate-500">{{ x.no }}・{{ x.procName }}・主刀 {{ x.surgeonName }}</span>
               </div>
-              <div :class="x.critical ? 'font-medium text-red-700' : 'text-slate-700'">{{ x.report!.diagnosis }}<span class="ml-1 text-xs font-normal text-slate-500">{{ x.report!.malignant ? '惡性' : '良性' }}・{{ x.report!.consistent ? '相符' : '和術前診斷不符' }}・{{ x.report!.byName }} {{ x.report!.at.slice(5) }}</span></div>
+              <div :class="x.critical ? 'font-medium text-red-700' : 'text-slate-700'">{{ x.report!.diagnosis }}<span class="ml-1 text-xs font-normal text-slate-500">{{ x.report!.malignant ? '惡性' : '良性' }}・{{ x.report!.consistent ? '相符' : '和術前診斷不符' }}・{{ x.report!.byName }} {{ x.report!.at.slice(5).replace('-', '/') }}</span></div>
               <div v-if="x.ackText" class="text-xs text-emerald-700">{{ x.ackText }}</div>
             </li>
           </ul>

@@ -5,7 +5,7 @@ import { AlertTriangle } from 'lucide-vue-next'
 import PatientFlags from './PatientFlags.vue'
 import type { PatientBrief } from '@/services'
 import { ageText } from '@/utils/date'
-import { genderLabel } from '@/utils/labels'
+import { genderLabel, money } from '@/utils/labels'
 
 // showDebt：只有櫃台的畫面（批價）顯示欠款；看診、護理畫面與欠款無關，不放
 defineProps<{ patient: PatientBrief; showDebt?: boolean }>()
@@ -21,7 +21,7 @@ defineProps<{ patient: PatientBrief; showDebt?: boolean }>()
     <div class="text-sm text-slate-600">生日 <span class="tabular">{{ patient.birthDate }}</span></div>
     <PatientFlags :flags="patient.flags" />
     <slot />
-    <span v-if="showDebt && patient.debt > 0" class="tabular rounded bg-amber-100 px-2 py-0.5 text-sm font-semibold text-amber-900 ring-1 ring-inset ring-amber-600/30">欠款 ${{ patient.debt.toLocaleString() }}</span>
+    <span v-if="showDebt && patient.debt > 0" class="tabular rounded bg-amber-100 px-2 py-0.5 text-sm font-semibold text-amber-900 ring-1 ring-inset ring-amber-600/30">欠款 {{ money(patient.debt) }}</span>
     <div
       :class="[
         'ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-sm',

@@ -27,7 +27,7 @@ const nextSlot = () => {
 }
 const slot = reactive<Record<string, { d: string; tm: string }>>({})
 const slotOf = (key: string) => (slot[key] ??= nextSlot())
-const sched = useAction(examApi.scheduleExam, { success: (e) => `已排程：${e.roomName} ${e.start.slice(5)}（${e.patientName} ${e.procName}）` })
+const sched = useAction(examApi.scheduleExam, { success: (e) => `已排程：${e.roomName} ${e.start.slice(5).replace('-', '/')}（${e.patientName} ${e.procName}）` })
 const err = ref<{ key: string; msg: string; mri?: boolean }>()
 // 磁振造影：病人有 MRI 不安全的植入物 → 放射科醫師寫確認結果才能排（服務層擋）
 const mriReason = reactive<Record<string, string>>({})
@@ -86,7 +86,7 @@ async function saveDowntime() {
   if (await addDt.run({ room: dt.room as ExamView['room'], from: `${dt.fromD} ${dt.fromT}`, to: `${dt.toD} ${dt.toT}`, reason: dt.reason, note: dt.note })) dtOpen.value = false
 }
 const endDt = useAction(examApi.endDowntime, { success: (d) => `${d.roomName}停機已結束` })
-const resched = useAction(examApi.rescheduleNext, { success: (e) => `已改到 ${e.start.slice(5)}（${e.patientName} ${e.procName}）` })
+const resched = useAction(examApi.rescheduleNext, { success: (e) => `已改到 ${e.start.slice(5).replace('-', '/')}（${e.patientName} ${e.procName}）` })
 const roomOptions = EXAM_ROOMS.map((r) => ({ value: r.id, label: r.name }))
 const reasonOptions = (Object.keys(DOWNTIME_REASON_LABEL) as (keyof typeof DOWNTIME_REASON_LABEL)[]).map((k) => ({ value: k, label: DOWNTIME_REASON_LABEL[k] }))
 const severityOptions = (Object.keys(CONTRAST_REACTION_LABEL) as (keyof typeof CONTRAST_REACTION_LABEL)[]).map((k) => ({ value: k, label: CONTRAST_REACTION_LABEL[k] }))
@@ -128,7 +128,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
             <li v-for="w in board.toSchedule" :key="w.key" class="flex flex-wrap items-end gap-2 px-4 py-2">
               <div class="min-w-[14rem] flex-1">
                 <b>{{ w.patientName }}</b> <span class="text-xs text-slate-500">{{ w.where }}</span>
-                <div class="text-xs text-slate-700">{{ w.procName }}・{{ w.roomName }}・約 {{ w.minutes }} 分・{{ w.doctorName }} {{ w.orderedAt.slice(5) }} 開立</div>
+                <div class="text-xs text-slate-700">{{ w.procName }}・{{ w.roomName }}・約 {{ w.minutes }} 分・{{ w.doctorName }} {{ w.orderedAt.slice(5).replace('-', '/') }} 開立</div>
                 <div v-if="w.prep.length" class="text-xs text-indigo-800">檢查前準備（排程時告知病人／病房）：{{ w.prep.join('、') }}</div>
                 <div v-if="w.contrast" :class="['text-xs', CONTRAST_TONE[w.contrast.level]]">顯影劑：{{ w.contrast.text }}<span class="text-slate-500">（{{ basis(w.contrast.renal) }}）</span></div>
                 <div v-if="w.safety.allergy" :class="['text-xs', w.safety.allergy.cleared ? 'text-slate-600' : 'font-semibold text-red-700']">顯影劑過敏（{{ w.safety.allergy.text }}）：{{ w.safety.allergy.cleared ? `${w.safety.allergy.cleared.byName} 已放行` : '開立醫師確認前置用藥並放行後才能報到' }}
@@ -254,7 +254,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
     </UDialog>
     <ContrastClearDialog v-model="clearOpen" :exam-key="clearing?.key ?? ''" :subject="clearing?.subject ?? ''" />
     <ReasonDialog v-model="arriveOpen" title="這間現在沒有排放射師" :subject="arriving ? `${arriving.roomName}：${arriving.patientName} ${arriving.procName}` : ''" label="誰來做（先聯絡支援再報到）" :presets="['已請別間放射師支援', '放射科組長支援', '加班人員支援']" ok-text="報到" :pending="arrive.pending.value" :error="arrive.fieldErrors.value.staffNote" @confirm="confirmArrive" />
-    <ReasonDialog v-model="cancelOpen" title="取消影像檢查" :subject="cancelling ? `${cancelling.patientName} ${cancelling.procName}（${cancelling.start.slice(5)}）` : ''" label="取消原因（影像會回到待排程）" :presets="['病人未禁食，改期', '病人未到', '病人拒絕', '醫師改檢查']" ok-text="取消檢查" danger :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @confirm="confirmCancel" />
+    <ReasonDialog v-model="cancelOpen" title="取消影像檢查" :subject="cancelling ? `${cancelling.patientName} ${cancelling.procName}（${cancelling.start.slice(5).replace('-', '/')}）` : ''" label="取消原因（影像會回到待排程）" :presets="['病人未禁食，改期', '病人未到', '病人拒絕', '醫師改檢查']" ok-text="取消檢查" danger :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @confirm="confirmCancel" />
     <ReasonDialog v-model="notReadyOpen" title="檢查前準備沒完成" :subject="notReady ? `${notReady.e.patientName}：${notReady.item.label}` : ''" label="原因（沒完成不能做，請取消改期）" :presets="['早上吃過早餐', '同意書還沒簽', '病人拒絕']" ok-text="記錄" :pending="prep.pending.value" :error="prep.fieldErrors.value.note" @confirm="confirmNotReady" />
   </div>
 </template>

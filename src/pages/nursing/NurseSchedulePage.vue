@@ -92,7 +92,7 @@ async function submitRatio() {
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="d in data.days" :key="d.date" :class="d.date === data.current.date && 'bg-brand-50/60'">
-              <td class="tabular whitespace-nowrap px-3 py-1.5 text-slate-600">{{ d.date.slice(5) }}（{{ weekday(d.date) }}）</td>
+              <td class="tabular whitespace-nowrap px-3 py-1.5 text-slate-600">{{ d.date.slice(5).replace('-', '/') }}（{{ weekday(d.date) }}）</td>
               <td v-for="c in d.cells" :key="c.shift" :class="['px-3 py-1.5 align-top', data.canEdit && d.date >= today() && 'cursor-pointer hover:bg-slate-50', d.date === data.current.date && c.shift === data.current.shift && 'ring-2 ring-inset ring-brand-400']" @click="openCell(d.date, c)">
                 <div :class="c.nurses.length ? 'text-slate-800' : 'text-slate-400'">{{ c.nurses.map((n) => n.name).join('、') || '未排' }}</div>
                 <div v-if="c.ratio" :class="['text-xs', c.ratio.over ? 'font-semibold text-red-700' : 'text-slate-400']">{{ c.ratio.text }}</div>

@@ -133,7 +133,7 @@ async function openStatement() {
             <div class="text-xs text-slate-500">{{ HOSPITAL.name }}・{{ view.charge ? '住院費用收據' : '住院費用試算' }}</div>
             <div class="text-base font-semibold text-slate-800">{{ view.admission.patientName }} <span class="text-sm font-normal text-slate-500">{{ view.admission.chartNo }}・住院號 {{ view.admission.admitNo }}・{{ view.admission.deptName }}<template v-if="view.bill">・{{ view.bill.identityName }}</template></span></div>
           </div>
-          <div v-if="view.charge" class="tabular text-right text-sm">收據 <b>{{ view.charge.receiptNo }}</b><div class="text-xs text-slate-500">{{ view.charge.paidAt }}・{{ view.charge.cashierName }}</div></div>
+          <div v-if="view.charge" class="tabular text-right text-sm">收據 <b>{{ view.charge.receiptNo }}</b><div class="text-xs text-slate-500">{{ view.charge.paidAt?.slice(5).replace('-', '/') }}・{{ view.charge.cashierName }}</div></div>
         </div>
         <p v-if="meta" class="mt-2 text-sm text-slate-700">
           住院期間 {{ toRoc(meta.from) }} ～ {{ toRoc(meta.to) }}，共 <b>{{ meta.days }}</b> 天（入院當天算、出院當天不算）
@@ -186,7 +186,7 @@ async function openStatement() {
         <p v-if="view.interim.suggest" class="mt-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900" role="status">{{ view.interim.suggest }}（提醒條件：{{ view.interim.settings.days ? `滿 ${view.interim.settings.days} 天` : '' }}{{ view.interim.settings.days && view.interim.settings.amount ? '或' : '' }}{{ view.interim.settings.amount ? `還沒繳的達 ${view.interim.settings.amount.toLocaleString()} 元` : '' }}）</p>
         <ul v-if="view.interim.payments.length" class="tabular mt-2 divide-y divide-slate-100 text-sm">
           <li v-for="p in view.interim.payments" :key="p.id" :class="['flex flex-wrap items-center gap-x-3 py-1.5', p.voided && 'text-slate-400 line-through']">
-            <span>{{ p.at }}</span><span>{{ p.receiptNo }}</span><span>{{ payMethodLabel[p.payMethod] }}</span>
+            <span>{{ p.at?.slice(5).replace('-', '/') }}</span><span>{{ p.receiptNo }}</span><span>{{ payMethodLabel[p.payMethod] }}</span>
             <span class="text-xs text-slate-500">截至 {{ p.asOf.slice(5).replace('-', '/') }} 費用 {{ p.billTotal.toLocaleString() }}</span>
             <b class="ml-auto">{{ p.amount.toLocaleString() }}</b>
             <span class="flex gap-1 no-underline">
@@ -194,7 +194,7 @@ async function openStatement() {
               <UButton v-if="!p.canVoid" size="sm" variant="ghost" @click="(ivOpen = p), (ivReason = '')">作廢</UButton>
             </span>
           </li>
-          <li v-for="r in view.interim.refunds" :key="r.receiptNo" class="flex flex-wrap gap-x-3 py-1.5 text-red-700"><span>{{ r.at }}</span><span>{{ r.receiptNo }}</span><span>{{ r.reason }}</span><b class="ml-auto">−{{ r.amount.toLocaleString() }}</b></li>
+          <li v-for="r in view.interim.refunds" :key="r.receiptNo" class="flex flex-wrap gap-x-3 py-1.5 text-red-700"><span>{{ r.at?.slice(5).replace('-', '/') }}</span><span>{{ r.receiptNo }}</span><span>{{ r.reason }}</span><b class="ml-auto">−{{ r.amount.toLocaleString() }}</b></li>
         </ul>
         <p v-if="view.interim.blocked" class="mt-2 text-xs text-slate-500">{{ view.interim.blocked }}</p>
         <form v-else class="mt-2 flex flex-wrap items-end gap-2" @submit.prevent="onPayInterim">
@@ -220,7 +220,7 @@ async function openStatement() {
             <UInput v-model="received" label="實收" type="number" min="0" class="tabular text-right text-lg" :error="(change >= 0 && cashProblem) || pay.fieldErrors.value.received" />
             <div :class="['flex justify-between rounded-md px-3 py-2 text-sm', owe ? 'bg-amber-50 text-amber-900' : change < 0 ? 'bg-red-50 text-red-700' : cashProblem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800']">
               <span>{{ owe ? '記為欠款' : change < 0 ? '尚差' : '找零' }}</span>
-              <span class="tabular text-lg font-bold">$ {{ (owe ? Math.max(0, payDue - (received ?? 0)) : Math.abs(change)).toLocaleString() }}</span>
+              <span class="tabular text-lg font-bold">{{ money(owe ? Math.max(0, payDue - (received ?? 0)) : Math.abs(change)) }}</span>
             </div>
             <template v-if="change < 0 || owe">
               <UCheckbox v-model="owe" label="差額記為欠款" />

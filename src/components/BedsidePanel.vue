@@ -67,7 +67,7 @@ async function submit() {
           <li v-for="p in v.items" :key="p.id" class="space-y-1 px-3 py-2">
             <div class="flex flex-wrap items-center gap-2">
               <b class="text-slate-800">{{ p.title }}</b>
-              <span class="tabular text-xs text-slate-500">{{ p.performedAt.slice(5) }}・{{ p.performedByName }}</span>
+              <span class="tabular text-xs text-slate-500">{{ p.performedAt.slice(5).replace('-', '/') }}・{{ p.performedByName }}</span>
               <span v-if="p.consentNo" class="text-xs text-slate-500">同意書 {{ p.consentNo }}</span>
               <UBadge v-else-if="p.consentWaiver" tone="gray" :title="p.consentWaiver">無同意書：緊急</UBadge>
               <UBadge v-if="p.complication !== '無'" tone="red">併發症</UBadge>
@@ -84,7 +84,7 @@ async function submit() {
             <div v-for="r in p.readings" :key="r.kind" :class="['text-xs', r.alert ? 'text-red-700' : 'text-slate-700']"><b>判讀：{{ r.label }}</b>（{{ r.reasons.join('；') }}）</div>
             <div v-if="p.readingWaiting" class="text-xs text-slate-500">判讀：{{ p.readingWaiting }}</div>
             <div v-if="p.alertPending && isDoctor"><UButton size="sm" variant="danger" :loading="ack.pending.value" @click="ack.run(p.id)">已知悉異常判讀</UButton></div>
-            <div v-else-if="p.readingAck && !p.alertPending" class="text-xs text-slate-500">異常判讀已知悉：{{ p.readingAckByName }} {{ p.readingAck.at.slice(5) }}</div>
+            <div v-else-if="p.readingAck && !p.alertPending" class="text-xs text-slate-500">異常判讀已知悉：{{ p.readingAckByName }} {{ p.readingAck.at.slice(5).replace('-', '/') }}</div>
             <div v-if="p.bleedingRisks?.length" class="text-xs text-amber-700">出血風險 {{ p.bleedingRisks.join('、') }}：{{ p.bleedingNote }}</div>
           </li>
         </ul>

@@ -513,7 +513,7 @@ function giveChecks(m: MarRecord, order: IpdOrder, nurseId: string, force?: { re
   // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
   // 核對通過、送到病房才算（只調劑還在藥局核對中，藥也還沒到）
   if (order.type === 'long' && udStage(m) !== 'verified') {
-    fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5)}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
+    fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5).replace('-', '/')}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5).replace('-', '/')}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
   }
   // 給藥前核對病人與藥品（條碼）
   const scanned = settleScan(admitted(m.admissionId), order, scan)
@@ -560,7 +560,7 @@ export function correctMar(marId: string, input: { to: MarDoneStatus; reason: st
     Object.assign(m, { status: input.to, note, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id, ...(g?.scanned ? { scan: g.scanned } : {}) })
     m.corrections = [...(m.corrections ?? []), { at: t, by: nurse.id, reason: reason!, from }]
     const label = { given: '已給藥', held: '暫停', refused: '拒絕', pending: '待給' } as const
-    audit('給藥更正', `${order.content} ${m.scheduledAt.slice(5)}：${label[from.status]} → ${label[input.to]}（${reason}）${at !== t ? `；實際給藥 ${at.slice(11)}` : ''}${g?.res ? `；${g.res.text}` : ''}${g?.scanned ? `；${scanText(g.scanned)}` : ''}`)
+    audit('給藥更正', `${order.content} ${m.scheduledAt.slice(5).replace('-', '/')}：${label[from.status]} → ${label[input.to]}（${reason}）${at !== t ? `；實際給藥 ${at.slice(11)}` : ''}${g?.res ? `；${g.res.text}` : ''}${g?.scanned ? `；${scanText(g.scanned)}` : ''}`)
     if (g?.res) consumeWitness(input.witness)
     return m
   })

@@ -143,7 +143,7 @@ export const downtimeClash = <T extends DT>(ds: T[], x: { room: ExamRoom; start:
 /** 現在停機中的 */
 export const downtimeNow = <T extends DT>(ds: T[], room: ExamRoom, now: string) => ds.find((d) => d.room === room && d.from <= now && now < downtimeEnd(d))
 export const downtimeText = (d: Pick<RoomDowntime, 'from' | 'to' | 'endedAt' | 'reason'>) =>
-  `${DOWNTIME_REASON_LABEL[d.reason]} ${d.from.slice(5)}–${downtimeEnd(d).slice(d.from.slice(0, 10) === downtimeEnd(d).slice(0, 10) ? 11 : 5)}`
+  `${DOWNTIME_REASON_LABEL[d.reason]} ${d.from.slice(5).replace('-', '/')}–${downtimeEnd(d).slice(d.from.slice(0, 10) === downtimeEnd(d).slice(0, 10) ? 11 : 5)}`
 
 /** 登記欄位：檢查室、起訖（結束要在開始之後、不能整段在過去、最長 7 天）、原因 */
 export function checkDowntime(x: { room?: string; from?: string; to?: string; reason?: string }, now: string): Record<string, string> {

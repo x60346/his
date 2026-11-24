@@ -102,7 +102,7 @@ async function submitPw() {
       </template>
       <template #cell-roles="{ row }"><template v-for="(x, i) in row.roles" :key="x">{{ i ? '、' : '' }}<span class="whitespace-nowrap">{{ roleLabel[x] }}</span></template></template>
       <template #cell-name="{ row }"><span class="whitespace-nowrap">{{ row.name }}</span></template>
-      <template #cell-lastLoginAt="{ row }"><span class="whitespace-nowrap">{{ row.lastLoginAt?.slice(5) ?? '—' }}</span></template>
+      <template #cell-lastLoginAt="{ row }"><span class="whitespace-nowrap">{{ row.lastLoginAt?.slice(5).replace('-', '/') ?? '—' }}</span></template>
       <template #cell-doctorName="{ row }"><span class="whitespace-nowrap">{{ row.doctorName || '—' }}</span></template>
       <template #cell-active="{ row }"><UBadge :tone="row.active ? 'green' : 'gray'">{{ row.active ? '啟用' : '停用' }}</UBadge></template>
       <template #cell-act="{ row }">

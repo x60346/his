@@ -70,7 +70,7 @@ export interface PostopPlan {
 
 const doneText = (s: Surgery) => {
   const p = s.postop!
-  return `${p.at.slice(5)} ${nameOf.user(p.by)}${p.setName ? ` 套用「${p.setName}」${p.orderIds.length} 項` : '：沿用術前醫囑'}${p.note ? `（${p.note}）` : ''}${p.npoStopped.length ? '；禁食停止' : ''}${p.npoKept.length ? '；禁食保留' : ''}`
+  return `${p.at.slice(5).replace('-', '/')} ${nameOf.user(p.by)}${p.setName ? ` 套用「${p.setName}」${p.orderIds.length} 項` : '：沿用術前醫囑'}${p.note ? `（${p.note}）` : ''}${p.npoStopped.length ? '；禁食停止' : ''}${p.npoKept.length ? '；禁食保留' : ''}`
 }
 const savable = (o: IpdOrder) => !o.infusion && !o.vent && !o.labSchedule && !o.codeBlueId && !o.isolationId && !(o.category === 'diet' && o.diet?.kind === 'tube')
 
@@ -86,7 +86,7 @@ export function postopPlan(surgeryId: string): Promise<PostopPlan> {
       ...(s.postop ? { doneText: doneText(s) } : {}),
       canWrite: !!team && s.status === 'done' && a.status === 'admitted' && !s.postop,
       sets: doctor ? db.postopSets.filter((x) => x.procId === s.procId && canUseSet(x, doctor)).map((x) => setView(x, doctor)).sort((x, y) => (x.scope === y.scope ? x.name.localeCompare(y.name) : x.scope === 'personal' ? -1 : 1)) : [],
-      npoOrders: activeNpo(a.id).map((o) => ({ id: o.id, text: `${o.content}（${o.startAt.slice(5)} 起）` })),
+      npoOrders: activeNpo(a.id).map((o) => ({ id: o.id, text: `${o.content}（${o.startAt.slice(5).replace('-', '/')} 起）` })),
       orderOptions: db.ipdOrders.filter((o) => o.admissionId === a.id && o.status === 'active' && savable(o)).map((o) => ({ id: o.id, text: `${o.type === 'long' ? '長期' : '臨時'}・${o.content}${o.dose ? ` ${o.dose}` : ''}${o.freq ? ` ${o.freq}` : ''}${o.route ? ` ${o.route}` : ''}` })),
     }
   })

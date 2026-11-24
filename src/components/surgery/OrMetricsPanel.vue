@@ -56,14 +56,14 @@ const pctText = (x: number | null) => (x === null ? '—' : `${x}%`)
             <h4 class="mb-1 font-semibold text-slate-700">首台延誤</h4>
             <p v-if="!m.firstCase.late.length" class="text-xs text-slate-400">沒有</p>
             <ul class="space-y-0.5 text-xs">
-              <li v-for="x in m.firstCase.late" :key="x.no" class="tabular">{{ x.date.slice(5) }} {{ x.room }} {{ x.no }}：晚 {{ x.minutes }} 分{{ x.open ? '（還沒做麻醉前查核）' : '' }}</li>
+              <li v-for="x in m.firstCase.late" :key="x.no" class="tabular">{{ x.date.slice(5).replace('-', '/') }} {{ x.room }} {{ x.no }}：晚 {{ x.minutes }} 分{{ x.open ? '（還沒做麻醉前查核）' : '' }}</li>
             </ul>
           </section>
           <section class="rounded-md border border-slate-200 bg-white p-3">
             <h4 class="mb-1 font-semibold text-slate-700">當天取消的原因</h4>
             <p v-if="!m.cancel.reasons.length" class="text-xs text-slate-400">沒有</p>
             <ul class="space-y-0.5 text-xs">
-              <li v-for="x in m.cancel.reasons" :key="x.no">{{ x.date.slice(5) }} {{ x.no }} {{ x.patientName }}：{{ x.reason }}</li>
+              <li v-for="x in m.cancel.reasons" :key="x.no">{{ x.date.slice(5).replace('-', '/') }} {{ x.no }} {{ x.patientName }}：{{ x.reason }}</li>
             </ul>
           </section>
         </div>

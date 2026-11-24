@@ -146,7 +146,7 @@ async function submitBackdate() {
   if (m.highAlert) {
     const ok = await ui.confirm({
       title: '高警訊藥品：雙人核對',
-      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}\n實際給藥時間：${givenAt.value.slice(5)}\n\n補登也要確認當時已雙人核對。`,
+      message: `${m.content}\n${dose(m)}\n病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}\n實際給藥時間：${givenAt.value.slice(5).replace('-', '/')}\n\n補登也要確認當時已雙人核對。`,
       okText: '已雙人核對，補登',
     })
     if (!ok) return
@@ -377,7 +377,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
               </div>
               <span class="flex items-center gap-1 text-xs text-slate-500">
                 <Clock class="h-3.5 w-3.5" />
-                <template v-if="o.lastGivenAt">上次 {{ o.lastGivenAt.slice(5) }}（{{ ago(o.lastGivenAt) }}）</template>
+                <template v-if="o.lastGivenAt">上次 {{ o.lastGivenAt.slice(5).replace('-', '/') }}（{{ ago(o.lastGivenAt) }}）</template>
                 <template v-else>尚未使用</template>
               </span>
               <UButton size="sm" variant="secondary" @click="scanGate(o.id, `${o.content}・${dose(o)}（PRN）`, !!o.drugId, () => (reasonFor = { kind: 'prn', order: o }))">給藥</UButton>
@@ -393,7 +393,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
             <li v-for="o in board.stat" :key="o.id" class="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
               <div class="min-w-[12rem] flex-1">
                 <div class="break-keep break-words font-medium text-slate-800">{{ o.content }}</div>
-                <div class="tabular text-xs text-slate-500">{{ o.startAt.slice(5) }} 開立・{{ o.doctorName }}</div>
+                <div class="tabular text-xs text-slate-500">{{ o.startAt.slice(5).replace('-', '/') }} 開立・{{ o.doctorName }}</div>
                 <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}（執行暫停）</div>
               </div>
               <span v-if="o.elsewhere" class="text-xs text-slate-600">{{ o.elsewhere }}</span>
@@ -416,7 +416,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
       <div v-if="backdateFor" class="space-y-3 text-sm">
         <div class="rounded-md bg-slate-50 px-3 py-2">
           <div class="font-medium text-slate-800">{{ backdateFor.content }}<span v-if="backdateFor.highAlert" class="ml-1 text-violet-700">（高警訊）</span></div>
-          <div class="tabular text-xs text-slate-500">預定 {{ backdateFor.scheduledAt.slice(5) }}・{{ dose(backdateFor) }}</div>
+          <div class="tabular text-xs text-slate-500">預定 {{ backdateFor.scheduledAt.slice(5).replace('-', '/') }}・{{ dose(backdateFor) }}</div>
         </div>
         <UInput v-model="givenAtInput" type="datetime-local" label="實際給藥時間" required :error="backdateProblem ?? exec.fieldErrors.value.givenAt" :hint="`最多往前 ${MAR_BACKDATE_MAX_MIN / 60} 小時；登打的時間也會一併記錄`" />
       </div>

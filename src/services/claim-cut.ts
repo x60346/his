@@ -59,13 +59,13 @@ function cutItem(c: ClaimCut): CutItem {
   return {
     ...c, status: st, statusLabel: CUT_STATUS_LABEL[st], patientName: nameOf.patient(c.patientId), chartNo: find.patient(c.patientId)?.chartNo ?? '', doctorName: nameOf.doctor(c.doctorId),
     date: it?.date ?? '', diagnosis: it?.diagnosis ?? '', codeLabel: `${c.code} ${CUT_REASONS.find((r) => r.code === c.code)?.label ?? ''}`,
-    ...(c.reply ? { replyText: `${c.reply.action === 'appeal' ? '申復' : '接受'}・${nameOf.user(c.reply.by)} ${c.reply.at.slice(5)}${c.reply.text ? `：${c.reply.text}` : ''}` } : {}),
-    ...(c.result ? { resultText: `${c.result.outcome === 'paid' ? `補付 ${c.result.points} 點` : '維持核減'}・${nameOf.user(c.result.by)} ${c.result.at.slice(5)}` } : {}),
+    ...(c.reply ? { replyText: `${c.reply.action === 'appeal' ? '申復' : '接受'}・${nameOf.user(c.reply.by)} ${c.reply.at.slice(5).replace('-', '/')}${c.reply.text ? `：${c.reply.text}` : ''}` } : {}),
+    ...(c.result ? { resultText: `${c.result.outcome === 'paid' ? `補付 ${c.result.points} 點` : '維持核減'}・${nameOf.user(c.result.by)} ${c.result.at.slice(5).replace('-', '/')}` } : {}),
     ...((d) => ({ canDispute: d.ok, ...(d.why ? { disputeWhy: d.why } : {}), ...(d.deadline ? { disputeDeadline: d.deadline } : {}) }))(disputeCheck(c, today())),
     disputeLeft: disputeLeft(c),
     replyDue: cutReplyDue(c), replyOverdue: !c.reply && today() > cutReplyDue(c),
-    ...(c.dispute ? { disputeText: `申請 ${c.dispute.points} 點・${nameOf.user(c.dispute.by)} ${c.dispute.at.slice(5)}：${c.dispute.reason}` } : {}),
-    ...(c.dispute?.result ? { disputeResultText: `${c.dispute.result.outcome === 'paid' ? `補付 ${c.dispute.result.points} 點` : '駁回'}・${nameOf.user(c.dispute.result.by)} ${c.dispute.result.at.slice(5)}${c.dispute.result.note ? `：${c.dispute.result.note}` : ''}` } : {}),
+    ...(c.dispute ? { disputeText: `申請 ${c.dispute.points} 點・${nameOf.user(c.dispute.by)} ${c.dispute.at.slice(5).replace('-', '/')}：${c.dispute.reason}` } : {}),
+    ...(c.dispute?.result ? { disputeResultText: `${c.dispute.result.outcome === 'paid' ? `補付 ${c.dispute.result.points} 點` : '駁回'}・${nameOf.user(c.dispute.result.by)} ${c.dispute.result.at.slice(5).replace('-', '/')}${c.dispute.result.note ? `：${c.dispute.result.note}` : ''}` } : {}),
   }
 }
 

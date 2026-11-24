@@ -21,4 +21,4 @@ export const dutyDateOf = (t: string) => (hourOf(t) < DUTY_DAY_START ? prevDay(t
 export const onCallFor = <S extends Pick<DutyShift, 'date' | 'deptId'>>(shifts: S[], deptId: string, t: string): S | undefined =>
   isOffHours(t) ? shifts.find((s) => s.deptId === deptId && s.date === dutyDateOf(t)) : undefined
 /** 值班時段的文字 */
-export const dutyHoursText = (date: string) => ((wd) => (wd === 0 || wd === 6 ? `${date.slice(5)} 08:00 到隔天 08:00（假日全天）` : `${date.slice(5)} 17:00 到隔天 08:00`))(weekdayOf(date))
+export const dutyHoursText = (date: string) => ((wd) => (wd === 0 || wd === 6 ? `${date.slice(5).replace('-', '/')} 08:00 到隔天 08:00（假日全天）` : `${date.slice(5).replace('-', '/')} 17:00 到隔天 08:00`))(weekdayOf(date))

@@ -22,7 +22,7 @@ const pullAct = useAction(surgeryApi.pullBackSurgery, { success: (x) => `已拉�
   <div v-if="s.delayRows.length" :class="['space-y-1 rounded-md border px-3 py-2 text-xs', s.delayOverflow ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50/60']">
     <div class="flex flex-wrap items-center gap-2">
       <b :class="s.delayOverflow ? 'text-red-800' : 'text-amber-900'">{{ s.delayMinutes ? `被急刀順延 ${s.delayMinutes} 分` : '急刀順延後已拉回原時間' }}</b>
-      <span class="text-slate-600">原排 {{ s.originalStart?.slice(5) }}，現排 {{ s.scheduleText }}</span>
+      <span class="text-slate-600">原排 {{ s.originalStart?.slice(5).replace('-', '/') }}，現排 {{ s.scheduleText }}</span>
       <UButton v-if="canAck" size="sm" class="ml-auto" :loading="ackAct.pending.value" @click="ackAct.run(s.id)">已讀</UButton>
     </div>
     <ul class="space-y-0.5">
@@ -33,7 +33,7 @@ const pullAct = useAction(surgeryApi.pullBackSurgery, { success: (x) => `已拉�
       </li>
     </ul>
     <div v-if="s.pullBack" class="flex flex-wrap items-center gap-2 font-medium text-emerald-800">
-      <span>{{ s.pullBack.why }}：可以拉回原時間 {{ s.pullBack.to.slice(5) }}</span>
+      <span>{{ s.pullBack.why }}：可以拉回原時間 {{ s.pullBack.to.slice(5).replace('-', '/') }}</span>
       <UButton v-if="canSchedule" size="sm" class="ml-auto" :loading="pullAct.pending.value" @click="pullAct.run(s.id)">拉回</UButton>
     </div>
     <p v-if="s.npoLong" class="font-medium text-amber-900">病人已禁食，又多等 {{ s.delayMinutes }} 分：請評估是否補點滴（或請麻醉科調整禁食）。</p>

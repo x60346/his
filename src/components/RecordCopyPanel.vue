@@ -98,7 +98,7 @@ const PAY: Record<PayMethod, string> = { cash: '現金', card: '刷卡', mobile:
             <summary class="cursor-pointer">內容</summary>
             <ul class="mt-1 space-y-0.5"><li v-for="x in r.items" :key="x.kind + x.refId">{{ x.label }}</li></ul>
           </details>
-          <p v-if="r.voided" class="text-xs text-slate-500">作廢：{{ r.voided.reason }}・{{ r.voidedByName }} {{ r.voided.at.slice(5) }}</p>
+          <p v-if="r.voided" class="text-xs text-slate-500">作廢：{{ r.voided.reason }}・{{ r.voidedByName }} {{ r.voided.at.slice(5).replace('-', '/') }}</p>
         </li>
       </ul>
     </UQueryState>

@@ -96,7 +96,7 @@ async function onRevoke(reason: string) {
         </span>
       </div>
       <div v-for="e in tg.exams" :key="e.id" class="flex flex-wrap items-center gap-2">
-        <span>{{ e.name }}（{{ e.start.slice(5, 16) }}）・檢查同意書：</span>
+        <span>{{ e.name }}（{{ e.start.slice(5, 16).replace('-', '/') }}）・檢查同意書：</span>
         <UBadge :tone="e.has ? 'green' : 'yellow'">{{ e.has ? '已簽' : '還沒有（報到確認前要有）' }}</UBadge>
         <UButton v-if="isDoctor && !e.has" size="sm" variant="secondary" @click="openRecord({ kind: 'procedure', examId: e.id, label: '檢查同意書' }, `${e.name}（顯影劑）`)">記錄簽署</UButton>
       </div>
@@ -112,11 +112,11 @@ async function onRevoke(reason: string) {
             <span v-else-if="c.bedsideUsed" class="ml-auto text-xs text-slate-500">已執行（不能撤回）</span>
             <button v-else-if="!c.revoked" type="button" class="ml-auto text-xs text-red-600 underline" @click="revokeId = c.id">撤回</button>
           </div>
-          <div class="text-xs text-slate-600">簽署 {{ c.signer.name }}（{{ c.signer.relation }}{{ c.signer.reason ? `：${c.signer.reason}` : '' }}）・說明 {{ c.explainedByName }} {{ c.signedAt.slice(5) }}・{{ c.explanation }}</div>
-          <div v-if="c.revoked" class="text-xs text-slate-500">撤回 {{ c.revoked.at.slice(5) }}：{{ c.revoked.reason }}</div>
+          <div class="text-xs text-slate-600">簽署 {{ c.signer.name }}（{{ c.signer.relation }}{{ c.signer.reason ? `：${c.signer.reason}` : '' }}）・說明 {{ c.explainedByName }} {{ c.signedAt.slice(5).replace('-', '/') }}・{{ c.explanation }}</div>
+          <div v-if="c.revoked" class="text-xs text-slate-500">撤回 {{ c.revoked.at.slice(5).replace('-', '/') }}：{{ c.revoked.reason }}</div>
           <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
             <template v-if="c.scan">
-              <span class="text-slate-500">紙本已掃描 {{ c.scan.pages }} 頁（{{ c.scan.at.slice(5) }}）</span>
+              <span class="text-slate-500">紙本已掃描 {{ c.scan.pages }} 頁（{{ c.scan.at.slice(5).replace('-', '/') }}）</span>
               <button type="button" class="text-brand-700 underline" @click="viewing = c">看掃描</button>
               <button type="button" class="text-slate-500 underline" :disabled="scanAct.pending.value" @click="pickScan(c)">重新掃描</button>
             </template>
@@ -156,7 +156,7 @@ async function onRevoke(reason: string) {
     <UDialog v-model="viewOpen" :title="`紙本掃描：${viewing?.no ?? ''} ${viewing?.kindLabel ?? ''}`" size="lg">
       <UQueryState :loading="scanLoading && !scanView" :ready="!!scanView">
         <template v-if="scanView">
-          <p v-if="scanView.scan" class="mb-2 text-xs text-slate-500">{{ scanView.scan.at.slice(5) }} {{ scanView.scan.byName }} 掃描・{{ scanView.scan.pages }} 頁</p>
+          <p v-if="scanView.scan" class="mb-2 text-xs text-slate-500">{{ scanView.scan.at.slice(5).replace('-', '/') }} {{ scanView.scan.byName }} 掃描・{{ scanView.scan.pages }} 頁</p>
           <p v-if="!scanView.pages.length" class="rounded-md border border-slate-200 px-3 py-6 text-center text-slate-400">示範資料只有掃描紀錄，沒有影像檔</p>
           <div v-else class="space-y-2">
             <img v-for="(p, i) in scanView.pages" :key="i" :src="p" :alt="`第 ${i + 1} 頁`" class="w-full rounded border border-slate-200" />

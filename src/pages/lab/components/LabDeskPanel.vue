@@ -111,7 +111,7 @@ const finished = computed(() => data.value?.checkedIn.filter((p) => !open.value.
       </UCard>
 
       <UCard :padded="false">
-        <template #title><span class="flex items-center gap-2 text-sm font-semibold">今天報到（{{ data.date.slice(5) }}）</span></template>
+        <template #title><span class="flex items-center gap-2 text-sm font-semibold">今天報到（{{ data.date.slice(5).replace('-', '/') }}）</span></template>
         <div class="space-y-3 p-3 text-sm">
           <form class="flex items-end gap-2" @submit.prevent="onScan">
             <UInput v-model="code" class="flex-1" label="掃條碼採檢／收回容器" placeholder="S2026…" :error="collect.fieldErrors.value.barcode ?? (collect.fieldErrors.value.fasting ? `${collect.fieldErrors.value.fasting}：請在下方按「採檢（空腹）」或「非空腹」` : undefined)" />

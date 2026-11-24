@@ -495,7 +495,7 @@ export function getDashboard(): Promise<DashboardStats> {
           imagingWork: imagingWorkCount(me.doctorId),
           imagingAcks: imagingAckCount(me.doctorId),
           metforminAlerts: db.imagingExams.filter((e) => e.metforminAlert && !e.metforminAlert.ackAt && e.metforminAlert.doctorId === me.doctorId).length,
-          ...((xs) => ({ examNoShow: xs.length, examNoShowText: xs.map((e) => `${db.patients.find((p) => p.id === e.patientId)?.name} ${db.procedures.find((p) => p.id === e.procId)?.name}（${e.start.slice(5)}）`).join('、') }))(noShowOf(me.doctorId)),
+          ...((xs) => ({ examNoShow: xs.length, examNoShowText: xs.map((e) => `${db.patients.find((p) => p.id === e.patientId)?.name} ${db.procedures.find((p) => p.id === e.procId)?.name}（${e.start.slice(5).replace('-', '/')}）`).join('、') }))(noShowOf(me.doctorId)),
           ...(isInfectious(me.doctorId) ? (({ pending, overdue }) => ({ abxPending: pending, abxOverdue: overdue, abxSteward: stewardTodoCount(now()) }))(abxPendingCounts(now())) : {}),
           ...(({ rejected, extend }) => ({ abxRejected: rejected.length, abxExtend: extend.length }))(abxAttendingTodo(me.doctorId, now())),
           abxAdvice: openAdvice(me.doctorId).length,

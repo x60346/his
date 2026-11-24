@@ -30,7 +30,7 @@ export function stayProgressGaps(admittedAt: string, dischargedAt: string, noteD
   return out
 }
 /** 缺的日期寫成一句（最多列 5 天） */
-export const progressGapText = (gaps: string[]) => `病程紀錄缺 ${gaps.length} 天：${gaps.slice(0, 5).map((d) => d.slice(5)).join('、')}${gaps.length > 5 ? '…' : ''}`
+export const progressGapText = (gaps: string[]) => `病程紀錄缺 ${gaps.length} 天：${gaps.slice(0, 5).map((d) => d.slice(5).replace('-', '/')).join('、')}${gaps.length > 5 ? '…' : ''}`
 
 /** 還缺什麼（空＝完整） */
 export function recordGaps(x: RecordInput): string[] {
@@ -89,7 +89,7 @@ export function nursingGapShifts(admittedAt: string, noteTimes: string[], now: s
     const start = `${s.date} ${String(SHIFT_HOUR[s.shift]).padStart(2, '0')}:00`
     const end = addMinutes8(start)
     if (start < admittedAt.slice(0, 16) || end > now) continue
-    if (!noteTimes.some((t) => t >= start && t < end)) out.push(`${s.date.slice(5)} ${s.shift}`)
+    if (!noteTimes.some((t) => t >= start && t < end)) out.push(`${s.date.slice(5).replace('-', '/')} ${s.shift}`)
   }
   return out
 }

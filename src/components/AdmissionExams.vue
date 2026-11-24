@@ -29,7 +29,7 @@ const ackMet = useAction(examApi.ackMetforminAlert, { success: '已處理 Metfor
       <ul v-if="v.exams.length" class="divide-y divide-slate-100 rounded border border-slate-200">
         <li v-for="e in v.exams" :key="e.id" class="space-y-0.5 px-3 py-2">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="tabular font-semibold">{{ e.start.slice(5) }}–{{ e.end.slice(11) }}</span>
+            <span class="tabular font-semibold">{{ e.start.slice(5).replace('-', '/') }}–{{ e.end.slice(11) }}</span>
             <span>{{ e.procName }}・{{ e.roomName }}</span>
             <UBadge :tone="e.noShow ? 'red' : TONE[e.stage]" class="ml-auto">{{ e.stageLabel }}</UBadge>
           </div>
@@ -49,11 +49,11 @@ const ackMet = useAction(examApi.ackMetforminAlert, { success: '已處理 Metfor
         </li>
       </ul>
       <div v-for="m in v.metforminAlerts" :key="m.id" class="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert">
-        <span class="min-w-0 flex-[1_1_10rem]">{{ m.procName }} {{ m.doneAt?.slice(5) }} 做完：{{ m.metforminAlertText }}</span>
+        <span class="min-w-0 flex-[1_1_10rem]">{{ m.procName }} {{ m.doneAt?.slice(5).replace('-', '/') }} 做完：{{ m.metforminAlertText }}</span>
         <UButton v-if="isDoctor" size="sm" :loading="ackMet.pending.value" @click="ackMet.run(m.id)">已處理</UButton>
       </div>
       <p v-if="v.unscheduled.length" class="text-xs text-slate-600">等檢查室排程：{{ v.unscheduled.join('、') }}</p>
     </div>
   </UQueryState>
-  <ContrastClearDialog v-model="clearOpen" :exam-key="clearing?.key ?? ''" :subject="clearing ? `${clearing.patientName} ${clearing.procName}（${clearing.start.slice(5)}）：過敏 ${clearing.safety.allergy?.text}` : ''" />
+  <ContrastClearDialog v-model="clearOpen" :exam-key="clearing?.key ?? ''" :subject="clearing ? `${clearing.patientName} ${clearing.procName}（${clearing.start.slice(5).replace('-', '/')}）：過敏 ${clearing.safety.allergy?.text}` : ''" />
 </template>

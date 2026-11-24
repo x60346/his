@@ -52,7 +52,7 @@ const sevTone = { mild: 'gray', moderate: 'yellow', severe: 'red' } as const
             <UBadge v-else :tone="r.overdue ? 'red' : 'yellow'" class="ml-auto">{{ r.overdue ? '評估逾時' : '待藥師評估' }}</UBadge>
           </div>
           <div class="text-slate-700">{{ r.symptoms }}</div>
-          <div class="tabular text-xs text-slate-500">發生 {{ r.onsetAt.slice(5) }}・處置：{{ r.action }}・{{ r.reportedByName }} {{ r.reportedAt.slice(5) }} 通報</div>
+          <div class="tabular text-xs text-slate-500">發生 {{ r.onsetAt.slice(5).replace('-', '/') }}・處置：{{ r.action }}・{{ r.reportedByName }} {{ r.reportedAt.slice(5).replace('-', '/') }} 通報</div>
           <div v-if="r.assessment" class="text-xs text-slate-600">{{ r.assessedByName }}：{{ r.assessment.note || '—' }}<template v-if="r.assessment.allergyAdded">；<b class="text-red-700">已加入過敏 {{ r.assessment.allergyAdded }}</b></template></div>
         </li>
       </ul>
@@ -61,7 +61,7 @@ const sevTone = { mild: 'gray', moderate: 'yellow', severe: 'red' } as const
 
   <UDialog v-model="open" title="藥物不良反應通報" size="md">
     <div class="space-y-3">
-      <USelect v-model="f.drugId" label="懷疑的藥（這次住院給過的）" required :options="(v?.drugs ?? []).map((d) => ({ label: `${d.name}（最近一次 ${d.lastGivenAt.slice(5)}）`, value: d.drugId }))" :error="rep.fieldErrors.value.drugId" />
+      <USelect v-model="f.drugId" label="懷疑的藥（這次住院給過的）" required :options="(v?.drugs ?? []).map((d) => ({ label: `${d.name}（最近一次 ${d.lastGivenAt.slice(5).replace('-', '/')}）`, value: d.drugId }))" :error="rep.fieldErrors.value.drugId" />
       <UInput v-model="f.onsetAt" type="datetime-local" label="發生時間" required :error="rep.fieldErrors.value.onsetAt" />
       <UTextarea v-model="f.symptoms" label="症狀" required :rows="2" placeholder="例：前胸、背部紅疹伴搔癢" :error="rep.fieldErrors.value.symptoms" />
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">

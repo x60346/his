@@ -59,7 +59,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
                   <UBadge v-else-if="x.assessment" :tone="canAddAllergy(x.assessment.causality) ? 'red' : 'gray'" class="ml-auto">{{ x.causalityLabel }}</UBadge>
                 </div>
                 <div class="mt-0.5 text-xs text-slate-700">{{ x.drugName }}・{{ x.severityLabel }}・{{ x.symptoms }}</div>
-                <div class="tabular text-xs text-slate-500">{{ x.reportedByName }} {{ x.reportedAt.slice(5) }} 通報<template v-if="x.dueAt && !x.assessment">・期限 {{ x.dueAt.slice(5) }}</template></div>
+                <div class="tabular text-xs text-slate-500">{{ x.reportedByName }} {{ x.reportedAt.slice(5).replace('-', '/') }} 通報<template v-if="x.dueAt && !x.assessment">・期限 {{ x.dueAt.slice(5).replace('-', '/') }}</template></div>
               </button>
             </li>
           </ul>
@@ -68,7 +68,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
 
       <UCard v-if="!item" data-detail><UEmpty title="請從左邊選一筆" description="用 Naranjo 量表評估藥物與反應的因果關係" /></UCard>
       <div v-else data-detail class="min-w-0 space-y-3">
-        <UCard :title="`${item.patientName}・${item.drugName}`" :subtitle="`${item.admissionId ? `${item.bedNo || '已出院'}・住院號 ${item.admitNo}` : '門診'}・發生 ${item.onsetAt.slice(5)}${item.examId ? '・影像檢查時（放射師通報）' : ''}`">
+        <UCard :title="`${item.patientName}・${item.drugName}`" :subtitle="`${item.admissionId ? `${item.bedNo || '已出院'}・住院號 ${item.admitNo}` : '門診'}・發生 ${item.onsetAt.slice(5).replace('-', '/')}${item.examId ? '・影像檢查時（放射師通報）' : ''}`">
           <div class="space-y-1 text-sm">
             <div><UBadge :tone="item.severity === 'severe' ? 'red' : item.severity === 'moderate' ? 'yellow' : 'gray'">{{ item.severityLabel }}</UBadge> <UBadge v-if="item.seriousLabel" tone="red">{{ item.seriousLabel }}</UBadge> {{ item.symptoms }}</div>
             <div class="text-slate-600">處置：{{ item.action }}</div>
@@ -76,7 +76,7 @@ const ANS: { key: NaranjoAnswer; label: string }[] = [{ key: 'yes', label: '是'
           </div>
         </UCard>
         <UCard v-if="item.assessment" title="評估結果">
-          <p class="text-sm">{{ item.assessedByName }} {{ item.assessment.at.slice(5) }}：Naranjo {{ item.assessment.score }} 分，<b>{{ item.causalityLabel }}</b>{{ item.assessment.note ? `；${item.assessment.note}` : '' }}<template v-if="item.assessment.allergyAdded">；已加入過敏 <b class="text-red-700">{{ item.assessment.allergyAdded }}</b></template></p>
+          <p class="text-sm">{{ item.assessedByName }} {{ item.assessment.at.slice(5).replace('-', '/') }}：Naranjo {{ item.assessment.score }} 分，<b>{{ item.causalityLabel }}</b>{{ item.assessment.note ? `；${item.assessment.note}` : '' }}<template v-if="item.assessment.allergyAdded">；已加入過敏 <b class="text-red-700">{{ item.assessment.allergyAdded }}</b></template></p>
         </UCard>
         <UCard v-else title="Naranjo 因果關係量表" :subtitle="`目前 ${score} 分：${CAUSALITY_LABEL[causality]}（≥9 確定、5–8 很可能、1–4 可能、≤0 存疑）`">
           <ol class="space-y-1.5 text-sm">

@@ -46,7 +46,7 @@ async function submitRes() {
         </div>
         <div v-if="p.summary" class="mt-1 text-xs text-slate-700">病情：{{ p.summary }}<br />理由：{{ p.reason }}</div>
         <div v-for="(n, i) in p.notesText" :key="i" class="text-xs text-slate-500">{{ n }}</div>
-        <div v-if="p.submittedAt" class="text-xs text-slate-500">送審 {{ p.submittedAt.slice(5) }}<template v-if="p.status === 'submitted'">（{{ p.days }} 天）</template></div>
+        <div v-if="p.submittedAt" class="text-xs text-slate-500">送審 {{ p.submittedAt.slice(5).replace('-', '/') }}<template v-if="p.status === 'submitted'">（{{ p.days }} 天）</template></div>
         <div v-if="p.resultText" class="text-xs" :class="p.status === 'rejected' ? 'text-red-700' : p.status === 'approved' ? 'text-emerald-700' : 'text-amber-800'">結果：{{ p.resultText }}<template v-if="p.validUntil">（門診效期 {{ p.validFrom }} ～ {{ p.validUntil }}<template v-if="p.qty">；已開 {{ p.qty.used }}、還剩 {{ p.qty.left }} {{ p.qty.unit }}</template><template v-if="p.times">；已開 {{ p.times.used }} 次、還剩 {{ p.times.left }} 次</template>）</template></div>
         <div v-if="p.selfPayText" class="text-xs text-slate-600">{{ p.selfPayText }}</div>
         <div v-if="p.emergencyText" class="text-xs text-amber-800">{{ p.emergencyText }}</div>

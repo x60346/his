@@ -59,7 +59,7 @@ watch(t, async () => {
           </g>
           <!-- 抗生素 -->
           <g v-for="(r, ri) in t.rows" :key="r.drugId">
-            <text x="6" :y="HEAD + ri * ROW + 15" class="fill-slate-800">{{ r.name.length > 18 ? `${r.name.slice(0, 17)}…` : r.name }}<title>{{ r.name }}{{ r.restricted ? '（管制性抗生素）' : '' }}：{{ r.first.slice(5) }}–{{ r.last.slice(5) }}，給藥 {{ r.dot }} 天</title></text>
+            <text x="6" :y="HEAD + ri * ROW + 15" class="fill-slate-800">{{ r.name.length > 18 ? `${r.name.slice(0, 17)}…` : r.name }}<title>{{ r.name }}{{ r.restricted ? '（管制性抗生素）' : '' }}：{{ r.first.slice(5).replace('-', '/') }}–{{ r.last.slice(5).replace('-', '/') }}，給藥 {{ r.dot }} 天</title></text>
             <text :x="LABEL_W - 6" :y="HEAD + ri * ROW + 15" text-anchor="end" class="fill-slate-400">{{ r.dot }} 天</text>
             <template v-for="(c, ci) in r.cells" :key="c.date">
               <rect
@@ -67,26 +67,26 @@ watch(t, async () => {
                 :x="LABEL_W + ci * CELL + 2" :y="HEAD + ri * ROW + 4" :width="CELL - 4" :height="ROW - 8" rx="3"
                 :class="c.given ? (r.restricted ? 'fill-amber-500' : 'fill-sky-500') : (r.restricted ? 'fill-white stroke-amber-500' : 'fill-white stroke-sky-500')"
                 stroke-width="1.5"
-              ><title>{{ c.date.slice(5) }} {{ r.name }}：{{ c.given ? `給 ${c.given} 劑` : '有醫囑、沒有給藥' }}</title></rect>
+              ><title>{{ c.date.slice(5).replace('-', '/') }} {{ r.name }}：{{ c.given ? `給 ${c.given} 劑` : '有醫囑、沒有給藥' }}</title></rect>
             </template>
           </g>
           <line x1="0" :x2="width" :y1="extraY - 4" :y2="extraY - 4" class="stroke-slate-200" />
           <!-- 培養：空心＝送檢、實心＝報告（點了看藥敏） -->
           <text x="6" :y="extraY + 15" class="fill-slate-600">細菌培養</text>
           <!-- 先畫所有送檢（空心），再畫報告（實心）：同一天送檢與報告時，報告不會被下一份培養的送檢圈蓋住 -->
-          <circle v-for="c in t.cultures.filter((x) => col(x.orderedAt) >= 0)" :key="`o-${c.id}`" :cx="cx(c.orderedAt)" :cy="extraY + 11" r="4" class="cursor-pointer fill-white stroke-violet-500" stroke-width="1.5" @click="selCulture = selCulture === c.id ? undefined : c.id"><title>{{ c.orderedAt.slice(5) }} 送檢（{{ c.specimen }}）</title></circle>
-          <circle v-for="c in t.cultures.filter((x) => col(x.reportedAt) >= 0)" :key="`r-${c.id}`" :cx="cx(c.reportedAt)" :cy="extraY + 11" r="6" :class="['cursor-pointer', c.culture.isolates.length ? 'fill-violet-600' : 'fill-emerald-500']" :stroke="selCulture === c.id ? '#1e293b' : 'none'" stroke-width="2" @click="selCulture = selCulture === c.id ? undefined : c.id"><title>{{ c.reportedAt.slice(5) }} 報告（{{ c.specimen }}）：{{ c.summary }}——點了看藥敏</title></circle>
+          <circle v-for="c in t.cultures.filter((x) => col(x.orderedAt) >= 0)" :key="`o-${c.id}`" :cx="cx(c.orderedAt)" :cy="extraY + 11" r="4" class="cursor-pointer fill-white stroke-violet-500" stroke-width="1.5" @click="selCulture = selCulture === c.id ? undefined : c.id"><title>{{ c.orderedAt.slice(5).replace('-', '/') }} 送檢（{{ c.specimen }}）</title></circle>
+          <circle v-for="c in t.cultures.filter((x) => col(x.reportedAt) >= 0)" :key="`r-${c.id}`" :cx="cx(c.reportedAt)" :cy="extraY + 11" r="6" :class="['cursor-pointer', c.culture.isolates.length ? 'fill-violet-600' : 'fill-emerald-500']" :stroke="selCulture === c.id ? '#1e293b' : 'none'" stroke-width="2" @click="selCulture = selCulture === c.id ? undefined : c.id"><title>{{ c.reportedAt.slice(5).replace('-', '/') }} 報告（{{ c.specimen }}）：{{ c.summary }}——點了看藥敏</title></circle>
           <!-- 肌酸酐、谷濃度 -->
           <template v-for="(k, ki) in (['cre', 'vant'] as const)" :key="k">
             <text x="6" :y="extraY + (ki + 1) * ROW + 15" class="fill-slate-600">{{ k === 'cre' ? '肌酸酐' : 'Vanco 谷濃度' }}</text>
             <text v-for="l in labsOn(k)" :key="l.date" :x="cx(l.date)" :y="extraY + (ki + 1) * ROW + 15" text-anchor="middle" :class="l.last.flag ? 'fill-red-600 font-semibold' : 'fill-slate-700'">
-              {{ l.last.value }}<title>{{ l.all.map((x) => `${x.at.slice(5)} ${x.label} ${x.value}${x.flag === 'H' ? '↑' : x.flag === 'L' ? '↓' : ''}`).join('\n') }}</title>
+              {{ l.last.value }}<title>{{ l.all.map((x) => `${x.at.slice(5).replace('-', '/')} ${x.label} ${x.value}${x.flag === 'H' ? '↑' : x.flag === 'L' ? '↓' : ''}`).join('\n') }}</title>
             </text>
           </template>
           <!-- 感染科建議 -->
           <text x="6" :y="extraY + 3 * ROW + 15" class="fill-slate-600">感染科建議</text>
           <g v-for="(a, ai) in t.advice.filter((x) => col(x.at) >= 0)" :key="ai">
-            <rect :x="cx(a.at) - 5" :y="extraY + 3 * ROW + 6" width="10" height="10" :transform="`rotate(45 ${cx(a.at)} ${extraY + 3 * ROW + 11})`" :class="a.statusLabel === '已接受' ? 'fill-emerald-500' : a.statusLabel === '不接受' ? 'fill-red-500' : 'fill-sky-600'"><title>{{ a.at.slice(5) }} {{ a.kindLabel }}（{{ a.orderText }}）：{{ a.note }}——{{ a.statusLabel }}</title></rect>
+            <rect :x="cx(a.at) - 5" :y="extraY + 3 * ROW + 6" width="10" height="10" :transform="`rotate(45 ${cx(a.at)} ${extraY + 3 * ROW + 11})`" :class="a.statusLabel === '已接受' ? 'fill-emerald-500' : a.statusLabel === '不接受' ? 'fill-red-500' : 'fill-sky-600'"><title>{{ a.at.slice(5).replace('-', '/') }} {{ a.kindLabel }}（{{ a.orderText }}）：{{ a.note }}——{{ a.statusLabel }}</title></rect>
           </g>
         </svg>
       </div>
@@ -99,7 +99,7 @@ watch(t, async () => {
         <span>滑鼠移到格子上看細節</span>
       </p>
       <div v-if="culture" class="rounded border border-violet-200 bg-violet-50/40 p-3">
-        <div class="mb-1 text-sm font-medium text-slate-800">{{ culture.reportedAt.slice(5) }} {{ culture.specimen }}培養：{{ culture.summary }}</div>
+        <div class="mb-1 text-sm font-medium text-slate-800">{{ culture.reportedAt.slice(5).replace('-', '/') }} {{ culture.specimen }}培養：{{ culture.summary }}</div>
         <CultureView :culture="culture.culture" />
       </div>
     </div>

@@ -86,7 +86,7 @@ const presets = computed(() => {
                 <UBadge :tone="STATUS_TONE[v.status]" class="ml-auto">{{ v.statusLabel }}</UBadge>
               </div>
               <div class="mt-0.5 text-xs text-slate-700">{{ v.orderText }}・{{ v.kindLabel }}</div>
-              <div class="tabular text-xs text-slate-500">{{ v.at.slice(5) }} {{ v.byName }}・主治 {{ v.attendingName }}</div>
+              <div class="tabular text-xs text-slate-500">{{ v.at.slice(5).replace('-', '/') }} {{ v.byName }}・主治 {{ v.attendingName }}</div>
             </button>
           </li>
         </ul>
@@ -99,8 +99,8 @@ const presets = computed(() => {
       <UCard v-if="selIv" :title="`${selIv.kindLabel}：${selIv.orderText}`" :subtitle="`${selIv.patientName}・${selIv.bedNo}・主治 ${selIv.attendingName}`">
         <div class="space-y-1 text-sm">
           <div><span class="text-slate-500">系統：</span>{{ selIv.finding }}</div>
-          <div><span class="text-slate-500">{{ selIv.status === 'dismissed' ? '不用介入' : '建議' }}（{{ selIv.byName }} {{ selIv.at.slice(5) }}）：</span>{{ selIv.note }}</div>
-          <div v-if="selIv.reply" :class="selIv.status === 'declined' ? 'text-red-700' : 'text-emerald-700'"><span class="text-slate-500">主治{{ selIv.statusLabel }}（{{ selIv.replyByName }} {{ selIv.reply.at.slice(5) }}）：</span>{{ selIv.reply.text }}</div>
+          <div><span class="text-slate-500">{{ selIv.status === 'dismissed' ? '不用介入' : '建議' }}（{{ selIv.byName }} {{ selIv.at.slice(5).replace('-', '/') }}）：</span>{{ selIv.note }}</div>
+          <div v-if="selIv.reply" :class="selIv.status === 'declined' ? 'text-red-700' : 'text-emerald-700'"><span class="text-slate-500">主治{{ selIv.statusLabel }}（{{ selIv.replyByName }} {{ selIv.reply.at.slice(5).replace('-', '/') }}）：</span>{{ selIv.reply.text }}</div>
           <div v-else-if="selIv.status === 'sent'" class="text-sky-700">等主治回覆（停止或修改醫囑＝接受）</div>
         </div>
         <p v-if="!item" class="mt-2 text-xs text-slate-500">這筆醫囑已停止或病人已出院。</p>
@@ -116,16 +116,16 @@ const presets = computed(() => {
           </div>
           <div class="mt-1 text-sm text-slate-700">{{ item.diagnosis }}・{{ item.deptName }} {{ item.attendingName }}</div>
           <div v-if="item.latestVitals" class="tabular mt-1 text-xs text-slate-600">
-            生命徵象（{{ item.latestVitals.at.slice(5) }}）：T {{ item.latestVitals.temp ?? '—' }}・P {{ item.latestVitals.pulse ?? '—' }}・BP {{ item.latestVitals.sbp ?? '—' }}/{{ item.latestVitals.dbp ?? '—' }}・SpO2 {{ item.latestVitals.spo2 ?? '—' }}
+            生命徵象（{{ item.latestVitals.at.slice(5).replace('-', '/') }}）：T {{ item.latestVitals.temp ?? '—' }}・P {{ item.latestVitals.pulse ?? '—' }}・BP {{ item.latestVitals.sbp ?? '—' }}/{{ item.latestVitals.dbp ?? '—' }}・SpO2 {{ item.latestVitals.spo2 ?? '—' }}
           </div>
           <div v-if="item.labs.length" class="mt-1 space-y-0.5 text-xs text-slate-600">
-            <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10) }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
+            <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10).replace('-', '/') }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
           </div>
           <div v-if="item.renal" class="mt-1 text-xs text-slate-600">{{ item.renal }}</div>
           <div class="mt-2 text-xs text-slate-700"><b>目前的抗生素：</b>{{ item.antibiotics.join('；') }}</div>
         </UCard>
 
-        <UCard :title="`${item.order.content}　每次 ${item.order.dose} ${item.order.unit} ${item.order.freq} ${item.order.route}`" :subtitle="`療程第 ${item.courseDay} 天（${item.courseStart.slice(5, 10)} 起）${item.order.abxInfo ? `・管制性抗生素 ${item.order.abxInfo.statusLabel}` : ''}`">
+        <UCard :title="`${item.order.content}　每次 ${item.order.dose} ${item.order.unit} ${item.order.freq} ${item.order.route}`" :subtitle="`療程第 ${item.courseDay} 天（${item.courseStart.slice(5, 10).replace('-', '/')} 起）${item.order.abxInfo ? `・管制性抗生素 ${item.order.abxInfo.statusLabel}` : ''}`">
           <p v-if="!item.findings.length" class="text-sm text-slate-500">系統沒有標出建議。</p>
           <ul v-else class="space-y-2">
             <li v-for="f in item.findings" :key="f.kind" class="rounded border border-slate-200 px-3 py-2 text-sm">
@@ -135,7 +135,7 @@ const presets = computed(() => {
               </div>
               <div v-if="f.handled" class="mt-1 text-xs text-slate-600">
                 <UBadge :tone="STATUS_TONE[f.handled.status]">{{ f.handled.statusLabel }}</UBadge>
-                {{ f.handled.byName }} {{ f.handled.at.slice(5) }}<template v-if="f.handled.orderId !== f.orderId">（對 {{ f.handled.orderText }}）</template>：{{ f.handled.note }}
+                {{ f.handled.byName }} {{ f.handled.at.slice(5).replace('-', '/') }}<template v-if="f.handled.orderId !== f.orderId">（對 {{ f.handled.orderText }}）</template>：{{ f.handled.note }}
                 <template v-if="f.handled.reply">；主治 {{ f.handled.replyByName }}：{{ f.handled.reply.text }}</template>
               </div>
               <div v-else-if="data?.canReview" class="mt-2 flex justify-end gap-2">
@@ -148,7 +148,7 @@ const presets = computed(() => {
 
         <UCard title="抗生素時間軸" subtitle="這次住院：用藥、培養、腎功能、谷濃度、感染科建議"><AbxTimeline :admission-id="item.admissionId" /></UCard>
 
-        <UCard v-if="item.culture" title="最近一次長菌的培養" :subtitle="`報告 ${item.culture.reportedAt.slice(5)}`">
+        <UCard v-if="item.culture" title="最近一次長菌的培養" :subtitle="`報告 ${item.culture.reportedAt.slice(5).replace('-', '/')}`">
           <CultureView :culture="item.culture.culture" />
         </UCard>
       </template>

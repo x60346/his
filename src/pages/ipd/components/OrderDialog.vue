@@ -199,7 +199,7 @@ ${doseNote(drug, input.dose ?? 0)}。
     // 已有執行中的同一種藥：列出來讓醫師判斷是忘了已開過，還是刻意加開
     const same = await ipdApi.listActiveSameDrug(props.admission.id, drug.id)
     if (same.length) {
-      const list = same.map((o) => `・每次 ${o.dose} ${o.unit}、${o.freq}、${o.route}（${o.type === 'long' ? '長期' : '臨時'}，${o.startAt.slice(5)} 開立）`).join('\n')
+      const list = same.map((o) => `・每次 ${o.dose} ${o.unit}、${o.freq}、${o.route}（${o.type === 'long' ? '長期' : '臨時'}，${o.startAt.slice(5).replace('-', '/')} 開立）`).join('\n')
       const ok = await ui.confirm({ title: '已有相同藥品的醫囑', message: `病人目前已有執行中的 ${drug.name}：\n${list}\n\n再開一筆會同時給藥。確定要再開立嗎？`, okText: '確定再開一筆', danger: true })
       if (!ok) return
       input.allowDuplicate = true
@@ -337,8 +337,8 @@ ${doseNote(drug, input.dose ?? 0)}。
         </div>
         <div v-if="form.type === 'stat' && addon" :class="['space-y-1 rounded-md border p-2 text-xs', addon.ok ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50']">
           <template v-if="addon.ok">
-            <UCheckbox v-model="addonUse" :label="`用現有檢體加做（${addon.tubeLabel}，條碼 ${addon.specimen!.barcode}，採檢 ${addon.specimen!.collectedAt.slice(5)}）`" />
-            <p class="text-slate-600">這支檢體在驗：{{ addon.specimen!.tests.join('、') }}；可加做到 {{ addon.specimen!.until.slice(5) }}。勾選就不用再抽血，檢驗科直接驗；不勾＝護理站重新採檢。</p>
+            <UCheckbox v-model="addonUse" :label="`用現有檢體加做（${addon.tubeLabel}，條碼 ${addon.specimen!.barcode}，採檢 ${addon.specimen!.collectedAt.slice(5).replace('-', '/')}）`" />
+            <p class="text-slate-600">這支檢體在驗：{{ addon.specimen!.tests.join('、') }}；可加做到 {{ addon.specimen!.until.slice(5).replace('-', '/') }}。勾選就不用再抽血，檢驗科直接驗；不勾＝護理站重新採檢。</p>
           </template>
           <p v-else class="text-slate-600">不能加做：{{ addon.reason }}（護理站會重新採檢）</p>
         </div>

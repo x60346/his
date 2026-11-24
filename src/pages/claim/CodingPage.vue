@@ -67,7 +67,7 @@ async function submit() {
           <div v-if="x.drgExempt" class="text-xs text-slate-500">不適用 DRG：{{ x.drgExempt }}（照實申報）</div>
           <div v-else class="text-xs text-slate-500">DRG <b>{{ x.drg.code }}</b> {{ x.drg.name }}（{{ x.drg.basis }}）</div>
           <div v-if="x.coded" class="text-xs" :class="x.coded.changed ? 'text-amber-800' : 'text-emerald-700'">
-            {{ x.coded.changed ? '已修改' : '已確認' }}・{{ x.coded.byName }} {{ x.coded.at.slice(5) }}<template v-if="x.coded.changed">：{{ x.coded.reason }}（原 {{ x.coded.beforeText }}）</template>
+            {{ x.coded.changed ? '已修改' : '已確認' }}・{{ x.coded.byName }} {{ x.coded.at.slice(5).replace('-', '/') }}<template v-if="x.coded.changed">：{{ x.coded.reason }}（原 {{ x.coded.beforeText }}）</template>
             <div v-if="x.coded.changed" class="text-slate-600">主治：{{ x.coded.ack ?? '還沒讀' }}</div>
             <div v-if="x.coded.revisions.length" class="text-slate-500">更正前：{{ x.coded.revisions.join('；') }}</div>
           </div>
@@ -80,7 +80,7 @@ async function submit() {
           <div>病摘主診斷：{{ cur.summaryDiagnosis || '—' }}<template v-if="cur.summarySecondary.length">；次診斷：{{ cur.summarySecondary.map((s) => s.icd).join('、') }}</template></div>
           <div v-if="cur.course" class="mt-1 whitespace-pre-line">住院經過：{{ cur.course }}</div>
           <div v-if="cur.surgeries.length" class="mt-1">手術：{{ cur.surgeries.join('；') }}</div>
-          <div v-if="cur.coded" class="mt-1">現在的編碼：{{ cur.mainDiagnosis }}<template v-if="cur.secondary.length">；次：{{ cur.secondary.map((s) => s.icd).join('、') }}</template>（{{ cur.coded.byName }} {{ cur.coded.at.slice(5) }}）</div>
+          <div v-if="cur.coded" class="mt-1">現在的編碼：{{ cur.mainDiagnosis }}<template v-if="cur.secondary.length">；次：{{ cur.secondary.map((s) => s.icd).join('、') }}</template>（{{ cur.coded.byName }} {{ cur.coded.at.slice(5).replace('-', '/') }}）</div>
         </div>
         <p v-if="cur.claimed" class="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">這筆 {{ cur.claimed.month }} 已經申報：原申報不動，改碼後的點數差額會列在 {{ cur.claimed.supplementMonth ?? '下一個還沒送的月份' }} 的住院申報「補報」</p>
         <div>

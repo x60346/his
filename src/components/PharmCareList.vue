@@ -31,11 +31,11 @@ const TONE = { sent: 'blue', accepted: 'green', declined: 'red' } as const
         <li v-for="n in v.notes" :key="n.id" class="space-y-1 px-3 py-2">
           <div class="flex flex-wrap items-center gap-2">
             <UBadge tone="purple">{{ n.kindLabel }}</UBadge>
-            <span class="tabular text-xs text-slate-500">{{ n.byName }} {{ n.at.slice(5) }}</span>
+            <span class="tabular text-xs text-slate-500">{{ n.byName }} {{ n.at.slice(5).replace('-', '/') }}</span>
             <UBadge :tone="TONE[n.status]" class="ml-auto">{{ n.statusLabel }}</UBadge>
           </div>
           <div class="text-slate-800">{{ n.text }}</div>
-          <div v-if="n.reply" class="text-xs text-slate-600">{{ n.replyByName }} {{ n.reply.at.slice(5) }}：{{ n.reply.text }}</div>
+          <div v-if="n.reply" class="text-xs text-slate-600">{{ n.replyByName }} {{ n.reply.at.slice(5).replace('-', '/') }}：{{ n.reply.text }}</div>
           <div v-else-if="isDoctor" class="flex justify-end gap-2">
             <UButton size="sm" variant="ghost" @click="replying = { note: n, accept: false }">不接受</UButton>
             <UButton size="sm" @click="replying = { note: n, accept: true }">接受</UButton>

@@ -111,7 +111,7 @@ const sacOptions = [1, 2, 3, 4].map((v) => ({ value: v, label: SAC_LABEL[v as 1 
             <div class="flex flex-wrap items-center gap-2">
               <UBadge :tone="STATUS_TONE[x.status]">{{ x.statusLabel }}</UBadge><span class="tabular text-xs text-slate-500">{{ x.no }}</span>
               <b>{{ x.categoryLabel }}</b><span class="text-xs">{{ x.harmLabel }}</span>
-              <span class="text-xs text-slate-600">{{ x.occurredAt.slice(5) }}・{{ x.location }}{{ x.patientName ? `・${x.patientName}` : '' }}</span>
+              <span class="text-xs text-slate-600">{{ x.occurredAt.slice(5).replace('-', '/') }}・{{ x.location }}{{ x.patientName ? `・${x.patientName}` : '' }}</span>
               <span class="text-xs text-slate-500">通報：{{ x.reporterName }}</span>
               <UBadge v-if="x.sacLabel" tone="purple">{{ x.sacLabel }}</UBadge>
               <UBadge v-if="x.rcaRequired && !x.rcaDone" tone="red">RCA 未完成</UBadge>
@@ -135,7 +135,7 @@ const sacOptions = [1, 2, 3, 4].map((v) => ({ value: v, label: SAC_LABEL[v as 1 
               <template v-else>
                 <p><b>原因分析：</b>{{ x.review?.cause }}</p>
                 <p><b>改善措施：</b>{{ x.review?.actions }}</p>
-                <p class="text-slate-500">{{ x.reviewerName }} {{ x.review?.closedAt?.slice(5) }} 結案</p>
+                <p class="text-slate-500">{{ x.reviewerName }} {{ x.review?.closedAt?.slice(5).replace('-', '/') }} 結案</p>
               </template>
             </div>
           </li>

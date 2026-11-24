@@ -59,7 +59,7 @@ const RES = { kept: '維持原醫囑', modified: '已修改', stopped: '已停�
               <div v-if="x.issues.length" class="mt-1 flex flex-wrap gap-1">
                 <UBadge v-for="(i, k) in x.issues" :key="k" :tone="i.level === 'severe' ? 'red' : 'yellow'">{{ i.kind }}</UBadge>
               </div>
-              <div class="tabular text-xs text-slate-500">送審 {{ x.order.pharm?.at.slice(5) }}・{{ x.order.doctorName }}</div>
+              <div class="tabular text-xs text-slate-500">送審 {{ x.order.pharm?.at.slice(5).replace('-', '/') }}・{{ x.order.doctorName }}</div>
             </button>
           </li>
         </ul>
@@ -77,7 +77,7 @@ const RES = { kept: '維持原醫囑', modified: '已修改', stopped: '已停�
         <div class="mt-1 text-sm text-slate-700">{{ item.diagnosis }}・主治 {{ item.attendingName }}</div>
         <div class="mt-1 text-xs text-slate-600">{{ item.renal }}</div>
       </UCard>
-      <UCard :title="`${item.order.content}　每次 ${item.order.dose} ${item.order.unit} ${item.order.freq} ${item.order.route}`" :subtitle="`${typeLabel(item)}醫囑・${item.order.doctorName} ${item.order.startAt.slice(5)} 開立${item.order.replacesText ? `・修改自 ${item.order.replacesText}` : ''}`">
+      <UCard :title="`${item.order.content}　每次 ${item.order.dose} ${item.order.unit} ${item.order.freq} ${item.order.route}`" :subtitle="`${typeLabel(item)}醫囑・${item.order.doctorName} ${item.order.startAt.slice(5).replace('-', '/')} 開立${item.order.replacesText ? `・修改自 ${item.order.replacesText}` : ''}`">
         <p v-if="item.givenBeforeReview" class="mb-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">先給後審：已給 {{ item.givenBeforeReview }} 劑</p>
         <p v-if="!item.issues.length" class="text-sm text-emerald-700">系統沒有找到問題（過敏、交互作用、重複、劑量、腎功能）。</p>
         <ul v-else class="space-y-1.5">
@@ -87,8 +87,8 @@ const RES = { kept: '維持原醫囑', modified: '已修改', stopped: '已停�
         </ul>
         <ul v-if="item.queries.length" class="mt-3 divide-y divide-slate-100 rounded border border-slate-100 text-xs">
           <li v-for="(q, k) in item.queries" :key="k" class="px-2 py-1">
-            <div><span class="tabular text-slate-500">{{ q.at.slice(5) }}</span> 疑義（{{ q.byName }}）：{{ q.text }}</div>
-            <div v-if="q.replyAt" class="text-slate-700"><span class="tabular text-slate-500">{{ q.replyAt.slice(5) }}</span> {{ q.resolution ? RES[q.resolution] : '回覆' }}（{{ q.replyByName }}）：{{ q.reply }}</div>
+            <div><span class="tabular text-slate-500">{{ q.at.slice(5).replace('-', '/') }}</span> 疑義（{{ q.byName }}）：{{ q.text }}</div>
+            <div v-if="q.replyAt" class="text-slate-700"><span class="tabular text-slate-500">{{ q.replyAt.slice(5).replace('-', '/') }}</span> {{ q.resolution ? RES[q.resolution] : '回覆' }}（{{ q.replyByName }}）：{{ q.reply }}</div>
             <div v-else class="text-amber-800">等醫師回覆（回覆前暫停給藥）</div>
           </li>
         </ul>
@@ -99,7 +99,7 @@ const RES = { kept: '維持原醫囑', modified: '已修改', stopped: '已停�
             <UButton variant="success" :icon="Check" :loading="approve.pending.value" @click="onApprove">通過</UButton>
           </div>
         </template>
-        <p v-else-if="tab === 'recent'" class="mt-2 text-xs text-slate-500">{{ item.approvedByName }} {{ item.order.pharm?.doneAt?.slice(5) }} 通過{{ item.order.pharm?.note ? `：${item.order.pharm.note}` : '' }}</p>
+        <p v-else-if="tab === 'recent'" class="mt-2 text-xs text-slate-500">{{ item.approvedByName }} {{ item.order.pharm?.doneAt?.slice(5).replace('-', '/') }} 通過{{ item.order.pharm?.note ? `：${item.order.pharm.note}` : '' }}</p>
       </UCard>
     </div>
 

@@ -66,7 +66,7 @@ const stateText = { ok: '時限內', soon: '快到期', overdue: '逾時' } as c
             </span>
           </div>
           <ul class="mt-1 text-xs text-slate-700">
-            <li v-for="x in c.cases" :key="x.id">{{ x.onsetAt }} {{ x.patientName }}（{{ x.bedNo }}）・{{ x.culture }}<UBadge v-if="x.status === 'reported'" tone="yellow" class="ml-1">待判定</UBadge></li>
+            <li v-for="x in c.cases" :key="x.id">{{ x.onsetAt?.slice(5).replace('-', '/') }} {{ x.patientName }}（{{ x.bedNo }}）・{{ x.culture }}<UBadge v-if="x.status === 'reported'" tone="yellow" class="ml-1">待判定</UBadge></li>
           </ul>
           <p v-if="c.decision" class="mt-1 text-xs text-slate-600">{{ c.decision.status === 'confirmed' ? '處置' : '排除原因' }}：{{ c.decision.note }}（{{ c.byName }} {{ hm(c.decision.at) }}）</p>
         </UCard>

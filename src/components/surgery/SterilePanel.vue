@@ -51,12 +51,12 @@ const wdAct = useAction(sterileApi.withdrawPack, { success: (r) => `${r.no} 已�
       </div>
 
       <section v-for="r in v.recalls" :key="r.batchId" class="rounded-md border border-red-300 bg-red-50 p-3">
-        <h3 class="font-semibold text-red-800">召回：{{ r.batchNo }}<span class="ml-2 text-xs font-normal text-red-700">{{ r.recalledAt.slice(5) }} 生物指示劑陽性，整鍋召回</span></h3>
+        <h3 class="font-semibold text-red-800">召回：{{ r.batchNo }}<span class="ml-2 text-xs font-normal text-red-700">{{ r.recalledAt.slice(5).replace('-', '/') }} 生物指示劑陽性，整鍋召回</span></h3>
         <div v-if="r.affected.length" class="mt-1">
           <div class="text-xs font-medium text-red-800">用過的手術（逐台通知主刀與感控）</div>
           <ul class="divide-y divide-red-100">
             <li v-for="a in r.affected" :key="a.surgeryId + a.packNo" class="flex flex-wrap items-center gap-2 py-1">
-              <b>{{ a.patientName }}</b><span class="text-xs text-slate-600">{{ a.chartNo }}・{{ a.no }} {{ a.procName }}・主刀 {{ a.doctorName }}・{{ a.usedAt.slice(5) }} 用 {{ a.packNo }}</span>
+              <b>{{ a.patientName }}</b><span class="text-xs text-slate-600">{{ a.chartNo }}・{{ a.no }} {{ a.procName }}・主刀 {{ a.doctorName }}・{{ a.usedAt.slice(5).replace('-', '/') }} 用 {{ a.packNo }}</span>
               <span v-if="a.notified" class="text-xs text-emerald-700">已通知：{{ a.notified }}</span>
               <UButton v-else-if="v.canManage" size="sm" variant="danger" class="ml-auto" @click="openNotify({ batchId: r.batchId, surgeryId: a.surgeryId, label: `${a.patientName} ${a.no}` })">記錄通知</UButton>
               <UBadge v-else tone="red">還沒通知</UBadge>
@@ -106,7 +106,7 @@ const wdAct = useAction(sterileApi.withdrawPack, { success: (r) => `${r.no} 已�
         <ul class="divide-y divide-slate-100">
           <li v-for="b in v.batches" :key="b.id" class="flex flex-wrap items-center gap-2 py-1.5">
             <b class="tabular">{{ b.no }}</b>
-            <span class="tabular text-xs text-slate-600">{{ b.at.slice(5) }}・{{ b.byName }}・{{ b.contents }}</span>
+            <span class="tabular text-xs text-slate-600">{{ b.at.slice(5).replace('-', '/') }}・{{ b.byName }}・{{ b.contents }}</span>
             <UBadge :tone="BI_TONE[b.biState]">{{ b.biText }}</UBadge>
             <span v-if="b.biByName" class="text-xs text-slate-500">{{ b.biByName }}</span>
             <span v-if="v.canManage && b.biState === 'due'" class="ml-auto flex gap-2">

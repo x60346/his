@@ -55,7 +55,7 @@ const dot = (z: number) => (Math.abs(z) > 3 ? 'fill-red-600' : Math.abs(z) > 2 ?
               <path :d="path(0)" class="fill-none stroke-sky-600" stroke-width="1.5" />
               <path :d="path(1)" class="fill-none stroke-violet-600" stroke-width="1.5" />
               <template v-for="lv in ([0, 1] as const)" :key="lv">
-                <circle v-for="p in pts(lv)" :key="`${lv}-${p.r.id}`" :cx="p.x" :cy="p.y" r="3.5" :class="dot(p.r.z[lv]) || (lv ? 'fill-violet-600' : 'fill-sky-600')"><title>{{ p.r.date.slice(5) }} 濃度 {{ lv + 1 }}：{{ p.r.values[lv] }}（z {{ p.r.z[lv] }}）{{ p.r.resultLabel }}</title></circle>
+                <circle v-for="p in pts(lv)" :key="`${lv}-${p.r.id}`" :cx="p.x" :cy="p.y" r="3.5" :class="dot(p.r.z[lv]) || (lv ? 'fill-violet-600' : 'fill-sky-600')"><title>{{ p.r.date.slice(5).replace('-', '/') }} 濃度 {{ lv + 1 }}：{{ p.r.values[lv] }}（z {{ p.r.z[lv] }}）{{ p.r.resultLabel }}</title></circle>
               </template>
             </svg>
           </div>
@@ -72,7 +72,7 @@ const dot = (z: number) => (Math.abs(z) > 3 ? 'fill-red-600' : Math.abs(z) > 2 ?
         <UCard title="紀錄" :padded="false">
           <ul class="divide-y divide-slate-100 text-sm">
             <li v-for="r in [...a.runs].reverse().slice(0, 8)" :key="r.id" class="flex flex-wrap items-center gap-2 px-4 py-1.5">
-              <span class="tabular text-xs text-slate-500">{{ r.at.slice(5) }}</span>
+              <span class="tabular text-xs text-slate-500">{{ r.at.slice(5).replace('-', '/') }}</span>
               <span class="tabular">{{ r.values.join('／') }}</span>
               <span class="tabular text-xs text-slate-500">z {{ r.z.join('／') }}</span>
               <UBadge :tone="r.result === 'reject' ? 'red' : r.result === 'warn' ? 'yellow' : 'green'">{{ r.resultLabel }}{{ r.rules.length ? ` ${r.rules.join('、')}` : '' }}</UBadge>

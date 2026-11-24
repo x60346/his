@@ -81,7 +81,7 @@ const ixHigh = (k: 'H' | 'I' | 'L', v: number) => v >= (k === 'H' ? HIL_LIMITS.H
                   <td class="py-1 pr-2">{{ r.name }}<span v-if="r.unit" class="block text-[11px] text-slate-400">{{ r.unit }}</span></td>
                   <td class="w-28 pr-2"><UInput v-model="editOf(h)[r.code]" :aria-label="`${r.name} 數值`" inputmode="decimal" /></td>
                   <td class="pr-2 text-slate-600">{{ r.ref }} <span :class="['font-semibold', r.critical ? 'text-red-700' : 'text-amber-700']">{{ r.critical ? '危急' : LAB_FLAG_TEXT[r.flag] }}</span></td>
-                  <td class="tabular pr-2 text-slate-600">{{ r.prev ? `${r.prev.value}（${r.prev.at.slice(5, 10)}）` : '—' }}</td>
+                  <td class="tabular pr-2 text-slate-600">{{ r.prev ? `${r.prev.value}（${r.prev.at.slice(5, 10).replace('-', '/')}）` : '—' }}</td>
                   <td class="text-red-800">{{ r.holds.join('；') }}</td>
                 </tr>
               </tbody>

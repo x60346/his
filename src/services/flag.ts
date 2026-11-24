@@ -154,7 +154,7 @@ export function reviewIsolation(id: string, note = ''): Promise<IsolationView> {
     const t = now()
     i.reviewedAt = t
     i.reviewedBy = u.id
-    if (note.trim()) i.note = [i.note, `${t.slice(5)} 檢討：${note.trim()}`].filter(Boolean).join('；')
+    if (note.trim()) i.note = [i.note, `${t.slice(5).replace('-', '/')} 檢討：${note.trim()}`].filter(Boolean).join('；')
     audit('隔離檢討（延續）', `${nameOf.patient(i.patientId)}：${isoText([i])}${note.trim() ? `；${note.trim()}` : ''}`)
     return isoView(i, t)
   })

@@ -24,7 +24,7 @@ const doRefund = async (n: NoticeRow) => {
   if (await ui.confirm({ title: '退還預收款', message: `退還 ${n.patientName} 預收款 ${n.prepayDue} 元（依預收時的付款方式），開退款單算在今天？`, okText: '退還' })) refundPre.run(n.visitId)
 }
 const undo = async (n: NoticeRow) => {
-  if (await ui.confirm({ title: '撤銷通知紀錄', message: `把 ${n.patientName}（${n.date.slice(5)} #${n.seqNo}）改回待通知？\n撤銷會寫入稽核紀錄。`, okText: '改回待通知' })) unmark.run(n.visitId)
+  if (await ui.confirm({ title: '撤銷通知紀錄', message: `把 ${n.patientName}（${n.date.slice(5).replace('-', '/')} #${n.seqNo}）改回待通知？\n撤銷會寫入稽核紀錄。`, okText: '改回待通知' })) unmark.run(n.visitId)
 }
 </script>
 
@@ -35,7 +35,7 @@ const undo = async (n: NoticeRow) => {
     </p>
     <ul class="divide-y divide-slate-100 rounded-md border border-slate-200">
       <li v-for="n in notices" :key="n.visitId" :class="['flex items-center gap-3 px-3 py-2 text-sm', n.notifiedAt && 'text-slate-400']">
-        <span class="tabular w-28 text-xs">{{ n.date.slice(5) }}（{{ weekdayLabel(n.date) }}）{{ periodLabel[n.period] }}</span>
+        <span class="tabular w-28 text-xs">{{ n.date.slice(5).replace('-', '/') }}（{{ weekdayLabel(n.date) }}）{{ periodLabel[n.period] }}</span>
         <span class="w-16 text-xs">{{ n.doctorName }}</span>
         <span class="tabular w-10 text-xs">#{{ n.seqNo }}</span>
         <span class="w-20 font-medium" :class="!n.notifiedAt && 'text-slate-800'">{{ n.patientName }}</span>
@@ -47,7 +47,7 @@ const undo = async (n: NoticeRow) => {
         </span>
         <span class="ml-auto">
           <span v-if="n.notifiedAt" class="tabular flex items-center gap-2 text-xs">
-            {{ n.notifiedAt.slice(5) }} {{ n.notifiedByName ?? '' }} 已通知
+            {{ n.notifiedAt.slice(5).replace('-', '/') }} {{ n.notifiedByName ?? '' }} 已通知
             <button type="button" class="text-brand-600 underline-offset-2 hover:underline disabled:opacity-50" :disabled="unmark.pending.value || !can('schedule.notice')" @click="undo(n)">撤銷</button>
           </span>
           <UButton v-else-if="can('schedule.notice')" size="sm" variant="secondary" :icon="Check" :loading="mark.pending.value" @click="mark.run(n.visitId)">已通知</UButton>

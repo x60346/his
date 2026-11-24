@@ -25,8 +25,8 @@ export interface RestraintView extends Restraint {
 const dView = (x: DeliriumAssessment): DeliriumView => ({ ...x, byName: nameOf.user(x.by), ...(x.ackBy ? { ackByName: nameOf.user(x.ackBy) } : {}) })
 const rView = (r: Restraint, t: string): RestraintView => ({
   ...r, state: restraintState(r, t), startedByName: nameOf.user(r.startedBy),
-  orderTexts: r.orders.map((o) => `${o.at.slice(5)} ${nameOf.user(o.by)}（到 ${o.until.slice(5)}）`),
-  checkTexts: r.checks.slice(-6).reverse().map((c) => `${c.at.slice(5)} ${nameOf.user(c.by)}：末梢循環${c.circulationOk ? '正常' : '異常'}、皮膚${c.skinOk ? '完整' : '異常'}、${c.stillNeeded ? '仍需約束' : '可以解除'}${c.note ? `（${c.note}）` : ''}`),
+  orderTexts: r.orders.map((o) => `${o.at.slice(5).replace('-', '/')} ${nameOf.user(o.by)}（到 ${o.until.slice(5).replace('-', '/')}）`),
+  checkTexts: r.checks.slice(-6).reverse().map((c) => `${c.at.slice(5).replace('-', '/')} ${nameOf.user(c.by)}：末梢循環${c.circulationOk ? '正常' : '異常'}、皮膚${c.skinOk ? '完整' : '異常'}、${c.stillNeeded ? '仍需約束' : '可以解除'}${c.note ? `（${c.note}）` : ''}`),
   ...(r.endedBy ? { endedByName: nameOf.user(r.endedBy) } : {}),
 })
 

@@ -368,7 +368,7 @@ export function unmarkNotified(visitId: string): Promise<void> {
     if (!v.cancelReason?.startsWith('停診')) fail('此掛號不是停診退掛')
     if (!v.notifiedAt) fail('這位病人尚未記錄通知', 'CONFLICT')
     const by = v.notifiedBy ? (db.users.find((x) => x.id === v.notifiedBy)?.name ?? v.notifiedBy) : '未知'
-    audit('撤銷停診通知', `${find.patient(v.patientId)?.name} ${v.date}（原記錄：${v.notifiedAt.slice(5)} ${by}）`)
+    audit('撤銷停診通知', `${find.patient(v.patientId)?.name} ${v.date}（原記錄：${v.notifiedAt.slice(5).replace('-', '/')} ${by}）`)
     delete v.notifiedAt
     delete v.notifiedBy
   })

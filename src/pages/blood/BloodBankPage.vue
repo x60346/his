@@ -111,7 +111,7 @@ const shownUnits = computed(() => (data.value?.units ?? []).filter((u) => !produ
               <b>{{ r.productLabel }} {{ r.units }} 單位</b>
               <UBadge v-if="r.urgent" tone="red">急</UBadge>
               <UBadge :tone="statusTone(r)">{{ r.statusLabel }}</UBadge>
-              <span class="tabular ml-auto text-xs text-slate-500">{{ r.no }}・{{ r.orderedAt.slice(5) }}・{{ r.doctorName }}</span>
+              <span class="tabular ml-auto text-xs text-slate-500">{{ r.no }}・{{ r.orderedAt.slice(5).replace('-', '/') }}・{{ r.doctorName }}</span>
             </div>
             <div class="text-xs text-slate-600">適應症：{{ r.indication }}<span v-if="r.labText">・{{ r.labText }}</span><span v-if="r.overReason" class="text-amber-800">・高於門檻：{{ r.overReason }}</span></div>
 

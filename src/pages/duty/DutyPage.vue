@@ -28,7 +28,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
           <span v-else class="text-slate-500">現在是上班時間（主治負責）</span>
         </div>
         <UCard v-if="mine?.calls.length" :padded="false">
-          <div class="px-4 py-2 text-sm font-semibold text-slate-700">我這一班被呼叫（{{ mine.date.slice(5) }} 那一班）</div>
+          <div class="px-4 py-2 text-sm font-semibold text-slate-700">我這一班被呼叫（{{ mine.date.slice(5).replace('-', '/') }} 那一班）</div>
           <ul class="divide-y divide-slate-100 border-t border-slate-200 text-sm">
             <li v-for="c in mine.calls" :key="c.id" class="flex flex-wrap items-center gap-2 px-4 py-1.5">
               <span class="tabular text-xs text-slate-500">{{ c.calledAt.slice(11) }}</span>
@@ -64,7 +64,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
         <UCard :padded="false">
           <div class="flex flex-wrap items-center gap-2 px-4 py-2 text-sm">
             <UButton size="sm" variant="secondary" @click="from = addDays(from, -7)">上一週</UButton>
-            <span class="tabular">{{ from.slice(5) }} 起 7 天</span>
+            <span class="tabular">{{ from.slice(5).replace('-', '/') }} 起 7 天</span>
             <UButton size="sm" variant="secondary" @click="from = addDays(from, 7)">下一週</UButton>
             <span v-if="!r.canEdit" class="text-xs text-slate-500">排班由有「醫師值班排班」權限的人安排</span>
           </div>
@@ -73,7 +73,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
               <thead><tr class="border-t border-slate-200 text-left text-xs text-slate-500"><th class="px-3 py-1">日期</th><th v-for="d in r.depts" :key="d.id" class="px-2 py-1">{{ d.name }}</th></tr></thead>
               <tbody>
                 <tr v-for="day in r.days" :key="day.date" class="border-t border-slate-100">
-                  <td class="tabular whitespace-nowrap px-3 py-1.5 font-medium text-slate-700" :title="day.hoursText">{{ day.date.slice(5) }}（{{ wd(day.date) }}）</td>
+                  <td class="tabular whitespace-nowrap px-3 py-1.5 font-medium text-slate-700" :title="day.hoursText">{{ day.date.slice(5).replace('-', '/') }}（{{ wd(day.date) }}）</td>
                   <td v-for="c in day.cells" :key="c.deptId" class="px-2 py-1">
                     <select v-if="r.canEdit && day.date >= today()" class="form-control min-w-[5.5rem] py-0.5 text-xs" :value="c.userId ?? ''" :aria-label="`${day.date} ${r.depts.find((d) => d.id === c.deptId)?.name}`" @change="set.run({ date: day.date, deptId: c.deptId, userId: ($event.target as HTMLSelectElement).value })">
                       <option value="">（沒排）</option>

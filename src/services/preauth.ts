@@ -55,10 +55,10 @@ function view(p: PreAuth): PreAuthView {
     ...(!p.admissionId && p.result?.monthlyQty !== undefined ? { monthlyQty: p.result.monthlyQty } : {}),
     ...((x) => (x ? { expiring: x } : {}))(opdExpiringOf(p, now().slice(0, 10))), statusLabel: PREAUTH_STATUS_LABEL[p.status], patientName: nameOf.patient(p.patientId), chartNo: find.patient(p.patientId)?.chartNo ?? '', admitNo: a?.admitNo ?? '', doctorName: nameOf.doctor(p.doctorId),
     ...((d) => (d !== undefined ? { days: d } : {}))(preAuthDays(p, t)), overdue: preAuthOverdue(p, t), allows: preAuthAllows(p),
-    notesText: p.notes.map((n) => `${n.at.slice(5)} ${nameOf.user(n.by)}：${n.text}`),
-    ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5)}${p.result.from ? `・續約，${p.result.from} 起` : ''}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.qty !== undefined ? `・核准量 ${p.result.qty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.times !== undefined ? `・核准 ${p.result.times} 次` : ''}${p.result.interval !== undefined ? `・間隔 ${p.result.interval} 天` : ''}${p.result.monthlyQty !== undefined ? `・每月最多 ${p.result.monthlyQty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
-    ...(p.selfPay ? { selfPayText: `病人同意自費・${nameOf.user(p.selfPay.by)} ${p.selfPay.at.slice(5)}：${p.selfPay.note}` } : {}),
-    ...(p.emergency ? { emergencyText: `緊急先用・${nameOf.user(p.emergency.by)} ${p.emergency.at.slice(5)}：${p.emergency.reason}` } : {}),
+    notesText: p.notes.map((n) => `${n.at.slice(5).replace('-', '/')} ${nameOf.user(n.by)}：${n.text}`),
+    ...(p.result ? { resultText: `${p.result.outcome === 'approved' ? '核准' : p.result.outcome === 'rejected' ? '不核准' : '補件'}・${nameOf.user(p.result.by)} ${p.result.at.slice(5).replace('-', '/')}${p.result.from ? `・續約，${p.result.from} 起` : ''}${p.result.until ? `・期限 ${p.result.until}` : ''}${p.result.qty !== undefined ? `・核准量 ${p.result.qty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.times !== undefined ? `・核准 ${p.result.times} 次` : ''}${p.result.interval !== undefined ? `・間隔 ${p.result.interval} 天` : ''}${p.result.monthlyQty !== undefined ? `・每月最多 ${p.result.monthlyQty} ${find.drug(p.itemId)?.unit ?? ''}` : ''}${p.result.note ? `：${p.result.note}` : ''}` } : {}),
+    ...(p.selfPay ? { selfPayText: `病人同意自費・${nameOf.user(p.selfPay.by)} ${p.selfPay.at.slice(5).replace('-', '/')}：${p.selfPay.note}` } : {}),
+    ...(p.emergency ? { emergencyText: `緊急先用・${nameOf.user(p.emergency.by)} ${p.emergency.at.slice(5).replace('-', '/')}：${p.emergency.reason}` } : {}),
   }
 }
 const RANK: Record<PreAuth['status'], number> = { ready: 0, submitted: 1, more: 2, draft: 3, approved: 4, rejected: 5 }

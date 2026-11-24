@@ -98,7 +98,7 @@ const STATUS = { ok: { label: '可套用', tone: 'green' }, confirm: { label: '�
               <UButton v-if="chosen" size="sm" variant="ghost" class="text-red-700" :icon="Trash2" :loading="delAct.pending.value" @click="del(chosen.id)">刪除這個組套</UButton>
             </div>
             <p v-if="!plan.sets.length" class="text-xs text-amber-800">這個術式還沒有您能用的組套：可以先開好醫囑，再用下面的「存成組套」，或選「沿用術前醫囑」。</p>
-            <p v-if="chosen?.updatedByName" class="text-xs text-slate-500">最後修改：{{ chosen.updatedByName }} {{ chosen.updatedAt.slice(5) }}</p>
+            <p v-if="chosen?.updatedByName" class="text-xs text-slate-500">最後修改：{{ chosen.updatedByName }} {{ chosen.updatedAt.slice(5).replace('-', '/') }}</p>
             <UQueryState :loading="pvLoading && !preview" :ready="!!preview || !setId">
               <ul v-if="preview" class="divide-y divide-slate-100 rounded border border-slate-200">
                 <li v-for="x in preview" :key="x.idx" class="flex flex-wrap items-start gap-2 px-3 py-1.5" :class="x.status === 'blocked' ? 'bg-slate-50 text-slate-500' : ''">

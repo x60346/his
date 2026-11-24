@@ -33,7 +33,7 @@ export function packState(p: Pick<InstrumentPack, 'used' | 'withdrawn' | 'expire
 export function biText(b: Pick<SterileBatch, 'at' | 'bi'>, now: string): string {
   if (b.bi) return b.bi.result === 'negative' ? '生物指示劑陰性' : '生物指示劑陽性（召回）'
   const due = biDueAt(b)
-  return due <= now ? '生物指示劑該判讀了' : `生物指示劑培養中（${due.slice(5)} 可判讀）`
+  return due <= now ? '生物指示劑該判讀了' : `生物指示劑培養中（${due.slice(5).replace('-', '/')} 可判讀）`
 }
 
 /**

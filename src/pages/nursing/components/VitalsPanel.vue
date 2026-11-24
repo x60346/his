@@ -75,13 +75,13 @@ const charts: { key: VitalKey; domain?: [number, number] }[] = [
   { key: 'spo2', domain: [85, 100] },
 ]
 const recent = computed(() => (vitals.value ?? []).slice(-9))
-const pointsOf = (k: VitalKey): LinePoint[] => recent.value.filter((v) => v[k] !== undefined).map((v) => ({ x: v.at.slice(5), y: v[k]! }))
+const pointsOf = (k: VitalKey): LinePoint[] => recent.value.filter((v) => v[k] !== undefined).map((v) => ({ x: v.at.slice(5).replace('-', '/'), y: v[k]! }))
 // 跨好幾天的資料，X 軸只寫「20:00」會出現好幾個一模一樣的標籤，分不出是哪一天——日期要留著
 const shortX = (x: string) => x.replace('-', '/') // MM-DD HH:mm → MM/DD HH:mm
 
 // ---------- 歷史紀錄 ----------
 const columns: Column<VitalRecord>[] = [
-  { key: 'at', label: '時間', width: '8rem', format: (r) => r.at.slice(5) },
+  { key: 'at', label: '時間', width: '8rem', format: (r) => r.at.slice(5).replace('-', '/') },
   ...fields.slice(0, 7).map((k) => ({ key: k, label: vitalSpecs[k].label, align: 'right' as const })),
   { key: 'o2', label: '給氧', align: 'right' },
   { key: 'avpu', label: '意識', align: 'center' },

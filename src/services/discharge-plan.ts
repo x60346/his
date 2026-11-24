@@ -186,7 +186,7 @@ export function listPlanWork(): Promise<PlanWorkItem[]> {
       const p = planOf(a.id)
       if (!p) {
         const s = planScreenStateOf(a, t)
-        out.push({ ...base(a.id), stage: 'screen', text: `入院 72 小時內篩選（${s.dueAt.slice(5)} 前）`, overdue: s.status === 'overdue' })
+        out.push({ ...base(a.id), stage: 'screen', text: `入院 72 小時內篩選（${s.dueAt.slice(5).replace('-', '/')} 前）`, overdue: s.status === 'overdue' })
       } else if (p.enrolled && !p.needs.length) out.push({ ...base(a.id), stage: 'needs', text: `已收案（${p.criteria.map(criterionLabel).join('、')}）：待需求評估`, overdue: false })
       else if (p.enrolled) {
         const waiting = p.referrals.filter((r) => !r.reply)
@@ -194,7 +194,7 @@ export function listPlanWork(): Promise<PlanWorkItem[]> {
         else if (waiting.length) out.push({ ...base(a.id), stage: 'refer', text: `待回覆：${waiting.map((r) => `${referralKindLabel(r.kind)}${r.sentAt ? '' : '（未送出）'}`).join('、')}`, overdue: false })
       }
     }
-    for (const x of followUpsDue(t)) out.push({ ...base(x.admission.id), stage: 'follow', text: `出院 ${x.admission.dischargedAt!.slice(5, 10)}：${x.due.dueAt.slice(5, 10)} 前電話追蹤`, overdue: x.due.status === 'overdue' })
+    for (const x of followUpsDue(t)) out.push({ ...base(x.admission.id), stage: 'follow', text: `出院 ${x.admission.dischargedAt!.slice(5, 10).replace('-', '/')}：${x.due.dueAt.slice(5, 10).replace('-', '/')} 前電話追蹤`, overdue: x.due.status === 'overdue' })
     const rank = { follow: 0, screen: 1, refer: 2, needs: 3 }
     return out.sort((x, y) => Number(y.overdue) - Number(x.overdue) || rank[x.stage] - rank[y.stage] || x.bedNo.localeCompare(y.bedNo))
   })

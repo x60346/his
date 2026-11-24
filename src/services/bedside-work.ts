@@ -35,7 +35,7 @@ export function noteOf(p: BedsideProcedure, r: BedsideReading): { objective: str
     return rep ? [`${find.procedure(rep.procId)?.name.replace(/（[^）]*）$/, '') ?? rep.procId}：${rep.values.map((v) => `${v.name} ${v.value}${v.unit ? ` ${v.unit}` : ''}`).join('、')}`] : []
   })
   return {
-    objective: [`${p.performedAt.slice(5)} 床邊${title}：${proc}。`, ...labs.map((l) => `${l}。`)].join(''),
+    objective: [`${p.performedAt.slice(5).replace('-', '/')} 床邊${title}：${proc}。`, ...labs.map((l) => `${l}。`)].join(''),
     assessment: [...r.readings.map((x) => `${BEDSIDE_FLUID[p.kind]}：${x.label}（${x.reasons.join('；')}）`), r.readingWaiting && `${BEDSIDE_FLUID[p.kind]}判讀${r.readingWaiting}`].filter(Boolean).join('；'),
   }
 }

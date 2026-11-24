@@ -45,7 +45,7 @@ async function submit() {
         <div class="flex flex-wrap items-center gap-2 font-medium text-slate-800">
           {{ item.consult.fromDeptName }} {{ item.consult.fromDoctorName }} → {{ item.consult.toDeptName }}<template v-if="item.consult.toDoctorName">（指定 {{ item.consult.toDoctorName }}）</template>
           <UBadge v-if="item.consult.urgent" tone="red">急會診</UBadge>
-          <span class="text-xs font-normal text-slate-500">{{ item.consult.requestedAt.slice(5) }} 申請<template v-if="!answered">・已等 {{ item.consult.waitingHours }} 小時</template></span>
+          <span class="text-xs font-normal text-slate-500">{{ item.consult.requestedAt.slice(5).replace('-', '/') }} 申請<template v-if="!answered">・已等 {{ item.consult.waitingHours }} 小時</template></span>
         </div>
         <div class="mt-1 text-slate-800">{{ item.consult.question }}</div>
       </div>
@@ -55,8 +55,8 @@ async function submit() {
           {{ item.summary.admission.bed?.bedNo }} {{ item.summary.admission.patientName }}（{{ item.summary.admission.gender === 'M' ? '男' : '女' }}・{{ item.summary.admission.age }} 歲）・{{ item.summary.admission.diagnosis }}・第 {{ item.summary.admission.days }} 天
         </div>
         <div v-if="item.summary.allergies.length" class="text-xs text-red-700">過敏：{{ item.summary.allergies.join('、') }}</div>
-        <div v-if="item.summary.latestVital" class="tabular text-xs text-slate-600">生命徵象（{{ item.summary.latestVital.at.slice(5) }}）：{{ item.summary.latestVital.text }}</div>
-        <div v-if="item.summary.latestNote" class="text-xs text-slate-600">最近病程（{{ item.summary.latestNote.at.slice(5) }} {{ item.summary.latestNote.doctorName }}）：A {{ item.summary.latestNote.assessment }}／P {{ item.summary.latestNote.plan }}</div>
+        <div v-if="item.summary.latestVital" class="tabular text-xs text-slate-600">生命徵象（{{ item.summary.latestVital.at.slice(5).replace('-', '/') }}）：{{ item.summary.latestVital.text }}</div>
+        <div v-if="item.summary.latestNote" class="text-xs text-slate-600">最近病程（{{ item.summary.latestNote.at.slice(5).replace('-', '/') }} {{ item.summary.latestNote.doctorName }}）：A {{ item.summary.latestNote.assessment }}／P {{ item.summary.latestNote.plan }}</div>
         <div class="text-xs text-slate-600">
           執行中醫囑：<template v-if="!item.summary.orders.length">無</template>
           <span v-for="(o, i) in item.summary.orders" :key="o.id"><template v-if="i">、</template>{{ o.content }}<template v-if="o.category === 'medication'">（{{ o.dose }} {{ o.unit }} {{ o.freq }}）</template><UBadge v-if="o.consultLabel" tone="purple" class="ml-0.5">會診</UBadge><button v-if="item.canOrder && o.doctorId === auth.user?.doctorId" type="button" class="ml-1 text-red-600 hover:underline" @click="onStop(o)">停止</button></span>
@@ -67,7 +67,7 @@ async function submit() {
         </div>
       </section>
       <section v-if="answered" class="space-y-1 rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-sm">
-        <div class="text-xs text-slate-500">{{ item.consult.answeredAt?.slice(5) }} {{ item.consult.answeredByName }} 回覆</div>
+        <div class="text-xs text-slate-500">{{ item.consult.answeredAt?.slice(5).replace('-', '/') }} {{ item.consult.answeredByName }} 回覆</div>
         <div><b>評估：</b>{{ item.consult.findings }}</div>
         <div><b>建議：</b>{{ item.consult.recommendation }}</div>
       </section>

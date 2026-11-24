@@ -110,8 +110,8 @@ export interface SurgeryView extends Surgery {
 }
 /** 順延的一行：「11-20 09:10 急刀 OR… 插台：09:00 → 11:00（延後 120 分）」；跨日的寫日期 */
 export const delayText = (d: NonNullable<Surgery['delays']>[number]) => d.pullBack
-  ? `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 取消或改期，拉回：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（提前 ${-d.minutes} 分）`
-  : `${d.at.slice(5, 16)} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
+  ? `${d.at.slice(5, 16).replace('-', '/')} 急刀 ${d.causeNo} 取消或改期，拉回：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（提前 ${-d.minutes} 分）`
+  : `${d.at.slice(5, 16).replace('-', '/')} 急刀 ${d.causeNo} 插台：${d.from.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)} → ${d.to.slice(d.from.slice(0, 10) === d.to.slice(0, 10) ? 11 : 5)}（延後 ${d.minutes} 分）`
 /** 還沒讀的順延（主刀、病房）：取消、已經送了的不算 */
 export const delayUnread = (s: Surgery, who: 'surgeon' | 'ward') => (s.status === 'requested' || s.status === 'scheduled') && (s.delays ?? []).some((d) => !d[who === 'surgeon' ? 'surgeonAck' : 'wardAck'])
 
@@ -121,7 +121,7 @@ export function surgeryView(s: Surgery): SurgeryView {
   const a = find.admission(s.admissionId)
   const p = find.patient(s.patientId)
   const bed = find.bed(a?.bedId ?? '')
-  const who = (x?: { by: string; at: string }) => (x ? `${nameOf.user(x.by)} ${x.at.slice(5)}` : undefined)
+  const who = (x?: { by: string; at: string }) => (x ? `${nameOf.user(x.by)} ${x.at.slice(5).replace('-', '/')}` : undefined)
   const end = s.schedule ? addMinutes(s.schedule.start, s.estMinutes) : undefined
   const missing = prepMissing(s)
   return {
@@ -131,7 +131,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     bedNo: bed?.bedNo ?? '', ward: bed?.ward ?? '', admitNo: a?.admitNo ?? '', allergies: p?.allergies ?? [], flags: flagsOf(s.patientId),
     doctorName: nameOf.doctor(s.doctorId), procName: find.procedure(s.procId)?.name ?? s.procId,
     sideText: SIDE_LABEL[s.side], anesthesiaText: ANESTHESIA_LABEL[s.anesthesia], statusLabel: SURGERY_STATUS_LABEL[s.status],
-    ...(s.schedule ? { scheduleText: `${s.schedule.room} ${s.schedule.start.slice(5)}–${end!.slice(11)}`, scheduleEnd: end } : {}),
+    ...(s.schedule ? { scheduleText: `${s.schedule.room} ${s.schedule.start.slice(5).replace('-', '/')}–${end!.slice(11)}`, scheduleEnd: end } : {}),
     ...(s.urgency ? { urgencyLabel: URGENCY_LABEL[s.urgency], emergency: emergencyState(s, now()) } : {}),
     delayRows: (s.delays ?? []).map((d) => ({ id: d.id, text: delayText(d), ...(d.surgeonAck ? { surgeonAck: who(d.surgeonAck) } : {}), ...(d.wardAck ? { wardAck: who(d.wardAck) } : {}) })),
     delayMinutes: delayTotal(s), ...(s.delays?.length ? { originalStart: s.delays[0].from } : {}),
@@ -139,12 +139,12 @@ export function surgeryView(s: Surgery): SurgeryView {
     delayOverflow: delayOverflow(s), ...(s.overtime ? { overtimeText: `同意加班・${who(s.overtime)}` } : {}),
     npoLong: s.status === 'scheduled' && delayTotal(s) >= NPO_DELAY_ALERT && !!s.prep.npo && !s.prep.npo.notNeeded,
     ...((d) => (d ? { pullBack: { to: d.from, why: `急刀 ${d.causeNo} ${surgeryOf(d.causeId)?.status === 'cancelled' ? '已取消' : '已改期'}` } } : {}))(pullBackOf(s, surgeryOf)),
-    ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5)}` } : {}),
+    ...(s.preAnes ? { preAnesText: preAnesSummary(s.preAnes, s.preAnes.plan ? `${ANESTHESIA_LABEL[s.preAnes.plan]}${s.preAnes.changedFrom ? `（原申請${ANESTHESIA_LABEL[s.preAnes.changedFrom]}：${s.preAnes.planReason}）` : ''}` : undefined), preAnesByName: `${nameOf.user(s.preAnes.by)} ${s.preAnes.at.slice(5).replace('-', '/')}` } : {}),
     teamRows: TEAM_ORDER.map((r) => ((id) => ({ role: r, label: TEAM_LABEL[r], ...(id ? { userId: id, name: nameOf.user(id) } : {}), shifts: (s.team?.[r] ?? []).map((x) => ({ name: nameOf.user(x.userId), ...(x.from ? { from: x.from } : {}), ...(x.to ? { to: x.to } : {}) })) }))(teamNow(s, r))),
     teamMissing: (s.status === 'scheduled' || s.status === 'sent' ? teamMissing(s, s.status === 'sent' && !s.checks.signIn ? 'signIn' : 'timeOut') : []).map((r) => TEAM_LABEL[r]),
     teamText: [`主刀 ${nameOf.doctor(s.doctorId)}`, ...TEAM_ORDER.filter((r) => s.team?.[r]?.length).map((r) => `${TEAM_LABEL[r].replace('護理師', '')} ${s.team![r]!.map((x) => nameOf.user(x.userId)).join('→')}`)].join('・'),
     ...((due) => ({ postopDue: due, postopLate: due && !!s.endAt && (parseDate(now()).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS }))(s.status === 'done' && !s.postop && a?.status === 'admitted' && !dayCase(a)),
-    ...(s.postop ? { postopText: `${s.postop.at.slice(5)} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
+    ...(s.postop ? { postopText: `${s.postop.at.slice(5).replace('-', '/')} ${nameOf.user(s.postop.by)}${s.postop.setName ? ` 套用「${s.postop.setName}」${s.postop.orderIds.length} 項` : `：沿用術前醫囑（${s.postop.note ?? ''}）`}${s.postop.npoStopped.length ? '；禁食停止' : ''}${s.postop.npoKept.length ? '；禁食保留' : ''}` } : {}),
     specimenRows: (s.specimens ?? []).map((x) => ({ id: x.id, text: specimenText(x), ...(x.frozen ? { frozen: ((st) => ({ text: x.frozen!.result ? `冰凍 ${st.minutes} 分回報：${x.frozen!.result.text}（接聽 ${nameOf.user(x.frozen!.result.receivedBy)}）` : `冰凍等待回報 ${st.minutes} 分${st.overdue ? `（超過 ${FROZEN_MINUTES} 分）` : ''}`, overdue: st.overdue && !st.done, done: st.done }))(frozenState(x.frozen, now(), mins)) } : {}) })),
     frozenWaiting: (s.specimens ?? []).filter((x) => x.frozen && !x.frozen.result).map((x) => ((st) => ({ label: x.label, minutes: st.minutes, overdue: st.overdue }))(frozenState(x.frozen!, now(), mins))),
     specimenStructured: !!(s.specimens || s.noSpecimen || s.status === 'in-progress'),
@@ -156,7 +156,7 @@ export function surgeryView(s: Surgery): SurgeryView {
     implant: !!find.procedure(s.procId)?.surgery?.implant,
     ...((rows) => ({ implantRows: rows, implantRecalled: rows.some((r) => r.recalled), implantMissing: !!find.procedure(s.procId)?.surgery?.implant && !rows.length && ['sent', 'in-progress'].includes(s.status) }))(implantRows(s)),
     selfPayOption: (IMPLANT_FOR[s.procId] ?? []).some((id) => isSelfPayImplant(find.procedure(id))),
-    consents: db.consents.filter((c) => c.surgeryId === s.id).map((c) => ({ id: c.id, no: c.no, kind: c.kind, kindLabel: CONSENT_KIND_LABEL[c.kind], title: c.title, signerText: `${c.signer.name}（${c.signer.relation}${c.signer.reason ? `：${c.signer.reason}` : ''}）`, ...(c.side ? { sideText: SIDE_LABEL[c.side] } : {}), signedAt: c.signedAt, explainedByName: nameOf.user(c.explainedBy), ...(c.revoked ? { revoked: `${c.revoked.at.slice(5)} ${nameOf.user(c.revoked.by)}：${c.revoked.reason}` } : {}) })),
+    consents: db.consents.filter((c) => c.surgeryId === s.id).map((c) => ({ id: c.id, no: c.no, kind: c.kind, kindLabel: CONSENT_KIND_LABEL[c.kind], title: c.title, signerText: `${c.signer.name}（${c.signer.relation}${c.signer.reason ? `：${c.signer.reason}` : ''}）`, ...(c.side ? { sideText: SIDE_LABEL[c.side] } : {}), signedAt: c.signedAt, explainedByName: nameOf.user(c.explainedBy), ...(c.revoked ? { revoked: `${c.revoked.at.slice(5).replace('-', '/')} ${nameOf.user(c.revoked.by)}：${c.revoked.reason}` } : {}) })),
     consentMissing: consentMissing(s.anesthesia, db.consents.filter((c) => c.surgeryId === s.id), s.side).map((k) => ((mm) => ({ kind: k, label: mm && k === 'surgery' ? `${CONSENT_KIND_LABEL[k]}（側別不符：同意書是${SIDE_LABEL[mm.side!]}、手術是${SIDE_LABEL[s.side]}，要重簽）` : CONSENT_KIND_LABEL[k] }))(consentSideMismatch(db.consents.filter((c) => c.surgeryId === s.id), s.side))),
     preAuthItems: (IMPLANT_FOR[s.procId] ?? []).filter((id) => find.procedure(id)?.preAuth).map((id) => ((p) => ({ procId: id, name: find.procedure(id)!.name, ...(p ? { preAuth: { id: p.id, no: p.no, statusLabel: PREAUTH_STATUS_LABEL[p.status], allows: preAuthAllows(p) } } : {}) }))(implantPreAuthOf(s.id, id))),
     ...(s.selfPayImplant ? { selfPayText: `病人已同意自費植入物・${who(s.selfPayImplant)}${s.selfPayImplant.note ? `（${s.selfPayImplant.note}）` : ''}` } : {}),

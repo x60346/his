@@ -53,6 +53,6 @@ async function submit() {
       <UButton :disabled="!opt?.ok" :loading="add.pending.value" @click="submit">補開</UButton>
     </div>
     <p v-if="opt && !opt.ok" class="text-xs text-red-700">不能加做：{{ opt.reason }}（請另外看診開立、重新採檢）</p>
-    <p v-else-if="opt?.ok" class="text-xs text-slate-600">用 {{ opt.tubeLabel }} {{ opt.specimen!.barcode }}（{{ opt.specimen!.collectedAt.slice(11) }} 採檢：{{ opt.specimen!.tests.join('、') }}），可加做到 {{ opt.specimen!.until.slice(5) }}{{ opt.selfPayVisit ? `；自費身分，${opt.selfPrice} 元要到批價補繳` : '' }}</p>
+    <p v-else-if="opt?.ok" class="text-xs text-slate-600">用 {{ opt.tubeLabel }} {{ opt.specimen!.barcode }}（{{ opt.specimen!.collectedAt.slice(11) }} 採檢：{{ opt.specimen!.tests.join('、') }}），可加做到 {{ opt.specimen!.until.slice(5).replace('-', '/') }}{{ opt.selfPayVisit ? `；自費身分，${opt.selfPrice} 元要到批價補繳` : '' }}</p>
   </div>
 </template>

@@ -118,7 +118,7 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
           <span class="flex items-center gap-1.5"><Droplet class="h-4 w-4 text-red-600" />本院血型：<b class="text-slate-800">{{ b.typingText ?? '未驗' }}</b>
             <span v-if="b.typingAt" class="tabular text-xs text-slate-500">（{{ b.typingAt.slice(0, 10) }}）</span></span>
           <span v-if="b.selfReported" class="text-xs text-slate-500">病人資料（自述）：{{ b.selfReported }} 型，不能用來配血</span>
-          <span v-for="l in b.labs" :key="l.code" :class="['tabular', l.over ? 'text-slate-600' : 'font-semibold text-red-700']">{{ l.code }} {{ l.value }}<span class="text-xs font-normal text-slate-500">（{{ l.at.slice(5, 16) }}）</span></span>
+          <span v-for="l in b.labs" :key="l.code" :class="['tabular', l.over ? 'text-slate-600' : 'font-semibold text-red-700']">{{ l.code }} {{ l.value }}<span class="text-xs font-normal text-slate-500">（{{ l.at.slice(5, 16).replace('-', '/') }}）</span></span>
           <UButton v-if="b.canOrder" size="sm" class="ml-auto" :icon="Plus" @click="openOrder">開備血單</UButton>
         </div>
 
@@ -128,7 +128,7 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
             <b class="text-slate-800">{{ r.productLabel }} {{ r.units }} 單位</b>
             <UBadge v-if="r.urgent" tone="red">急</UBadge>
             <UBadge :tone="statusTone(r)">{{ r.statusLabel }}</UBadge>
-            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ r.orderedAt.slice(5) }}・{{ r.doctorName }}</span>
+            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ r.orderedAt.slice(5).replace('-', '/') }}・{{ r.doctorName }}</span>
             <UButton v-if="isDoctor && b.canOrder && ['typing', 'matching', 'ready'].includes(r.status)" size="sm" variant="ghost" class="ml-auto text-red-700" @click="cancelling = r">取消</UButton>
           </div>
           <div class="text-xs text-slate-600">
@@ -136,7 +136,7 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
             <span v-if="r.typingText">・血庫驗血型 <b>{{ r.typingText }}</b></span>
           </div>
           <p v-if="r.overReason" class="text-xs text-amber-800">高於輸血門檻的理由：{{ r.overReason }}</p>
-          <p v-if="r.cancelled" class="text-xs text-slate-500">已取消：{{ r.cancelled.reason }}・{{ r.cancelled.byName }} {{ r.cancelled.at.slice(5) }}</p>
+          <p v-if="r.cancelled" class="text-xs text-slate-500">已取消：{{ r.cancelled.reason }}・{{ r.cancelled.byName }} {{ r.cancelled.at.slice(5).replace('-', '/') }}</p>
           <p v-if="r.status === 'typing' || r.status === 'matching'" class="text-xs text-slate-500">血庫處理中（{{ r.rows.length }}／{{ r.units }} 袋已配好）。</p>
 
           <ul v-if="r.rows.length" class="space-y-1.5">
@@ -161,16 +161,16 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
                 </span>
               </div>
               <div v-if="x.issue" class="mt-1 space-y-0.5 text-xs text-slate-600">
-                <div class="tabular">發血 {{ x.issue.issuedAt.slice(5) }}・{{ x.issue.issuedByName }}<span v-if="x.issue.returned">・退回 {{ x.issue.returned.at.slice(11) }}（{{ x.issue.returned.reason }}）</span></div>
+                <div class="tabular">發血 {{ x.issue.issuedAt.slice(5).replace('-', '/') }}・{{ x.issue.issuedByName }}<span v-if="x.issue.returned">・退回 {{ x.issue.returned.at.slice(11) }}（{{ x.issue.returned.reason }}）</span></div>
                 <template v-if="x.issue.transfusion">
-                  <div class="tabular">開始 {{ x.issue.transfusion.startAt.slice(5) }}・{{ x.issue.nurseName }}，核對 {{ x.issue.witnessName }}
+                  <div class="tabular">開始 {{ x.issue.transfusion.startAt.slice(5).replace('-', '/') }}・{{ x.issue.nurseName }}，核對 {{ x.issue.witnessName }}
                     <span v-if="x.issue.transfusion.scan?.mode === 'skipped'" class="text-amber-800">・未掃描</span>
                     <span v-if="x.issue.transfusion.endAt">・結束 {{ x.issue.transfusion.endAt.slice(11) }}<span v-if="x.issue.transfusion.volume !== undefined">，{{ x.issue.transfusion.volume }} ml</span></span>
                   </div>
                   <div v-for="v in x.issue.transfusion.vitals" :key="v.at + v.kind" class="tabular">{{ KIND_LABEL[v.kind] }} {{ v.at.slice(11) }}：{{ vtext(v) }}</div>
                   <div v-if="x.issue.transfusion.reaction" class="rounded bg-red-100 px-2 py-1 text-red-900">
                     輸血反應 {{ x.issue.transfusion.reaction.at.slice(11) }}：{{ x.issue.transfusion.reaction.symptoms.join('、') }}<span v-if="x.issue.transfusion.reaction.note">；{{ x.issue.transfusion.reaction.note }}</span>
-                    <div v-if="x.issue.transfusion.reaction.ackAt" class="text-red-800">醫師處置（{{ x.issue.ackByName }} {{ x.issue.transfusion.reaction.ackAt.slice(5) }}）：{{ x.issue.transfusion.reaction.ackNote }}</div>
+                    <div v-if="x.issue.transfusion.reaction.ackAt" class="text-red-800">醫師處置（{{ x.issue.ackByName }} {{ x.issue.transfusion.reaction.ackAt.slice(5).replace('-', '/') }}）：{{ x.issue.transfusion.reaction.ackNote }}</div>
                   </div>
                 </template>
               </div>
@@ -178,7 +178,7 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
           </ul>
           <details v-if="r.released.length" class="text-xs text-slate-500">
             <summary class="cursor-pointer">已釋出 {{ r.released.length }} 袋</summary>
-            <ul class="mt-1"><li v-for="x in r.released" :key="x.unitNo + x.at">{{ x.unitNo }}：{{ x.reason }}・{{ x.byName }} {{ x.at.slice(5) }}</li></ul>
+            <ul class="mt-1"><li v-for="x in r.released" :key="x.unitNo + x.at">{{ x.unitNo }}：{{ x.reason }}・{{ x.byName }} {{ x.at.slice(5).replace('-', '/') }}</li></ul>
           </details>
         </section>
         <p v-if="isNurse" class="text-xs text-slate-500">發血由血庫處理；血袋到病房後在這裡床邊核對開始輸血。發血後 30 分鐘內要開始、4 小時內輸完。</p>

@@ -58,12 +58,12 @@ async function onDecide(reason: string) {
             <div class="flex flex-wrap items-center gap-2">
               <b class="text-slate-800">{{ c.label }}</b>
               <UBadge :tone="statusView[c.status].tone">{{ statusView[c.status].text }}</UBadge>
-              <span class="text-xs text-slate-500">發生 {{ c.onsetAt.slice(5) }}・{{ c.reportedByName }} {{ c.reportedAt.slice(5) }} 通報</span>
+              <span class="text-xs text-slate-500">發生 {{ c.onsetAt.slice(5).replace('-', '/') }}・{{ c.reportedByName }} {{ c.reportedAt.slice(5).replace('-', '/') }} 通報</span>
             </div>
             <p v-if="c.lineText || c.surgeryText" class="text-xs text-slate-600">{{ c.lineText ?? c.surgeryText }}</p>
             <p class="text-slate-700">{{ c.symptoms }}</p>
             <p class="text-slate-700"><span class="text-xs text-slate-500">培養：</span>{{ c.culture }}</p>
-            <p v-if="c.decision" class="text-xs text-slate-600">{{ c.decidedByName }} {{ c.decision.at.slice(5) }} 判定：{{ c.decision.reason }}</p>
+            <p v-if="c.decision" class="text-xs text-slate-600">{{ c.decidedByName }} {{ c.decision.at.slice(5).replace('-', '/') }} 判定：{{ c.decision.reason }}</p>
             <p v-if="c.suggestIsolation" class="text-xs text-amber-800">成立：病人目前沒有接觸隔離，可以在「隔離與 DNR」開（不自動開）。</p>
             <div v-if="v.canDecide && c.status === 'reported'" class="flex gap-1.5">
               <UButton size="sm" variant="danger" @click="deciding = { c, confirm: true }">判定成立</UButton>

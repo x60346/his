@@ -20,7 +20,7 @@ import type { Patient, TriageLevel, TriageVitals } from '@/types'
 import { useAction, useDebounced, useQuery } from '@/composables/useService'
 import { ageText, today } from '@/utils/date'
 // 今天的只顯示時刻；留觀跨日的帶日期
-const atText = (s: string) => (s.slice(0, 10) === today() ? s.slice(11) : s.slice(5))
+const atText = (s: string) => (s.slice(0, 10) === today() ? s.slice(11) : s.slice(5).replace('-', '/'))
 
 const router = useRouter()
 const { data: board, loading } = useQuery(() => erApi.erBoard())
@@ -209,7 +209,7 @@ async function submitEnd() {
           <summary class="cursor-pointer text-slate-600">最近 24 小時已離開急診 {{ done.length }} 位</summary>
           <ul class="mt-2 divide-y divide-slate-100">
             <li v-for="i in done" :key="i.visitId" class="py-1 text-xs text-slate-600">
-              <span :class="['mr-1 inline-block w-5 rounded text-center font-bold', LEVEL_CLASS[i.level]]">{{ i.level }}</span>{{ i.arrivedAt.slice(5) }} {{ i.patientName }}・{{ i.complaint }}・{{ i.stageLabel }}<span v-if="i.dispositionText">（{{ i.dispositionText }}）</span>
+              <span :class="['mr-1 inline-block w-5 rounded text-center font-bold', LEVEL_CLASS[i.level]]">{{ i.level }}</span>{{ i.arrivedAt.slice(5).replace('-', '/') }} {{ i.patientName }}・{{ i.complaint }}・{{ i.stageLabel }}<span v-if="i.dispositionText">（{{ i.dispositionText }}）</span>
               <!-- 已離開急診（收住院、離院）但急診開的檢驗還沒採檢或收件：仍要能印條碼、採檢、看報告，不然這筆檢驗沒人做、卻照樣計費 -->
               <template v-if="i.labs && (i.labs.toCollect || i.labs.toReceive || i.labs.fresh)">
                 <span class="ml-1 font-semibold text-amber-800">檢驗：{{ labText(i.labs) }}</span>

@@ -176,7 +176,7 @@ function onScrapApproved(token: string) {
             </thead>
             <tbody class="divide-y divide-slate-100">
               <tr v-for="t in ledger.txns" :key="t.id">
-                <td class="tabular whitespace-nowrap px-3 py-1.5 text-xs text-slate-500">{{ t.at.slice(5) }}</td>
+                <td class="tabular whitespace-nowrap px-3 py-1.5 text-xs text-slate-500">{{ t.at.slice(5).replace('-', '/') }}</td>
                 <td class="px-2"><UBadge :tone="typeView[t.type].tone">{{ typeView[t.type].label }}</UBadge></td>
                 <td class="px-2 text-xs text-slate-600">
                   {{ t.ref ?? t.reason ?? '' }}<template v-if="t.ref && t.reason">・{{ t.reason }}</template>

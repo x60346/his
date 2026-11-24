@@ -66,7 +66,7 @@ const print = () => window.print()
               <UBadge tone="red">{{ i.score }} 分</UBadge>
               <div class="min-w-0 flex-[1_1_10rem]">
                 <div><b class="text-slate-800">{{ i.patientName }}</b> <span class="text-xs text-slate-500">{{ i.chartNo }}・{{ i.ward }} {{ i.bedNo }}・{{ i.deptName }} {{ i.doctorName }}</span><UBadge v-if="i.reassess" tone="gray" class="ml-1">重評</UBadge></div>
-                <div class="text-xs text-slate-500">{{ i.diagnosis }}・目前飲食：{{ i.diet ?? '沒有飲食醫囑' }}・篩檢 {{ i.screenedAt.slice(5) }}</div>
+                <div class="text-xs text-slate-500">{{ i.diagnosis }}・目前飲食：{{ i.diet ?? '沒有飲食醫囑' }}・篩檢 {{ i.screenedAt.slice(5).replace('-', '/') }}</div>
               </div>
               <UButton size="sm" @click="openAssess(i)">評估</UButton>
             </li>
@@ -74,7 +74,7 @@ const print = () => window.print()
           <details v-if="work.recent.length" class="rounded-md border border-slate-200 bg-white p-3 text-sm">
             <summary class="cursor-pointer text-slate-600">最近 7 天寫的評估 {{ work.recent.length }} 筆</summary>
             <ul class="mt-2 divide-y divide-slate-100 text-xs text-slate-600">
-              <li v-for="x in work.recent" :key="x.id" class="py-1">{{ x.at.slice(5) }} {{ x.bedNo }} {{ x.patientName }}・{{ x.recommendation }}<UBadge :tone="x.seenAt ? 'green' : 'yellow'" class="ml-1">{{ x.seenAt ? '主治已閱' : '主治未閱' }}</UBadge></li>
+              <li v-for="x in work.recent" :key="x.id" class="py-1">{{ x.at.slice(5).replace('-', '/') }} {{ x.bedNo }} {{ x.patientName }}・{{ x.recommendation }}<UBadge :tone="x.seenAt ? 'green' : 'yellow'" class="ml-1">{{ x.seenAt ? '主治已閱' : '主治未閱' }}</UBadge></li>
             </ul>
           </details>
         </template>

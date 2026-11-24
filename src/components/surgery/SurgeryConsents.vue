@@ -46,7 +46,7 @@ async function onRevoke(reason: string) {
 <template>
   <div v-if="s.status !== 'cancelled'" class="space-y-0.5 text-xs">
     <div v-for="c in s.consents" :key="c.id" :class="c.revoked ? 'text-slate-400 line-through' : 'text-slate-600'">
-      {{ c.kindLabel }} {{ c.no }}：{{ c.title }}{{ c.sideText ? `（${c.sideText}）` : '' }}・簽署 {{ c.signerText }}・說明 {{ c.explainedByName }} {{ c.signedAt.slice(5) }}
+      {{ c.kindLabel }} {{ c.no }}：{{ c.title }}{{ c.sideText ? `（${c.sideText}）` : '' }}・簽署 {{ c.signerText }}・說明 {{ c.explainedByName }} {{ c.signedAt.slice(5).replace('-', '/') }}
       <span v-if="c.revoked" class="no-underline">（已撤回 {{ c.revoked }}）</span>
       <button v-else-if="editable" type="button" class="ml-1 text-red-600 underline" @click="revokeId = c.id">撤回</button>
     </div>

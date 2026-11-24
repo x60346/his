@@ -138,7 +138,7 @@ const docWho = (d: DnrView) =>
                   <span class="tabular text-xs text-slate-500">{{ i.startedAt.slice(0, 16) }} 起・第 {{ i.days }} 天・{{ i.startedByName }}</span>
                 </div>
                 <p v-if="i.note" class="mt-0.5 text-xs text-slate-600">{{ i.note }}</p>
-                <p v-if="i.reviewedAt" class="text-xs text-slate-500">上次檢討：{{ i.reviewedAt.slice(5) }} {{ i.reviewedByName }}</p>
+                <p v-if="i.reviewedAt" class="text-xs text-slate-500">上次檢討：{{ i.reviewedAt.slice(5).replace('-', '/') }} {{ i.reviewedByName }}</p>
                 <p v-if="i.review" class="mt-1 text-xs font-semibold text-amber-800">{{ ISOLATION_REVIEW_TEXT[i.review] }}</p>
                 <p class="mt-1 text-xs text-slate-700">防護：<b>{{ i.ppe.join('、') }}</b><template v-if="i.release">　解除條件：<span :class="i.release.met ? 'text-emerald-700' : 'text-amber-800'">{{ i.release.met ? '已達到' : '未達到' }}（{{ i.release.text }}）</span></template></p>
                 <div v-if="i.bundle && isDoctor && i.admissionId" class="mt-1 rounded bg-white/70 px-2 py-1 text-xs">
@@ -174,15 +174,15 @@ const docWho = (d: DnrView) =>
             <div v-if="f.dnr" class="space-y-0.5 rounded border border-slate-300 bg-slate-50 px-3 py-2">
               <div class="font-medium text-slate-800">{{ f.dnr.docLabel }}</div>
               <div class="text-xs text-slate-600">{{ f.dnr.title }}</div>
-              <div class="tabular text-xs text-slate-500">{{ f.dnr.signedAt }} 簽署・{{ docWho(f.dnr) }}・健保卡{{ f.dnr.nhiCard ? '已註記' : '未註記' }}</div>
-              <div class="text-xs text-slate-500">{{ f.dnr.recordedAt.slice(5) }} {{ f.dnr.recordedByName }} 登錄</div>
+              <div class="tabular text-xs text-slate-500">{{ f.dnr.signedAt?.slice(5).replace('-', '/') }} 簽署・{{ docWho(f.dnr) }}・健保卡{{ f.dnr.nhiCard ? '已註記' : '未註記' }}</div>
+              <div class="text-xs text-slate-500">{{ f.dnr.recordedAt.slice(5).replace('-', '/') }} {{ f.dnr.recordedByName }} 登錄</div>
               <UButton v-if="isDoctor" size="sm" variant="ghost" class="mt-1 text-red-700" @click="revoking = f.dnr">撤回</UButton>
             </div>
             <p v-if="!isDoctor" class="text-xs text-slate-500">DNR 由醫師登錄、撤回。</p>
             <ul v-if="f.dnrHistory.length" class="divide-y divide-slate-100 rounded border border-slate-100 text-xs text-slate-400">
               <li v-for="d in f.dnrHistory" :key="d.id" class="px-2 py-1">
-                <span class="line-through">{{ d.signedAt }} {{ d.label }}（{{ d.docLabel }}）</span>
-                <span class="ml-1 text-slate-500">{{ d.revoked?.reason }}・{{ d.revokedByName }} {{ d.revoked?.at.slice(5) }}</span>
+                <span class="line-through">{{ d.signedAt?.slice(5).replace('-', '/') }} {{ d.label }}（{{ d.docLabel }}）</span>
+                <span class="ml-1 text-slate-500">{{ d.revoked?.reason }}・{{ d.revokedByName }} {{ d.revoked?.at.slice(5).replace('-', '/') }}</span>
               </li>
             </ul>
           </section>

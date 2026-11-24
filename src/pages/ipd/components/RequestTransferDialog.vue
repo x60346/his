@@ -56,7 +56,7 @@ async function submit() {
       <p class="rounded-md bg-slate-50 px-3 py-2 text-slate-700">目前：{{ admission.deptName }}・<b>{{ admission.doctorName }}</b>・{{ admission.bed?.bedNo }}</p>
       <USelect :model-value="form.toDeptId" label="轉入科別" required placeholder="請選擇" :options="deptOptions" :error="save.fieldErrors.value.toDeptId" @update:model-value="onDept" />
       <USelect v-model="form.toDoctorId" label="指定接手醫師" :options="doctorOptions" :disabled="!form.toDeptId" :error="save.fieldErrors.value.toDoctorId" />
-      <p v-if="fromConsult" class="rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-900">依 {{ fromConsult.toDeptName }} {{ fromConsult.answeredByName }} 的會診建議（{{ fromConsult.answeredAt?.slice(5) }}）：{{ fromConsult.findings }}</p>
+      <p v-if="fromConsult" class="rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-900">依 {{ fromConsult.toDeptName }} {{ fromConsult.answeredByName }} 的會診建議（{{ fromConsult.answeredAt?.slice(5).replace('-', '/') }}）：{{ fromConsult.findings }}</p>
       <UTextarea v-model="form.reason" label="轉科原因（新科醫師會看到）" required :rows="2" placeholder="例：急性期已穩定，轉復健科接續住院復健" :error="save.fieldErrors.value.reason" />
       <div class="space-y-2 rounded-md border border-slate-200 p-3">
         <div class="text-xs font-semibold text-slate-600">轉出摘要（新科接手要看，也寫進病程紀錄）</div>

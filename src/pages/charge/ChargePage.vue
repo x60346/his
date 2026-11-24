@@ -254,7 +254,7 @@ const identityOpen = ref(false)
           <div class="mb-1 text-xs font-semibold text-red-800">待退費（部分退藥、未執行）{{ pendingRefunds.length }} 筆</div>
           <button v-for="r in pendingRefunds" :key="r.chargeId" :class="['flex w-full items-center gap-2 rounded px-1 py-1 text-left text-sm hover:bg-red-100', r.id === visitId && 'bg-red-100']" @click="visitId = r.id">
             <span class="min-w-0 flex-1 truncate">{{ r.patientName }} <span class="tabular text-xs text-slate-500">{{ r.date.slice(5).replace('-', '/') }} {{ r.deptName }}</span></span>
-            <span class="tabular text-xs font-semibold text-red-800">{{ r.pending.amount ? `退 $${r.pending.amount}` : '改點數' }}</span>
+            <span class="tabular text-xs font-semibold text-red-800">{{ r.pending.amount ? `退 ${money(r.pending.amount)}` : '改點數' }}</span>
           </button>
         </div>
         <div v-if="addonDue?.length" class="border-b border-amber-100 bg-amber-50/60 px-3 py-2">
@@ -275,9 +275,9 @@ const identityOpen = ref(false)
               </span>
               <span class="text-right">
                 <UStatusBadge :map="visitStatus" :value="v.status" />
-                <span v-if="v.charge" class="tabular block text-xs text-slate-500">${{ v.charge.patientTotal }}</span>
+                <span v-if="v.charge" class="tabular block text-xs text-slate-500">{{ money(v.charge.patientTotal) }}</span>
                 <span v-if="v.pendingRefund !== undefined" class="block text-xs font-medium text-red-700">待退費</span>
-                <span v-else-if="v.estimate !== undefined" class="tabular block text-xs font-medium text-slate-700">約 ${{ v.estimate }}</span>
+                <span v-else-if="v.estimate !== undefined" class="tabular block text-xs font-medium text-slate-700">約 {{ money(v.estimate) }}</span>
               </span>
             </button>
           </li>
@@ -304,7 +304,7 @@ const identityOpen = ref(false)
               <span class="text-slate-700">{{ d.deptName }}</span>
               <span class="tabular text-xs text-slate-400">{{ d.receiptNo }}</span>
               <span class="min-w-0 flex-[1_1_10rem] truncate text-xs text-slate-500">{{ d.oweReason }}<template v-if="d.repayments.length">・已收回 {{ d.repayments.length }} 次</template></span>
-              <span class="tabular font-semibold text-amber-900">尚欠 ${{ d.outstanding.toLocaleString() }}</span>
+              <span class="tabular font-semibold text-amber-900">尚欠 {{ money(d.outstanding) }}</span>
               <UButton size="sm" variant="secondary" @click="openRepay(d)">收回</UButton>
             </li>
           </ul>
@@ -348,7 +348,7 @@ const identityOpen = ref(false)
               </div>
               <div class="rounded-md bg-slate-900 px-4 py-3 text-right text-white">
                 <div class="text-xs text-slate-400">{{ preview?.prepaid ? '本次應收（已扣預收）' : '應收金額' }}</div>
-                <div class="tabular text-3xl font-bold">$ {{ total.toLocaleString() }}</div>
+                <div class="tabular text-3xl font-bold">{{ money(total) }}</div>
                 <div v-if="preview?.prepaid" class="tabular text-xs text-slate-300">應收 {{ preview.patientTotal.toLocaleString() }} − 掛號預收 {{ preview.prepaid.applied.toLocaleString() }}（{{ preview.prepaid.receiptNo }}）</div>
               </div>
               <p v-if="preview?.prepaid?.excess" class="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">預收多收 <b class="tabular">{{ preview.prepaid.excess }}</b> 元：結帳時開退款單，當場退還病人（依預收時的付款方式）</p>
@@ -379,11 +379,11 @@ const identityOpen = ref(false)
                 <!-- 綠色只代表「可以收款」：不足是紅色、金額異常是黃色，不要讓錯誤的找零看起來像沒問題 -->
                 <div v-if="owe" class="flex justify-between rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   <span>記為欠款</span>
-                  <span class="tabular text-lg font-bold">$ {{ owedAmount.toLocaleString() }}</span>
+                  <span class="tabular text-lg font-bold">{{ money(owedAmount) }}</span>
                 </div>
                 <div v-else :class="['flex justify-between rounded-md px-3 py-2 text-sm', change < 0 ? 'bg-red-50 text-red-700' : cashProblem ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800']">
                   <span>{{ change < 0 ? '尚差' : '找零' }}</span>
-                  <span class="tabular text-lg font-bold">$ {{ Math.abs(change).toLocaleString() }}</span>
+                  <span class="tabular text-lg font-bold">{{ money(Math.abs(change)) }}</span>
                 </div>
                 <!-- 錢不夠：差額記為欠款，下次來再收（要寫原因，日結看得到）。足額時不出現 -->
                 <template v-if="change < 0 || owe">
@@ -417,7 +417,7 @@ const identityOpen = ref(false)
               <b>待退費</b>：{{ receipt.pendingRefund.items.join('、') }}
               <span class="block text-xs text-red-800">用病人實際拿走的藥重算：應付 {{ receipt.pendingRefund.patientTotalAfter.toLocaleString() }} 元<template v-if="receipt.pendingRefund.nhiPoints">、申報點數 −{{ receipt.pendingRefund.nhiPoints }}</template></span>
             </span>
-            <UButton variant="danger" @click="partialOpen = true">{{ receipt.pendingRefund.amount ? `退費 $${receipt.pendingRefund.amount}` : '更正申報點數' }}</UButton>
+            <UButton variant="danger" @click="partialOpen = true">{{ receipt.pendingRefund.amount ? `退費 ${money(receipt.pendingRefund.amount)}` : '更正申報點數' }}</UButton>
           </div>
           <!-- 檢驗、處置：病人沒做就離開，標「未執行」（醫令照留，櫃台退差額；健保項目通常只更正申報點數） -->
           <div v-if="receipt.procedures.length && !receipt.voided" class="no-print rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">
@@ -476,7 +476,7 @@ const identityOpen = ref(false)
           收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span>（{{ receipt.paidAt.slice(0, 10) }}）照算在原本那天的日結；退款另開退款單、算在今天。退費後病人回到「待批價」，醫師可以修改後重新批價。
         </p>
         <div class="rounded-md bg-red-50 px-3 py-2">
-          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ (receipt.cancel?.refundAmount ?? 0).toLocaleString() }}</span></div>
+          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">{{ money(receipt.cancel?.refundAmount ?? 0) }}</span></div>
           <div class="text-xs text-red-700">依原付款方式：結帳時 {{ PM_LABEL[receipt.payMethod] }}<template v-if="receipt.repayments?.length">；收回的欠款依當時的方式</template></div>
           <div v-if="receipt.owed && receipt.owed - (receipt.repayments ?? []).reduce((n, r) => n + r.amount, 0) - (receipt.partialRefunds ?? []).reduce((n, r) => n + r.owedOffset, 0) > 0" class="text-xs text-red-700">還沒收回的欠款一併取消</div>
           <div v-if="receipt.partialRefunds?.length" class="text-xs text-red-700">已部分退費的不再退（已扣掉）</div>
@@ -508,9 +508,9 @@ const identityOpen = ref(false)
       <div v-if="receipt?.pendingRefund" class="space-y-3 text-sm">
         <p class="text-slate-600">{{ receipt.pendingRefund.items.join('、') }}。收據 <span class="tabular font-medium">{{ receipt.receiptNo }}</span> 不作廢、原本那天的帳不動<template v-if="receipt.pendingRefund.amount">；差額另開退款單、算在今天</template>。</p>
         <div class="space-y-1 rounded-md bg-red-50 px-3 py-2">
-          <div class="flex justify-between text-red-800"><span>應付減少</span><span class="tabular">$ {{ receipt.pendingRefund.amount.toLocaleString() }}</span></div>
+          <div class="flex justify-between text-red-800"><span>應付減少</span><span class="tabular">{{ money(receipt.pendingRefund.amount) }}</span></div>
           <div v-if="receipt.pendingRefund.owedOffset" class="flex justify-between text-xs text-red-700"><span>先抵還沒收回的欠款</span><span class="tabular">− {{ receipt.pendingRefund.owedOffset.toLocaleString() }}</span></div>
-          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">$ {{ receipt.pendingRefund.cash.toLocaleString() }}</span></div>
+          <div class="flex justify-between font-semibold text-red-800"><span>退還病人</span><span class="tabular">{{ money(receipt.pendingRefund.cash) }}</span></div>
           <div v-for="x in receipt.pendingRefund.parts" :key="x.payMethod" class="text-xs text-red-700">{{ PM_LABEL[x.payMethod] }} {{ x.amount.toLocaleString() }} 元</div>
           <div v-if="!receipt.pendingRefund.amount" class="text-xs text-red-700">部分負擔沒有變：不需退款，只更正健保申報點數（−{{ receipt.pendingRefund.nhiPoints }}）</div>
         </div>

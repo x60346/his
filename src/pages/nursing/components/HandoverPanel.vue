@@ -84,7 +84,7 @@ async function submit() {
         <li v-for="d in dutyRows" :key="d.id" class="flex flex-wrap items-start gap-2">
           <span class="tabular w-14 shrink-0 font-medium text-slate-700">{{ d.bedNo }}</span>
           <div class="min-w-0 flex-[1_1_14rem]">
-            <div><b>{{ d.patientName }}</b> <span class="text-xs text-slate-500">{{ d.at.slice(5) }} {{ d.doctorName }}・{{ d.acked ? '主治已看' : '主治還沒看' }}</span></div>
+            <div><b>{{ d.patientName }}</b> <span class="text-xs text-slate-500">{{ d.at.slice(5).replace('-', '/') }} {{ d.doctorName }}・{{ d.acked ? '主治已看' : '主治還沒看' }}</span></div>
             <div class="text-xs text-slate-700">{{ d.items.map((i) => `${i.label} ${i.text}`).join('；') }}</div>
           </div>
         </li>

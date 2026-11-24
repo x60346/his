@@ -105,7 +105,7 @@ async function submitEx() {
             </div>
           </div>
           <div class="ml-auto flex flex-wrap items-center gap-2">
-            <UBadge v-if="b.submitted" tone="green">已送出・{{ b.submitted.at.slice(5) }} {{ b.submitted.byName }}</UBadge>
+            <UBadge v-if="b.submitted" tone="green">已送出・{{ b.submitted.at.slice(5).replace('-', '/') }} {{ b.submitted.byName }}</UBadge>
             <UBadge v-else-if="b.totals.problems" tone="red">檢核有問題 {{ b.totals.problems }} 筆</UBadge>
             <UButton v-if="b.submitted" size="sm" variant="secondary" @click="openFile">匯入檢核結果</UButton>
             <UButton size="sm" variant="secondary" :icon="Download" @click="exportCsv">匯出 CSV</UButton>
@@ -130,7 +130,7 @@ async function submitEx() {
               <template v-for="r in rows" :key="r.refId + (r.supplementOf ?? '')">
                 <tr :class="r.excluded ? 'text-slate-400' : r.problems.length ? 'bg-red-50/50' : ''">
                   <td class="tabular whitespace-nowrap px-2 py-1.5">{{ r.date }}</td>
-                  <td class="px-2"><span class="whitespace-nowrap text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div><UBadge v-if="r.interim" tone="blue" class="ml-1">期中（住院中，到 {{ r.interim.through.slice(5) }}）</UBadge><div v-if="r.interimPrior" class="text-xs text-blue-800">期中已報 {{ fmt(r.interimPrior) }} 點，這筆報差額</div></td>
+                  <td class="px-2"><span class="whitespace-nowrap text-xs">{{ r.caseLabel }}</span><UBadge v-if="r.supplementOf" tone="yellow" class="ml-1">補報（{{ r.supplementOf }}）</UBadge><div v-if="r.supplementNote" class="text-xs text-amber-800">{{ r.supplementNote }}</div><UBadge v-if="r.interim" tone="blue" class="ml-1">期中（住院中，到 {{ r.interim.through.slice(5).replace('-', '/') }}）</UBadge><div v-if="r.interimPrior" class="text-xs text-blue-800">期中已報 {{ fmt(r.interimPrior) }} 點，這筆報差額</div></td>
                   <td class="whitespace-nowrap px-2">{{ r.patientName }}<span class="ml-1 text-xs text-slate-400">{{ r.chartNo }}</span></td>
                   <td class="whitespace-nowrap px-2 text-xs">{{ r.doctorName }}</td>
                   <td class="px-2 text-xs">{{ r.diagnosis || '—' }}</td>
@@ -150,7 +150,7 @@ async function submitEx() {
                   </td>
                 </tr>
                 <tr v-if="r.problems.length && !r.excluded" class="bg-red-50/50"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700">檢核：{{ r.problems.join('；') }}</td></tr>
-                <tr v-if="r.rejected"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700"><UBadge tone="red">退件</UBadge> {{ r.rejected.label }}<template v-if="r.rejected.note">：{{ r.rejected.note }}</template>（{{ r.rejected.byName }} {{ r.rejected.at.slice(5) }}）・改好資料後列在下一個還沒送的月份重送</td></tr>
+                <tr v-if="r.rejected"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700"><UBadge tone="red">退件</UBadge> {{ r.rejected.label }}<template v-if="r.rejected.note">：{{ r.rejected.note }}</template>（{{ r.rejected.byName }} {{ r.rejected.at.slice(5).replace('-', '/') }}）・改好資料後列在下一個還沒送的月份重送</td></tr>
                 <tr v-if="!b.submitted && r.supplementOf && r.problems.length"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-red-700">檢核：{{ r.problems.join('；') }}</td></tr>
                 <tr v-if="r.excluded"><td :colspan="b.kind === 'ipd' ? 10 : 9" class="px-2 pb-1.5 text-xs text-slate-500">已排除：{{ r.excluded.reason }}（{{ r.excluded.byName }}）</td></tr>
                 <tr v-if="b.kind === 'ipd' && r.categories && !r.excluded"><td colspan="10" class="px-2 pb-1.5 text-xs text-slate-500">{{ CLAIM_CATEGORIES.filter((c) => r.categories?.[c]).map((c) => `${CLAIM_CATEGORY_LABEL[c]} ${fmt(r.categories![c]!)}`).join('・') }}

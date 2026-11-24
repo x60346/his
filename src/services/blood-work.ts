@@ -137,7 +137,7 @@ export function requestView(r: BloodRequest, t: string = now()): BloodRequestVie
     id: r.id, no: r.no, admissionId: r.admissionId, admitNo: a?.admitNo ?? '', patientId: r.patientId, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '',
     bedNo: bed?.bedNo ?? '', ward: bed?.ward ?? '', admitted: a?.status === 'admitted',
     product: r.product, productLabel: BLOOD_PRODUCT_LABEL[r.product], units: r.units, indication: r.indication, urgent: r.urgent,
-    ...(r.lab ? { labText: `${th?.code ?? r.lab.code} ${r.lab.value}（${r.lab.at.slice(5, 16)}）` } : {}),
+    ...(r.lab ? { labText: `${th?.code ?? r.lab.code} ${r.lab.value}（${r.lab.at.slice(5, 16).replace('-', '/')}）` } : {}),
     ...(r.overReason ? { overReason: r.overReason } : {}),
     orderedAt: r.orderedAt, doctorName: nameOf.doctor(r.doctorId), status: st, statusLabel: BLOOD_STATUS_LABEL[st],
     ...(r.typing ? { typingText: bloodTypeText(r.typing), typedByName: nameOf.user(r.typing.by) } : {}),

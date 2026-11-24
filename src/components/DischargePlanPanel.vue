@@ -86,12 +86,12 @@ async function submitFollow() {
         <section class="rounded-md border border-slate-200 p-3">
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <span class="font-semibold text-slate-700">篩選</span>
-            <UBadge v-if="!p && v.plannable" :tone="v.screen.status === 'overdue' ? 'red' : v.screen.status === 'due' ? 'yellow' : 'cyan'">{{ dueText[v.screen.status] }}（{{ v.screen.dueAt.slice(5) }} 前）</UBadge>
+            <UBadge v-if="!p && v.plannable" :tone="v.screen.status === 'overdue' ? 'red' : v.screen.status === 'due' ? 'yellow' : 'cyan'">{{ dueText[v.screen.status] }}（{{ v.screen.dueAt.slice(5).replace('-', '/') }} 前）</UBadge>
             <UBadge v-if="p" :tone="p.enrolled ? 'purple' : 'gray'">{{ p.enrolled ? '收案' : '不收案' }}</UBadge>
             <UButton v-if="v.canEdit && v.plannable" class="ml-auto" size="sm" variant="secondary" @click="openScreen">{{ p ? '重新篩選' : '篩選' }}</UButton>
           </div>
           <p v-if="!p" class="text-xs text-slate-500">入院 72 小時內篩選；系統已勾：{{ v.auto.length ? v.auto.map((k) => PLAN_CRITERIA.find((c) => c.key === k)?.label).join('、') : '無' }}。</p>
-          <p v-else class="text-xs text-slate-600">{{ p.screenedAt.slice(5) }} {{ p.screenedByName }}：{{ p.criteriaText.join('、') || '都不符合' }}</p>
+          <p v-else class="text-xs text-slate-600">{{ p.screenedAt.slice(5).replace('-', '/') }} {{ p.screenedByName }}：{{ p.criteriaText.join('、') || '都不符合' }}</p>
         </section>
 
         <template v-if="p?.enrolled">
@@ -118,7 +118,7 @@ async function submitFollow() {
               <li v-for="r in p.referralViews" :key="r.id" class="flex flex-wrap items-center gap-2 py-1.5">
                 <b class="text-slate-800">{{ r.kindLabel }}</b><span class="text-slate-600">{{ r.agency }}</span>
                 <UBadge v-if="r.reply" :tone="r.reply.status === 'approved' ? 'green' : 'red'">{{ r.reply.status === 'approved' ? '核定' : '未核定' }}{{ r.reply.note ? `：${r.reply.note}` : '' }}</UBadge>
-                <UBadge v-else-if="r.sentAt" tone="yellow">{{ r.sentAt.slice(5, 10) }} 送出・待回覆</UBadge>
+                <UBadge v-else-if="r.sentAt" tone="yellow">{{ r.sentAt.slice(5, 10).replace('-', '/') }} 送出・待回覆</UBadge>
                 <UBadge v-else tone="gray">未送出</UBadge>
                 <span v-if="v.canEdit" class="ml-auto flex gap-1">
                   <UButton size="sm" variant="ghost" :icon="Printer" @click="printing = r">{{ r.sentAt ? '重印' : '列印送出' }}</UButton>
@@ -131,10 +131,10 @@ async function submitFollow() {
           <section v-if="v.followUp" class="rounded-md border border-slate-200 p-3">
             <div class="mb-2 flex items-center gap-2">
               <span class="font-semibold text-slate-700">出院後追蹤</span>
-              <UBadge :tone="v.followUp.status === 'done' ? 'green' : v.followUp.status === 'overdue' ? 'red' : 'yellow'">{{ v.followUp.status === 'done' ? '已追蹤' : `${v.followUp.dueAt.slice(5, 10)} 前電話追蹤` }}</UBadge>
+              <UBadge :tone="v.followUp.status === 'done' ? 'green' : v.followUp.status === 'overdue' ? 'red' : 'yellow'">{{ v.followUp.status === 'done' ? '已追蹤' : `${v.followUp.dueAt.slice(5, 10).replace('-', '/')} 前電話追蹤` }}</UBadge>
               <UButton v-if="v.canEdit && !p.followUp" class="ml-auto" size="sm" @click="(fu.reached = true), (fu.result = ''), (follow.fieldErrors.value = {}), (fuOpen = true)">記追蹤</UButton>
             </div>
-            <p v-if="p.followUp" class="text-slate-700">{{ p.followUp.at.slice(5) }} {{ p.followUpByName }}・{{ p.followUp.reached ? '聯絡到' : '聯絡不到' }}：{{ p.followUp.result }}</p>
+            <p v-if="p.followUp" class="text-slate-700">{{ p.followUp.at.slice(5).replace('-', '/') }} {{ p.followUpByName }}・{{ p.followUp.reached ? '聯絡到' : '聯絡不到' }}：{{ p.followUp.result }}</p>
           </section>
         </template>
       </template>

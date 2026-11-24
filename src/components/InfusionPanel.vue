@@ -79,8 +79,8 @@ async function onStop(reason: string) {
           </div>
           <template v-if="x.running">
             <div class="flex flex-wrap items-center gap-2">
-              <span>第 {{ x.running.bagNo }} 瓶・{{ x.running.startAt.slice(5) }} 接上（{{ x.running.startByName }}）・目前 {{ x.running.rateMlH }} ml/h</span>
-              <UBadge :tone="stateTone[x.running.state]">預計 {{ x.running.endAt.slice(5) }} 滴完{{ x.running.state === 'overdue' ? '（已滴完）' : x.running.state === 'due' ? '（快滴完）' : '' }}</UBadge>
+              <span>第 {{ x.running.bagNo }} 瓶・{{ x.running.startAt.slice(5).replace('-', '/') }} 接上（{{ x.running.startByName }}）・目前 {{ x.running.rateMlH }} ml/h</span>
+              <UBadge :tone="stateTone[x.running.state]">預計 {{ x.running.endAt.slice(5).replace('-', '/') }} 滴完{{ x.running.state === 'overdue' ? '（已滴完）' : x.running.state === 'due' ? '（快滴完）' : '' }}</UBadge>
             </div>
             <div class="h-2 overflow-hidden rounded bg-slate-100"><div class="h-full bg-sky-500" :style="{ width: `${Math.round((x.running.infused / (x.order.infusion?.volumeMl ?? 1)) * 100)}%` }" /></div>
             <p class="tabular text-xs text-slate-500">已滴入約 {{ x.running.infused }}／{{ x.order.infusion?.volumeMl }} ml</p>
@@ -97,7 +97,7 @@ async function onStop(reason: string) {
           </div>
           <details v-if="x.history.length" class="text-xs text-slate-600">
             <summary class="cursor-pointer">之前 {{ x.history.length }} 瓶</summary>
-            <ul><li v-for="h in x.history" :key="h.bagNo">第 {{ h.bagNo }} 瓶 {{ h.startAt.slice(5) }} → {{ h.endAt.slice(5) }}・{{ h.infused }} ml・{{ h.reason }}（{{ h.byName }}）</li></ul>
+            <ul><li v-for="h in x.history" :key="h.bagNo">第 {{ h.bagNo }} 瓶 {{ h.startAt.slice(5).replace('-', '/') }} → {{ h.endAt.slice(5).replace('-', '/') }}・{{ h.infused }} ml・{{ h.reason }}（{{ h.byName }}）</li></ul>
           </details>
         </section>
       </template>

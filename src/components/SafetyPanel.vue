@@ -14,7 +14,7 @@ const isNurse = computed(() => auth.user?.role === 'nurse')
 const { data, loading } = useQuery(() => deliriumApi.patientSafety(props.admissionId), [() => props.admissionId])
 const v = computed(() => (data.value?.admissionId === props.admissionId ? data.value : undefined))
 const orderText = (r: RestraintView) =>
-  ({ ok: `醫囑有效到 ${r.state.orderUntil?.slice(5)}`, pending: '緊急約束：等醫師補醫囑（1 小時內）', missing: '緊急約束超過 1 小時沒有醫囑', expired: `醫囑已在 ${r.state.orderUntil?.slice(5)} 到期` })[r.state.order]
+  ({ ok: `醫囑有效到 ${r.state.orderUntil?.slice(5).replace('-', '/')}`, pending: '緊急約束：等醫師補醫囑（1 小時內）', missing: '緊急約束超過 1 小時沒有醫囑', expired: `醫囑已在 ${r.state.orderUntil?.slice(5).replace('-', '/')} 到期` })[r.state.order]
 
 // ---------- CAM ----------
 const camOpen = ref(false)
@@ -82,7 +82,7 @@ async function submitEnd() {
           <p v-if="!v.assessments.length" class="text-xs text-slate-500">還沒有評估。</p>
           <ul v-else class="space-y-1 text-xs text-slate-600">
             <li v-for="x in v.assessments" :key="x.id" class="flex flex-wrap items-center gap-1.5">
-              <span class="tabular">{{ x.at.slice(5) }}</span>{{ x.byName }}
+              <span class="tabular">{{ x.at.slice(5).replace('-', '/') }}</span>{{ x.byName }}
               <UBadge :tone="x.positive ? 'red' : 'green'">{{ x.positive ? '陽性' : '陰性' }}</UBadge>
               <span v-if="x.note">{{ x.note }}</span>
               <template v-if="x.positive">
@@ -105,10 +105,10 @@ async function submitEnd() {
               <b class="text-slate-800">{{ r.sites.join('、') }}・{{ r.method }}</b>
               <span class="text-slate-600">{{ r.reason }}</span>
               <UBadge v-if="r.emergency" tone="red">緊急約束</UBadge>
-              <span class="tabular text-xs text-slate-500">{{ r.startedAt.slice(5) }} 開始（{{ r.startedByName }}）・已 {{ r.state.hours }} 小時</span>
+              <span class="tabular text-xs text-slate-500">{{ r.startedAt.slice(5).replace('-', '/') }} 開始（{{ r.startedByName }}）・已 {{ r.state.hours }} 小時</span>
             </div>
             <div :class="['text-xs', r.state.order === 'ok' ? 'text-slate-600' : 'font-semibold text-red-700']">{{ orderText(r) }}</div>
-            <div :class="['text-xs', r.state.check === 'overdue' ? 'font-semibold text-red-700' : r.state.check === 'due' ? 'text-amber-800' : 'text-slate-600']">下次查核：{{ r.state.checkDueAt.slice(5) }}{{ r.state.check === 'overdue' ? '（逾時）' : r.state.check === 'due' ? '（快到了）' : '' }}</div>
+            <div :class="['text-xs', r.state.check === 'overdue' ? 'font-semibold text-red-700' : r.state.check === 'due' ? 'text-amber-800' : 'text-slate-600']">下次查核：{{ r.state.checkDueAt.slice(5).replace('-', '/') }}{{ r.state.check === 'overdue' ? '（逾時）' : r.state.check === 'due' ? '（快到了）' : '' }}</div>
             <ul v-if="r.checkTexts.length" class="text-xs text-slate-500"><li v-for="c in r.checkTexts" :key="c">{{ c }}</li></ul>
             <div class="flex flex-wrap gap-1.5 pt-1">
               <UButton v-if="isNurse" size="sm" @click="openCheck(r)">查核</UButton>
@@ -118,7 +118,7 @@ async function submitEnd() {
           </div>
           <details v-if="v.ended.length" class="mt-2 text-xs text-slate-600">
             <summary class="cursor-pointer">已解除 {{ v.ended.length }} 次</summary>
-            <ul class="mt-1"><li v-for="r in v.ended" :key="r.id">{{ r.startedAt.slice(5) }} → {{ r.endedAt!.slice(5) }}（{{ r.state.hours }} 小時）{{ r.sites.join('、') }} {{ r.method }}・{{ r.endReason }}</li></ul>
+            <ul class="mt-1"><li v-for="r in v.ended" :key="r.id">{{ r.startedAt.slice(5).replace('-', '/') }} → {{ r.endedAt!.slice(5).replace('-', '/') }}（{{ r.state.hours }} 小時）{{ r.sites.join('、') }} {{ r.method }}・{{ r.endReason }}</li></ul>
           </details>
         </section>
       </template>

@@ -31,7 +31,7 @@ const viewOf = (o: IpdOrder, t: string): InfusionView => {
     ...(vd && o.infusion!.vaso ? { vaso: { unit: vd.unit, dose: vasoDose(vd, r?.rateMlH ?? o.infusion!.rateMlH, o.infusion!.vaso.weightKg), max: o.infusion!.vaso.max, target: o.infusion!.vaso.target, weightKg: o.infusion!.vaso.weightKg, perMl: vd.perMl } } : {}),
     ...(r ? (() => {
       const end = expectedEnd(r, vol)
-      return { running: { ...r, infused: infusedMl(r, vol, t), endAt: end, state: changeState(end, t), startByName: nameOf.user(r.startBy), changes: r.rateChanges.map((c) => `${c.at.slice(5)} ${nameOf.user(c.by)}：${c.from} → ${c.to} ml/h（${c.reason}）`) } }
+      return { running: { ...r, infused: infusedMl(r, vol, t), endAt: end, state: changeState(end, t), startByName: nameOf.user(r.startBy), changes: r.rateChanges.map((c) => `${c.at.slice(5).replace('-', '/')} ${nameOf.user(c.by)}：${c.from} → ${c.to} ml/h（${c.reason}）`) } }
     })() : {}),
     history: db.infusions.filter((x) => x.orderId === o.id && x.endAt).sort((a, b) => b.bagNo - a.bagNo).map((x) => ({ bagNo: x.bagNo, startAt: x.startAt, endAt: x.endAt!, reason: x.endReason ?? '', infused: infusedMl(x, vol, t), byName: nameOf.user(x.endBy) })),
   }

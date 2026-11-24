@@ -177,7 +177,7 @@ export function answerConsult(id: string, input: { findings: string; recommendat
       return consultView(c)
     }
     addChartNote(a.id, d.id, 'consultReply', [
-      { label: '會診回覆', text: `${nameOf.dept(d.deptId)}（申請：${c.requestedAt.slice(5)}，${c.question}）` },
+      { label: '會診回覆', text: `${nameOf.dept(d.deptId)}（申請：${c.requestedAt.slice(5).replace('-', '/')}，${c.question}）` },
       { label: '評估', text: c.findings! },
       { label: '建議', text: c.recommendation! },
       { label: '轉科', text: c.suggestTransfer ? `建議轉入${nameOf.dept(d.deptId)}` : '' },

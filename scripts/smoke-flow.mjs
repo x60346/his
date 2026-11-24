@@ -7137,7 +7137,7 @@ try {
       ok(f.start?.includes(sg1.no), `和種子一撞期：「${f.start}」`)
     }
     let v = await S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 09:00` })
-    ok(v.status === 'scheduled' && v.scheduleText === `OR3 ${tomorrow.slice(5)} 09:00–10:00`, `排程：${v.scheduleText}`)
+    ok(v.status === 'scheduled' && v.scheduleText === `OR3 ${tomorrow.slice(5).replace('-', '/')} 09:00–10:00`, `排程：${v.scheduleText}`)
     v = await S.scheduleSurgery(s1.id, { room: 'OR3', start: `${tomorrow} 10:00` })
     ok(v.schedule.start.endsWith('10:00') && db().auditLogs[0].action === '手術改期', '改期寫稽核')
     // 只交給手術室護理長
@@ -14475,6 +14475,27 @@ try {
     await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
   }
 
+  // 畫面格式一致：月日一律 11/24（11/24 09:30），金額一律 money()（$1,234）。掃原始碼，防止新寫的又用回 11-24、$ 1,234
+  console.log('\n[日期與金額格式]')
+  {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const files = []
+    const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); if (fs.statSync(p).isDirectory()) { if (!p.includes(path.join('src', 'mock'))) walk(p) } else if (/\.(vue|ts)$/.test(f)) files.push(p) } }
+    walk('src')
+    const dash = []
+    const dollar = []
+    for (const p of files) {
+      fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => {
+        if (!/Number\([^)]*\.slice\(5\)\)|parts\.slice\(5\)/.test(l) && /\.slice\(5(, ?(10|16))?\)(?!\.replace\('-')(?!\.join)/.test(l)) dash.push(`${p}:${i + 1}`)
+        // $${…}（模板字串）、${{ x }}、$ {{ x }}（Vue 模板）；物件字面值 ${{ a: … }[k]} 不算；money() 本身不算
+        if (!p.endsWith('labels.ts') && /\$ \{\{|\$\{\{ ?[\w.?()![\]]+ ?\}\}|\$\$\{/.test(l)) dollar.push(`${p}:${i + 1}`)
+      })
+    }
+    ok(dash.length === 0, `月日都寫成 11/24（掃 ${files.length} 個檔）${dash.length ? `；還有：${dash.slice(0, 5).join('、')}` : ''}`)
+    ok(dollar.length === 0, `金額都用 money()${dollar.length ? `；還有：${dollar.slice(0, 5).join('、')}` : ''}`)
+  }
+
   // 給藥紀錄更正：暫停後病人回來還是給了、按錯列記成已給（8 小時內；PRN、臨時、管制藥不能改成未給；紀錄只增補）
   console.log('\n[給藥紀錄更正]')
   {
@@ -19048,14 +19069,14 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const NR = await load('/src/services/nursing-rules.ts')
     const sh = NR.recentShifts('2026-11-20 14:30', 7).slice(1)
     const g = api.nursingGapShifts('2026-11-19 09:00', ['2026-11-19 20:00', '2026-11-20 03:00'], '2026-11-20 14:30', sh)
-    ok(g.join() === '' && api.nursingGapShifts('2026-11-18 09:00', ['2026-11-19 20:00'], '2026-11-20 14:30', sh).join() === '11-18 小夜,11-19 大夜,11-19 白班,11-20 大夜', '規則：入院後開始的、已結束的班每班一筆（入院那班、現在這班不算）')
+    ok(g.join() === '' && api.nursingGapShifts('2026-11-18 09:00', ['2026-11-19 20:00'], '2026-11-20 14:30', sh).join() === '11/18 小夜,11/19 大夜,11/19 白班,11/20 大夜', '規則：入院後開始的、已結束的班每班一筆（入院那班、現在這班不算）')
     const late = db().admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('C18'))
     await as('nurse01')
     let list = await api.recordAuditApi.missingNursingNotes()
     ok(list.length === 1 && list[0].admissionId === late.id && list[0].shifts.length === 1, `種子：只有 ${list[0]?.patientName}（${list[0]?.ward} ${list[0]?.bedNo}）缺 ${list[0]?.shifts.join('')}`)
     ok((await api.dashboardApi.getDashboard()).nursingRecordMissing === 1, '護理師首頁：護理紀錄缺漏')
     const [md, shift] = list[0].shifts[0].split(' ')
-    const start = `${T.slice(0, 4)}-${md} ${shift === '大夜' ? '00' : shift === '白班' ? '08' : '16'}:00`
+    const start = `${T.slice(0, 4)}-${md.replace('/', '-')} ${shift === '大夜' ? '00' : shift === '白班' ? '08' : '16'}:00`
     db().nursingNotes.push({ id: 'NN-T-GAP', admissionId: late.id, at: dateUtil.addMinutes(start, 60), focus: '補記', data: 'x', action: 'x', response: 'x', nurseId: 'U201' })
     list = await api.recordAuditApi.missingNursingNotes()
     ok(!list.length, '補記那一班：不再缺')
@@ -19159,9 +19180,9 @@ const bad = (await C.codingQueue()).todo.find((x) => x.mainDiagnosis && !db().ic
     const errOf = async (fn) => { try { await fn(); return '' } catch (e) { return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}` } }
     const fieldsOf = async (fn) => { try { await fn(); return {} } catch (e) { return e.fields ?? (e.field ? { [e.field]: e.message } : {}) } }
     ok(api.stayProgressGaps('2026-11-01 14:00', '2026-11-05 11:00', ['2026-11-02 08:30', '2026-11-04']).join() === '2026-11-03' && !api.stayProgressGaps('2026-11-01 14:00', '2026-11-02 10:00', []).length, '規則：入院隔天到出院前一天（入院、出院當天不要求）')
-    ok(api.noteDateOf({ at: '2026-11-10 09:00', lateFor: '2026-11-03' }) === '2026-11-03' && api.progressGapText(['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']) === '病程紀錄缺 6 天：11-01、11-02、11-03、11-04、11-05…', '補寫算補的那天；缺的日期最多列 5 天')
+    ok(api.noteDateOf({ at: '2026-11-10 09:00', lateFor: '2026-11-03' }) === '2026-11-03' && api.progressGapText(['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']) === '病程紀錄缺 6 天：11/01、11/02、11/03、11/04、11/05…', '補寫算補的那天；缺的日期最多列 5 天')
     const base = { day: false, dischargedAt: '2026-11-05 10:00', summary: { signedAt: '2026-11-05 09:00' }, surgeries: [], consults: [] }
-    ok(api.recordGaps({ ...base, progress: { gaps: ['2026-11-03'] } })[0] === '病程紀錄缺 1 天：11-03' && api.recordCompletedAt({ ...base, progress: { gaps: [], lastLateAt: '2026-11-08 10:00' } }) === '2026-11-08 10:00', '缺的算未完成；完成時間算到最後一次補寫')
+    ok(api.recordGaps({ ...base, progress: { gaps: ['2026-11-03'] } })[0] === '病程紀錄缺 1 天：11/03' && api.recordCompletedAt({ ...base, progress: { gaps: [], lastLateAt: '2026-11-08 10:00' } }) === '2026-11-08 10:00', '缺的算未完成；完成時間算到最後一次補寫')
     // 種子：只有 9 天前出院的肺炎病人缺一天
     const W = await load('/src/services/record-audit-work.ts')
     const withGaps = W.discharged().filter((a) => W.stayGapsOf(a).length)

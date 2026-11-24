@@ -222,8 +222,8 @@ function pacuItem(s: Surgery, u: Actor, t: string): PacuItem {
     stage, inAt: p.inAt, minutes, long: stage === 'in' && minutes > PACU_LONG_MINUTES,
     ...(latest ? { latest } : {}), scores, unmet: pacuUnmet(latest),
     scoreDue: stage === 'in' && (!latest ? minutes >= PACU_SCORE_EVERY : Math.round((parseDate(t).getTime() - parseDate(latest.at).getTime()) / 60000) > PACU_SCORE_EVERY),
-    ...(p.out ? { outText: `${p.out.at.slice(5)} 轉出（Aldrete ${p.out.aldrete}、疼痛 ${p.out.pain}${p.out.ponv ? '、噁心嘔吐' : ''}）・${nameOf.user(p.out.by)}${p.out.override ? `・放行原因：${p.out.override}` : ''}` } : {}),
-    ...(p.received ? { receivedText: `${p.received.at.slice(5)} 病房接回・${nameOf.user(p.received.by)}` } : {}),
+    ...(p.out ? { outText: `${p.out.at.slice(5).replace('-', '/')} 轉出（Aldrete ${p.out.aldrete}、疼痛 ${p.out.pain}${p.out.ponv ? '、噁心嘔吐' : ''}）・${nameOf.user(p.out.by)}${p.out.override ? `・放行原因：${p.out.override}` : ''}` } : {}),
+    ...(p.received ? { receivedText: `${p.received.at.slice(5).replace('-', '/')} 病房接回・${nameOf.user(p.received.by)}` } : {}),
     handover: [
       `${ANESTHESIA_LABEL[s.anesthesia]}${s.preAnes ? `・${asaText(s.preAnes)}${s.preAnes.difficult ? '・困難插管' : ''}` : ''}`,
       ...(r ? intraopAlerts(r).map((x) => `術中${x.text}`) : []),

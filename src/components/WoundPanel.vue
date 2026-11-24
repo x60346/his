@@ -86,14 +86,14 @@ const kindNow = computed(() => (caring.value ? caring.value.kind : nw.kind))
             <b class="text-slate-800">{{ w.label }}・{{ w.site }}</b>
             <UBadge v-if="w.stageText" tone="purple">{{ w.stageText }}</UBadge>
             <UBadge v-if="w.hospitalAcquired" tone="red">院內壓傷</UBadge>
-            <span class="text-xs text-slate-500">{{ w.foundAt.slice(5) }} 發現（{{ w.recordedByName }}）</span>
+            <span class="text-xs text-slate-500">{{ w.foundAt.slice(5).replace('-', '/') }} 發現（{{ w.recordedByName }}）</span>
           </div>
-          <p class="tabular">最新：{{ w.latest.lengthCm }}×{{ w.latest.widthCm }}×{{ w.latest.depthCm }} cm（{{ w.latest.area }} cm²）・滲液{{ exLabel(w.latest.exudate) }}・{{ w.latest.dressing }}・{{ w.latest.at.slice(5) }}</p>
-          <p v-if="w.stall" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">2 週沒有變小：{{ w.stall.from.at.slice(5, 10) }} {{ w.stall.from.area }} cm² → {{ w.stall.to.at.slice(5, 10) }} {{ w.stall.to.area }} cm²，請主治評估（換敷料、會診整形外科、營養）</p>
+          <p class="tabular">最新：{{ w.latest.lengthCm }}×{{ w.latest.widthCm }}×{{ w.latest.depthCm }} cm（{{ w.latest.area }} cm²）・滲液{{ exLabel(w.latest.exudate) }}・{{ w.latest.dressing }}・{{ w.latest.at.slice(5).replace('-', '/') }}</p>
+          <p v-if="w.stall" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">2 週沒有變小：{{ w.stall.from.at.slice(5, 10).replace('-', '/') }} {{ w.stall.from.area }} cm² → {{ w.stall.to.at.slice(5, 10).replace('-', '/') }} {{ w.stall.to.area }} cm²，請主治評估（換敷料、會診整形外科、營養）</p>
           <table class="w-full text-left text-xs">
             <thead class="whitespace-nowrap text-slate-500"><tr><th class="py-1">時間</th><th>大小 cm</th><th>面積</th><th>分級</th><th>滲液</th><th>敷料</th><th>護理師</th></tr></thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="c in w.careViews" :key="c.at"><td class="tabular py-1">{{ c.at.slice(5) }}</td><td class="tabular">{{ c.lengthCm }}×{{ c.widthCm }}×{{ c.depthCm }}</td><td class="tabular">{{ c.area }}</td><td>{{ PRESSURE_STAGES.find((s) => s.stage === c.stage)?.label ?? '—' }}</td><td>{{ exLabel(c.exudate) }}</td><td>{{ c.dressing }}</td><td>{{ c.byName }}</td></tr>
+              <tr v-for="c in w.careViews" :key="c.at"><td class="tabular py-1">{{ c.at.slice(5).replace('-', '/') }}</td><td class="tabular">{{ c.lengthCm }}×{{ c.widthCm }}×{{ c.depthCm }}</td><td class="tabular">{{ c.area }}</td><td>{{ PRESSURE_STAGES.find((s) => s.stage === c.stage)?.label ?? '—' }}</td><td>{{ exLabel(c.exudate) }}</td><td>{{ c.dressing }}</td><td>{{ c.byName }}</td></tr>
             </tbody>
           </table>
           <div v-if="v.canNurse" class="flex gap-1.5">
@@ -103,7 +103,7 @@ const kindNow = computed(() => (caring.value ? caring.value.kind : nw.kind))
         </section>
         <details v-if="v.closed.length" class="text-xs text-slate-600">
           <summary class="cursor-pointer">已結案 {{ v.closed.length }} 個</summary>
-          <ul><li v-for="w in v.closed" :key="w.id">{{ w.label }} {{ w.site }}・{{ w.foundAt.slice(5, 10) }} → {{ w.closedAt!.slice(5, 10) }}・{{ w.closeReason }}</li></ul>
+          <ul><li v-for="w in v.closed" :key="w.id">{{ w.label }} {{ w.site }}・{{ w.foundAt.slice(5, 10).replace('-', '/') }} → {{ w.closedAt!.slice(5, 10).replace('-', '/') }}・{{ w.closeReason }}</li></ul>
         </details>
       </template>
     </UQueryState>

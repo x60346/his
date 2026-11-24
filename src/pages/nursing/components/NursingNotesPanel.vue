@@ -66,7 +66,7 @@ async function respond(noteId: string) {
     <UQueryState :loading="loading && !notes" :ready="!!notes?.length" empty-title="尚無護理紀錄">
       <article v-for="n in notes" :key="n.id" class="mb-3 rounded-md border border-slate-200 p-3 text-sm last:mb-0">
         <header class="mb-1.5 flex items-center gap-2 text-xs text-slate-500">
-          <span class="tabular font-medium text-slate-700">{{ n.at }}</span>
+          <span class="tabular font-medium text-slate-700">{{ n.at?.slice(5).replace('-', '/') }}</span>
           <span class="rounded bg-brand-50 px-1.5 py-0.5 font-semibold text-brand-700">{{ n.focus }}</span>
           <span class="ml-auto">{{ n.nurseName }}</span>
         </header>
@@ -77,7 +77,7 @@ async function respond(noteId: string) {
           <div class="flex items-start gap-2">
             <dt class="w-4 font-bold text-brand-700">R</dt>
             <dd v-if="n.response" class="text-slate-700">
-              {{ n.response }}<span v-if="n.respondedAt" class="tabular ml-2 text-xs text-slate-400">{{ n.respondedAt.slice(5) }} 補記</span>
+              {{ n.response }}<span v-if="n.respondedAt" class="tabular ml-2 text-xs text-slate-400">{{ n.respondedAt.slice(5).replace('-', '/') }} 補記</span>
             </dd>
             <!-- 尚未有反應：就地補記 -->
             <dd v-else class="flex flex-1 gap-2">

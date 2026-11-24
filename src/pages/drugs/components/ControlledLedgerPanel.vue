@@ -79,7 +79,7 @@ function exportCsv() {
             <tbody class="divide-y divide-slate-100">
               <tr class="bg-slate-50/60 text-xs text-slate-500"><td class="px-3 py-1" colspan="4">期初結存</td><td class="px-2 text-right font-semibold text-slate-700">{{ data.opening }}</td><td colspan="5"></td></tr>
               <tr v-for="(r, i) in data.rows" :key="i" :class="r.kind === 'residual' && 'bg-purple-50/50'">
-                <td class="whitespace-nowrap px-3 py-1.5 text-xs">{{ r.at.slice(5, 16) }}</td>
+                <td class="whitespace-nowrap px-3 py-1.5 text-xs">{{ r.at.slice(5, 16).replace('-', '/') }}</td>
                 <td class="px-2"><UBadge :tone="KIND_TONE[r.kind]">{{ r.typeLabel }}</UBadge></td>
                 <td class="px-2 text-right text-emerald-700">{{ r.kind === 'in' ? `+${r.qty}` : '' }}</td>
                 <td class="px-2 text-right text-sky-700">{{ r.kind === 'out' ? `−${r.qty}` : r.kind === 'residual' ? `（銷毀 ${r.qty}）` : '' }}</td>

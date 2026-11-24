@@ -52,7 +52,7 @@ async function onPrint() {
       </div>
       <p class="text-xs text-slate-500">給藥前護理師掃這個條碼核對病人。條碼是這次住院的住院號：上次住院的舊腕帶掃了會被擋，請剪掉。</p>
       <template v-if="reprint">
-        <p class="text-sm text-slate-600">已印過 {{ view.printed }} 條<template v-if="view.reprints.length">（上次重印 {{ view.reprints.at(-1)!.at.slice(5) }} {{ view.reprints.at(-1)!.byName }}：{{ view.reprints.at(-1)!.reason }}）</template>。重印要寫原因，並剪掉舊的。</p>
+        <p class="text-sm text-slate-600">已印過 {{ view.printed }} 條<template v-if="view.reprints.length">（上次重印 {{ view.reprints.at(-1)!.at.slice(5).replace('-', '/') }} {{ view.reprints.at(-1)!.byName }}：{{ view.reprints.at(-1)!.reason }}）</template>。重印要寫原因，並剪掉舊的。</p>
         <UInput v-model="reason" label="重印原因" required placeholder="例：腕帶弄濕無法掃描" :error="printIt.fieldErrors.value.reason" />
       </template>
     </div>

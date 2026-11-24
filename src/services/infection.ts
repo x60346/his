@@ -30,8 +30,8 @@ const view = (c: InfectionCase): InfectionView => {
   const bed = find.bed(a?.bedId ?? '')
   return {
     ...c, label: infectionLabel(c.kind), patientName: nameOf.patient(a?.patientId), bedNo: bed?.bedNo ?? '', ward: bed?.ward ?? '',
-    ...(l ? { lineText: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10)} 放置，發生時第 ${lineDayAt(l.insertedAt, c.onsetAt)} 天）` } : {}),
-    ...(s ? { surgeryText: `${find.procedure(s.procId)?.name ?? '手術'}（${(s.endAt ?? s.schedule?.start ?? '').slice(5, 10)}）` } : {}),
+    ...(l ? { lineText: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10).replace('-', '/')} 放置，發生時第 ${lineDayAt(l.insertedAt, c.onsetAt)} 天）` } : {}),
+    ...(s ? { surgeryText: `${find.procedure(s.procId)?.name ?? '手術'}（${(s.endAt ?? s.schedule?.start ?? '').slice(5, 10).replace('-', '/')}）` } : {}),
     reportedByName: nameOf.user(c.reportedBy), ...(c.decision ? { decidedByName: nameOf.user(c.decision.by) } : {}),
     suggestIsolation: c.status === 'confirmed' && !!a && !activeIsolations(a.patientId).some((i) => i.kind === 'contact'),
   }
@@ -54,8 +54,8 @@ export function patientInfections(admissionId: string): Promise<PatientInfection
     return {
       admissionId: a.id,
       cases: db.infectionCases.filter((c) => c.admissionId === a.id).sort((x, y) => y.reportedAt.localeCompare(x.reportedAt)).map(view),
-      lines: db.lines.filter((l) => l.admissionId === a.id && INFECTION_KINDS.some((k) => k.line === l.kind)).map((l) => ({ id: l.id, kind: l.kind, text: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10)} 放置${l.removedAt ? `、${l.removedAt.slice(5, 10)} 移除` : ''}）`, insertedAt: l.insertedAt, ...(l.removedAt ? { removedAt: l.removedAt } : {}) })),
-      surgeries: db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').map((s) => ({ id: s.id, text: `${find.procedure(s.procId)?.name ?? '手術'}（${(s.endAt ?? '').slice(5, 10)}）` })),
+      lines: db.lines.filter((l) => l.admissionId === a.id && INFECTION_KINDS.some((k) => k.line === l.kind)).map((l) => ({ id: l.id, kind: l.kind, text: `${lineKind(l.kind).label}（${l.site}，${l.insertedAt.slice(5, 10).replace('-', '/')} 放置${l.removedAt ? `、${l.removedAt.slice(5, 10).replace('-', '/')} 移除` : ''}）`, insertedAt: l.insertedAt, ...(l.removedAt ? { removedAt: l.removedAt } : {}) })),
+      surgeries: db.surgeries.filter((s) => s.admissionId === a.id && s.status === 'done').map((s) => ({ id: s.id, text: `${find.procedure(s.procId)?.name ?? '手術'}（${(s.endAt ?? '').slice(5, 10).replace('-', '/')}）` })),
       canReport: (u.role === 'nurse' || u.role === 'doctor') && a.status === 'admitted', canDecide: permissionsOf(u).includes('infection.control'),
     }
   })

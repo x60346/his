@@ -45,10 +45,10 @@ const highNow = computed(() => form.residualMl !== undefined && Number(form.resi
             <b class="text-slate-800">{{ v.plan.text }}</b>
             <span class="ml-2 text-xs text-slate-500">約 {{ v.plan.kcal }} kcal、蛋白質 {{ v.plan.protein }} g／日・今天已灌 {{ v.todayMl }} ml</span>
           </div>
-          <p v-if="v.highResidual" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">{{ v.highResidual.at.slice(5) }} 反抽 {{ v.highResidual.residualMl }} ml（>{{ TUBE_RESIDUAL_HOLD }}）：建議暫停下一餐並通知醫師</p>
+          <p v-if="v.highResidual" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">{{ v.highResidual.at.slice(5).replace('-', '/') }} 反抽 {{ v.highResidual.residualMl }} ml（>{{ TUBE_RESIDUAL_HOLD }}）：建議暫停下一餐並通知醫師</p>
           <ul class="divide-y divide-slate-100 rounded-md border border-slate-200">
             <li v-for="s in v.slots" :key="s.slot" class="flex flex-wrap items-center gap-2 px-3 py-2">
-              <span class="tabular w-24 text-slate-700">{{ s.slot.slice(5) }}</span>
+              <span class="tabular w-24 text-slate-700">{{ s.slot.slice(5).replace('-', '/') }}</span>
               <span class="text-slate-600">{{ s.ml }} ml{{ v.plan.mode === 'continuous' ? '（本班）' : '' }}</span>
               <UBadge :tone="stateView[s.state].tone">{{ stateView[s.state].label }}</UBadge>
               <span v-if="s.record" class="text-xs text-slate-500">
@@ -62,7 +62,7 @@ const highNow = computed(() => form.residualMl !== undefined && Number(form.resi
       </template>
     </UQueryState>
 
-    <UDialog v-model="open" :title="`管灌：${target?.slot.slice(5) ?? ''}`" size="sm" @submit="submit">
+    <UDialog v-model="open" :title="`管灌：${target?.slot.slice(5).replace('-', '/') ?? ''}`" size="sm" @submit="submit">
       <div class="space-y-3 text-sm">
         <UInput v-model="form.residualMl" type="number" label="灌食前反抽量 ml（選填）" :error="save.fieldErrors.value.residualMl" />
         <p v-if="highNow" class="rounded bg-red-50 px-2 py-1 text-xs text-red-800">反抽超過 {{ TUBE_RESIDUAL_HOLD }} ml：建議這一餐暫停（勾下面「沒灌」寫原因）並通知醫師</p>

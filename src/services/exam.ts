@@ -118,7 +118,7 @@ function view(e: ImagingExam): ExamView {
     safety: e.doneAt ? {} : safetyOf(e),
     ...(!e.arrivedAt && !e.cancelled ? ((m) => (m ? { noStaff: m } : {}))(examStaffMissing(e)) : {}),
     ...(!e.arrivedAt && !e.cancelled ? ((why) => (why ? { downtimeClash: `${examRoomName(e.room)}${why}，請改期` } : {}))(rescheduleWhy(e)) : {}),
-    ...(e.metforminAlert ? { metforminAlertText: `暫停 Metformin 到 ${e.metforminAlert.until.slice(5)}（${METFORMIN_HOLD_HOURS} 小時），複查腎功能再恢復${e.metforminAlert.ackAt ? `；${nameOf.user(e.metforminAlert.ackBy!)} 已處理` : ''}` } : {}),
+    ...(e.metforminAlert ? { metforminAlertText: `暫停 Metformin 到 ${e.metforminAlert.until.slice(5).replace('-', '/')}（${METFORMIN_HOLD_HOURS} 小時），複查腎功能再恢復${e.metforminAlert.ackAt ? `；${nameOf.user(e.metforminAlert.ackBy!)} 已處理` : ''}` } : {}),
   }
 }
 /** 還有效的檢查（取消的不算） */

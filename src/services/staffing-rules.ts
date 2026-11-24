@@ -57,7 +57,7 @@ export function restProblems(shifts: { date: string; shift: ShiftName }[]): stri
   const out: string[] = []
   for (let i = 1; i < xs.length; i++) {
     const gap = (xs[i].start - xs[i - 1].end) / 60
-    if (gap < REST_HOURS) out.push(`${xs[i - 1].date.slice(5)} ${xs[i - 1].shift}下班後只休息 ${gap} 小時就接 ${xs[i].date.slice(5)} ${xs[i].shift}`)
+    if (gap < REST_HOURS) out.push(`${xs[i - 1].date.slice(5).replace('-', '/')} ${xs[i - 1].shift}下班後只休息 ${gap} 小時就接 ${xs[i].date.slice(5).replace('-', '/')} ${xs[i].shift}`)
   }
   return out
 }

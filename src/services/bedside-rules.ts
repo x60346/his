@@ -132,7 +132,7 @@ export const BLEEDING_DRUGS = ['warfarin', 'clopidogrel', 'heparin', 'enoxaparin
 export function bleedingRisks(plt: { value: string; at: string } | undefined, drugs: { name: string; generic: string }[]): string[] {
   const out: string[] = []
   const v = plt ? Number(plt.value) : NaN
-  if (plt && Number.isFinite(v) && v < BEDSIDE_PLT_MIN) out.push(`血小板 ${plt.value}（${plt.at.slice(5, 16)}，< ${BEDSIDE_PLT_MIN}）`)
+  if (plt && Number.isFinite(v) && v < BEDSIDE_PLT_MIN) out.push(`血小板 ${plt.value}（${plt.at.slice(5, 16).replace('-', '/')}，< ${BEDSIDE_PLT_MIN}）`)
   for (const d of drugs) if (BLEEDING_DRUGS.some((k) => d.generic.toLowerCase().includes(k))) out.push(`使用中：${d.name}`)
   return out
 }

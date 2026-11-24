@@ -53,8 +53,8 @@ const TONE = { continue: 'green', hold: 'yellow', change: 'blue' } as const
     <div v-if="v" class="space-y-3">
       <div class="flex flex-wrap items-center gap-2 text-sm">
         <UBadge :tone="v.state === 'done' ? 'green' : v.overdue ? 'red' : 'yellow'">{{ v.state === 'done' ? '整合完成' : v.state === 'unbuilt' ? '待建居家用藥清單' : `待主治決定 ${v.left} 項` }}</UBadge>
-        <span v-if="v.state !== 'done'" :class="['tabular text-xs', v.overdue ? 'font-semibold text-red-700' : 'text-slate-500']">期限 {{ v.dueAt.slice(5) }}（入院 24 小時內）{{ v.overdue ? '・已逾時' : '' }}</span>
-        <span v-if="v.builtByName" class="text-xs text-slate-500">清單：{{ v.builtByName }} {{ v.builtAt?.slice(5) }}<template v-if="v.completedByName">・完成：{{ v.completedByName }} {{ v.completedAt?.slice(5) }}</template></span>
+        <span v-if="v.state !== 'done'" :class="['tabular text-xs', v.overdue ? 'font-semibold text-red-700' : 'text-slate-500']">期限 {{ v.dueAt.slice(5).replace('-', '/') }}（入院 24 小時內）{{ v.overdue ? '・已逾時' : '' }}</span>
+        <span v-if="v.builtByName" class="text-xs text-slate-500">清單：{{ v.builtByName }} {{ v.builtAt?.slice(5).replace('-', '/') }}<template v-if="v.completedByName">・完成：{{ v.completedByName }} {{ v.completedAt?.slice(5).replace('-', '/') }}</template></span>
       </div>
 
       <!-- 建清單 -->
@@ -93,7 +93,7 @@ const TONE = { continue: 'green', hold: 'yellow', change: 'blue' } as const
             <UBadge :tone="x.source === 'opd' ? 'gray' : 'purple'">{{ x.source === 'opd' ? `門診 ${x.lastDate ?? ''}` : '院外' }}</UBadge>
             <UBadge v-if="x.decision" :tone="TONE[x.decision]" class="ml-auto">{{ x.decisionLabel }}</UBadge>
           </div>
-          <div v-if="x.decision" class="text-xs text-slate-600">{{ x.decidedByName }} {{ x.decidedAt?.slice(5) }}<template v-if="x.reason">：{{ x.reason }}</template><template v-if="x.decision === 'continue' && x.activeOrderText">（住院醫囑：{{ x.activeOrderText }}）</template></div>
+          <div v-if="x.decision" class="text-xs text-slate-600">{{ x.decidedByName }} {{ x.decidedAt?.slice(5).replace('-', '/') }}<template v-if="x.reason">：{{ x.reason }}</template><template v-if="x.decision === 'continue' && x.activeOrderText">（住院醫囑：{{ x.activeOrderText }}）</template></div>
           <div v-else-if="v.canDecide" class="flex flex-wrap items-center justify-end gap-2">
             <span v-if="x.activeOrderText" class="mr-auto text-xs text-emerald-700">已有住院醫囑：{{ x.activeOrderText }}</span>
             <UButton size="sm" variant="ghost" @click="asking = { item: x, decision: 'hold' }">暫停</UButton>

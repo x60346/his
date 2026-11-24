@@ -68,7 +68,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
                 </div>
                 <div class="mt-0.5 text-xs text-slate-700">{{ x.order.content }}・{{ x.abx.text.split('・')[0] }}</div>
                 <div class="text-xs text-slate-500">{{ x.abx.reasonText }}・{{ x.deptName }} {{ x.attendingName }}</div>
-                <div v-if="tab === 'pending'" class="tabular text-xs" :class="x.abx.overdue ? 'font-semibold text-red-700' : 'text-slate-500'">審核期限 {{ x.abx.reviewDueAt.slice(5) }}</div>
+                <div v-if="tab === 'pending'" class="tabular text-xs" :class="x.abx.overdue ? 'font-semibold text-red-700' : 'text-slate-500'">審核期限 {{ x.abx.reviewDueAt.slice(5).replace('-', '/') }}</div>
               </button>
             </li>
           </ul>
@@ -86,10 +86,10 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
           </div>
           <div class="mt-1 text-sm text-slate-700">{{ item.diagnosis }}・{{ item.deptName }} {{ item.attendingName }}</div>
           <div v-if="item.latestVitals" class="tabular mt-1 text-xs text-slate-600">
-            生命徵象（{{ item.latestVitals.at.slice(5) }}）：T {{ item.latestVitals.temp ?? '—' }}・P {{ item.latestVitals.pulse ?? '—' }}・BP {{ item.latestVitals.sbp ?? '—' }}/{{ item.latestVitals.dbp ?? '—' }}・SpO2 {{ item.latestVitals.spo2 ?? '—' }}
+            生命徵象（{{ item.latestVitals.at.slice(5).replace('-', '/') }}）：T {{ item.latestVitals.temp ?? '—' }}・P {{ item.latestVitals.pulse ?? '—' }}・BP {{ item.latestVitals.sbp ?? '—' }}/{{ item.latestVitals.dbp ?? '—' }}・SpO2 {{ item.latestVitals.spo2 ?? '—' }}
           </div>
           <div v-if="item.labs.length" class="mt-1 space-y-0.5 text-xs text-slate-600">
-            <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10) }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
+            <div v-for="l in item.labs" :key="l.procName">{{ l.procName }}（{{ l.at.slice(5, 10).replace('-', '/') }}）：<span :class="l.abnormal.length ? 'font-medium text-red-700' : ''">{{ l.abnormal.join('、') || '正常' }}</span></div>
           </div>
           <div v-if="item.renal" class="mt-1 text-xs text-slate-600">{{ item.renal }}</div>
         <div class="mt-2 text-xs text-slate-700"><b>目前的抗生素：</b>{{ item.antibiotics.join('；') }}</div>
@@ -100,7 +100,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
             <div><span class="text-slate-500">使用理由：</span>{{ item.abx.reasonText }}</div>
             <ul class="divide-y divide-slate-100 rounded border border-slate-100 text-xs">
               <li v-for="(s, i) in item.abx.steps" :key="i" class="flex flex-wrap gap-x-2 px-2 py-1">
-                <span class="tabular text-slate-500">{{ s.at.slice(5) }}</span>
+                <span class="tabular text-slate-500">{{ s.at.slice(5).replace('-', '/') }}</span>
                 <UBadge :tone="s.action === 'approve' ? 'green' : s.action === 'reject' ? 'red' : 'blue'">{{ STEP[s.action] }}</UBadge>
                 <span class="text-slate-500">{{ s.byName }}</span>
                 <span class="min-w-0 flex-[1_1_10rem] text-slate-700">{{ s.text }}<template v-if="s.days">（至第 {{ s.days }} 天）</template></span>
@@ -117,7 +117,7 @@ const STEP: Record<string, string> = { request: '開立', approve: '核准', rej
               <UButton variant="success" :icon="Check" :loading="review.pending.value" @click="decide(true)">核准</UButton>
             </div>
           </template>
-          <p v-else-if="decision" class="mt-2 text-xs text-slate-500">{{ decision.at.slice(5) }} {{ decision.action === 'approve' ? '核准' : '不核准' }}：{{ decision.text }}</p>
+          <p v-else-if="decision" class="mt-2 text-xs text-slate-500">{{ decision.at.slice(5).replace('-', '/') }} {{ decision.action === 'approve' ? '核准' : '不核准' }}：{{ decision.text }}</p>
         </UCard>
         <UCard title="抗生素時間軸" subtitle="這次住院：用藥、培養、腎功能、谷濃度、感染科建議"><AbxTimeline :admission-id="item.admissionId" /></UCard>
       </div>

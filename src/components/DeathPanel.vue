@@ -131,7 +131,7 @@ async function morgue() {
 
     <UDialog v-model="decOpen" title="宣告死亡" @submit="declare">
       <div class="space-y-2">
-        <p v-if="v.fromCode" class="text-xs text-slate-600">死亡時間：{{ v.fromCode.endedAt }}（急救結束）</p>
+        <p v-if="v.fromCode" class="text-xs text-slate-600">死亡時間：{{ v.fromCode.endedAt?.slice(5).replace('-', '/') }}（急救結束）</p>
         <p v-else class="text-xs text-slate-600">死亡時間記為現在。</p>
         <UInput v-for="(lbl, i) in CAUSE_LABELS" :key="lbl" v-model="f.causes[i]" :label="lbl" :required="i === 0" :error="decAct.fieldErrors.value[`cause${i}`]" :placeholder="i === 0 ? '例：敗血性休克' : ''" />
         <UInput v-model="f.other" label="其他對死亡有影響之疾病（選填）" />

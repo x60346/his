@@ -32,8 +32,8 @@ async function submitLate() {
       <ul class="space-y-1 text-sm">
         <li v-for="p in prog" :key="p.admissionId" class="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-1.5">
           <div class="min-w-0 flex-[1_1_14rem]">
-            <b>{{ p.patientName }}</b><span class="text-xs text-slate-500">・{{ p.admitNo }}{{ p.bedText ? `・${p.bedText}` : '' }}・入院 {{ p.admittedAt.slice(5, 10) }}</span>
-            <div class="text-xs text-amber-800">沒有病程紀錄：{{ p.dates.map((d) => d.slice(5)).join('、') }}</div>
+            <b>{{ p.patientName }}</b><span class="text-xs text-slate-500">・{{ p.admitNo }}{{ p.bedText ? `・${p.bedText}` : '' }}・入院 {{ p.admittedAt.slice(5, 10).replace('-', '/') }}</span>
+            <div class="text-xs text-amber-800">沒有病程紀錄：{{ p.dates.map((d) => d.slice(5).replace('-', '/')).join('、') }}</div>
           </div>
           <UButton size="sm" variant="secondary" @click="openLate({ admissionId: p.admissionId, patientName: p.patientName, dates: p.dates })">補寫</UButton>
         </li>

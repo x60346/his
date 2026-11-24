@@ -102,14 +102,14 @@ export function abxCourseHint(drugId: string, history: CourseOrder[], t: string,
   const same = history.filter((x) => x.drugId === drugId && x.status !== 'active' && recent(x)).sort((a, b) => b.stopAt!.localeCompare(a.stopAt!))[0]
   if (same) {
     const day = abxDay(abxCourseStart(same, history), t)
-    return { day, text: `${drugName(drugId)} ${same.stopAt!.slice(5)} 才停（${ABX_RESTART_HOURS} 小時內）：再開接續原療程，今天是第 ${day} 天` }
+    return { day, text: `${drugName(drugId)} ${same.stopAt!.slice(5).replace('-', '/')} 才停（${ABX_RESTART_HOURS} 小時內）：再開接續原療程，今天是第 ${day} 天` }
   }
   const others = history.filter((x) => x.drugId && x.drugId !== drugId && ABX_PROFILE[x.drugId]?.cls === cls && recent(x))
   if (!others.length) return undefined
   const start = others.map((x) => abxCourseStart(x, history)).sort()[0]
   const day = abxDay(start, t)
   const names = [...new Set(others.map((x) => drugName(x.drugId!)))].join('、')
-  return { day, text: `同類抗生素（${ABX_CLASS_LABEL[cls]}）${names} 從 ${start.slice(5, 10)} 開始用：換藥不重新起算，抗生素療程今天是第 ${day} 天` }
+  return { day, text: `同類抗生素（${ABX_CLASS_LABEL[cls]}）${names} 從 ${start.slice(5, 10).replace('-', '/')} 開始用：換藥不重新起算，抗生素療程今天是第 ${day} 天` }
 }
 
 export interface StewardOrder {

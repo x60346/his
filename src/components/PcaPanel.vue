@@ -101,16 +101,16 @@ function openEnd(p: PcaView) {
           <div class="flex flex-wrap items-center gap-2">
             <b class="text-slate-800">{{ p.drugName }}</b>
             <UBadge :tone="statusView[p.status].tone">{{ statusView[p.status].text }}</UBadge>
-            <span class="text-xs text-slate-500">單次 {{ p.bolusMg }} mg・鎖定 {{ p.lockoutMin }} 分・每小時上限 {{ p.hourLimitMg }} mg・基礎 {{ p.basalMgH }} mg/h（每小時最多 {{ p.maxPerHour }} mg）・{{ p.orderedByName }} {{ p.orderedAt.slice(5) }}</span>
+            <span class="text-xs text-slate-500">單次 {{ p.bolusMg }} mg・鎖定 {{ p.lockoutMin }} 分・每小時上限 {{ p.hourLimitMg }} mg・基礎 {{ p.basalMgH }} mg/h（每小時最多 {{ p.maxPerHour }} mg）・{{ p.orderedByName }} {{ p.orderedAt.slice(5).replace('-', '/') }}</span>
           </div>
-          <p v-if="p.setup" class="text-xs text-slate-600">{{ p.setup.at.slice(5) }} 架設：{{ p.setupByName }}、核對 {{ p.setupWitnessName }}・累計用量 {{ p.usedMl }}／{{ p.volumeMl }} ml</p>
+          <p v-if="p.setup" class="text-xs text-slate-600">{{ p.setup.at.slice(5).replace('-', '/') }} 架設：{{ p.setupByName }}、核對 {{ p.setupWitnessName }}・累計用量 {{ p.usedMl }}／{{ p.volumeMl }} ml</p>
           <div v-if="p.openAlert" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
-            <b>警示：{{ p.openAlert.text }}</b>（{{ p.openAlert.at.slice(5) }}）{{ p.openAlert.note }}
+            <b>警示：{{ p.openAlert.text }}</b>（{{ p.openAlert.at.slice(5).replace('-', '/') }}）{{ p.openAlert.note }}
             <UButton v-if="v.canOrder" size="sm" variant="danger" class="ml-2" @click="ackFor = p">處理</UButton>
             <span v-else class="ml-1 text-xs">建議暫停 PCA、通知醫師</span>
           </div>
-          <p v-if="p.alertAck && !p.openAlert" class="text-xs text-slate-600">{{ p.alertAck.at.slice(5) }} 醫師處理：{{ p.alertAck.note }}</p>
-          <p v-if="p.recordDue" :class="['text-xs', p.recordDue.status === 'overdue' ? 'font-semibold text-red-700' : p.recordDue.status === 'due' ? 'text-amber-800' : 'text-slate-500']">下次紀錄：{{ p.recordDue.dueAt.slice(5) }}{{ p.recordDue.status === 'overdue' ? '（逾時）' : '' }}</p>
+          <p v-if="p.alertAck && !p.openAlert" class="text-xs text-slate-600">{{ p.alertAck.at.slice(5).replace('-', '/') }} 醫師處理：{{ p.alertAck.note }}</p>
+          <p v-if="p.recordDue" :class="['text-xs', p.recordDue.status === 'overdue' ? 'font-semibold text-red-700' : p.recordDue.status === 'due' ? 'text-amber-800' : 'text-slate-500']">下次紀錄：{{ p.recordDue.dueAt.slice(5).replace('-', '/') }}{{ p.recordDue.status === 'overdue' ? '（逾時）' : '' }}</p>
           <div class="flex flex-wrap gap-1.5">
             <UButton v-if="v.canNurse && p.status === 'ordered'" size="sm" @click="witnessFor = { p, stage: 'setup' }">雙人核對架設</UButton>
             <UButton v-if="v.canOrder && p.status === 'ordered'" size="sm" variant="ghost" @click="cancelFor = p">取消</UButton>
@@ -121,11 +121,11 @@ function openEnd(p: PcaView) {
             <thead class="whitespace-nowrap text-slate-500"><tr><th class="py-1">時間</th><th>按壓/給藥</th><th>累計 ml</th><th>疼痛</th><th>鎮靜</th><th>呼吸</th><th>紀錄</th></tr></thead>
             <tbody class="divide-y divide-slate-100">
               <tr v-for="r in p.recordViews" :key="r.at" :class="r.alert && 'bg-red-50 text-red-800'">
-                <td class="tabular py-1">{{ r.at.slice(5) }}</td><td class="tabular">{{ r.demands }}/{{ r.delivered }}</td><td class="tabular">{{ r.usedMl }}</td><td class="tabular">{{ r.pain }}</td><td class="tabular">{{ r.sedation }}</td><td class="tabular">{{ r.resp }}</td><td>{{ r.byName }}{{ r.note ? `：${r.note}` : '' }}</td>
+                <td class="tabular py-1">{{ r.at.slice(5).replace('-', '/') }}</td><td class="tabular">{{ r.demands }}/{{ r.delivered }}</td><td class="tabular">{{ r.usedMl }}</td><td class="tabular">{{ r.pain }}</td><td class="tabular">{{ r.sedation }}</td><td class="tabular">{{ r.resp }}</td><td>{{ r.byName }}{{ r.note ? `：${r.note}` : '' }}</td>
               </tr>
             </tbody>
           </table>
-          <p v-if="p.end" class="text-xs text-slate-600">{{ p.end.at.slice(5) }} 結束（{{ p.end.reason }}）：剩餘 {{ p.end.residualMl }} ml 銷毀，{{ p.endByName }}、見證 {{ p.endWitnessName }}</p>
+          <p v-if="p.end" class="text-xs text-slate-600">{{ p.end.at.slice(5).replace('-', '/') }} 結束（{{ p.end.reason }}）：剩餘 {{ p.end.residualMl }} ml 銷毀，{{ p.endByName }}、見證 {{ p.endWitnessName }}</p>
         </section>
       </template>
     </UQueryState>

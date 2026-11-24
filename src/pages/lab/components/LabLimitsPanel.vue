@@ -46,7 +46,7 @@ const open = reactive<Record<string, boolean>>({})
                 </td>
               </tr>
               <tr v-if="open[r.procId]"><td colspan="6" class="pb-2 text-xs text-slate-600">
-                <div v-for="(h, i) in r.history" :key="i">{{ h.at.slice(5) }} {{ h.byName }}：{{ h.text }}（{{ h.reason }}）</div>
+                <div v-for="(h, i) in r.history" :key="i">{{ h.at.slice(5).replace('-', '/') }} {{ h.byName }}：{{ h.text }}（{{ h.reason }}）</div>
               </td></tr>
             </template>
           </tbody>

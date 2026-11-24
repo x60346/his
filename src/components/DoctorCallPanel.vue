@@ -49,7 +49,7 @@ const rrt = useAction(doctorCallApi.callRrtFromCall, { success: '已呼叫快速
         <ul v-else class="divide-y divide-slate-100 rounded-md border border-slate-200">
           <li v-for="c in v.calls" :key="c.id" class="space-y-1 px-3 py-2">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="tabular text-xs text-slate-500">{{ c.calledAt.slice(5) }}</span>
+              <span class="tabular text-xs text-slate-500">{{ c.calledAt.slice(5).replace('-', '/') }}</span>
               <UBadge :tone="c.urgency === 'urgent' ? 'red' : 'gray'">{{ c.urgency === 'urgent' ? '緊急' : '一般' }}</UBadge>
               <b>{{ c.toName }}</b><span class="text-xs text-slate-500">{{ c.roleLabel }}・{{ c.calledByName }} 打</span>
               <UBadge v-if="c.overdue" tone="red">超過 15 分鐘沒回覆：{{ c.toRole === 'attending' ? '再找一次，或呼叫快速反應小組' : '再找一次或改找主治' }}</UBadge>

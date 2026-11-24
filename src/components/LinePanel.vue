@@ -90,11 +90,11 @@ async function submitRm() {
             <div class="flex flex-wrap items-center gap-2">
               <b class="text-slate-800">{{ l.label }}</b>
               <span class="text-slate-600">{{ l.site }}・{{ l.size }}</span>
-              <span class="tabular text-xs text-slate-500">{{ l.insertedAt.slice(5) }} 放置（{{ l.placedBy }}）・已放 {{ ageText(l) }}</span>
+              <span class="tabular text-xs text-slate-500">{{ l.insertedAt.slice(5).replace('-', '/') }} 放置（{{ l.placedBy }}）・已放 {{ ageText(l) }}</span>
               <span v-if="l.consentNo" class="text-xs text-slate-500">同意書 {{ l.consentNo }}</span>
               <UBadge v-else-if="l.consentWaiver" tone="gray" :title="l.consentWaiver">無同意書：{{ l.consentWaiver.startsWith('緊急') ? '緊急' : '外院放置' }}</UBadge>
               <template v-if="l.state.chest">
-                <span class="text-xs text-slate-600">24 小時 {{ l.state.chest.ml24 }} mL<template v-if="l.state.chest.lastAt">・最近 {{ l.state.chest.lastAt.slice(5) }}</template></span>
+                <span class="text-xs text-slate-600">24 小時 {{ l.state.chest.ml24 }} mL<template v-if="l.state.chest.lastAt">・最近 {{ l.state.chest.lastAt.slice(5).replace('-', '/') }}</template></span>
                 <UBadge v-if="l.state.chest.airLeak" tone="yellow">漏氣</UBadge>
                 <UBadge v-if="l.state.chest.bleeding" tone="red">每小時 {{ l.state.chest.lastRate }} mL（≥{{ CHEST_BLEED_MLH }}）：通知醫師</UBadge>
                 <UBadge v-if="l.state.chest.recordDue" tone="cyan">該記引流量了</UBadge>
@@ -108,10 +108,10 @@ async function submitRm() {
             <details v-if="l.drainage?.length" class="text-xs text-slate-600">
               <summary class="cursor-pointer">引流紀錄 {{ l.drainage.length }} 筆</summary>
               <ul class="mt-1 space-y-0.5">
-                <li v-for="d in [...l.drainage].reverse()" :key="d.at" class="tabular">{{ d.at.slice(5) }}・{{ d.ml }} mL・{{ d.appearance }}{{ d.airLeak ? '・漏氣' : '' }}</li>
+                <li v-for="d in [...l.drainage].reverse()" :key="d.at" class="tabular">{{ d.at.slice(5).replace('-', '/') }}・{{ d.ml }} mL・{{ d.appearance }}{{ d.airLeak ? '・漏氣' : '' }}</li>
               </ul>
             </details>
-            <div v-if="l.needChecks.length" class="text-xs text-slate-500">最近評估：{{ l.needChecks.at(-1)!.at.slice(5) }} {{ l.needChecks.at(-1)!.byName }}・{{ l.needChecks.at(-1)!.needed ? '還需要' : `可以移除（${l.needChecks.at(-1)!.note}）` }}</div>
+            <div v-if="l.needChecks.length" class="text-xs text-slate-500">最近評估：{{ l.needChecks.at(-1)!.at.slice(5).replace('-', '/') }} {{ l.needChecks.at(-1)!.byName }}・{{ l.needChecks.at(-1)!.needed ? '還需要' : `可以移除（${l.needChecks.at(-1)!.note}）` }}</div>
             <div class="flex flex-wrap gap-1.5">
               <template v-if="lineKind(l.kind).dailyNeed">
                 <UButton size="sm" variant="secondary" :loading="need.pending.value" @click="need.run(l.id, true)">還需要</UButton>
@@ -125,7 +125,7 @@ async function submitRm() {
         <details v-if="lines.removed.length" class="text-xs text-slate-600">
           <summary class="cursor-pointer">已移除 {{ lines.removed.length }} 條</summary>
           <ul class="mt-1 space-y-0.5">
-            <li v-for="l in lines.removed" :key="l.id">{{ l.label }} {{ l.site }} {{ l.size }}・{{ l.insertedAt.slice(5) }} → {{ l.removedAt!.slice(5) }}（{{ l.state.day }} 天）・{{ l.removeReason }}・{{ l.removedByName }}</li>
+            <li v-for="l in lines.removed" :key="l.id">{{ l.label }} {{ l.site }} {{ l.size }}・{{ l.insertedAt.slice(5).replace('-', '/') }} → {{ l.removedAt!.slice(5).replace('-', '/') }}（{{ l.state.day }} 天）・{{ l.removeReason }}・{{ l.removedByName }}</li>
           </ul>
         </details>
         <p class="text-xs text-slate-500">導尿管、中心靜脈導管每天評估還需要嗎，滿 7 天提醒主治；周邊留置針滿 96 小時提醒更換；胸管每班記引流量（每小時 ≥200 mL 通知醫師，24 小時 &lt;200 mL 又沒漏氣可評估拔管）。胸管在住院醫囑「床邊處置」登錄。只提醒，不擋。</p>
@@ -175,7 +175,7 @@ async function submitRm() {
 
     <UDialog v-model="drOpen" :title="`記引流量：胸管（${dr?.site ?? ''}）`" size="sm" @submit="submitDr">
       <div class="space-y-3 text-sm">
-        <UInput v-model="drForm.ml" type="number" label="這一段的引流量（mL）" required :hint="dr?.drainage?.at(-1) ? `上一筆 ${dr.drainage.at(-1)!.at.slice(5)} 之後` : undefined" :error="drain.fieldErrors.value.ml" />
+        <UInput v-model="drForm.ml" type="number" label="這一段的引流量（mL）" required :hint="dr?.drainage?.at(-1) ? `上一筆 ${dr.drainage.at(-1)!.at.slice(5).replace('-', '/')} 之後` : undefined" :error="drain.fieldErrors.value.ml" />
         <div>
           <div class="mb-1 text-slate-700">外觀</div>
           <div class="flex flex-wrap gap-1.5">

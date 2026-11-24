@@ -19,7 +19,7 @@ const ov = computed(() => (data.value?.admissionId === props.admission.id ? data
 const SCALES: RiskScale[] = ['fall', 'pressure']
 const levelTone: Record<RiskLevel, 'red' | 'yellow' | 'green'> = { high: 'red', moderate: 'yellow', low: 'green' }
 const dueText = (d: { dueAt: string; status: string; reason: string }) =>
-  `${d.status === 'overdue' ? '逾時' : d.status === 'due' ? '該評了' : '下次'}：${d.dueAt.slice(5)} 前（${RISK_REASON_LABEL[d.reason as keyof typeof RISK_REASON_LABEL]}）`
+  `${d.status === 'overdue' ? '逾時' : d.status === 'due' ? '該評了' : '下次'}：${d.dueAt.slice(5).replace('-', '/')} 前（${RISK_REASON_LABEL[d.reason as keyof typeof RISK_REASON_LABEL]}）`
 
 // ---------- 評估 ----------
 const scale = ref<RiskScale>()
@@ -78,7 +78,7 @@ async function confirmVoid(reason: string) {
           <p v-if="ov.scales[s].latest?.measures?.length" class="text-xs text-slate-600">預防措施：{{ ov.scales[s].latest!.measures!.map((k) => RISK_MEASURES[s].find((m) => m.key === k)?.label).join('、') }}</p>
           <ul v-if="ov.scales[s].history.length" class="tabular divide-y divide-slate-100 rounded border border-slate-100 text-xs">
             <li v-for="r in ov.scales[s].history" :key="r.id" :class="['flex flex-wrap items-center gap-x-2 px-2 py-1', r.voided && 'text-slate-400']">
-              <span :class="r.voided && 'line-through'">{{ r.at.slice(5) }}</span>
+              <span :class="r.voided && 'line-through'">{{ r.at.slice(5).replace('-', '/') }}</span>
               <span :class="['w-16', r.voided && 'line-through']">{{ r.score }} 分 {{ RISK_LEVEL_LABEL[r.level].replace('風險', '') }}</span>
               <span class="text-slate-500">{{ RISK_REASON_LABEL[r.reason] }}・{{ r.nurseName }}</span>
               <span v-if="r.voided" class="text-red-600">已作廢：{{ r.voided.reason }}</span>
@@ -91,7 +91,7 @@ async function confirmVoid(reason: string) {
 
     <UDialog v-model="open" :title="scale ? `${RISK_SCALE_NAME[scale]}：${admission.bed?.bedNo ?? ''} ${admission.patientName}` : ''" size="lg" @submit="submit">
       <div v-if="scale" class="space-y-3 text-sm">
-        <p v-if="ov?.scales[scale].latest" class="text-xs text-slate-500">已帶入上次（{{ ov.scales[scale].latest!.at.slice(5) }}）的答案，請逐題確認。</p>
+        <p v-if="ov?.scales[scale].latest" class="text-xs text-slate-500">已帶入上次（{{ ov.scales[scale].latest!.at.slice(5).replace('-', '/') }}）的答案，請逐題確認。</p>
         <fieldset v-for="it in RISK_ITEMS[scale]" :key="it.key" class="rounded-md border border-slate-200 px-3 py-2">
           <legend class="px-1 font-medium text-slate-700">{{ it.label }}</legend>
           <div class="flex flex-wrap gap-x-4 gap-y-1">
@@ -129,7 +129,7 @@ async function confirmVoid(reason: string) {
     <ReasonDialog
       v-model="voidOpen"
       title="作廢風險評估"
-      :subject="voiding ? `${RISK_SCALE_LABEL[voiding.scale]} ${voiding.at.slice(5)} ${voiding.score} 分` : ''"
+      :subject="voiding ? `${RISK_SCALE_LABEL[voiding.scale]} ${voiding.at.slice(5).replace('-', '/')} ${voiding.score} 分` : ''"
       label="作廢原因（紀錄會留著、劃線）"
       :presets="['選錯題目', '評錯病人']"
       ok-text="作廢"

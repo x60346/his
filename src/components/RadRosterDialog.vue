@@ -38,7 +38,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
     <div class="space-y-3 text-sm">
       <div class="flex flex-wrap items-center gap-2">
         <UButton size="sm" variant="secondary" @click="from = addDays(from, -7)">上一週</UButton>
-        <span class="tabular">{{ from.slice(5) }} 起 7 天</span>
+        <span class="tabular">{{ from.slice(5).replace('-', '/') }} 起 7 天</span>
         <UButton size="sm" variant="secondary" @click="from = addDays(from, 7)">下一週</UButton>
         <span class="text-xs text-slate-500">超音波由醫師做、心電圖由技術員做，不用排放射師</span>
       </div>
@@ -50,7 +50,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
               <tbody>
                 <template v-for="d in r.days" :key="d.date">
                   <tr v-for="(room, i) in d.rooms" :key="d.date + room.room" :class="i === 0 ? 'border-t border-slate-200' : ''">
-                    <td class="tabular px-2 py-1 font-medium text-slate-700"><template v-if="i === 0">{{ d.date.slice(5) }}（{{ wd(d.date) }}）</template></td>
+                    <td class="tabular px-2 py-1 font-medium text-slate-700"><template v-if="i === 0">{{ d.date.slice(5).replace('-', '/') }}（{{ wd(d.date) }}）</template></td>
                     <td class="px-2 py-1">{{ room.name }}</td>
                     <td v-for="b in room.blocks" :key="b.block" class="px-2 py-1">
                       <span v-if="b.closed" class="text-slate-400">{{ b.closed }}</span>
@@ -69,14 +69,14 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
           <div v-if="r.unstaffed.length" class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
             <div class="font-semibold text-amber-900">未來 14 天沒有放射師的檢查</div>
             <ul class="mt-1 space-y-0.5 text-xs text-amber-900">
-              <li v-for="x in r.unstaffed" :key="x.id" class="tabular">{{ x.start.slice(5) }} {{ x.roomName }}・{{ x.patientName }}（{{ x.missing }}）</li>
+              <li v-for="x in r.unstaffed" :key="x.id" class="tabular">{{ x.start.slice(5).replace('-', '/') }} {{ x.roomName }}・{{ x.patientName }}（{{ x.missing }}）</li>
             </ul>
           </div>
           <div v-if="r.canEdit && r.requests.length" class="rounded-md border border-slate-200 px-3 py-2">
             <div class="mb-1 font-semibold text-slate-700">請假、換班待核准</div>
             <ul class="space-y-2">
               <li v-for="q in r.requests" :key="q.id" class="flex flex-wrap items-end gap-2 text-xs">
-                <div class="min-w-0 flex-[1_1_14rem]"><b>{{ q.requesterName }}</b> {{ q.date.slice(5) }} {{ q.roomName }} {{ q.blockLabel }}：{{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}<span class="text-slate-500">（{{ q.reason }}）</span><span v-if="q.kind === 'leave'" class="text-amber-700">・{{ q.freeTechs?.length ? `這段有空：${q.freeTechs.map((t) => t.name).join('、')}` : '這段沒有人有空，核准後空著' }}</span></div>
+                <div class="min-w-0 flex-[1_1_14rem]"><b>{{ q.requesterName }}</b> {{ q.date.slice(5).replace('-', '/') }} {{ q.roomName }} {{ q.blockLabel }}：{{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}<span class="text-slate-500">（{{ q.reason }}）</span><span v-if="q.kind === 'leave'" class="text-amber-700">・{{ q.freeTechs?.length ? `這段有空：${q.freeTechs.map((t) => t.name).join('、')}` : '這段沒有人有空，核准後空著' }}</span></div>
                 <select v-if="q.kind === 'leave'" v-model="replaceBy[q.id]" class="form-control w-36 py-0.5 text-xs" :aria-label="`${q.date} ${q.roomName} ${q.blockLabel} 改排`">
                   <option value="">核准後空著</option>
                   <option v-for="t in q.freeTechs ?? []" :key="t.id" :value="t.id">改排 {{ t.name }}</option>
@@ -92,7 +92,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
             <ul class="space-y-1">
               <li v-for="m in r.myShifts" :key="m.id" class="text-xs">
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="tabular">{{ m.date.slice(5) }}（{{ wd(m.date) }}）{{ m.roomName }} {{ m.blockLabel }}</span>
+                  <span class="tabular">{{ m.date.slice(5).replace('-', '/') }}（{{ wd(m.date) }}）{{ m.roomName }} {{ m.blockLabel }}</span>
                   <span v-if="m.pending" class="text-amber-700">{{ m.pending }}</span>
                   <template v-else>
                     <button type="button" class="text-brand-700 underline" @click="openReq(m.id, 'leave')">請假</button>
@@ -112,7 +112,7 @@ const wd = (d: string) => '日一二三四五六'[new Date(`${d}T00:00:00`).getD
             </ul>
           </div>
           <ul v-if="!r.canEdit && r.requests.length" class="space-y-0.5 text-xs text-slate-600">
-            <li v-for="q in r.requests" :key="q.id">我的申請：{{ q.date.slice(5) }} {{ q.roomName }} {{ q.blockLabel }} {{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}・{{ { pending: '等核准', approved: '已核准', rejected: `退回（${q.decided?.note ?? ''}）`, cancelled: '已取消' }[q.status] }}</li>
+            <li v-for="q in r.requests" :key="q.id">我的申請：{{ q.date.slice(5).replace('-', '/') }} {{ q.roomName }} {{ q.blockLabel }} {{ q.kind === 'leave' ? '請假' : `換給 ${q.toName}` }}・{{ { pending: '等核准', approved: '已核准', rejected: `退回（${q.decided?.note ?? ''}）`, cancelled: '已取消' }[q.status] }}</li>
           </ul>
           <p v-if="!r.canEdit" class="text-xs text-slate-500">排班由放射科組長（權限「放射師排班」）安排；自己的班可以申請請假或換班。</p>
         </template>
