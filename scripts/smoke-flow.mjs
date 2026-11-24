@@ -14475,6 +14475,67 @@ try {
     await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
   }
 
+  // 給藥紀錄更正：暫停後病人回來還是給了、按錯列記成已給（8 小時內；PRN、臨時、管制藥不能改成未給；紀錄只增補）
+  console.log('\n[給藥紀錄更正]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const N = api.nursingApi
+    let msg = ''
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : `（非預期的錯誤）${e.message}`
+      }
+    }
+    const fieldsOf = async (fn) => {
+      try {
+        await fn()
+        return {}
+      } catch (e) {
+        return e.fields ?? (e.field ? { [e.field]: e.message } : {})
+      }
+    }
+    const tNow = (await load('/src/utils/date.ts')).now()
+    const cutoff = (await load('/src/utils/date.ts')).addMinutes(tNow, -480)
+    const ord = (m) => db().ipdOrders.find((o) => o.id === m.orderId)
+    const m = db().mar.find((x) => x.status === 'given' && x.udLineId && !x.residual && !x.stockFrom && x.executedAt >= cutoff && ord(x)?.type === 'long' && !db().drugs.find((d) => d.id === ord(x)?.drugId)?.controlled && db().admissions.find((a) => a.id === x.admissionId)?.status === 'admitted')
+    ok(!!m, `找到一筆 8 小時內給的 UD 排程給藥（${m && ord(m).content} ${m?.scheduledAt}）`)
+    await as('nurse01')
+    const view = (await N.getMarBoard(m.admissionId, m.scheduledAt.slice(0, 10))).mar.find((x) => x.id === m.id)
+    ok(view.correction?.to.join() === 'held,refused', '畫面看得到「更正」：已給藥只能改成暫停或拒絕')
+    const f = await fieldsOf(() => N.correctMar(m.id, { to: 'held', reason: ' ' }))
+    ok(!!f.reason, '更正沒寫原因 → 標在原因欄')
+    await N.correctMar(m.id, { to: 'held', reason: '記錄錯誤（按錯列，藥其實沒給）' })
+    let r = db().mar.find((x) => x.id === m.id)
+    ok(r.status === 'held' && r.corrections?.length === 1 && r.corrections[0].from.status === 'given' && !r.scan && db().auditLogs[0].action === '給藥更正', '已給藥 → 暫停：更正前的留在紀錄裡、掃描紀錄拿掉、稽核記一筆')
+    const ud = await load('/src/services/ud-work.ts')
+    const line = db().udDispenses.flatMap((u) => u.lines).find((l) => l.id === r.udLineId)
+    ok(ud.pendingReturn(line).waiting.marIds.includes(m.id), '改成沒給：這一劑列入「待送回藥局」')
+    await N.correctMar(m.id, { to: 'given', reason: '病人檢查回來後給藥' })
+    r = db().mar.find((x) => x.id === m.id)
+    ok(r.status === 'given' && r.corrections.length === 2 && !ud.pendingReturn(line).waiting.marIds.includes(m.id), '暫停 → 已給藥（補給）：兩次更正都留著，不再列待送回')
+    msg = await errOf(() => N.correctMar(m.id, { to: 'given', reason: 'x' }))
+    ok(msg.includes('相同') || msg.includes('不能'), `改成和目前一樣 → 「${msg}」`)
+    // PRN 用病房常備：記錯不能在這裡改成沒給
+    const prn = db().ipdOrders.find((o) => o.status === 'active' && o.freq === 'PRN' && o.drugId && !db().drugs.find((d) => d.id === o.drugId)?.controlled && db().admissions.find((a) => a.id === o.admissionId)?.status === 'admitted')
+    if (prn) {
+      const g = await N.givePrn(prn.id, '體溫 38.5°C')
+      msg = await errOf(() => N.correctMar(g.id, { to: 'held', reason: '按錯' }))
+      ok(msg.includes('病房常備'), `PRN 給錯 → 「${msg}」`)
+    }
+    // 超過 8 小時的不能改
+    const old = db().mar.find((x) => x.status !== 'pending' && (x.recordedAt ?? x.executedAt) < cutoff && db().admissions.find((a) => a.id === x.admissionId)?.status === 'admitted')
+    if (old) {
+      msg = await errOf(() => N.correctMar(old.id, { to: old.status === 'given' ? 'held' : 'given', reason: 'x' }))
+      ok(msg.includes('8 小時'), `超過 8 小時 → 「${msg}」`)
+    }
+    await as('dr01')
+    await expectError(() => N.correctMar(m.id, { to: 'held', reason: 'x' }), '醫師更正給藥紀錄')
+  }
+
   // 醫師首頁住院待辦 → 帶到哪位病人、哪個分頁：每位醫師、每張卡片，首頁有數字就一定列得出病人（反之亦然）
   console.log('\n[醫師待辦帶到病人]')
   {

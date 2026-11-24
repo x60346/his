@@ -16,7 +16,8 @@ import { RISK_REASON_LABEL, RISK_SCALE_NAME } from './risk-rules'
 import { activeIsolations, placementFor } from './flag-work'
 import { ISOLATION_REVIEW_TEXT, isolationReviewDue, isoText } from './flag-rules'
 import { scanRequired, scanText, settleScan, type ScanInput } from './scan-work'
-import { checkGivenAt, isAbnormal, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
+import { marCorrection, type MarDoneStatus } from './mar-correct-work'
+import { checkGivenAt, isAbnormal, MAR_CORRECT_MAX_MIN, MAR_EARLY_MIN, marUrgency, measuredThisShift, needsAck, openQuery, orderChange, recentShifts, shiftRange, type OrderChange, shiftInstanceOf, vitalSpecs, type Shift, type ShiftInstance, type VitalKey } from './nursing-rules'
 import { admissionView, find, nameOf, wardOf, type AdmissionView } from './views'
 import { transfusionTasksOf } from './blood-work'
 import { activeLines, drainBetween, lineTodosOf, painStateOf } from './line-work'
@@ -484,22 +485,11 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
       fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
     }
     const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
-    // 需健保事前審查的藥：核准前不能給（病人同意自費、醫師寫緊急理由除外）
-    if (status === 'given') requireDrugPreAuth(order)
-    // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
-    // 核對通過、送到病房才算（只調劑還在藥局核對中，藥也還沒到）
-    if (status === 'given' && order.type === 'long' && udStage(m) !== 'verified') {
-      fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5)}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
-    }
-    // 給藥前核對病人與藥品（條碼）：暫停、拒絕沒有給，不用掃
-    const scanned = status === 'given' ? settleScan(admitted(m.admissionId), order, scan) : undefined
-    // 暫停、拒絕本來就是「不給」，照常；只有給藥要過這一關
-    const forced = status === 'given' ? holdForQuery(order, force) : undefined
-    const res = status === 'given' ? residualCheck(order, nurse.id, witness) : undefined
-    // 臨時（STAT）給藥用病房常備藥：給的時候扣住院藥局
-    const stock = status === 'given' && order.type === 'stat' ? wardStockOut(order, admitted(m.admissionId).admitNo, nurse.id, res?.ledger ?? {}) : undefined
-    if (stock) m.stockFrom = stock.from
-    if (res) m.residual = res.residual
+    // 暫停、拒絕本來就是「不給」，照常；只有給藥要過給藥前的檢查（事前審查、藥到了沒、掃描、疑問、殘餘量、扣病房常備）
+    const g = status === 'given' ? giveChecks(m, order, nurse.id, force, witness, scan) : undefined
+    const scanned = g?.scanned
+    const forced = g?.forced
+    const res = g?.res
     const noteText = [note.trim(), forced ? `疑問期間仍給藥：${forced}` : ''].filter(Boolean).join('；')
     Object.assign(m, { status, note: noteText || undefined, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id, ...(scanned ? { scan: scanned } : {}) })
     // 臨時給藥醫囑執行後即完成；完成時間記在 stopAt（和非給藥的臨時醫囑一樣），護理站才看得出「已完成」與時間
@@ -509,6 +499,69 @@ export function executeMar(marId: string, status: Exclude<MarRecord['status'], '
     }
     audit(forced ? '疑問期間仍給藥' : '給藥', `${order.content} ${status}${at !== t ? `（補登 ${at.slice(11)}）` : ''}${noteText ? `：${noteText}` : ''}${res ? `；${res.text}` : ''}${scanned ? `；${scanText(scanned)}` : ''}`)
     if (res) consumeWitness(witness)
+    return m
+  })
+}
+
+/**
+ * 排程（或臨時）的一劑要記成「已給藥」前的檢查——給藥與更正（暫停後補給）共用：
+ * 事前審查、UD 藥到病房了沒、條碼核對、醫囑疑問、管制藥殘餘量見證、臨時給藥扣病房常備
+ */
+function giveChecks(m: MarRecord, order: IpdOrder, nurseId: string, force?: { reason: string }, witness?: string, scan?: ScanInput) {
+  // 需健保事前審查的藥：核准前不能給（病人同意自費、醫師寫緊急理由除外）
+  requireDrugPreAuth(order)
+  // 排程給藥的藥由住院藥局調劑送來（UD）：還沒調劑就是藥還沒到病房，不能記「已給」
+  // 核對通過、送到病房才算（只調劑還在藥局核對中，藥也還沒到）
+  if (order.type === 'long' && udStage(m) !== 'verified') {
+    fail(udStage(m) === 'prepared' ? `這一劑（${m.scheduledAt.slice(5)}）藥局已調劑、還在核對，核對送出後才能給` : `藥局尚未調劑這一劑（${m.scheduledAt.slice(5)}）：請聯絡住院藥局補調劑`, 'CONFLICT', 'ud')
+  }
+  // 給藥前核對病人與藥品（條碼）
+  const scanned = settleScan(admitted(m.admissionId), order, scan)
+  const forced = holdForQuery(order, force)
+  const res = residualCheck(order, nurseId, witness)
+  // 臨時（STAT）給藥用病房常備藥：給的時候扣住院藥局
+  const stock = order.type === 'stat' ? wardStockOut(order, admitted(m.admissionId).admitNo, nurseId, res?.ledger ?? {}) : undefined
+  if (stock) m.stockFrom = stock.from
+  if (res) m.residual = res.residual
+  return { scanned, forced, res }
+}
+
+/**
+ * 更正給藥紀錄（marCorrection 決定能改成什麼）：
+ *   改成已給藥：和給藥一樣的檢查（掃描、疑問、殘餘量見證…），可補登實際給藥時間
+ *   改成暫停或拒絕：原因就是更正原因
+ * 更正前的狀態留在 corrections（紀錄只增補不改寫），稽核記一筆「給藥更正」
+ */
+export function correctMar(marId: string, input: { to: MarDoneStatus; reason: string; givenAt?: string; force?: { reason: string }; witness?: string; scan?: ScanInput }): Promise<MarRecord> {
+  return mutate(() => {
+    const nurse = requirePermission('mar.give')
+    const m = must(db.mar.find((x) => x.id === marId), '給藥紀錄')
+    admitted(m.admissionId)
+    const t = now()
+    const c = marCorrection(m, t)
+    if (!c) fail(m.status === 'pending' ? '這一劑還沒執行，直接在給藥紀錄記錄即可' : `只能更正 ${MAR_CORRECT_MAX_MIN / 60} 小時內記錄的給藥；更早的請寫在護理紀錄`, 'CONFLICT')
+    if (!c!.to.includes(input.to)) fail(input.to === m.status ? '和目前的紀錄相同' : c!.why ?? '不能改成這個狀態', 'CONFLICT')
+    const reason = input.reason?.trim()
+    if (!reason) failField('reason', '請寫更正原因（例：病人檢查回來後給藥、按錯列）')
+    const order = must(db.ipdOrders.find((o) => o.id === m.orderId), '醫囑')
+    const at = input.to === 'given' && input.givenAt ? input.givenAt : t
+    if (at !== t) {
+      const problem = checkGivenAt(m.scheduledAt, at, t)
+      if (problem) failField('givenAt', problem)
+    }
+    if (input.to === 'given' && marUrgency(m.scheduledAt, at) === 'upcoming') fail(`尚未到給藥時間（預定 ${m.scheduledAt.slice(11)}，最早可提前 ${MAR_EARLY_MIN} 分鐘）`)
+    const from = { status: m.status, ...(m.executedAt ? { executedAt: m.executedAt } : {}), ...(m.recordedAt ? { recordedAt: m.recordedAt } : {}), ...(m.nurseId ? { nurseId: m.nurseId } : {}), ...(m.note ? { note: m.note } : {}) }
+    const g = input.to === 'given' ? giveChecks(m, order, nurse.id, input.force, input.witness, input.scan) : undefined
+    if (input.to !== 'given') {
+      // 改成沒給：掃描紀錄跟著「已給藥」，一起拿掉（更正前的留在 corrections）
+      delete m.scan
+    }
+    const note = input.to === 'given' ? (g?.forced ? `疑問期間仍給藥：${g.forced}` : undefined) : reason
+    Object.assign(m, { status: input.to, note, executedAt: at, recordedAt: at !== t ? t : undefined, nurseId: nurse.id, ...(g?.scanned ? { scan: g.scanned } : {}) })
+    m.corrections = [...(m.corrections ?? []), { at: t, by: nurse.id, reason: reason!, from }]
+    const label = { given: '已給藥', held: '暫停', refused: '拒絕', pending: '待給' } as const
+    audit('給藥更正', `${order.content} ${m.scheduledAt.slice(5)}：${label[from.status]} → ${label[input.to]}（${reason}）${at !== t ? `；實際給藥 ${at.slice(11)}` : ''}${g?.res ? `；${g.res.text}` : ''}${g?.scanned ? `；${scanText(g.scanned)}` : ''}`)
+    if (g?.res) consumeWitness(input.witness)
     return m
   })
 }

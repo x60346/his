@@ -19,6 +19,7 @@ import { addonCheck } from './specimen-rules'
 import { openQuery } from './nursing-rules'
 import { stopOrderRecord } from './order-ops'
 import { udDelivery, udStage } from './ud-work'
+import { marCorrection, type MarCorrection } from './mar-correct-work'
 import { checkRxAlerts, type RxAlert } from './interaction-rules'
 import { drugRefs, ipdInUse, settleRxAlerts } from './rx-alert-work'
 import { ABX_DEFAULT_DAYS, ABX_REASON_LABEL, abxText, checkAbxInput } from './abx-rules'
@@ -540,7 +541,13 @@ export interface MarView extends MarRecord {
   abxRejected?: boolean
   /** 長期醫囑還沒通過藥師審核：藥局還不能調劑 */
   pharmPending?: boolean
+  /** 現在可以怎麼更正（8 小時內記的才有） */
+  correction?: MarCorrection
+  /** 更正過的：每次更正前是什麼、誰、為什麼（畫面逐行列出） */
+  correctionLog?: { at: string; byName: string; reason: string; fromText: string }[]
 }
+
+const MAR_STATUS_TEXT: Record<MarRecord['status'], string> = { pending: '待給', given: '已給藥', held: '暫停', refused: '拒絕' }
 
 /** 組出某日的給藥紀錄檢視（服務層內部共用：不補排程、不包 query） */
 export function marViews(admissionId: string, date: string): MarView[] {
@@ -570,6 +577,10 @@ export function marViews(admissionId: string, date: string): MarView[] {
         ...(m.residual ? { residualWitnessName: nameOf.user(m.residual.witnessBy) } : {}),
         ...(o?.abx ? { abxText: abxText(o.abx, m.scheduledAt > now() ? now() : m.scheduledAt), ...(o.abx.status === 'rejected' && o.status === 'active' ? { abxRejected: true } : {}) } : {}),
         ...(d && o?.dose && !Number.isInteger(o.dose) && doseStrengthText(d, o.dose) ? { doseStrength: doseStrengthText(d, o.dose) } : {}),
+        ...((c) => (c ? { correction: c } : {}))(marCorrection(m, now())),
+        ...(m.corrections?.length
+          ? { correctionLog: m.corrections.map((x) => ({ at: x.at, byName: nameOf.user(x.by), reason: x.reason, fromText: `${MAR_STATUS_TEXT[x.from.status]}${x.from.executedAt ? ` ${x.from.executedAt.slice(11)}` : ''}${x.from.nurseId ? `・${nameOf.user(x.from.nurseId)}` : ''}${x.from.note ? `（${x.from.note}）` : ''}` })) }
+          : {}),
       }
     })
 }

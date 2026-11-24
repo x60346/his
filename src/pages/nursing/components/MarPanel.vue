@@ -3,8 +3,8 @@
 // 「逾時／待給／未到」由共用規則 marUrgency 依「現在時間」即時計算——時鐘走，顏色就跟著變，不必重新查詢。
 // 服務層用同一條規則把關：未到時間按「給藥」會被擋下，畫面上的停用只是讓人不必白按。
 import { computed, ref, watch } from 'vue'
-import { Check, CircleSlash, Clock, History, Pause } from 'lucide-vue-next'
-import { UBadge, UButton, UDialog, UInput, UQueryState } from '@/components/ui'
+import { Check, CircleSlash, Clock, History, Pause, PenLine } from 'lucide-vue-next'
+import { UBadge, UButton, UDialog, UInput, UQueryState, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WitnessDialog from '@/components/WitnessDialog.vue'
 import ScanDialog from '@/components/ScanDialog.vue'
@@ -219,6 +219,48 @@ async function confirmReason(note: string) {
   if (ok !== undefined) reasonFor.value = null
 }
 
+// ---------- 更正給藥紀錄：暫停後病人回來還是給了、按錯列……（能改成什麼由服務層 marCorrection 決定，8 小時內） ----------
+const corrFor = ref<MarView | null>(null)
+const corrOpen = computed({ get: () => !!corrFor.value, set: (v) => !v && (corrFor.value = null) })
+const corrTo = ref<'given' | 'held' | 'refused'>('given')
+const corrReason = ref('')
+const corrAtInput = ref('')
+const corrAt = computed(() => corrAtInput.value.replace('T', ' '))
+const corrAtProblem = computed(() => (corrFor.value && corrTo.value === 'given' && corrAt.value !== props.clock ? checkGivenAt(corrFor.value.scheduledAt, corrAt.value, props.clock) : null))
+const corrPresets = computed(() => (corrTo.value === 'given' ? ['病人檢查回來後給藥', '病人後來願意服藥', '記錄錯誤（其實已給）'] : ['記錄錯誤（按錯列，藥其實沒給）', '原因記錯']))
+const corr = useAction(nursingApi.correctMar, { success: '已更正給藥紀錄' })
+function openCorrect(m: MarView) {
+  corr.fieldErrors.value = {}
+  corrTo.value = m.correction?.to.includes('given') ? 'given' : (m.correction?.to[0] ?? 'held')
+  corrReason.value = ''
+  corrAtInput.value = props.clock.replace(' ', 'T')
+  corrFor.value = m
+}
+async function submitCorrect() {
+  const m = corrFor.value
+  if (!m || corrAtProblem.value) return
+  // 改成已給藥要先掃描（對話框會關掉）：原因先在這裡檢查，不然掃完才被擋、打的字也不見了（服務層照樣檢查）
+  if (!corrReason.value.trim()) {
+    corr.fieldErrors.value = { reason: '請寫更正原因' }
+    return
+  }
+  const base = { to: corrTo.value, reason: corrReason.value, ...(corrTo.value === 'given' && corrAt.value !== props.clock ? { givenAt: corrAt.value } : {}), ...(corrTo.value === 'given' && m.queried ? { force: { reason: corrReason.value } } : {}) }
+  if (corrTo.value !== 'given') {
+    if (await corr.run(m.id, base)) corrFor.value = null
+    return
+  }
+  // 改成已給藥：和給藥一樣先掃描、高警訊雙人核對、管制藥殘餘量見證
+  corrFor.value = null
+  scanGate(m.orderId, `${m.scheduledAt.slice(11)} ${m.content}・${dose(m)}（更正為已給藥）`, true, async () => {
+    if (m.highAlert && !(await ui.confirm({ title: '高警訊藥品：雙人核對', message: `${m.content}
+${dose(m)}
+病人：${props.admission.bed?.bedNo ?? '日間'} ${props.admission.patientName}
+
+請確認已與另一位護理師核對。`, okText: '已雙人核對' }))) return
+    withResidual(m, m.orderId, (w) => corr.run(m.id, { ...base, ...(w ? { witness: w } : {}), ...(scanned.value ? { scan: scanned.value } : {}) }))
+  })
+}
+
 /** 距今多久，例：3 小時前 */
 function ago(at: string) {
   const min = Math.round((parseDate(props.clock).getTime() - parseDate(at).getTime()) / 60000)
@@ -297,6 +339,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
                 <div v-if="m.queried" class="text-xs text-amber-800">護理師疑問：{{ m.queried }}（給藥暫停）</div>
                 <div class="tabular text-xs text-slate-500">{{ dose(m) }}<template v-if="m.freq">・{{ m.freq }}</template></div>
                 <div v-if="m.note" class="text-xs text-slate-600">原因：{{ m.note }}</div>
+                <div v-for="(c, i) in m.correctionLog ?? []" :key="i" class="text-xs text-amber-800">更正 {{ c.at.slice(11) }}・{{ c.byName }}：原記{{ c.fromText }}<template v-if="c.reason !== m.note">；{{ c.reason }}</template></div>
               </div>
 
               <template v-if="m.status === 'pending'">
@@ -315,6 +358,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
                   <div v-if="m.scan" :class="m.scan.mode === 'scanned' ? 'text-emerald-700' : 'text-amber-700'">{{ scanLabel(m.scan) }}</div>
                   <div v-if="m.residual" class="text-purple-700">殘餘 {{ m.residual.qty }} {{ m.unit }} 銷毀・見證 {{ m.residualWitnessName }}</div>
                 </div>
+                <UButton v-if="m.correction" size="sm" variant="ghost" :icon="PenLine" :title="m.correction.to.length ? '更正這筆給藥紀錄' : m.correction.why" @click="openCorrect(m)">更正</UButton>
               </template>
             </li>
           </ul>
@@ -379,6 +423,35 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
       <template #footer>
         <UButton variant="secondary" @click="backdateOpen = false">取消</UButton>
         <UButton type="submit" variant="success" :disabled="!!backdateProblem" :loading="exec.pending.value">補登給藥</UButton>
+      </template>
+    </UDialog>
+    <UDialog v-model="corrOpen" title="更正給藥紀錄" size="sm" @submit="submitCorrect">
+      <div v-if="corrFor" class="space-y-3 text-sm">
+        <div class="rounded-md bg-slate-50 px-3 py-2">
+          <div class="font-medium text-slate-800">{{ corrFor.scheduledAt.slice(11) }} {{ corrFor.content }}</div>
+          <div class="text-xs text-slate-600">目前：{{ statusView[corrFor.status as 'given' | 'held' | 'refused'].label }} {{ corrFor.executedAt?.slice(11) }}・{{ corrFor.nurseName }}<template v-if="corrFor.note">（{{ corrFor.note }}）</template></div>
+        </div>
+        <fieldset v-if="corrFor.correction?.to.length">
+          <legend class="mb-1 text-sm font-medium text-slate-700">改成</legend>
+          <div class="flex flex-wrap gap-3">
+            <label v-for="x in corrFor.correction.to" :key="x" class="inline-flex items-center gap-1.5"><input v-model="corrTo" type="radio" :value="x" />{{ statusView[x].label }}</label>
+          </div>
+        </fieldset>
+        <p v-if="corrFor.correction?.why" class="text-xs text-amber-800">{{ corrFor.correction.why }}</p>
+        <template v-if="corrFor.correction?.to.length">
+          <UInput v-if="corrTo === 'given'" v-model="corrAtInput" type="datetime-local" label="實際給藥時間" required :error="corrAtProblem ?? corr.fieldErrors.value.givenAt" :hint="`最多往前 ${MAR_BACKDATE_MAX_MIN / 60} 小時`" />
+          <div>
+            <UTextarea v-model="corrReason" label="更正原因" required :rows="2" :error="corr.fieldErrors.value.reason" />
+            <div class="mt-1 flex flex-wrap gap-1">
+              <button v-for="x in corrPresets" :key="x" type="button" class="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 hover:border-brand-300" @click="corrReason = x">{{ x }}</button>
+            </div>
+          </div>
+          <p class="text-xs text-slate-500">原本的紀錄會保留在這一劑下方（紀錄只增補、不改寫），稽核也會記一筆。</p>
+        </template>
+      </div>
+      <template #footer>
+        <UButton variant="secondary" @click="corrOpen = false">{{ corrFor?.correction?.to.length ? '取消' : '關閉' }}</UButton>
+        <UButton v-if="corrFor?.correction?.to.length" type="submit" :variant="corrTo === 'given' ? 'success' : 'primary'" :disabled="!!corrAtProblem" :loading="corr.pending.value">更正為{{ statusView[corrTo].label }}</UButton>
       </template>
     </UDialog>
     <ScanDialog v-model="scanOpen" :target="scanTarget" :demo-assist="policy?.demoAssist" @done="onScanned" />

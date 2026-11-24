@@ -1979,6 +1979,11 @@ export interface MarRecord {
    * 沒有這個欄位＝當時不需要掃描（設定關閉、或功能上線前的紀錄）。只有「已給藥」才有
    */
   scan?: { mode: 'scanned' } | { mode: 'skipped'; reason: ScanSkipReason; note?: string }
+  /**
+   * 更正紀錄（紀錄只增補不改寫）：例如暫停後病人檢查回來還是給了、按錯列記成已給。
+   * 每次更正把更正前的狀態留在這裡，目前的欄位是更正後的
+   */
+  corrections?: { at: string; by: string; reason: string; from: { status: MarRecord['status']; executedAt?: string; recordedAt?: string; nurseId?: string; note?: string } }[]
 }
 
 /** 略過掃描的原因 */

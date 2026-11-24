@@ -23,6 +23,8 @@ export function marUrgency(scheduledAt: string, nowStr: string): MarUrgency {
  * 頁面即時提示與服務層共用。
  */
 export const MAR_BACKDATE_MAX_MIN = 120
+/** 給藥紀錄可以更正的時間：記錄後 8 小時內（同一班），更早的寫在護理紀錄、走病安通報 */
+export const MAR_CORRECT_MAX_MIN = 480
 export function checkGivenAt(scheduledAt: string, givenAt: string, nowStr: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(givenAt)) return '請輸入實際給藥時間'
   if (givenAt > nowStr) return '給藥時間不能晚於現在'
