@@ -183,7 +183,7 @@ const CONTRAST_TONE = { ok: 'text-slate-600', hydrate: 'text-amber-800', unknown
                 <p v-if="e.downtimeClash" class="flex flex-wrap items-center gap-2 text-xs font-semibold text-red-700">{{ e.downtimeClash }}
                   <UButton v-if="board.canSchedule" size="sm" :loading="resched.pending.value" @click="resched.run(e.id)">排到下一個空檔</UButton></p>
                 <p v-if="e.noStaff && e.stage === 'scheduled'" class="text-xs font-semibold text-amber-800">{{ e.noStaff }}（請放射科組長在「放射師排班」補人）</p>
-                <p v-if="e.noShow" class="text-xs text-red-700">過了排程 30 分鐘還沒報到{{ e.where === '門診' ? '（開立醫師首頁看得到）' : '（請聯絡病房）' }}：改時間或取消</p>
+                <p v-if="e.noShow" class="text-xs text-red-700">過了排程 30 分鐘還沒報到{{ e.where === '門診' || e.where === '急診' ? '（開立醫師首頁看得到）' : '（請聯絡病房）' }}：改時間或取消</p>
                 <div v-if="moving === e.id" class="flex flex-wrap items-end gap-2">
                   <UInput v-model="slotOf(e.key).d" type="date" class="w-40" label="新日期" />
                   <UInput v-model="slotOf(e.key).tm" type="time" class="w-28" label="新時間" />

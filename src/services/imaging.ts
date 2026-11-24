@@ -23,6 +23,8 @@ export interface ImagingReportView extends ImagingReport {
   doctorName: string
   readerName: string
   source: 'opd' | 'ipd'
+  /** 急診開的 */
+  er: boolean
   patientName: string
   chartNo: string
   needsAck: boolean
@@ -43,6 +45,7 @@ function reportView(r: ImagingReport): ImagingReportView {
     doctorName: nameOf.doctor(r.doctorId),
     readerName: nameOf.doctor(r.readerId),
     source: r.orderId ? 'ipd' : 'opd',
+    er: !!r.encounterId && !!find.visit(db.encounters.find((x) => x.id === r.encounterId)?.visitId ?? '')?.er,
     patientName: p?.name ?? '', chartNo: p?.chartNo ?? '',
     needsAck: imagingNeedsAck(r),
     canAck: imagingNeedsAck(r) && canAckImaging(r, me),

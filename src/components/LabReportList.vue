@@ -49,7 +49,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
         <article v-for="r in reports" :key="r.id" :class="['rounded-md border px-3 py-2', r.needsAck ? 'border-red-300 bg-red-50/40' : 'border-slate-200']">
           <header class="flex flex-wrap items-center gap-2 text-sm">
             <span class="font-medium text-slate-800">{{ r.procName }}</span>
-            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ when(r.reportedAt) }}・{{ r.source === 'ipd' ? '住院' : '門診' }}・{{ r.doctorName }} 開立</span>
+            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ when(r.reportedAt) }}・{{ r.er ? '急診' : r.source === 'ipd' ? '住院' : '門診' }}・{{ r.doctorName }} 開立</span>
             <UBadge v-if="r.hasCritical" tone="red">危急值</UBadge>
             <UBadge v-if="r.corrections?.length" tone="yellow">已更正</UBadge>
             <span v-if="r.callout" class="text-xs text-slate-500">檢驗科 {{ r.calloutByName }} {{ when(r.callout.at) }} 已電話通報 {{ r.callout.to }}{{ r.calloutOnTime ? '' : '（逾時）' }}{{ r.callout.escalated ? '（前面沒聯絡上，升級通報）' : '' }}</span>

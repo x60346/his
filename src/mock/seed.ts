@@ -338,10 +338,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   const patients: Patient[] = patientRows.map((r, i) => {
     const [name, gender, age, identity, allergies, family, smoking, betel] = r
     const birth = toDateStr(new Date(thisYear - age, int(0, 11), int(1, 28)))
-    // 確保年齡與設定一致（生日尚未到則多減一年會使年齡偏小，這裡把生日放在今天之前）
+    // 確保年齡與設定一致：今年的生日還沒到，出生年要再往前一年（以前拿出生那年的生日跟今天比、永遠不成立，生日沒到的人都少一歲）
     const b = parseDate(birth)
-    const bd = new Date(thisYear - age, b.getMonth(), b.getDate())
-    const birthDate = bd > new Date() ? toDateStr(new Date(thisYear - age - 1, b.getMonth(), b.getDate())) : toDateStr(bd)
+    const notYet = toDateStr(new Date(thisYear, b.getMonth(), b.getDate())) > T
+    const birthDate = toDateStr(new Date(thisYear - age - (notYet ? 1 : 0), b.getMonth(), b.getDate()))
     return {
       id: `PT${String(i + 1).padStart(4, '0')}`,
       chartNo: String(100001 + i),
@@ -771,7 +771,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 入院日依今天是幾號往前推，最多 60 天，部分負擔仍在第二段）。亂數照樣抽，其他人的資料不變
     const rolled = int(1, 6)
     // 蜂窩性組織炎住 9 天：示範抗生素每日審視「Vancomycin 超過 7 天」
-    const daysIn = i === 4 ? Math.min(60, Math.max(32, 31 + Number(T.slice(8, 10)))) : i === 5 ? 9 : rolled
+    // 敗血症至少住 3 天：示範 Meropenem「50 小時前開立沒審（逾時）」，入院不滿 50 小時開立時間會被推到入院後、就不逾時
+    const daysIn = i === 4 ? Math.min(60, Math.max(32, 31 + Number(T.slice(8, 10)))) : i === 5 ? 9 : sc.dx.startsWith('A41') ? Math.max(3, rolled) : rolled
     const admitDate = addDays(T, -daysIn)
     // 隔離示範（不抽亂數）：肺炎（疑似肺結核、空氣隔離）住綜合病房的單人房；蜂窩性組織炎（MRSA、接觸隔離）住綜合病房健保床，同房另一床空著
     const cls: Bed['bedClass'] = i === 0 || i === 2 ? '單人房' : i === 4 ? '雙人房' : '健保床'

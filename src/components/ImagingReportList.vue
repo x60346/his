@@ -32,7 +32,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
         <article v-for="r in data.reports" :key="r.id" :class="['rounded-md border px-3 py-2 text-sm', r.needsAck ? 'border-red-300 bg-red-50/40' : 'border-slate-200']">
           <header class="flex flex-wrap items-center gap-2">
             <span class="font-medium text-slate-800">{{ r.procName }}</span>
-            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ when(r.reportedAt) }}・{{ r.source === 'ipd' ? '住院' : '門診' }}・判讀 {{ r.readerName }}</span>
+            <span class="tabular text-xs text-slate-500">{{ r.no }}・{{ when(r.reportedAt) }}・{{ r.er ? '急診' : r.source === 'ipd' ? '住院' : '門診' }}・判讀 {{ r.readerName }}</span>
             <UBadge v-if="r.significant" tone="red">重要發現</UBadge>
             <UBadge v-if="r.addenda?.length" tone="yellow">已補充</UBadge>
             <span v-if="r.ackAt" class="text-xs text-slate-500">{{ r.ackByName }} {{ when(r.ackAt) }} 已確認</span>

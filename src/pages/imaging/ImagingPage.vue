@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 影像判讀（醫師）：放射科醫師判讀 X 光、超音波、電腦斷層；其他醫師在這裡判讀自己開的心電圖。
-// 左邊「待判讀」（舊的在前；住院還沒做的灰色、不能寫）與「已報告」（某天發出或補充的），
+// 左邊「待判讀」（舊的在前；檢查室還沒做完的灰色、不能寫）與「已報告」（某天發出或補充的），
 // 右邊寫「所見」「結論」（可一鍵帶入正常範本再改），有重要發現（氣胸、腦出血…）勾起來——開立醫師要確認。
 // 發出後原文不能改，只能「補充報告」。規則都在服務層 imaging.ts。
 import { computed, ref, watch } from 'vue'
@@ -84,7 +84,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
               </span>
               <UBadge v-if="w.exam?.noShow" tone="red">病人未到</UBadge>
               <UBadge v-else-if="w.awaitingExam" tone="gray">待檢查</UBadge>
-              <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
+              <UBadge v-else :tone="w.er ? 'red' : w.source === 'ipd' ? 'purple' : 'blue'">{{ w.er ? '急診' : w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
           </li>
         </ul>
@@ -109,7 +109,7 @@ const when = (s: string) => s.slice(5, 16).replace('-', '/')
       </UQueryState>
     </UCard>
 
-    <UCard v-if="!item && !report" data-detail><UEmpty title="請從左邊選一筆影像檢查" :description="tab === 'work' ? '舊的在前；住院的要護理師執行（做完檢查）後才能判讀' : '已發出的報告不能改，可以加補充報告'" /></UCard>
+    <UCard v-if="!item && !report" data-detail><UEmpty title="請從左邊選一筆影像檢查" :description="tab === 'work' ? '舊的在前；影像檢查室完成檢查後才能判讀' : '已發出的報告不能改，可以加補充報告'" /></UCard>
     <UCard v-else-if="item" data-detail>
       <template #title>
         <div class="text-base font-semibold text-slate-800">{{ item.patientName }} <span class="text-sm font-normal text-slate-500">{{ item.chartNo }}・{{ genderLabel[item.gender] }}・{{ ageText(item.birthDate) }}</span></div>

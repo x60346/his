@@ -328,7 +328,8 @@ try {
   // 依執行時間，今天可能已經沒有開放的診次（例如深夜），就改掛明天
   const open = (list) => list.find((s) => !s.full && !s.closed)
   const session = open(sessions) ?? open(await api.scheduleApi.listSessions({ date: (await load('/src/utils/date.ts')).addDays(T, 1) }))
-  const patient = dbm.db.patients.find((p) => !p.deceasedAt && p.allergies.length === 0 && !dbm.db.visits.some((v) => v.sessionId === session.id && v.patientId === p.id))
+  // 不挑手上還有 Acetaminophen 的病人（下面開 Acetaminophen 會跳重複用藥提醒；種子資料依日期不同）
+  const patient = dbm.db.patients.find((p) => !p.deceasedAt && p.allergies.length === 0 && !dbm.db.visits.some((v) => v.sessionId === session.id && v.patientId === p.id) && !dbm.db.encounters.some((e) => e.patientId === p.id && e.medications.some((m) => m.drugId === 'M001')))
   // 現場掛號：病人在櫃台，掛號同時報到（掛到明天的就不能報到，叫號前另外處理）
   const visit = await api.bookingApi.register({ patientId: patient.id, sessionId: session.id, identityCode: '01', caseType: '01', checkIn: session.date === T })
   ok(visit.status === 'registered', `${patient.name} 掛 ${session.deptName} ${session.doctorName}，看診號 ${visit.seqNo}`)
@@ -12678,6 +12679,64 @@ try {
   }
 
   // 檢查室設備停機：時段判斷、欄位、下一個空檔、停機時數；種子（X 光保養、一筆需改期、首頁）；排程與報到擋、一鍵改期、登記、提早結束與取消、權限
+  console.log('\n[急診影像]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const errOf = async (fn) => {
+      try {
+        await fn()
+        return ''
+      } catch (e) {
+        return e.name === 'ServiceError' ? e.message : 'X' + e.message
+      }
+    }
+    ok(db().encounters.every((e) => e.diagnoses.every((d) => db().icdCodes.some((c) => c.code === d.icd))), '種子：病歷上的診斷碼都在診斷主檔（急診胸痛 R07.9）')
+    const v1 = db().visits.find((v) => v.id === 'V-ER-LAB-1')
+    const e1 = db().encounters.find((e) => e.visitId === v1.id)
+    const key = `E:${e1.id}:P013`
+    const draftOf = (procs) => ({ subjective: e1.subjective, objective: e1.objective, assessment: e1.assessment, plan: e1.plan, vitals: e1.vitals, diagnoses: e1.diagnoses, medications: [], procedures: procs, refillTimes: 0, admissionRequested: false })
+    const old = e1.procedures.map((p) => ({ procId: p.procId, qty: 1, selfPay: false }))
+    // 急診醫師看診中開胸部 X 光：存病歷就送出，不用等完成看診、批價
+    await as('dr12')
+    const saved = await api.opdApi.saveDraft(e1.id, draftOf([...old, { procId: 'P013', qty: 1, selfPay: false }]))
+    ok(!!saved.procedures.find((p) => p.procId === 'P013').orderedAt && v1.status === 'in-consult', '急診開 X 光：存病歷蓋送出時間（看診中、沒批價）')
+    await as('clerk01')
+    const w = (await api.examApi.examBoard(T)).toSchedule.find((x) => x.key === key)
+    ok(w?.where === '急診' && w.source === 'opd' && w.orderedAt === saved.procedures.find((p) => p.procId === 'P013').orderedAt, '影像檢查室待排程：列出急診的 X 光（標急診、從送出算）')
+    let ex
+    for (const hh of ['09:00', '11:00', '13:00', '14:00', '15:00', '16:00']) {
+      try { ex = await api.examApi.scheduleExam(key, `${addDaysT(1)} ${hh}`); break } catch { /* 撞期換時段 */ }
+    }
+    ok(!!ex && ex.where === '急診', '急診 X 光可以排程（檢查室看板標急診）')
+    await as('dr12')
+    let msg = await errOf(() => api.opdApi.saveDraft(e1.id, draftOf(old)))
+    ok(msg.includes('已經排檢查'), `已排檢查的影像不能從醫令刪掉 → 「${msg}」`)
+    ok((await api.imagingApi.patientImaging(v1.patientId)).pending.some((p) => p.key === key && p.exam?.stage === 'scheduled'), '急診醫師看病人影像：等檢查中（已排程）')
+    await as('clerk01')
+    await api.examApi.arriveExam(ex.id)
+    await as('rt01')
+    await api.examApi.completeExam(ex.id)
+    // 收住院（還沒判讀）：重要發現由住院主治確認
+    await as('dr12')
+    await api.opdApi.completeEncounter(e1.id, draftOf([...old, { procId: 'P013', qty: 1, selfPay: false }]))
+    const med = db().departments.find((x) => x.code === 'MED')
+    const medDoc = db().doctors.find((x) => x.deptId === med.id)
+    const it = await api.erApi.setDisposition(v1.id, { kind: 'admit', deptId: med.id, doctorId: medDoc.id, diagnosis: '急性冠心症' })
+    await as('clerk01')
+    const bed = db().beds.find((b) => b.status === 'empty' && db().admissions.every((a) => a.bedId !== b.id))
+    await api.admissionApi.checkIn(it.admissionId, bed.id)
+    await as('dr10')
+    const iw = (await api.imagingApi.listImagingWork()).find((x) => x.key === key)
+    ok(iw && !iw.awaitingExam && iw.where === '急診' && iw.er, '放射科待判讀：急診 X 光做完可判讀（病人已收住院、急診沒批價）')
+    const r = await api.imagingApi.reportImaging({ key, findings: '右側氣胸約 20%', impression: '右側氣胸', significant: true })
+    ok(r.encounterId === e1.id && r.needsAck && r.er, '發報告（重要發現，標急診）')
+    const attUser = db().users.find((u) => u.doctorId === medDoc.id).username
+    await as(attUser)
+    ok((await api.imagingApi.myImagingAcks()).some((x) => x.id === r.id), '已收住院：重要發現出現在住院主治的待確認')
+    await api.imagingApi.ackImaging(r.id)
+    ok(!!db().imagingReports.find((x) => x.id === r.id).ackAt, '住院主治確認急診開的 X 光重要發現')
+  }
   console.log('\n[檢查室設備停機]')
   {
     resetDb('small')

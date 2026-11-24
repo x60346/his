@@ -1,6 +1,7 @@
 // 影像檢查的內部計算（index 不匯出，不會被包成 API）：待判讀清單、誰能判讀、誰能確認、首頁數量。
 // 待判讀不另存，由醫令推算（同檢驗）：
 //   門診：完成看診、已批價的影像醫令；櫃台標「未執行」的不列
+//   急診：醫師存病歷就送出（orderedAt），不用等完成看診、批價（同急診檢驗）；退掛的不算
 //   住院：影像的臨時醫囑
 // 都要在檢查室排程、報到、完成（exam.ts）後才能判讀；還沒做的列出但不能寫（住院已完成卻沒有檢查紀錄的是舊資料，視同做過）
 // 判讀者：主檔 imaging.reader——radiology＝放射科醫師（科別代碼 RAD）；orderer＝開立醫師自己（心電圖）
@@ -9,11 +10,14 @@ import { db } from '@/mock/db'
 import { find, nameOf } from './views'
 import { now } from '@/utils/date'
 import { examNoShow } from './exam-rules'
+import { careAdmissionOf } from './lab-work'
 
 export interface ImagingWorkItem {
   /** E:看診id:醫令id（門診）或 O:醫囑id（住院） */
   key: string
   source: 'opd' | 'ipd'
+  /** 急診開的（不用等批價；畫面標「急診」） */
+  er?: boolean
   procId: string
   procName: string
   reader: 'radiology' | 'orderer'
@@ -63,15 +67,17 @@ export function pendingImagingWork(): ImagingWorkItem[] {
     return { patientId, patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', gender: p?.gender ?? 'M', birthDate: p?.birthDate ?? '' }
   }
   for (const e of db.encounters) {
-    if (e.status !== 'completed') continue
     const v = find.visit(e.visitId)
-    if (!v || (v.status !== 'charged' && v.status !== 'dispensed')) continue
+    if (!v) continue
+    const paid = e.status === 'completed' && (v.status === 'charged' || v.status === 'dispensed')
+    if (!paid && !(v.er && v.status !== 'cancelled')) continue
     for (const x of e.procedures) {
       const im = imagingOf(x.procId)
       if (!im || x.notDone || reportedImagingOpd(e.id, x.procId)) continue
+      if (!paid && !x.orderedAt) continue
       list.push({
-        key: `E:${e.id}:${x.procId}`, source: 'opd', procId: x.procId, procName: find.procedure(x.procId)?.name ?? x.procId, reader: im.reader, ...base(e.patientId),
-        where: `${nameOf.dept(e.deptId)}門診`, doctorId: e.doctorId, doctorName: nameOf.doctor(e.doctorId), orderedAt: e.completedAt ?? e.date,
+        key: `E:${e.id}:${x.procId}`, source: 'opd', ...(v.er ? { er: true } : {}), procId: x.procId, procName: find.procedure(x.procId)?.name ?? x.procId, reader: im.reader, ...base(e.patientId),
+        where: v.er ? '急診' : `${nameOf.dept(e.deptId)}門診`, doctorId: e.doctorId, doctorName: nameOf.doctor(e.doctorId), orderedAt: x.orderedAt ?? e.completedAt ?? e.date,
         clinical: e.diagnoses.map((d) => `${d.icd} ${d.name}`).join('、'), normal: im.normal,
         ...(examOfKey(`E:${e.id}:${x.procId}`)?.doneAt ? {} : { awaitingExam: true }), ...examInfo(`E:${e.id}:${x.procId}`),
       })
@@ -95,11 +101,11 @@ export function pendingImagingWork(): ImagingWorkItem[] {
 /** 要確認：重要發現、或有補充報告，而且還沒確認 */
 export const imagingNeedsAck = (r: Pick<ImagingReport, 'significant' | 'addenda' | 'ackAt'>) => !r.ackAt && (!!r.significant || !!r.addenda?.length)
 
-/** 誰能按「已知悉」：開立醫師；住院另加主治醫師 */
+/** 誰能按「已知悉」：開立醫師；這份報告現在歸屬的住院的主治（急診開的、已收住院的也算） */
 export function canAckImaging(r: ImagingReport, doctorId?: string): boolean {
   if (!doctorId) return false
   if (r.doctorId === doctorId) return true
-  return !!r.admissionId && find.admission(r.admissionId)?.doctorId === doctorId
+  return careAdmissionOf(r)?.doctorId === doctorId
 }
 
 /** 門診開立醫師的影像未到（過了排程 30 分鐘沒報到、沒取消）：首頁提醒 */

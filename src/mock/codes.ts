@@ -158,6 +158,7 @@ export const icdCodes: IcdCode[] = [
   { code: 'R51.9', name: '頭痛', nameEn: 'Headache, unspecified' },
   { code: 'R50.9', name: '發燒', nameEn: 'Fever, unspecified' },
   { code: 'R10.9', name: '腹痛', nameEn: 'Unspecified abdominal pain' },
+  { code: 'R07.9', name: '胸痛', nameEn: 'Chest pain, unspecified' },
   { code: 'R05.9', name: '咳嗽', nameEn: 'Cough, unspecified' },
   { code: 'F41.9', name: '焦慮症', nameEn: 'Anxiety disorder, unspecified' },
   { code: 'G47.00', name: '失眠', nameEn: 'Insomnia, unspecified' },

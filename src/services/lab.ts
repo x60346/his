@@ -32,6 +32,8 @@ export interface LabReportView extends LabReport {
   doctorName: string
   reportedByName: string
   source: 'opd' | 'ipd'
+  /** 急診開的 */
+  er: boolean
   /** 醫師要確認（危急值或更正過，還沒按已知悉） */
   needsAck: boolean
   /** 目前登入的醫師能不能按「已知悉」（開立醫師、住院另含主治） */
@@ -90,6 +92,7 @@ function reportView(r: LabReport): LabReportView {
     doctorName: nameOf.doctor(r.doctorId),
     reportedByName: nameOf.user(r.reportedBy),
     source: r.orderId ? 'ipd' : 'opd',
+    er: !!r.encounterId && !!find.visit(db.encounters.find((x) => x.id === r.encounterId)?.visitId ?? '')?.er,
     needsAck: labNeedsAck(r),
     canAck: labNeedsAck(r) && sessionRole() === 'doctor' && canAckLab(r, sessionUser()?.doctorId),
     hasCritical: r.values.some((v) => v.critical),

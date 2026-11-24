@@ -1,4 +1,4 @@
-// 急診檢驗的內部工具（index 不匯出）：醫師存病歷時替急診的檢驗蓋「送出時間」、刪掉已採檢的擋下、看板的檢驗進度
+// 急診檢驗的內部工具（index 不匯出）：醫師存病歷時替急診的檢驗與影像蓋「送出時間」、刪掉已採檢（已排檢查）的擋下、看板的檢驗進度
 import type { Encounter, ProcedureOrder, Visit } from '@/types'
 import { db } from '@/mock/db'
 import { now } from '@/utils/date'
@@ -7,21 +7,27 @@ import { find } from './views'
 import { opdSpecimenOf } from './specimen-work'
 
 const isLab = (procId: string) => !!find.procedure(procId)?.labItems?.length
+const isImaging = (procId: string) => !!find.procedure(procId)?.imaging
 
 /**
- * 急診病歷存檔（暫存或完成）：檢驗醫令沿用之前的送出時間，新加的蓋現在＝送出；
- * 已經採檢或發報告的檢驗不能刪（要改請請檢驗科退件、或另開）
+ * 急診病歷存檔（暫存或完成）：檢驗、影像醫令沿用之前的送出時間，新加的蓋現在＝送出（急診不等批價，送出就能採檢、排檢查）；
+ * 已經採檢或發報告的檢驗不能刪（要改請請檢驗科退件、或另開）；已排檢查或發報告的影像不能刪（要取消請影像檢查室取消排程）
  */
 export function stampErLabs(e: Encounter, v: Visit, prev: ProcedureOrder[]) {
   if (!v.er) return
   const t = now()
   for (const p of e.procedures) {
-    if (!isLab(p.procId)) continue
+    if (!isLab(p.procId) && !isImaging(p.procId)) continue
     const old = prev.find((x) => x.procId === p.procId)
     p.orderedAt = old?.orderedAt ?? t
   }
   for (const old of prev.filter((x) => x.orderedAt && !e.procedures.some((p) => p.procId === x.procId))) {
     const key = `E:${e.id}:${old.procId}`
+    if (isImaging(old.procId)) {
+      if (db.imagingReports.some((r) => r.encounterId === e.id && r.procId === old.procId)) fail(`${find.procedure(old.procId)?.name} 已經發報告了，不能從醫令刪掉`, 'CONFLICT')
+      if (db.imagingExams.some((x) => x.key === key && !x.cancelled)) fail(`${find.procedure(old.procId)?.name} 已經排檢查了，不能從醫令刪掉（要取消請影像檢查室取消排程）`, 'CONFLICT')
+      continue
+    }
     if (db.labReports.some((r) => r.encounterId === e.id && r.procId === old.procId)) fail(`${find.procedure(old.procId)?.name} 已經發報告了，不能從醫令刪掉`, 'CONFLICT')
     if (opdSpecimenOf(key)?.collectedAt) fail(`${find.procedure(old.procId)?.name} 已經採檢了，不能從醫令刪掉（要取消請檢驗科退件）`, 'CONFLICT')
   }

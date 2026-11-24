@@ -89,12 +89,11 @@ export function pendingLabWork(): LabWorkItem[] {
   return list.sort((a, b) => a.orderedAt.localeCompare(b.orderedAt))
 }
 
-/** 誰能按「已知悉」：開立醫師；住院另加主治醫師 */
 /**
  * 這份報告現在歸哪一次住院：住院醫囑的就是那次；急診開的、病人已經從急診收住院（直接或留觀後）還在住院中，
  * 危急值要找病房與主治，不是已經不在照顧的急診醫師
  */
-export function careAdmissionOf(r: LabReport) {
+export function careAdmissionOf(r: Pick<LabReport, 'admissionId' | 'encounterId'>) {
   if (r.admissionId) return find.admission(r.admissionId)
   const e = r.encounterId ? db.encounters.find((x) => x.id === r.encounterId) : undefined
   const v = e ? find.visit(e.visitId) : undefined

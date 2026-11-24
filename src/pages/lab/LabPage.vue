@@ -140,7 +140,7 @@ const whenText = (s: string) => s.slice(5, 16).replace('-', '/')
               <UBadge v-else-if="w.analyzerHeld" tone="red">儀器待審核</UBadge>
               <UBadge v-else-if="w.awaitingPayment" tone="yellow" :title="`加做：條碼 ${w.addon}`">加做・待補繳</UBadge>
               <UBadge v-else-if="w.addon" tone="green" :title="`加做：條碼 ${w.addon}`">加做</UBadge>
-              <UBadge v-else :tone="w.source === 'ipd' ? 'purple' : 'blue'">{{ w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
+              <UBadge v-else :tone="w.er ? 'red' : w.source === 'ipd' ? 'purple' : 'blue'">{{ w.er ? '急診' : w.source === 'ipd' ? '住院' : '門診' }}</UBadge>
             </button>
           </li>
         </ul>

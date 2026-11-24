@@ -18,6 +18,7 @@ import { addDays } from '@/utils/date'
 import { examOfKey, imagingOf, isRadiologist, noShowOf, pendingImagingWork, type ImagingWorkItem } from './imaging-work'
 import { find, nameOf } from './views'
 import { mriRiskOf } from './implant-work'
+import { careAdmissionOf } from './lab-work'
 import { examStaffMissing, radUnstaffedExams } from './rad-roster-work'
 import { blockNow, RAD_BLOCKS, RAD_ROOMS, radBlockLabel, staffMissing } from './rad-roster-rules'
 
@@ -101,12 +102,15 @@ function safetyOf(x: { key: string; procId: string; patientId: string; admission
 }
 function view(e: ImagingExam): ExamView {
   const st = examStage(e)
-  const a = e.admissionId ? find.admission(e.admissionId) : undefined
+  // 急診開的：還在急診標「急診」；已經收住院的標現在的病床
+  const enc = e.key.startsWith('E:') ? db.encounters.find((x) => x.id === e.key.split(':')[1]) : undefined
+  const er = !!enc && !!find.visit(enc.visitId)?.er
+  const a = e.admissionId ? find.admission(e.admissionId) : er ? careAdmissionOf({ encounterId: enc!.id }) : undefined
   const bed = a?.bedId ? find.bed(a.bedId) : undefined
   const p = find.patient(e.patientId)
   return {
     ...e, stage: st, stageLabel: EXAM_STAGE_LABEL[st], roomName: examRoomName(e.room), procName: find.procedure(e.procId)?.name ?? e.procId,
-    patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', where: bed ? `${bed.ward} ${bed.bedNo}` : '門診', end: addMinutes(e.start, e.minutes),
+    patientName: p?.name ?? '', chartNo: p?.chartNo ?? '', where: bed ? `${bed.ward} ${bed.bedNo}` : er ? '急診' : '門診', end: addMinutes(e.start, e.minutes),
     ...(e.doneBy ? { doneByName: nameOf.user(e.doneBy) } : {}),
     noShow: examNoShow(e, now()), ...(examNoShow(e, now()) ? { stageLabel: '未到' } : {}),
     prepItems: prepDefs(e.procId).map((d) => ({ ...d, ...(e.prep?.[d.id] ? { ok: e.prep[d.id].ok, ...(e.prep[d.id].note ? { note: e.prep[d.id].note } : {}) } : {}) })),
