@@ -14475,6 +14475,46 @@ try {
     await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
   }
 
+  // 醫師首頁住院待辦 → 帶到哪位病人、哪個分頁：每位醫師、每張卡片，首頁有數字就一定列得出病人（反之亦然）
+  console.log('\n[醫師待辦帶到病人]')
+  {
+    resetDb('small')
+    const keys = (await load('/src/services/doctor-todo.ts')).DOCTOR_TODO_KEYS
+    const docs = dbm.db.users.filter((u) => u.active && u.roles.includes('doctor') && u.doctorId)
+    let checked = 0
+    let nonzero = 0
+    const bad = []
+    for (const u of docs) {
+      await as(u.username)
+      const d = await api.dashboardApi.getDashboard()
+      for (const k of keys) {
+        const count = k === 'drg' ? (d.drgNear ?? 0) + (d.drgOver ?? 0) : (d[k] ?? 0)
+        const xs = await api.doctorTodoApi.doctorTodoTargets(k)
+        checked++
+        if (count > 0) nonzero++
+        if ((count > 0) !== (xs.length > 0) || xs.some((x) => !x.tab || (!x.discharged && !x.bedNo))) bad.push(`${u.username} ${k}：首頁 ${count}、列出 ${xs.length}`)
+      }
+    }
+    ok(bad.length === 0, `${docs.length} 位醫師 × ${keys.length} 張卡片（${nonzero} 張有數字）：首頁有數字就列得出病人與分頁${bad.length ? `；不符：${bad.slice(0, 5).join('；')}` : ''}`)
+    await as('nurse01')
+    await expectError(() => api.doctorTodoApi.doctorTodoTargets('orderQueries'), '護理師查醫師待辦病人')
+    // 病理報告待確認：病人出院了也列出（標已出院、帶手術那天）
+    const s = dbm.db.surgeries.find((x) => x.status === 'done' && x.doctorId)
+    if (s) {
+      s.path = { ...(s.path ?? {}), sentAt: s.endAt ?? `${T} 08:00`, received: s.endAt ?? `${T} 08:00`, report: { malignant: true, consistent: false, text: '測試', at: `${T} 09:00`, by: 'U001' } }
+      delete s.path.ack
+      const a = dbm.db.admissions.find((x) => x.id === s.admissionId)
+      const was = a.status
+      a.status = 'discharged'
+      const dr = dbm.db.users.find((x) => x.doctorId === s.doctorId)
+      await as(dr.username)
+      const xs = await api.doctorTodoApi.doctorTodoTargets('pathAckDue')
+      const hit = xs.find((x) => x.admissionId === a.id)
+      ok(hit?.discharged && /^\d{4}-\d{2}-\d{2}$/.test(hit.surgeryDate ?? '') && xs.at(-1).admissionId === a.id, `病理報告待確認的病人已出院：列在最後、標已出院、帶手術那天（${hit?.surgeryDate}）`)
+      a.status = was
+    }
+  }
+
   // 健檢（使用者、UI/UX、PM 三方）修正：影像臨時醫囑不在護理站按完成、不算護理師待執行；藥師、放射師查得到值班表
   console.log('\n[健檢修正]')
   {

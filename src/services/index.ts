@@ -51,6 +51,7 @@ import * as line from './line'
 import * as bedside from './bedside'
 import * as radRoster from './rad-roster'
 import * as duty from './duty'
+import * as doctorTodo from './doctor-todo'
 import * as doctorCall from './doctor-call'
 import * as nutrition from './nutrition'
 import * as tube from './tube'
@@ -151,6 +152,7 @@ export const lineApi = overNetwork(line)
 export const bedsideApi = overNetwork(bedside)
 export const radRosterApi = overNetwork(radRoster)
 export const dutyApi = overNetwork(duty)
+export const doctorTodoApi = overNetwork(doctorTodo)
 export const doctorCallApi = overNetwork(doctorCall)
 export const nutritionApi = overNetwork(nutrition)
 export const tubeApi = overNetwork(tube)

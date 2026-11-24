@@ -27,7 +27,11 @@ export function drgExemptOf(a: Admission, to: string): string | undefined {
 
 /** 首頁（主治）：我主治、住院中、適用 DRG 的，點數接近上限（80% 以上）、超過上限 */
 export function drgAlertCounts(doctorId: string): { near: number; over: number } {
-  const t = now()
-  const xs = db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === doctorId && !a.obs && !drgExemptOf(a, t)).map((a) => drgAlert(linePoints(ipdBillOf(a).lines).points, drgOfAdmission(a)).level)
+  const xs = drgAlertsOf(doctorId).map((x) => x.level)
   return { near: xs.filter((x) => x === 'near').length, over: xs.filter((x) => x === 'over').length }
+}
+/** 我主治、適用 DRG、點數到上限 80% 以上的住院（首頁數字與「帶到哪位病人」共用） */
+export function drgAlertsOf(doctorId: string): { a: Admission; level: string }[] {
+  const t = now()
+  return db.admissions.filter((a) => a.status === 'admitted' && a.doctorId === doctorId && !a.obs && !drgExemptOf(a, t)).map((a) => ({ a, level: drgAlert(linePoints(ipdBillOf(a).lines).points, drgOfAdmission(a)).level as string })).filter((x) => x.level === 'near' || x.level === 'over')
 }

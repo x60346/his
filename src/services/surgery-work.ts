@@ -229,14 +229,20 @@ export function surgeryCounts(t: string, doctorId?: string): { toSchedule: numbe
   return {
     toSchedule: live().filter((s) => s.status === 'requested').length,
     prepDue: live().filter((s) => s.status === 'scheduled' && s.schedule && s.schedule.start.slice(0, 10) <= tomorrow && prepMissing(s).length).length,
-    recordDue: doctorId ? db.surgeries.filter((s) => s.status === 'done' && !s.record && s.doctorId === doctorId).length : 0,
+    recordDue: doctorId ? recordDueOf(doctorId).length : 0,
   }
 }
 
+/** 主刀：手術紀錄待寫（首頁數字與「帶到哪位病人」共用） */
+export const recordDueOf = (doctorId: string) => db.surgeries.filter((s) => s.status === 'done' && !s.record && s.doctorId === doctorId)
+/** 主刀：術後醫囑待開（手術完成、住院中、還沒開；日間手術沒轉住院當天回家，不用） */
+export const postopDueOf = (doctorId: string) => live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId && !dayCase(find.admission(s.admissionId)))
+/** 主刀：病理報告待確認（惡性或不符；病人出院了也要確認） */
+export const pathAckDueOf = (doctorId: string) => db.surgeries.filter((s) => s.path && s.doctorId === doctorId && pathCritical(s.path.report) && !s.path.ack)
+
 /** 主刀首頁：術後醫囑待開（手術完成、住院中、還沒開）；完成超過 4 小時還沒開 */
 export function postopCounts(t: string, doctorId: string): { due: number; late: number } {
-  // 日間手術（沒轉住院）當天回家，不用術後醫囑
-  const xs = live().filter((s) => s.status === 'done' && !s.postop && s.doctorId === doctorId && !dayCase(find.admission(s.admissionId)))
+  const xs = postopDueOf(doctorId)
   return { due: xs.length, late: xs.filter((s) => s.endAt && (parseDate(t).getTime() - parseDate(s.endAt).getTime()) / 3600000 > POSTOP_DUE_HOURS).length }
 }
 
@@ -245,7 +251,7 @@ export function pathCounts(t: string, doctorId?: string): { ackDue: number; toRe
   const xs = db.surgeries.filter((s) => s.path)
   const mins = (a: string) => (parseDate(t).getTime() - parseDate(a).getTime()) / 60000
   return {
-    ackDue: doctorId ? xs.filter((s) => s.doctorId === doctorId && pathCritical(s.path!.report) && !s.path!.ack).length : 0,
+    ackDue: doctorId ? pathAckDueOf(doctorId).length : 0,
     toReceive: xs.filter((s) => !s.path!.received).length,
     overdue: xs.filter((s) => !s.path!.received && mins(s.path!.sentAt) > PATH_RECEIVE_HOURS * 60).length,
     toReport: xs.filter((s) => s.path!.received && !s.path!.report).length,

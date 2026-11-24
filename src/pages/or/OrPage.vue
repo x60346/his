@@ -3,6 +3,7 @@
 //   - 排程：待排程清單（有「手術排程」權限的人可以排房間與時間，同房撞期、超過開放時段由服務層擋）；各房當天的手術
 //   - 查核：點一台 → 麻醉前（Sign In）→ 劃刀前暫停確認（Time Out）→ 開始手術（沒暫停確認擋）→ 離開前（Sign Out）＋紗布器械計數 → 完成
 // 病人的過敏、隔離、DNR 在每一台上都看得到；所有規則在服務層（surgery.ts、surgery-rules）
+import { useRoute } from 'vue-router'
 import { computed, reactive, ref, watch } from 'vue'
 import { AlertTriangle, CalendarClock, Stethoscope } from 'lucide-vue-next'
 import PreAnesDialog from '@/components/surgery/PreAnesDialog.vue'
@@ -29,7 +30,9 @@ import { addMinutes, now, today } from '@/utils/date'
 
 const auth = useAuth()
 const isNurse = computed(() => auth.user?.role === 'nurse')
-const date = ref(today())
+// 從首頁「病理報告待確認」（病人已出院）點過來帶 ?date=手術那天
+const qDate = useRoute().query.date
+const date = ref(typeof qDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(qDate) ? qDate : today())
 // 排程與查核／效率指標
 const mode = ref('board')
 const { data, loading } = useQuery(() => surgeryApi.orBoard(date.value), [date])

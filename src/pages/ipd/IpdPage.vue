@@ -4,7 +4,7 @@
 // 長期給藥醫囑會連動護理站的給藥排程（由服務層處理），停止醫囑時未執行的排程一併刪除。
 import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowRightLeft, Droplet, FlaskConical, ScanLine, LogOut, Plus, Square, Pencil, Stethoscope } from 'lucide-vue-next'
 import { UBadge, UButton, UCard, UDialog, UEmpty, UQueryState, USelect, UTabs, UTextarea } from '@/components/ui'
 import DrgStrip from '@/components/DrgStrip.vue'
@@ -36,6 +36,8 @@ import SpecimenPanel from '@/components/SpecimenPanel.vue'
 import AdmissionExams from '@/components/AdmissionExams.vue'
 import DischargeMedListPrint from '@/components/DischargeMedListPrint.vue'
 import type { DischargeMedList } from '@/services'
+import { doctorTodoApi } from '@/services'
+import type { DoctorTodoTarget } from '@/services/doctor-todo'
 import SurgeryPanel from '@/components/surgery/SurgeryPanel.vue'
 import CertificatePanel from '@/components/CertificatePanel.vue'
 import MedicationEditor, { type MedRow } from '@/pages/opd/components/MedicationEditor.vue'
@@ -245,6 +247,29 @@ const tabs = computed(() => [
   { key: 'discharge', label: ds.value?.signedAt ? '出院病摘・已准出院' : ds.value ? '出院病摘・草稿' : '出院病摘' },
 ])
 
+// ---------- 從首頁待辦點過來（?todo=…）----------
+// 列出有這件事的病人（點一下就選那位、開該開的分頁），一進來先帶到第一位；處理完的病人會自動從清單消失。
+// 已出院的（病理報告常在出院後才出來）住院醫囑找不到，改帶到手術室那一天
+const router = useRouter()
+const todoKey = ref(typeof useRoute().query.todo === 'string' ? String(useRoute().query.todo) : '')
+const todoLabel = typeof useRoute().query.label === 'string' ? String(useRoute().query.label) : '首頁待辦'
+const { data: todoTargets } = useQuery(async () => (todoKey.value && !isAdmin ? doctorTodoApi.doctorTodoTargets(todoKey.value) : []), [todoKey])
+let todoJumped = false
+function openTodo(x: DoctorTodoTarget) {
+  if (x.discharged) {
+    router.push({ name: 'or', query: x.surgeryDate ? { date: x.surgeryDate } : {} })
+    return
+  }
+  admissionId.value = x.admissionId
+  tab.value = x.tab
+}
+watch(todoTargets, (xs) => {
+  if (todoJumped || !xs?.length) return
+  todoJumped = true
+  const first = xs.find((x) => !x.discharged)
+  if (first) openTodo(first)
+})
+
 // 檢驗報告：分頁數量、上方「待確認」紅條（危急值或更正過）
 const { data: labs } = useQuery(async () => (adm.value ? labApi.patientLabs(adm.value.patientId) : undefined), [() => adm.value?.patientId])
 const labAlerts = computed(() => (labs.value?.reports ?? []).filter((r) => r.needsAck))
@@ -366,6 +391,19 @@ async function submitNote() {
       </template>
       <div v-if="isAdmin" class="border-b border-slate-100 p-3">
         <USelect v-model="doctorFilter" :options="[{ label: '全部醫師', value: '' }, ...(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))]" />
+      </div>
+      <div v-if="todoKey" class="border-b border-brand-200 bg-brand-50 p-2" role="region" :aria-label="`首頁待辦：${todoLabel}`">
+        <div class="flex items-center gap-2 px-1 pb-1">
+          <span class="text-xs font-semibold text-brand-900">{{ todoLabel }}<template v-if="todoTargets?.length">（{{ todoTargets.length }} 位）</template></span>
+          <button type="button" class="ml-auto text-xs text-slate-500 hover:text-slate-700" @click="todoKey = ''">關閉</button>
+        </div>
+        <p v-if="todoTargets && !todoTargets.length" class="px-1 pb-1 text-xs text-emerald-700">都處理完了</p>
+        <button v-for="x in todoTargets ?? []" :key="x.admissionId" type="button" :class="['flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-brand-100', x.admissionId === admissionId && 'bg-brand-100']" @click="openTodo(x)">
+          <span v-if="x.bedNo" class="tabular rounded bg-white px-1.5 text-xs font-medium text-slate-700">{{ x.bedNo }}</span>
+          <span class="font-medium text-slate-800">{{ x.patientName }}</span>
+          <span v-if="x.discharged" class="ml-auto text-xs text-slate-600">已出院・到手術室{{ x.surgeryDate ? ` ${x.surgeryDate.slice(5).replace('-', '/')}` : '' }}</span>
+          <span v-else class="ml-auto text-xs text-slate-600">{{ tabs.find((t) => t.key === x.tab)?.label ?? '' }}</span>
+        </button>
       </div>
       <div v-if="incomingConsults?.length" class="border-b border-rose-200 bg-rose-50 p-2">
         <div class="px-1 pb-1 text-xs font-semibold text-rose-900">會診（待回覆 {{ pendingConsults }}<template v-if="incomingConsults.length > pendingConsults">・追蹤中 {{ incomingConsults.length - pendingConsults }}</template>）</div>
