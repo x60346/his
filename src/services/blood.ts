@@ -6,7 +6,7 @@ import { db, newId, nextCounter } from '@/mock/db'
 import { addMinutes, now, today } from '@/utils/date'
 import { audit, fail, failField, failFields, fieldErrors, must, mutate, query, requireUser } from './http'
 import {
-  ABO_TYPES, activeMatches, BLOOD_DEFAULTS, BLOOD_PRODUCT_LABEL, BLOOD_PRODUCTS, BLOOD_RETURN_MIN, BLOOD_THRESHOLD, bloodCompatible, bloodTypeText, checkBloodInput,
+  ABO_TYPES, activeMatches, BLOOD_DEFAULTS, BLOOD_PRODUCT_LABEL, BLOOD_PRODUCTS, BLOOD_RETURN_MIN, BLOOD_CHECK_MIN, BLOOD_THRESHOLD, bloodCompatible, bloodTypeText, checkBloodInput,
   issueState, latestIssue, REACTION_SYMPTOMS, requestStatus, thresholdProblem, unitExpired,
 } from './blood-rules'
 import {
@@ -509,6 +509,9 @@ export function recordTransfusionCheck(requestId: string, unitId: string, vitals
     const { r, a, i } = transfusing(requestId, unitId)
     if (i.transfusion.vitals.some((v) => v.kind === '15min')) fail('15 分鐘的生命徵象已經記過了', 'CONFLICT')
     const t = now()
+    // 和「該量了」同一個時間點：開始才幾分鐘就記，抓不到輸血初期的反應，結束輸血的檢查也形同虛設
+    const due = addMinutes(i.transfusion.startAt, BLOOD_CHECK_MIN)
+    if (t < due) fail(`開始輸血後 ${BLOOD_CHECK_MIN} 分鐘（${due.slice(11)}）再量；這之前有不適請按「輸血反應」`, 'CONFLICT')
     i.transfusion.vitals.push(takeVitals(a.id, '15min', vitals, u.id, t)!)
     audit('輸血 15 分鐘生命徵象', `${r.no} ${nameOf.patient(a.patientId)}`)
     return requestView(r, t)

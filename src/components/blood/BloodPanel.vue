@@ -15,6 +15,7 @@ import {
 } from '@/services'
 import type { BloodProduct } from '@/types'
 import { useAction, useQuery } from '@/composables/useService'
+import { useNow } from '@/composables/useNow'
 import { useAuth } from '@/stores/auth'
 import { now } from '@/utils/date'
 
@@ -23,6 +24,9 @@ const auth = useAuth()
 const isDoctor = computed(() => auth.user?.role === 'doctor')
 const isNurse = computed(() => auth.user?.role === 'nurse')
 const { data, loading } = useQuery(() => bloodApi.patientBlood(props.admissionId), [() => props.admissionId])
+// 15 分鐘生命徵象到時間了沒：用走動的時鐘判斷（分頁不會自己重查，等到時間按鈕要自己亮起來）
+const clock = useNow()
+const checkReady = (todo: { check?: string; checkDueAt?: string }) => !!todo.check || (!!todo.checkDueAt && clock.value >= todo.checkDueAt)
 const b = computed(() => (data.value?.admissionId === props.admissionId ? data.value : undefined))
 
 const statusTone = (r: BloodRequestView) =>
@@ -148,7 +152,7 @@ const toggleSymptom = (s: string, on: boolean) => (symptoms.value = on ? [...new
                   <template v-if="isNurse">
                     <UButton v-if="x.state === 'issued'" size="sm" @click="starting = { r, x }">開始輸血</UButton>
                     <template v-if="x.state === 'transfusing'">
-                      <UButton v-if="!x.issue?.transfusion?.vitals.some((v) => v.kind === '15min')" size="sm" :variant="x.todo.check ? 'primary' : 'secondary'" @click="openStep(r, x, 'check')">15 分鐘生命徵象</UButton>
+                      <UButton v-if="!x.issue?.transfusion?.vitals.some((v) => v.kind === '15min')" size="sm" :variant="checkReady(x.todo) ? 'primary' : 'secondary'" :disabled="!checkReady(x.todo)" :title="checkReady(x.todo) ? undefined : `開始後 15 分鐘（${x.todo.checkDueAt?.slice(11)}）再量`" @click="openStep(r, x, 'check')">{{ checkReady(x.todo) ? '15 分鐘生命徵象' : `${x.todo.checkDueAt?.slice(11)} 量生命徵象` }}</UButton>
                       <UButton size="sm" variant="secondary" @click="openStep(r, x, 'end')">結束輸血</UButton>
                       <UButton size="sm" variant="danger" @click="openStep(r, x, 'reaction')">輸血反應</UButton>
                     </template>

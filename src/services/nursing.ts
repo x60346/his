@@ -64,6 +64,8 @@ export interface WardPatient extends AdmissionView {
   bloodIssued: number
   bloodTransfusing: number
   bloodUrgency?: 'overdue' | 'due'
+  /** 已發血超過 30 分鐘還沒開始 */
+  bloodIssuedLate?: boolean
   /** 疼痛：最近分數；≥4 的重評逾時（overdue）或等重評中（upcoming）；本班評過沒有 */
   painScore?: number
   painReassess?: 'overdue' | 'upcoming'
@@ -144,8 +146,12 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           })(),
           ...(() => {
             const bt = transfusionTasksOf(a.id, t)
-            const u = bt.some((x) => x.urgency === 'overdue') ? 'overdue' : bt.some((x) => x.urgency === 'due') ? 'due' : undefined
-            return { bloodIssued: bt.filter((x) => x.state === 'issued').length, bloodTransfusing: bt.filter((x) => x.state === 'transfusing').length, ...(u ? { bloodUrgency: u as 'overdue' | 'due' } : {}) }
+            // 有袋子在輸：急迫度只看輸血中的（另一袋剛發血不算「該量 15 分鐘」）；只有已發血的才看發血
+            const tr = bt.filter((x) => x.state === 'transfusing')
+            const is = bt.filter((x) => x.state === 'issued')
+            const src = tr.length ? tr : is
+            const u = src.some((x) => x.urgency === 'overdue') ? 'overdue' : src.some((x) => x.urgency === 'due') ? 'due' : undefined
+            return { bloodIssued: is.length, bloodTransfusing: tr.length, ...(u ? { bloodUrgency: u as 'overdue' | 'due' } : {}), ...(is.some((x) => x.urgency === 'overdue') ? { bloodIssuedLate: true } : {}) }
           })(),
           ...(() => {
             const ps = painStateOf(a.id, t)

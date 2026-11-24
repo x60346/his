@@ -209,6 +209,10 @@ export function checkUnitScan(code: string, target: BloodUnit): ScanResult {
   const hit = db.bloodUnits.find((u) => normalizeCode(u.unitNo) === c)
   if (!hit) return { ok: false, message: `不認得的血袋條碼（${c}）` }
   const r = hit.requestId ? requestOf(hit.requestId) : undefined
+  // 同一位病人的另一袋：說清楚不是這一袋（只寫「配給某某」會讀成這位病人的、好像沒問題）
+  const tr = target.requestId ? requestOf(target.requestId) : undefined
+  if (r && tr && r.patientId === tr.patientId && (hit.status === 'issued' || hit.status === 'reserved'))
+    return { ok: false, message: `血袋不對！${hit.unitNo} 是這位病人的另一袋（${hit.status === 'issued' ? '已發血' : '還在血庫、沒有發'}），這次要輸的是 ${target.unitNo}` }
   if (r && (hit.status === 'issued' || hit.status === 'reserved'))
     return { ok: false, message: `血袋不對！${hit.unitNo} 是配給 ${nameOf.patient(r.patientId)}（${r.no}）的${BLOOD_PRODUCT_LABEL[hit.product]} ${bloodTypeText(hit)}` }
   return { ok: false, message: `血袋不對！${hit.unitNo} 沒有發給這位病人（${BLOOD_PRODUCT_LABEL[hit.product]} ${bloodTypeText(hit)}）` }

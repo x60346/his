@@ -6644,7 +6644,7 @@ try {
     ok(msg.includes('病人不對'), `腕帶掃到別人：「${msg}」`)
     const unitNo2 = db().bloodUnits.find((u) => u.id === u2).unitNo
     const sc = await B.bloodScanCheck({ requestId: r1.id, unitId: u1, kind: 'unit', code: unitNo2 })
-    ok(!sc.ok && sc.message.includes('配給') && db().auditLogs.some((l) => l.action === '輸血掃描不符'), `血袋掃到別袋：「${sc.message}」，記稽核`)
+    ok(!sc.ok && sc.message.includes('這位病人的另一袋') && sc.message.includes(db().bloodUnits.find((u) => u.id === u1).unitNo) && db().auditLogs.some((l) => l.action === '輸血掃描不符'), `血袋掃到別袋：「${sc.message}」，記稽核`)
     msg = await errOf(() => B.startTransfusion(r1.id, u1, { witness: w.token, vitals: V, scan: { patientCode: adm.admitNo, unitCode: unitNo2 } }))
     ok(msg.includes('血袋不對'), '服務層開始時再核對血袋')
     const vitalsBefore = db().vitals.length
@@ -6658,6 +6658,8 @@ try {
     // 15 分鐘、結束
     const tr = () => db().bloodRequests.find((r) => r.id === r1.id).issues.filter((i) => i.unitId === u1).at(-1).transfusion
     ok(!row.todo.check, '剛開始：還不用量')
+    msg = await errOf(() => B.recordTransfusionCheck(r1.id, u1, V))
+    ok(msg.includes('15 分鐘') && msg.includes('再量'), `剛開始就記 15 分鐘生命徵象 → 「${msg}」`)
     tr().startAt = addMinutes(nowStr(), -16)
     let pb = await B.patientBlood(adm.id)
     ok(pb.requests.find((r) => r.id === r1.id).rows.find((x) => x.unit.id === u1).todo.check === 'due' && (await api.dashboardApi.getDashboard()).transfusionTodo >= 1, '開始 15 分鐘：該量生命徵象（首頁也算）')
@@ -7037,6 +7039,22 @@ try {
     await B.endTransfusion(req.id, unit.id, { volume: 200, vitals: { temp: 36.7, pulse: 80, sbp: 120, dbp: 72 } })
     p = await wp()
     ok(!p.bloodTransfusing && !p.bloodIssued && !(await bt()).length, '輸完：標記與待辦消失')
+    // 一袋輸血中（還不用量）、另一袋剛發血：「輸血中」不標紅（不是該量 15 分鐘），「已發血」照樣顯示
+    await as(userOf(adm.doctorId))
+    const req2 = await B.orderBlood({ admissionId: adm.id, product: 'rbc', units: 2, indication: '大量輸血', overReason: '術中大量出血' })
+    await as('lab01')
+    if (!(await B.bloodCandidates(req2.id).catch(() => [])).length) await B.recordBloodTyping(req2.id, { abo: 'AB', rh: '+' })
+    const cs = (await B.bloodCandidates(req2.id)).slice(0, 2)
+    await B.crossmatchBlood(req2.id, cs.map((c) => c.id))
+    await B.issueBlood(req2.id, cs[0].id)
+    await as('nurse01')
+    const w2 = await api.witnessApi.approveWitness({ purpose: 'transfusion', requestId: req2.id, unitId: cs[0].id, username: 'nurse02', password: '1234' })
+    await B.startTransfusion(req2.id, cs[0].id, { witness: w2.token, vitals: { temp: 36.6, pulse: 80, sbp: 120, dbp: 70 } })
+    await as('lab01')
+    await B.issueBlood(req2.id, cs[1].id)
+    await as('nurse01')
+    p = await wp()
+    ok(p.bloodTransfusing === 1 && p.bloodIssued === 1 && !p.bloodUrgency && !p.bloodIssuedLate, '一袋輸血中、一袋剛發血：輸血中不標紅（還不用量），已發血也列出')
 
     // 存好後 Esc 可以關
     const fs = await import('node:fs')
@@ -12736,6 +12754,20 @@ try {
     ok((await api.imagingApi.myImagingAcks()).some((x) => x.id === r.id), '已收住院：重要發現出現在住院主治的待確認')
     await api.imagingApi.ackImaging(r.id)
     ok(!!db().imagingReports.find((x) => x.id === r.id).ackAt, '住院主治確認急診開的 X 光重要發現')
+  }
+  console.log('\n[首頁逾時給藥與護理站一致]')
+  {
+    resetDb('small')
+    await as('nurse01')
+    // 醫師剛開的長期藥還沒排今天的給藥時間（還沒人開過護理站）：拿掉今天還沒給的劑次模擬
+    dbm.db.mar = dbm.db.mar.filter((m) => !(m.status === 'pending' && m.scheduledAt.startsWith(T) && dbm.db.ipdOrders.find((o) => o.id === m.orderId)?.type === 'long'))
+    const home = (await api.dashboardApi.getDashboard()).ipd.overdueMar
+    const wards = [...new Set(dbm.db.beds.map((b) => b.ward))]
+    let sum = 0
+    for (const w of wards) sum += (await api.nursingApi.listWardPatients(w)).reduce((s, p) => s + p.overdueCount, 0)
+    const ho = dbm.db.handovers.filter((h) => h.date === T && h.shift === '大夜')
+    ok(ho.length > 0 && ho.every((h) => dbm.db.nurseShifts.some((s) => s.ward === h.ward && s.date === T && s.shift === '大夜' && s.nurseId === h.nurseId)), `種子：今天清晨的 ${ho.length} 筆大夜交班都是那個病房當班大夜護理師寫的`)
+    ok(home === sum && home > 0, `首頁逾時未給藥 ${home}＝各病房護理站加總 ${sum}（首頁先補今天的給藥時間，不用等有人開護理站）`)
   }
   console.log('\n[檢查室設備停機]')
   {

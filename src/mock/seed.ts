@@ -2545,6 +2545,11 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const cur = { date: nowStr.slice(0, 10), shift: (Number(nowStr.slice(11, 13)) >= 16 ? '小夜' : Number(nowStr.slice(11, 13)) >= 8 ? '白班' : '大夜') as NurseShift['shift'] }
     const duty = nurseShifts.find((x) => x.ward === codes.icuWard && x.date === cur.date && x.shift === cur.shift)
     const icuPts = admissions.filter((a) => a.status === 'admitted' && beds.find((b) => b.id === a.bedId)?.ward === codes.icuWard)
+    // 排班出來後：今天清晨大夜的交班、昨天上午的護理紀錄，改記成那個病房當班的護理師（以前一律記孫佩君，她今天其實上白班、會變成自己交班給自己）
+    const wardOfAdm = (aid: string) => beds.find((b) => b.id === admissions.find((a) => a.id === aid)?.bedId)?.ward
+    const onDuty = (ward: string | undefined, date: string, shift: NurseShift['shift']) => nurseShifts.find((x) => x.ward === ward && x.date === date && x.shift === shift)?.nurseId
+    for (const h of handovers) if (h.date === T && h.shift === '大夜') h.nurseId = onDuty(h.ward, T, '大夜') ?? h.nurseId
+    for (const n of nursingNotes) if (n.nurseId === 'U202' && n.at === `${addDays(T, -1)} 10:00`) n.nurseId = onDuty(wardOfAdm(n.admissionId), addDays(T, -1), '白班') ?? n.nurseId
     icuPts.forEach((a, i) => duty && nurseAssignments.push({ id: `NAS-ICU-${i + 1}`, ward: codes.icuWard, date: cur.date, shift: cur.shift, admissionId: a.id, nurseId: duty.nurseId, by: duty.nurseId, at: `${cur.date} ${cur.shift === '白班' ? '08:10' : cur.shift === '小夜' ? '16:10' : '00:10'}` }))
     const sep = icuPts.find((a) => a.diagnosis.startsWith('A41'))
     if (sep) {

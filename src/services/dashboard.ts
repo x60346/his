@@ -57,7 +57,7 @@ import { careRoleOf } from './care-team'
 import { deliriumDoctorCounts, restraintTodosOf } from './delirium-work'
 import { specimenLate, specimenStage } from './specimen-rules'
 import { toRecollect } from './specimen-work'
-import { ensureLabDraws } from './ipd'
+import { ensureLabDraws, ensureMar } from './ipd'
 import { isLabOrder } from './specimen-work'
 import { QC_ANALYTES, qcStatusToday } from './qc-rules'
 import { examOfKey, isRadiologist, pendingImagingWork } from './imaging-work'
@@ -388,6 +388,10 @@ function labToCollectToday(): number {
 
 export function getDashboard(): Promise<DashboardStats> {
   return query(() => {
+    // 先補齊住院病人今天的給藥時間（和護理站一樣）：沒人開過護理站時，「逾時未給藥」會少算今天的劑次
+    let marAdded = false
+    for (const a of db.admissions.filter((x) => x.status === 'admitted')) marAdded = ensureMar(a.id, today()) || marAdded
+    if (marAdded) commitIfPossible()
     const seesRevenue = ['clerk', 'admin'].includes(sessionRole() ?? '') // 看「現在用的角色」：護理師兼櫃台，以護理師身分時看不到收入
     const t = today()
     const n = now()
