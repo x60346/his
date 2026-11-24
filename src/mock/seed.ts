@@ -1257,6 +1257,12 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     // 病房常備補充（住院藥局 → 病房）：不改變全院總量，只換地點
     const wardMoves = codes.wards.flatMap((w, wi) => wardStockItems.filter((x) => x.ward === w && x.drugId === drug.id).map((x) => ({ kind: 'ward' as const, at: wardRefillAt, qty: wardStartQty(wi, x.drugId, x.par), ref: wardRefillNo(wi), loc: `LOC-W${wi + 1}` })))
     const udNeed = udLines.filter((l) => l.drugId === drug.id).reduce((n, l) => n + l.qty, 0)
+    // 已准出院、還沒調劑的出院帶藥也從住院藥局扣：大型醫院的住院藥局要留得夠，藥師首頁那筆待辦打開才調得出來
+    const homeNeed = admissions.filter((a) => a.status === 'admitted').flatMap((a) => a.dischargeSummary?.meds ?? []).filter((m) => m.drugId === drug.id).reduce((n, m) => n + m.qty, 0)
+    // 示範「低於基準量、待補充」的病房常備：藥師打開就補，住院藥局也要夠
+    const wardGap = codes.wards.reduce((n, w, wi) => n + wardStockItems.filter((x) => x.ward === w && x.drugId === drug.id).reduce((k, x) => k + x.par - wardStartQty(wi, x.drugId, x.par), 0), 0)
+    /** 住院藥局平常要留的量：幾天的每日調劑＋待調劑的出院帶藥＋待補的病房常備 */
+    const ipdReserve = udNeed * 3 + homeNeed + wardGap + 10
     const receiveAt = `${addDays(T, -14)} 10:00`
     const totalOut = outs.reduce((s, o) => s + o.qty, 0)
     const outBefore = outs.filter((o) => o.at < receiveAt).reduce((s, o) => s + o.qty, 0)
@@ -1318,8 +1324,10 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       if (ev.kind === 'ward') {
         // 大型：住院藥局不夠補，先向藥庫請領
         if (ipdLoc !== recvLoc) {
+          // 補完病房後仍要留平常的量（以前只多請 10，住院藥局常被病房補到見底，出院帶藥就調不出來）
           const have = usableQty(at(ipdLoc), ev.at)
-          if (have < ev.qty) transfer(ipdLoc, ev.qty - have + 10, ev.at, xferRef())
+          const want = ev.qty + ipdReserve - have
+          if (want > 0) transfer(ipdLoc, Math.min(want, Math.max(ev.qty - have, usableQty(at(recvLoc), ev.at))), ev.at, xferRef())
         }
         move(ipdLoc, ev.loc, ev.qty, ev.at, ev.ref)
         continue
@@ -1328,8 +1336,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         lots.push({ ...ev.lot, locationId: recvLoc })
         post(recvLoc, ev.type, ev.at, ev.lot.qty, [{ lotNo: ev.lot.lotNo, qty: ev.lot.qty }], ev.ref)
         // 大型：住院藥局開帳時從藥庫撥一些注射劑，和住院病人在用的藥（夠調劑幾天：UD、病房常備都從這裡扣）
-        if (scale === 'large' && ev.type === 'opening' && (drug.category === '注射' || udNeed > 0)) {
-          const q = Math.min(Math.floor(ev.lot.qty / 2), Math.max(Math.min(20, Math.floor(ev.lot.qty / 10)), udNeed * 4 + 10))
+        if (scale === 'large' && ev.type === 'opening' && (drug.category === '注射' || udNeed + homeNeed > 0)) {
+          const q = Math.min(Math.floor(ev.lot.qty / 2), Math.max(Math.min(20, Math.floor(ev.lot.qty / 10)), udNeed * 4 + homeNeed + 10))
           if (q > 0) transfer(ipdLoc, q, `${ev.at.slice(0, 10)} 09:00`, xferRef())
         }
         continue
@@ -1472,7 +1480,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     const { qty } = suggestRestockQty({ usable, need: 0, safetyStock: lowDrug.safetyStock, used30 })
     if (qty > 0) {
       restockRequests.push({
-        id: 'RS-SEED-1', drugId: lowDrug.id, qty, receivedQty: 0, dispenseIds: [], note: '低於安全庫存，已向藥商叫貨',
+        id: 'RS-SEED-1', drugId: lowDrug.id, qty, receivedQty: 0, dispenseIds: [], note: scale === 'small' ? '低於安全庫存，已向藥商叫貨' : '低於安全庫存，向藥庫請領',
         requestedBy: 'U301', requestedAt: `${addDays(T, -1)} 16:40`, status: 'open', txnIds: [],
       })
     }

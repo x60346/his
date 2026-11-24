@@ -20,7 +20,7 @@ import { openQuery } from './nursing-rules'
 import { postStock } from './stock-ledger'
 import { usableQty } from './stock-rules'
 import { checkUdIssue, UD_RETURN_CAUSE, udPerDose, udVerifyBlocker, type UdReturnCause } from './ud-rules'
-import { pendingReturn, udBoxWard, udCandidate, udLineHome, type PendingReturn } from './ud-work'
+import { pendingReturn, udBoxWard, udCandidate, udHeld, udLineHome, type PendingReturn } from './ud-work'
 import { pharmBlocksUd } from './pharm-rules'
 import { admissionView, find, nameOf, stockLoc } from './views'
 
@@ -360,8 +360,7 @@ export function dispenseUd(input: UdDispenseInput): Promise<{ no: string; patien
       return { o, d, ms, per, qty: per ? per * ms.length : raw ?? 0 }
     })
     // 同一種藥合計夠不夠（還沒核對的其他調劑也要算進去：它們核對時才扣）
-    const holding = new Map<string, number>()
-    for (const x of db.udDispenses) for (const l of x.lines) if (x.boxes.find((b) => b.admissionId === l.admissionId)?.status === 'prepared') holding.set(l.drugId, (holding.get(l.drugId) ?? 0) + l.qty)
+    const holding = new Map(plan.map((p) => [p.d.id, udHeld(p.d.id)]))
     const need = new Map<string, number>()
     for (const p of plan) need.set(p.d.id, (need.get(p.d.id) ?? 0) + p.qty)
     for (const p of plan) {

@@ -10,6 +10,7 @@ import { postStock } from './stock-ledger'
 import { shiftInstanceOf, shiftOf } from './nursing-rules'
 import { allocateFefo, usableQty } from './stock-rules'
 import { wardExpiryLots, type WardExpiryLot } from './ward-stock-work'
+import { udHeld } from './ud-work'
 import { find, nameOf, stockLoc } from './views'
 import { consumeWitness, wardReturnRef, WITNESS_MIN, witnessFor } from './witness-core'
 
@@ -165,6 +166,8 @@ export function refillWard(ward: string, lines: { drugId: string; qty: number }[
     const t = now()
     const errors: Record<string, string> = {}
     const todo = (lines ?? []).filter((l) => l.qty !== 0)
+    // 住院藥局可以動的量：已調劑待核對的藥盒要用的不算
+    const srcFree = (drugId: string) => Math.max(0, usableQty(stockLoc.lots(drugId, src.id), t) - udHeld(drugId))
     if (!todo.length) fail('沒有要補充的品項')
     if (new Set(todo.map((l) => l.drugId)).size !== todo.length) fail('同一個品項出現兩次，請重新整理')
     for (const l of todo) {
@@ -174,6 +177,7 @@ export function refillWard(ward: string, lines: { drugId: string; qty: number }[
       else if (!Number.isInteger(l.qty) || l.qty < 0) errors[`qty.${l.drugId}`] = '數量需為正整數'
       else if (usableQty(stockLoc.lots(l.drugId, loc.id), t) + l.qty > item.par) errors[`qty.${l.drugId}`] = `補了會超過基準量 ${item.par}`
       else if (stockLoc.counting(l.drugId, src.id)) errors[`qty.${l.drugId}`] = `${d.name}在${src.name}盤點中`
+      else if (l.qty > srcFree(l.drugId)) errors[`qty.${l.drugId}`] = `${src.name}可用只有 ${srcFree(l.drugId)}${udHeld(l.drugId) ? `（另有 ${udHeld(l.drugId)} 已調劑待核對）` : ''}`
     }
     failFields(errors)
     const no = `WR${t.slice(0, 10).replace(/-/g, '')}-${String(nextCounter(`wardrefill:${t.slice(0, 10)}`)).padStart(2, '0')}`

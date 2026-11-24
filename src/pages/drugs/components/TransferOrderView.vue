@@ -65,8 +65,11 @@ const issue = useAction(transferApi.issueTransfer, { success: (t) => `${t.no} �
 async function onIssue() {
   const t = tr.value
   if (!t) return
-  const short = t.lines.filter((l) => (issueQty[l.id] ?? 0) < l.qty).length
-  const ok = await ui.confirm({ title: '撥發', message: `從${t.fromName}撥出 ${t.lines.length} 項${short ? `（${short} 項少於請領量）` : ''}，依效期先到先出扣批號；${t.toName}簽收後才入帳。`, okText: '撥發' })
+  // 0＝這次不撥：不算在「撥出幾項」裡，另外說（例：藥庫也缺貨，等採購到貨再請領）
+  const none = t.lines.filter((l) => !(issueQty[l.id] > 0)).length
+  const short = t.lines.filter((l) => issueQty[l.id] > 0 && issueQty[l.id] < l.qty).length
+  const sent = t.lines.length - none
+  const ok = await ui.confirm({ title: '撥發', message: `從${t.fromName}撥出 ${sent} 項${short ? `（${short} 項少於請領量）` : ''}${none ? `，${none} 項這次不撥` : ''}，依效期先到先出扣批號；${t.toName}簽收後才入帳。`, okText: '撥發' })
   if (ok) await issue.run(t.id, { ...issueQty })
 }
 

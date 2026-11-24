@@ -14475,6 +14475,44 @@ try {
     await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
   }
 
+  // 大型醫院的住院藥局：種子備量夠用（出院帶藥、明天調劑、病房常備補充一起做也夠）；
+  // 已調劑待核對的量不能被病房常備補充、出院帶藥拿走（藥已經裝進藥盒，核對時才扣帳）
+  console.log('\n[住院藥局保留量（大型）]')
+  {
+    resetDb('large')
+    const db = () => dbm.db
+    const ipd = db().stockLocations.find((l) => l.dispensesIpd).id
+    const free = (d) => db().drugLots.filter((l) => l.drugId === d && l.locationId === ipd && l.qty > 0 && l.expiry >= T).reduce((n, l) => n + l.qty, 0)
+    await as('ph01')
+    const rx = (await api.dischargeRxApi.listDischargeRx()).find((x) => !x.dispensedAt)
+    ok(rx && rx.items.every((i) => !i.shortage), `種子：出院帶藥 ${rx?.items.map((i) => `${i.drugName} 需 ${i.qty}／有 ${i.stock}`).join('、')}，打開就調得出來`)
+    let w = await api.udApi.getUdWork()
+    const lines = w.daily.flatMap((g) => g.lines)
+    const odd = lines.filter((l) => !l.perDose)
+    const before = free('M001')
+    const r = await api.udApi.dispenseUd({ kind: 'daily', marIds: lines.flatMap((l) => l.marIds), qtys: Object.fromEntries(odd.map((l) => [l.orderId, 0])) })
+    const held = db().udDispenses.find((x) => x.no === r.no).lines.filter((l) => l.drugId === 'M001').reduce((n, l) => n + l.qty, 0)
+    ok(held > 0 && free('M001') === before, `明天的調劑：Acetaminophen ${held} 已裝進藥盒，帳還沒扣（${before}）`)
+    await api.dischargeRxApi.dispenseDischargeRx(rx.admissionId)
+    const ward = db().wardStockItems.find((x) => x.drugId === 'M001').ward
+    const rf = await api.wardStockApi.refillWard(ward, [{ drugId: 'M001', qty: 15 }])
+    ok(!!rf.no && free('M001') >= held, `出院帶藥、病房補充 15 都做完，住院藥局還有 ${free('M001')}，夠待核對的 ${held}`)
+    // 把住院藥局的 Acetaminophen 調到只剩待核對的量：病房補充、出院帶藥都要擋（以前會放行，核對時才扣不到）
+    let left = held
+    await takeStock(['M001'], (l, lot) => { const q = lot.expiry >= T ? Math.min(left, lot.qty) : lot.qty; if (lot.expiry >= T) left -= q; return q }, '破損', ipd)
+    ok(free('M001') === held, `測試準備：住院藥局 Acetaminophen 只剩 ${held}（都是待核對藥盒要用的）`)
+    await api.wardStockApi.saveWardStockItem(ward, 'M001', 41)
+    try {
+      await api.wardStockApi.refillWard(ward, [{ drugId: 'M001', qty: 1 }])
+      ok(false, '病房常備補充動到待核對的量應被擋下')
+    } catch (x) {
+      ok(x.fields?.['qty.M001']?.includes('已調劑待核對'), `病房常備補充不能動待核對的量 → 「${x.fields?.['qty.M001'] ?? x.message}」`)
+    }
+    const d = db().udDispenses.find((x) => x.no === r.no)
+    for (const b of d.boxes) await api.udApi.verifyUdBox(d.id, b.admissionId)
+    ok(free('M001') === 0 && ledgerBroken(db()).length === 0, '藥盒全部核對送出：Acetaminophen 剛好扣完，帳本仍對得起來')
+  }
+
   // 病房常備：每病房一個地點；藥師補充、PRN/STAT 扣病人所在病房（不足改藥局直送）、護理師每班點班
   console.log('\n[病房常備]')
   {

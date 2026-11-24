@@ -115,7 +115,7 @@ const shown = computed(() => rows.value?.length ?? 0)
       <UStatCard label="缺貨" :value="summary?.out ?? '—'" :icon="PackageX" tone="red" hint="無可用庫存" :active="cardFilter === 'out'" :on-click="() => toggleCard('out')" />
       <UStatCard label="低於安全庫存" :value="summary?.low ?? '—'" :icon="AlertTriangle" tone="amber" :active="cardFilter === 'low'" :on-click="() => toggleCard('low')" />
       <UStatCard label="效期提醒" :value="summary ? `${summary.expiring} / ${summary.expired}` : '—'" :icon="CalendarClock" tone="amber" hint="60 天內到期 / 已過期待報廢" :active="cardFilter === 'expiry'" :on-click="() => toggleCard('expiry')" />
-      <UStatCard label="補貨待到貨" :value="summary?.restockOpen ?? '—'" :icon="Truck" tone="brand" hint="已申請、還沒到貨入庫" :active="cardFilter === 'restock'" :on-click="() => toggleCard('restock')" />
+      <UStatCard label="補貨待到貨" :value="summary?.restockOpen ?? '—'" :icon="Truck" tone="brand" :hint="work.multi.value ? '已申請、門診藥局還沒簽收撥補' : '已申請、還沒到貨入庫'" :active="cardFilter === 'restock'" :on-click="() => toggleCard('restock')" />
     </div>
 
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_32rem]">

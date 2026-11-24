@@ -15,6 +15,7 @@ import ControlledRxDialog from '@/components/ControlledRxDialog.vue'
 import { CONTROLLED_LEVEL_LABEL, dispenseOpen, pharmacyApi, scanApi, type DispenseScanInput } from '@/services'
 import type { DispenseItem } from '@/services/pharmacy'
 import { useAction, useQuery } from '@/composables/useService'
+import { useWorkLocation } from '@/composables/useWorkLocation'
 import { followToday } from '@/composables/useClock'
 import { diffDays, today } from '@/utils/date'
 import { dispenseStatus } from '@/utils/labels'
@@ -22,6 +23,9 @@ import type { DispenseStatus } from '@/types'
 
 // ---------- 清單 ----------
 const date = ref(today())
+// 補貨什麼時候會到：小型醫院是藥商到貨入庫；大型醫院是向藥庫請領、門診藥局簽收撥補
+const work = useWorkLocation()
+const arrive = computed(() => (work.multi.value ? `${work.locations.value.find((l) => l.dispensesOpd)?.name ?? '門診藥局'}簽收撥補後` : '到貨入庫後'))
 const todayStr = followToday(date) // 原本看今天的，跨日時自動換到新的一天
 const { data: all, loading } = useQuery(() => pharmacyApi.listDispenses({ date: date.value }), [date])
 const tab = ref<DispenseStatus>('pending')
@@ -227,7 +231,7 @@ const print = () => window.print()
               <td colspan="5" class="px-4 pb-2">
                 <div v-if="it.restock?.includesThis" class="flex flex-wrap items-center gap-2 text-xs text-sky-800">
                   <UBadge tone="blue">已申請補貨</UBadge>
-                  <span>{{ it.restock.requestedAt.slice(5, 16).replace('-', '/') }} 申請，尚欠 {{ it.restock.outstanding }} {{ it.unit }}；到貨入庫後即可{{ d.status === 'pending' ? '核對' : '發藥' }}</span>
+                  <span>{{ it.restock.requestedAt.slice(5, 16).replace('-', '/') }} 申請，尚欠 {{ it.restock.outstanding }} {{ it.unit }}；{{ arrive }}即可{{ d.status === 'pending' ? '核對' : '發藥' }}</span>
                 </div>
                 <div v-else class="flex flex-wrap items-center gap-2 text-xs text-red-700">
                   <UButton size="sm" variant="secondary" :icon="PackagePlus" @click="openRestock(it)">{{ it.restock ? '加入補貨申請' : '申請補貨' }}</UButton>
@@ -243,7 +247,7 @@ const print = () => window.print()
       <!-- 錯誤訊息不只說「錯了」，也告訴使用者下一步 -->
       <div v-if="shortages.length && dispenseOpen(d)" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
 {{ shortages.map((s) => s.drugName).join('、') }} 庫存不足，無法{{ d.status === 'pending' ? '核對' : '發藥' }}。
-        <template v-if="shortages.every((s) => s.restock?.includesThis)">已申請補貨，到貨入庫後即可{{ d.status === 'pending' ? '核對' : '發藥' }}；也可以請醫師改開替代藥。</template>
+        <template v-if="shortages.every((s) => s.restock?.includesThis)">已申請補貨，{{ arrive }}即可{{ d.status === 'pending' ? '核對' : '發藥' }}；也可以請醫師改開替代藥。</template>
         <template v-else>請按該列的「申請補貨」，或聯絡醫師更換藥品。</template>
       </div>
 

@@ -34,7 +34,7 @@ watch(open, async (v) => {
 })
 
 const save = useAction(inventoryApi.requestRestock, {
-  success: (r) => `${r.drugName} 補貨申請：共 ${r.qty} ${r.unit}，待到貨${r.waiting.length ? `（${r.waiting.length} 位病人等候中）` : ''}`,
+  success: (r) => `${r.drugName} 補貨申請：共 ${r.qty} ${r.unit}，${work.multi.value ? '待向藥庫請領、簽收' : '待到貨'}${r.waiting.length ? `（${r.waiting.length} 位病人等候中）` : ''}`,
 })
 async function submit() {
   if (!props.drugId) return
@@ -85,8 +85,8 @@ const hm = (t: string) => t.slice(5, 16).replace('-', '/')
           :hint="`建議：${plan.suggestion.formula}`"
           :error="save.fieldErrors.value.qty"
         />
-        <UInput v-model="form.note" label="備註（選填）" placeholder="例：請藥商下午送達" />
-        <p v-if="pickupNo" class="text-xs text-slate-500">申請後，領藥號 {{ pickupNo }} 要等到貨入庫才能核對、發藥；也可以請醫師改開替代藥。</p>
+        <UInput v-model="form.note" label="備註（選填）" :placeholder="work.multi.value ? '例：病人在等，請藥庫儘快撥' : '例：請藥商下午送達'" />
+        <p v-if="pickupNo" class="text-xs text-slate-500">申請後，領藥號 {{ pickupNo }} 要等{{ work.multi.value ? `${work.locations.value.find((l) => l.dispensesOpd)?.name ?? '門診藥局'}簽收撥補` : '到貨入庫' }}才能核對、發藥；也可以請醫師改開替代藥。</p>
       </div>
     </UQueryState>
     <template #footer>

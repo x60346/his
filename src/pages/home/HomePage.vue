@@ -209,7 +209,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
     { roles: ['pharmacist'], label: '缺貨或低於安全庫存', count: s.value.lowStockDrugs, hint: '門診藥局需要補貨的藥品', route: 'drugs', query: { filter: 'short' }, icon: Package, urgent: true },
-    { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
+    { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: s.value.transferRequested !== undefined ? '已申請、門診藥局還沒簽收撥補' : '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
     ...(s.value.transferRequested !== undefined
       ? [
           { roles: ['pharmacist'], label: '撥補待撥發', count: s.value.transferRequested, hint: '藥局請領、等藥庫撥發', route: 'drugs', query: { tab: 'transfer' }, icon: Truck },

@@ -18,6 +18,16 @@ export function udCandidate(m: MarRecord): IpdOrder | undefined {
   return find.admission(m.admissionId)?.status === 'admitted' ? o : undefined
 }
 
+/**
+ * 已調劑、還沒核對的量（住院藥局）：藥已經裝進藥盒、離開藥架，帳要核對時才扣。
+ * 住院藥局其他出庫（再調劑、病房常備補充、出院帶藥）都要先扣掉它，否則把藥盒要用的拿走，核對時才發現扣不到
+ */
+export function udHeld(drugId: string): number {
+  let n = 0
+  for (const x of db.udDispenses) for (const l of x.lines) if (l.drugId === drugId && x.boxes.find((b) => b.admissionId === l.admissionId)?.status === 'prepared') n += l.qty
+  return n
+}
+
 /** 一行調劑所在的調劑單與那位病人的藥盒 */
 export function udLineHome(lineId: string): { disp: UdDispense; line: UdLine; box: UdBox } | undefined {
   for (const disp of db.udDispenses) {

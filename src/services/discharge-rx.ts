@@ -7,6 +7,7 @@ import { now, today } from '@/utils/date'
 import { audit, fail, failField, must, mutate, query, requireUser } from './http'
 import { doseUnitOf } from './billing'
 import { postStock } from './stock-ledger'
+import { udHeld } from './ud-work'
 import { usableQty } from './stock-rules'
 import { checkAllergies, type AllergyWarning } from './allergy'
 import { effectiveTiming, timingText } from './drug-rules'
@@ -65,7 +66,8 @@ function rxView(a: Admission): DischargeRxView {
   const loc = stockLoc.ipd()
   const items = (ds.meds ?? []).map((m) => {
     const d = find.drug(m.drugId)
-    const stock = usableQty(stockLoc.lots(m.drugId, loc), today())
+    // 已調劑待核對的藥盒要用的不算（藥已經裝進藥盒）
+    const stock = Math.max(0, usableQty(stockLoc.lots(m.drugId, loc), today()) - udHeld(m.drugId))
     return {
       drugId: m.drugId, drugName: d?.name ?? m.drugId, drugNameZh: d?.nameZh ?? '', spec: d?.spec ?? '', unit: d?.unit ?? '', doseUnit: d ? doseUnitOf(d) : '',
       dose: m.dose, freq: m.freq, freqLabel: find.freq(m.freq)?.label ?? m.freq, route: m.route, days: m.days, qty: m.qty,
@@ -109,7 +111,7 @@ export function dispenseDischargeRx(admissionId: string): Promise<DischargeRxVie
     if (!ds!.meds?.length) fail('這位病人沒有出院帶藥', 'CONFLICT')
     if (a.dischargeRx) fail('出院帶藥已經調劑了', 'CONFLICT')
     const loc = stockLoc.ipd()
-    const short = ds!.meds!.filter((m) => usableQty(stockLoc.lots(m.drugId, loc), today()) < m.qty).map((m) => find.drug(m.drugId)?.name ?? m.drugId)
+    const short = ds!.meds!.filter((m) => usableQty(stockLoc.lots(m.drugId, loc), today()) - udHeld(m.drugId) < m.qty).map((m) => find.drug(m.drugId)?.name ?? m.drugId)
     if (short.length) fail(`住院藥局庫存不足：${short.join('、')}（請先撥補或請醫師改藥）`, 'CONFLICT')
     const t = now()
     const txnIds = ds!.meds!.map((m) => postStock({ kind: 'out', type: 'dispense', drugId: m.drugId, locationId: loc, qty: m.qty, ref: `出院帶藥 ${a.admitNo}`, patientId: a.patientId, doctorId: ds!.doctorId }, u.id, t).id)
