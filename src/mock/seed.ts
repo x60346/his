@@ -483,12 +483,15 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
 
   // 歷史就醫（過去 180 天）
+  // 同一位病人同一天只看一次（以前偶爾抽到同一天，申報檢核出現「同一天同一科重複就醫」）
   opdPatients.forEach((pt) => {
     const times = int(1, 4)
+    const used = new Set<string>()
     for (let k = 0; k < times; k++) {
       const date = addDays(T, -int(8, 180))
       const daySessions = sessionsOn(date)
-      if (!daySessions.length) continue
+      if (!daySessions.length || used.has(date)) continue
+      used.add(date)
       const session = sessionFor(pt, daySessions, pick(['D01', 'D02', 'D02', 'D06', 'D07', 'D03']))
       if (!session) continue
       const sc = scenarioFor(session.deptId)
@@ -589,7 +592,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
     for (const [pt, ago, times] of demo) {
       // 往前找最近一個有內科門診、這位病人適合的日子（週末沒有門診）
       let session: ClinicSession | undefined
-      for (let k = ago; k < ago + 7 && !session; k++) session = sessionsOn(addDays(T, -k)).find((x) => x.deptId === 'D02' && x.period === 'AM' && deptFits(pt, 'D02', x.date))
+      // 那天已經有看過診的跳過（以前會和歷史就醫撞在同一天，申報檢核出現「同一天同一科重複就醫」）
+      for (let k = ago; k < ago + 7 && !session; k++) session = sessionsOn(addDays(T, -k)).find((x) => x.deptId === 'D02' && x.period === 'AM' && deptFits(pt, 'D02', x.date) && !visits.some((v) => v.patientId === pt.id && v.createdAt.startsWith(x.date)))
       if (!session) continue
       const flow = flowFrom(`${session.date} 09:${pad2(int(0, 30))}`, int(5, 30))
       const v = makeVisit(pt, session, 'dispensed', flow.reg, '04')

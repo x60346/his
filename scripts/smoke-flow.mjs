@@ -11796,7 +11796,7 @@ try {
     const cr = b.pending.find((r) => r.id === 'LR-CR-1')
     ok(cr && ['late', 'pending'].includes(cr.calloutState) && cr.values[0].value === '32' && cr.where.includes('ICU'), `種子：今天加護病房血糖 32 還沒通報（${cr?.calloutState}，期限 ${cr?.calloutDue}）`)
     const old = db().labReports.filter((r) => r.values.some((v) => v.critical) && r.reportedAt < T)
-    ok(old.length >= 2 && old.every((r) => r.callout?.readBack) && old.some((r) => r.callout.toRole === 'doctor' && !r.admissionId) && b.rate.ontime === old.length - 1, `種子：過去 ${old.length} 份危急值都通報過（門診給開立醫師）、一份逾時；達成率 ${b.rate.ontime}/${b.rate.total}`)
+    ok(old.length >= 2 && old.every((r) => r.callout?.readBack) && old.some((r) => r.callout.toRole === 'doctor' && !r.admissionId) && (old.length < 3 || old.some((r) => !api.calloutStatus(r, 'x', api.calloutLimitOf(db().procedures.find((p) => p.id === r.procId)?.labLimits)).ontime)) && b.rate.ontime === old.filter((r) => r.reportedAt.slice(0, 10) >= addDaysT(-30) && api.calloutStatus(r, 'x', api.calloutLimitOf(db().procedures.find((p) => p.id === r.procId)?.labLimits)).ontime).length, `種子：過去 ${old.length} 份危急值都通報過（門診給開立醫師）、第三份 45 分才通報（逾時）；近 30 天達成率 ${b.rate.ontime}/${b.rate.total}`)
     let dash = await api.dashboardApi.getDashboard()
     ok(dash.calloutPending >= 1, `檢驗科首頁：危急值待通報 ${dash.calloutPending}（逾時 ${dash.calloutLate}）`)
 
