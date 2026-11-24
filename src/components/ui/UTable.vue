@@ -48,7 +48,7 @@ function cellText(row: T, col: Column<T>) {
       <thead>
         <tr class="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
           <!-- sticky：放在可捲動容器中時表頭固定在上方 -->
-          <th v-for="c in columns" :key="c.key" :style="{ width: c.width }" :class="['sticky top-0 z-[1] whitespace-nowrap bg-slate-50 px-3 py-2', alignCls[c.align ?? 'left']]">
+          <th v-for="c in columns" :key="c.key" :style="{ width: c.width, minWidth: c.width }" :class="['sticky top-0 z-[1] whitespace-nowrap bg-slate-50 px-3 py-2', alignCls[c.align ?? 'left']]">
             {{ c.label }}
           </th>
         </tr>

@@ -10,7 +10,8 @@ import { wardStockApi, witnessApi } from '@/services'
 import { useAction, useQuery } from '@/composables/useService'
 
 const props = defineProps<{ ward: string; clock: string }>()
-const { data, loading } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.getWardStock(props.ward) }), [() => props.ward])
+// 沒有病房常備的病房（加護病房、留觀區）：不報錯，顯示說明（分頁平常不會出現，從別處連進來時用）
+const { data, loading } = useQuery(async () => ({ ward: props.ward, v: await wardStockApi.wardStockIfAny(props.ward) }), [() => props.ward])
 const view = computed(() => (data.value?.ward === props.ward ? data.value.v : undefined))
 
 const counted = reactive<Record<string, number | undefined>>({})
@@ -52,7 +53,8 @@ const md = (s: string) => s.slice(5, 16).replace('-', '/')
 
 <template>
   <div class="space-y-3 p-4">
-    <UQueryState :loading="loading && !view" :ready="!!view">
+    <p v-if="data?.ward === ward && !data.v" class="py-6 text-center text-sm text-slate-500">這個病房沒有病房常備：藥由住院藥局每日調劑</p>
+    <UQueryState v-else :loading="loading && !view" :ready="!!view">
       <template v-if="view">
         <div class="flex flex-wrap items-center gap-2 text-sm">
           <span class="font-semibold text-slate-700">{{ view.locationName }}</span>

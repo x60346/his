@@ -50,7 +50,7 @@ import NursingNotesPanel from './components/NursingNotesPanel.vue'
 import HandoverPanel from './components/HandoverPanel.vue'
 import WardTasksPanel from './components/WardTasksPanel.vue'
 import WardStockPanel from './components/WardStockPanel.vue'
-import { bloodApi, dutyApi, masterApi, pressureApi, nursingApi, staffingApi, suggestAssign } from '@/services'
+import { bloodApi, dutyApi, masterApi, pressureApi, nursingApi, staffingApi, suggestAssign, wardStockApi } from '@/services'
 import { UDialog, USelect } from '@/components/ui'
 import { useAction } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
@@ -139,6 +139,9 @@ const tab = ref(['stock', 'handover', 'icuboard', 'code', 'negative'].includes(S
 // 輸血：已發血待輸、輸血中（分頁上的數字）
 const { data: blood } = useQuery(async () => (admissionId.value ? bloodApi.patientBlood(admissionId.value) : undefined), [admissionId])
 const bloodTodo = computed(() => (blood.value && blood.value.admissionId === admissionId.value ? blood.value.requests.reduce((n, r) => n + r.rows.filter((x) => x.state === 'issued' || x.state === 'transfusing').length, 0) : 0))
+// 有病房常備的病房才有「常備點班」（加護病房、留觀區沒有常備藥車，點進去只會報錯）
+const { data: stockOf } = useQuery(async () => ({ ward: ward.value, has: !!(await wardStockApi.wardStockIfAny(ward.value)) }), [ward])
+const hasStock = computed(() => stockOf.value?.ward === ward.value && stockOf.value.has)
 const tabs = computed(() =>
   !adm.value
     ? [
@@ -149,7 +152,7 @@ const tabs = computed(() =>
         ...(ward.value === dayWard
           ? []
           : [
-              { key: 'stock', label: '常備點班' },
+              ...(hasStock.value ? [{ key: 'stock', label: '常備點班' }] : []),
               { key: 'scan', label: '給藥掃描' },
               { key: 'isoward', label: '隔離與 DNR', count: (allPatients.value ?? []).reduce((s, p) => s + p.isolationTodo, 0) || undefined },
               { key: 'lineward', label: '品質指標' },
@@ -192,6 +195,13 @@ const WARD_ONLY = ['tasks', 'stock', 'scan', 'isoward', 'lineward', 'icuboard', 
 watch(admissionId, (id) => {
   if (id && WARD_ONLY.includes(tab.value)) tab.value = adm.value?.icu ? 'flowsheet' : 'mar'
   else if (!id && tab.value !== 'handover' && !WARD_ONLY.includes(tab.value)) tab.value = 'tasks'
+})
+
+// 換病房後原本的病房層級分頁不存在（例：5A 的常備點班 → 加護病房沒有常備）：回到本班待辦。
+// 等常備查好、而且沒選病人才判斷（病人資料載入中分頁清單會暫時是病房層級的，不能誤切）
+watch([tabs, () => stockOf.value?.ward], ([ts]) => {
+  if (admissionId.value || stockOf.value?.ward !== ward.value) return
+  if (!ts.some((t) => t.key === tab.value)) tab.value = 'tasks'
 })
 
 // 本班待辦：取消選取病人就回到全病房清單；點清單的一列跳到該病人的對應分頁

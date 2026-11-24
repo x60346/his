@@ -155,7 +155,7 @@ const history = computed(() => [...(vitals.value ?? [])].reverse())
           <template v-for="k in fields.slice(0, 6)" :key="k" #[`cell-${k}`]="{ row }">
             <span :class="['tabular', isAbnormal(k, row[k]) && 'font-semibold text-red-600']">{{ row[k] ?? '—' }}</span>
           </template>
-          <template #cell-pain="{ row }"><span :class="['tabular', (row.pain ?? 0) >= PAIN_ACT_FROM && 'font-semibold text-red-600']" :title="row.painAction">{{ row.pain ?? '—' }}<span v-if="row.painAction" class="ml-1 text-xs font-normal text-slate-500">（{{ row.painAction }}）</span></span></template>
+          <template #cell-pain="{ row }"><span :class="['tabular', (row.pain ?? 0) >= PAIN_ACT_FROM && 'font-semibold text-red-600']" :title="row.painAction">{{ row.pain ?? '—' }}<span v-if="row.painAction" class="block min-w-[9rem] text-xs font-normal text-slate-500">{{ row.painAction }}</span></span></template>
           <template #cell-o2="{ row }"><span class="tabular">{{ row.o2 === undefined ? '—' : row.o2 === 0 ? '室內' : `${row.o2} L` }}</span></template>
           <template #cell-avpu="{ row }"><span :class="row.avpu && row.avpu !== 'A' && 'font-semibold text-red-600'">{{ row.avpu ?? '—' }}</span></template>
           <template #cell-news="{ row }"><span v-if="newsOf(row)" :class="['tabular', newsOf(row)!.level === 'high' ? 'font-semibold text-red-600' : newsOf(row)!.level === 'medium' && 'font-semibold text-amber-700']">{{ newsOf(row)!.total }}</span><span v-else class="text-slate-300">—</span></template>
