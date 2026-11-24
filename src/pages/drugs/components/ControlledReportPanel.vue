@@ -3,7 +3,7 @@
 // 再加全院合計（院內撥補不算收支）。每一格就是那本簿冊的數字（服務層 controlled.controlledReport 用同一個計算）。
 import { computed, ref } from 'vue'
 import { Download, Printer } from 'lucide-vue-next'
-import { UButton, UInput, UQueryState } from '@/components/ui'
+import { UButton, UInput, UQueryState, USegmented } from '@/components/ui'
 import { CONTROLLED_LEVEL_LABEL, controlledApi, controlledReportCsv, controlledReportFileName, controlledReportXlsx, controlledReportXlsxFileName, XLSX_MIME } from '@/services'
 import { downloadFile } from '@/utils/download'
 import { useQuery } from '@/composables/useService'
@@ -35,9 +35,12 @@ function exportCsv() {
     <div class="no-print flex flex-wrap items-end gap-3">
       <UInput v-model="from" type="date" label="起" class="w-40" />
       <UInput v-model="to" type="date" label="迄" class="w-40" :max="todayStr" />
-      <div class="flex gap-1">
-        <UButton v-for="p in presets" :key="p.label" size="sm" :variant="from === p.from && to === p.to ? 'primary' : 'ghost'" @click="(from = p.from), (to = p.to)">{{ p.label }}</UButton>
-      </div>
+      <USegmented
+        label="快速選期間"
+        :model-value="presets.find((p) => from === p.from && to === p.to)?.label ?? ''"
+        :options="presets.map((p) => ({ key: p.label, label: p.label }))"
+        @update:model-value="(l) => { const p = presets.find((x) => x.label === l)!; from = p.from; to = p.to }"
+      />
       <div class="ml-auto flex gap-2">
         <UButton variant="secondary" :icon="Download" :disabled="!data" @click="exportXlsx">匯出 Excel</UButton>
         <UButton variant="ghost" :disabled="!data" @click="exportCsv">CSV</UButton>

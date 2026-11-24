@@ -4,7 +4,7 @@
 // 服務層用同一條規則把關：未到時間按「給藥」會被擋下，畫面上的停用只是讓人不必白按。
 import { computed, ref, watch } from 'vue'
 import { Check, CircleSlash, Clock, History, Pause, PenLine } from 'lucide-vue-next'
-import { UBadge, UButton, UDialog, UInput, UQueryState, UTextarea } from '@/components/ui'
+import { UBadge, UButton, UDialog, UInput, UQueryState, USegmented, UTextarea } from '@/components/ui'
 import ReasonDialog from '@/components/ReasonDialog.vue'
 import WitnessDialog from '@/components/WitnessDialog.vue'
 import ScanDialog from '@/components/ScanDialog.vue'
@@ -292,14 +292,7 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
   <div class="space-y-5 p-4">
     <!-- 日期與摘要 -->
     <div class="flex flex-wrap items-center gap-3">
-      <div class="flex rounded-md border border-slate-200 p-0.5">
-        <button
-          v-for="t in dateTabs"
-          :key="t.key"
-          :class="['rounded px-3 py-1 text-sm', date === t.key ? 'bg-brand-600 text-white' : 'text-slate-600 hover:bg-slate-100']"
-          @click="date = t.key"
-        >{{ t.label }}</button>
-      </div>
+      <USegmented v-model="date" label="給藥日期" :options="dateTabs" />
       <div v-if="board" class="flex gap-2 text-sm">
         <UBadge v-if="summary.overdue" tone="red">逾時 {{ summary.overdue }}</UBadge>
         <UBadge v-if="summary.due" tone="yellow">待給藥 {{ summary.due }}</UBadge>

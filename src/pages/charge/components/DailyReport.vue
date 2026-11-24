@@ -4,7 +4,7 @@
 import { HOSPITAL } from '@/utils/hospital'
 import { computed, nextTick, ref } from 'vue'
 import { Ban, Coins, Download, FileText, Printer, Stethoscope } from 'lucide-vue-next'
-import { UButton, UCard, UInput, UStatCard, UTable, type Column } from '@/components/ui'
+import { UButton, UCard, UInput, USegmented, UStatCard, UTable, type Column } from '@/components/ui'
 import { chargeApi, dailyReportCsv, dailyReportXlsx, reportFileName, reportXlsxFileName, XLSX_MIME } from '@/services'
 import { downloadFile } from '@/utils/download'
 import type { DailyReport } from '@/services/charge'
@@ -144,9 +144,12 @@ const print = async () => {
     <div class="no-print flex flex-wrap items-end gap-3">
       <div class="w-44"><UInput :model-value="from" label="起始日期" type="date" :max="todayStr" @update:model-value="setFrom" /></div>
       <div class="w-44"><UInput v-model="to" label="結束日期" type="date" :max="todayStr" /></div>
-      <div class="flex gap-1">
-        <UButton v-for="p in presets" :key="p.label" size="sm" :variant="from === p.from && to === p.to ? 'primary' : 'ghost'" @click="usePreset(p)">{{ p.label }}</UButton>
-      </div>
+      <USegmented
+        label="快速選期間"
+        :model-value="presets.find((p) => from === p.from && to === p.to)?.label ?? ''"
+        :options="presets.map((p) => ({ key: p.label, label: p.label }))"
+        @update:model-value="(l) => usePreset(presets.find((p) => p.label === l)!)"
+      />
       <div class="ml-auto flex gap-2">
         <UButton variant="secondary" :icon="Printer" :disabled="!r || !!error" @click="print">列印</UButton>
         <UButton variant="secondary" :icon="Download" :disabled="!r || !!error" @click="exportXlsx">匯出 Excel</UButton>

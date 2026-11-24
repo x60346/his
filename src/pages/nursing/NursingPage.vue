@@ -7,7 +7,7 @@ import { useRevealOnNarrow } from '@/composables/useRevealOnNarrow'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { AlertTriangle, ListChecks } from 'lucide-vue-next'
-import { UBadge, UButton, UCard, UQueryState, UTabs } from '@/components/ui'
+import { UBadge, UButton, UCard, UQueryState, USegmented, UTabs } from '@/components/ui'
 import PatientBanner from '@/components/PatientBanner.vue'
 import IpdFeeStrip from '@/components/IpdFeeStrip.vue'
 import DrgStrip from '@/components/DrgStrip.vue'
@@ -225,15 +225,9 @@ const wardTotals = computed(() => ({
   <div class="space-y-3">
     <!-- 病房切換 -->
     <div class="flex flex-wrap items-center gap-2">
-      <div class="flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm">
-        <button
-          v-for="w in wards"
-          :key="w"
-          :class="['rounded-md px-3 py-1.5 text-sm', ward === w ? 'bg-brand-600 font-medium text-white' : 'text-slate-600 hover:bg-slate-100']"
-          @click="ward = w"
-        >{{ w }}</button>
-      </div>
-      <UButton size="sm" :variant="!admissionId && tab !== 'handover' ? 'primary' : 'secondary'" :icon="ListChecks" @click="showTasks">本班待辦</UButton>
+      <USegmented v-model="ward" label="病房" :options="wards.map((w) => ({ key: w, label: w }))" />
+      <!-- 「本班待辦」是一個檢視，不是動作：選中時用藍框，不用實心藍底 -->
+      <UButton size="sm" variant="secondary" :icon="ListChecks" :aria-pressed="!admissionId && tab !== 'handover'" :class="!admissionId && tab !== 'handover' && '!border-brand-500 !text-brand-700 ring-1 ring-brand-500'" @click="showTasks">本班待辦</UButton>
       <UBadge v-if="wardTotals.overdue" tone="red">全病房逾時給藥 {{ wardTotals.overdue }}</UBadge>
       <UBadge v-if="wardTotals.stat" tone="yellow">待執行臨時醫囑 {{ wardTotals.stat }}</UBadge>
       <UBadge v-if="wardTotals.unacked" tone="cyan">待核對醫囑 {{ wardTotals.unacked }}</UBadge>
@@ -253,8 +247,13 @@ const wardTotals = computed(() => ({
       <span v-if="asg.patients.some((p) => !p.nurseId)" class="text-xs text-amber-800">未分床 {{ asg.patients.filter((p) => !p.nurseId).length }} 位</span>
       <span class="ml-auto flex gap-1.5">
         <template v-if="myCount">
-          <UButton size="sm" :variant="showMine ? 'primary' : 'secondary'" @click="mineOnly = true">我的病人 {{ myCount }}</UButton>
-          <UButton size="sm" :variant="!showMine ? 'primary' : 'secondary'" @click="mineOnly = false">全病房 {{ allPatients?.length ?? 0 }}</UButton>
+          <USegmented
+            size="sm"
+            label="病人範圍"
+            :model-value="showMine ? 'mine' : 'all'"
+            :options="[{ key: 'mine', label: '我的病人', count: myCount }, { key: 'all', label: '全病房', count: allPatients?.length ?? 0 }]"
+            @update:model-value="mineOnly = $event === 'mine'"
+          />
         </template>
         <UButton v-if="asg.canAssign" size="sm" variant="secondary" @click="openAsg">分床</UButton>
       </span>

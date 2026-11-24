@@ -14494,6 +14494,18 @@ try {
     }
     ok(dash.length === 0, `月日都寫成 11/24（掃 ${files.length} 個檔）${dash.length ? `；還有：${dash.slice(0, 5).join('、')}` : ''}`)
     ok(dollar.length === 0, `金額都用 money()${dollar.length ? `；還有：${dollar.slice(0, 5).join('、')}` : ''}`)
+    // 切換鈕（病房、我的病人／全病房、今天／明天、本月／上月）用 USegmented：選中不是實心藍底
+    const solid = []
+    for (const p of files) {
+      if (p.includes(path.join('components', 'ui')) || p.endsWith('AdminPage.vue')) continue // AdminPage 左側是設定項目選單，不是切換鈕
+      // 一排選中實心藍底的按鈕：手刻 bg-brand-600、依「等於哪個」換 primary，或相鄰兩顆按鈕各設一個狀態（我的病人／全病房）
+      const pair = /\? 'primary' : '(secondary|ghost)'.*@click="\w+ = /
+      const ls = fs.readFileSync(p, 'utf8').split('\n')
+      ls.forEach((l, i) => {
+        if (/\? '[^']*bg-brand-600[^']*text-white|=== [^"]*\? 'primary' : 'ghost'/.test(l) || (pair.test(l) && (pair.test(ls[i - 1] ?? '') || pair.test(ls[i + 1] ?? '')))) solid.push(`${p}:${i + 1}`)
+      })
+    }
+    ok(solid.length === 0, `切換鈕都用 USegmented${solid.length ? `；還有：${solid.slice(0, 5).join('、')}` : ''}`)
   }
 
   // 給藥紀錄更正：暫停後病人回來還是給了、按錯列記成已給（8 小時內；PRN、臨時、管制藥不能改成未給；紀錄只增補）
