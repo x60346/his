@@ -97,6 +97,8 @@ function revealFirstError() {
 export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>, opts: { success?: string | ((r: R) => string) } = {}) {
   const ui = useUi()
   const pending = ref(false)
+  /** 正在送出的這一次帶了哪些參數：清單每一列共用同一個動作時，只讓按下的那一列轉圈（runningWith） */
+  const pendingArgs = shallowRef<unknown[]>()
   /** 服務層標了欄位的錯誤：{ idNo: '已建檔…' }，表單直接綁到對應欄位 */
   const fieldErrors = ref<Record<string, string>>({})
 
@@ -104,6 +106,7 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
   async function run(...args: A): Promise<R | undefined> {
     if (pending.value) return undefined
     pending.value = true
+    pendingArgs.value = args
     fieldErrors.value = {}
     try {
       const r = await fn(...args)
@@ -125,10 +128,13 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
       return undefined
     } finally {
       pending.value = false
+      pendingArgs.value = undefined
     }
   }
+  /** 正在送出、而且前幾個參數就是這些（例：runningWith(row.id)）：清單裡只有那一列顯示轉圈 */
+  const runningWith = (...prefix: unknown[]) => pending.value && !!pendingArgs.value && prefix.every((x, i) => pendingArgs.value![i] === x)
 
-  return { run, pending, fieldErrors }
+  return { run, pending, fieldErrors, runningWith }
 }
 
 /** 防抖：來源停止變動 ms 毫秒後才更新（搜尋框用，避免每打一個字就查一次） */

@@ -32,7 +32,7 @@ const rows: Row[] = [
   { id: '2', seq: 2, name: '李美玲', status: 'consulted' },
   { id: '3', seq: 3, name: '張家豪', status: 'in-consult' },
   { id: '4', seq: 4, name: '陳淑芬', status: 'registered' },
-  { id: '5', seq: 5, name: '林俊傑', status: 'cancelled' },
+  { id: '5', seq: 5, name: '林俊德', status: 'cancelled' },
 ]
 const columns: Column<Row>[] = [
   { key: 'seq', label: '號', width: '60px', align: 'center' },

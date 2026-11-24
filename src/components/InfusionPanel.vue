@@ -130,6 +130,6 @@ async function onStop(reason: string) {
       </template>
     </UDialog>
 
-    <ReasonDialog :model-value="!!stopFor" title="停止點滴" label="原因" :presets="['醫囑停止', '病人可以進食、不需要了', '留置針阻塞或滲漏', '出院']" :pending="stop.pending.value" :error="stop.fieldErrors.value.reason" @update:model-value="(y: boolean) => !y && (stopFor = undefined)" @confirm="onStop" />
+    <ReasonDialog :model-value="!!stopFor" title="停止點滴" label="原因" ok-text="停止點滴" danger :presets="['醫囑停止', '病人可以進食、不需要了', '留置針阻塞或滲漏', '出院']" :pending="stop.pending.value" :error="stop.fieldErrors.value.reason" @update:model-value="(y: boolean) => !y && (stopFor = undefined)" @confirm="onStop" />
   </div>
 </template>

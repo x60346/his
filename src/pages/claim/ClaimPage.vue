@@ -31,7 +31,8 @@ const ui = useUi()
 const submitAct = useAction(claimApi.submitClaim, { success: (x) => `已送出 ${x.month}：${x.totals.count} 筆、申請 ${fmt(x.totals.claim)} 點` })
 async function submit() {
   if (!b.value) return
-  if (!(await ui.confirm({ title: `送出 ${b.value.month} 申報`, message: `${b.value.totals.count} 筆、申請 ${fmt(b.value.totals.claim)} 點。送出後這個月鎖定，之後的更正列在下個月補報。`, okText: '送出' }))) return
+  if (!(await ui.confirm({ title: `送出 ${b.value.month} 申報`, message: `${b.value.totals.count} 筆、申請 ${fmt(b.value.totals.claim)} 點。送出後這個月鎖定，之後的更正列在下個月補報。
+（示範系統：只在院內鎖定，不會上傳健保署）`, okText: '送出' }))) return
   await submitAct.run(b.value.kind, b.value.month)
 }
 async function exportXml() {

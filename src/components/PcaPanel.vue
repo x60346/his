@@ -184,7 +184,7 @@ function openEnd(p: PcaView) {
     </UDialog>
 
     <WitnessDialog v-model="witnessOpen" :title="witnessFor?.stage === 'setup' ? 'PCA 架設雙人核對' : 'PCA 剩餘量銷毀見證'" who="核對護理師" :subject="witnessFor ? `${witnessFor.p.drugName}・單次 ${witnessFor.p.bolusMg} mg、鎖定 ${witnessFor.p.lockoutMin} 分、上限 ${witnessFor.p.hourLimitMg} mg/h${witnessFor.stage === 'end' ? `・剩餘 ${ef.residualMl} ml` : ''}` : ''" :note="witnessFor?.stage === 'setup' ? '核對病人、藥袋、機器設定與醫囑相同。' : '當場看著剩餘量銷毀。'" :ok-text="witnessFor?.stage === 'setup' ? '核對無誤' : '見證銷毀'" :approve="approve" @approved="onWitness" />
-    <ReasonDialog :model-value="!!cancelFor" title="取消 PCA" label="原因" :presets="['病人拒絕', '改其他止痛方式']" :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @update:model-value="(x: boolean) => !x && (cancelFor = undefined)" @confirm="onCancel" />
+    <ReasonDialog :model-value="!!cancelFor" title="取消 PCA" label="原因" ok-text="取消 PCA" danger :presets="['病人拒絕', '改其他止痛方式']" :pending="cancel.pending.value" :error="cancel.fieldErrors.value.reason" @update:model-value="(x: boolean) => !x && (cancelFor = undefined)" @confirm="onCancel" />
     <ReasonDialog :model-value="!!ackFor" title="處理 PCA 警示" label="處置" :presets="['停止基礎速率、繼續觀察', '暫停 PCA、改口服止痛', '給 Naloxone 0.04 mg IV，持續監測']" :pending="ack.pending.value" :error="ack.fieldErrors.value.note" @update:model-value="(x: boolean) => !x && (ackFor = undefined)" @confirm="onAck" />
   </div>
 </template>

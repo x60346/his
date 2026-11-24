@@ -16,7 +16,7 @@ defineProps<{
 
 <template>
   <slot v-if="ready" />
-  <div v-else-if="loading" class="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
+  <div v-else-if="loading" class="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
     <Loader2 class="h-4 w-4 animate-spin" />載入中…
   </div>
   <UEmpty v-else-if="emptyTitle" :title="emptyTitle" :description="emptyDescription" />

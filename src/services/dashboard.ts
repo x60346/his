@@ -142,6 +142,8 @@ export interface DashboardStats {
   nutritionUnseen?: number
   /** 約束查核逾時（護理師，全院）；譫妄陽性待確認、約束醫囑待補或到期（醫師，本科住院病人） */
   restraintCheckOverdue: number
+  /** 護理師這一班有分床：疼痛、管路、約束、營養、風險評估只算自己的病人（首頁說明要寫「我的病人」不是「全院」） */
+  nurseScoped?: boolean
   deliriumPositive?: number
   restraintOrder?: number
   /** 出院準備（有「出院準備」權限的人）：待篩選快到期或逾時、出院後待電話追蹤 */
@@ -530,6 +532,7 @@ export function getDashboard(): Promise<DashboardStats> {
         const scope = sessionRole() === 'nurse' ? myScope(me?.id, t) : undefined
         const inpt = db.admissions.filter((a) => a.status === 'admitted' && (!scope || scope.has(a.id)))
         return {
+          ...(scope ? { nurseScoped: true } : {}),
           painReassessOverdue: inpt.filter((a) => painStateOf(a.id, t).reassess?.status === 'overdue').length,
           lineTodo: inpt.reduce((n, a) => n + lineTodosOf(a.id, t).filter((x) => x.kind !== 'attending').length, 0),
           ...(sessionRole() === 'doctor' && me?.doctorId ? { lineAttending: attendingLineAlerts(me.doctorId, t), nutritionUnseen: nutritionCounts(t, me.doctorId).unseen } : {}),

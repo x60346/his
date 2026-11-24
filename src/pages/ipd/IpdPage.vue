@@ -93,7 +93,7 @@ const transfer = computed(() => adm.value?.lastTransfer)
 const cancelTransfer = useAction(admissionApi.cancelDeptTransfer, { success: '已撤回轉科申請' })
 async function onCancelTransfer() {
   const a = adm.value
-  if (a && (await ui.confirm({ title: '撤回轉科申請', message: `撤回「轉${a.lastTransfer?.toDeptName}」的申請？病人繼續由您負責。`, okText: '撤回' }))) cancelTransfer.run(a.id)
+  if (a && (await ui.confirm({ title: '撤回轉科申請', message: `撤回「轉${a.lastTransfer?.toDeptName}」的申請？病人繼續由您負責。`, okText: '撤回申請', danger: true }))) cancelTransfer.run(a.id)
 }
 
 // ---------- 會診 ----------
@@ -434,17 +434,17 @@ async function submitNote() {
       <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <FlaskConical class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
-        <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
+        <UButton size="sm" variant="secondary" @click="tab = 'labs'">查看</UButton>
       </div>
       <div v-if="bloodReactions" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <Droplet class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>輸血反應待確認：</b>{{ bloodReactions }} 筆，已停止輸血，請寫處置</span>
-        <UButton size="sm" variant="danger" @click="tab = 'blood'">查看</UButton>
+        <UButton size="sm" variant="secondary" @click="tab = 'blood'">查看</UButton>
       </div>
       <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800" role="alert">
         <ScanLine class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
-        <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
+        <UButton size="sm" variant="secondary" @click="tab = 'imaging'">查看</UButton>
       </div>
       <div v-if="transfer?.status === 'pending'" class="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900" role="status">
         <ArrowRightLeft class="h-4 w-4" />
@@ -770,7 +770,7 @@ async function submitNote() {
       :error="keepAct.fieldErrors.value.reply"
       @confirm="confirmKeep"
     />
-    <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回" :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
+    <ReasonDialog v-model="cancelConsultOpen" title="撤回會診" :subject="cancelling ? `${cancelling.toDeptName}：${cancelling.question}` : ''" label="撤回原因" :presets="['病情已改善', '改為轉科', '開錯科別']" ok-text="撤回會診" danger :pending="cancelConsult.pending.value" :error="cancelConsult.fieldErrors.value.reason" @confirm="confirmCancelConsult" />
     <AcceptTransferDialog v-model="acceptOpen" :item="accepting" @accepted="(id) => (admissionId = id)" />
     <UDialog v-model="cancelOpen" title="取消准予出院" size="sm">
       <div class="space-y-3 text-sm">

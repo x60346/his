@@ -24,7 +24,7 @@ export const dispenseStatus: LabelMap<DispenseStatus> = {
 export const admissionStatus: LabelMap<AdmissionStatus> = {
   reserved: { label: '待報到', tone: 'yellow' },
   admitted: { label: '住院中', tone: 'blue' },
-  discharged: { label: '已出院', tone: 'green' },
+  discharged: { label: '已出院', tone: 'gray' },
   cancelled: { label: '已取消', tone: 'gray' },
 }
 

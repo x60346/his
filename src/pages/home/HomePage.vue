@@ -1,12 +1,12 @@
 <script setup lang="ts">
 // 首頁儀表板：今日營運指標、近 7 日趨勢、依角色顯示的待辦。
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Droplet, Scissors, Siren,
   AlertTriangle, BedDouble, ChevronRight, ClipboardCheck, Coins, DoorOpen, FlaskConical, ScanLine, Package, PhoneCall, Pill, ShieldAlert, Receipt, Stethoscope, Truck, Users,
 } from 'lucide-vue-next'
-import { UBarChart, UCard, UEmpty, UStatCard } from '@/components/ui'
+import { UBarChart, UCard, UEmpty, UQueryState, UStatCard } from '@/components/ui'
 import { dashboardApi, masterApi, opdApi } from '@/services'
 import { useQuery } from '@/composables/useService'
 import { useToday } from '@/composables/useClock'
@@ -22,13 +22,14 @@ const auth = useAuth()
 const can = useCan()
 const router = useRouter()
 
-const { data: s, reload } = useQuery(() => dashboardApi.getDashboard())
+const { data: s, reload, loading: homeLoading } = useQuery(() => dashboardApi.getDashboard())
 
 // 醫師才查自己的候診清單
 const isDoctor = computed(() => auth.user?.role === 'doctor' && !!auth.user.doctorId)
 const todayStr = useToday()
 const { data: myQueue } = useQuery(async () => (isDoctor.value ? opdApi.listQueue({ date: todayStr.value, doctorId: auth.user!.doctorId! }) : []), [todayStr])
-const myWaiting = computed(() => (myQueue.value ?? []).filter((v) => v.status === 'registered' || v.status === 'in-consult').length)
+const myWaiting = computed(() => (myQueue.value ?? []).filter((v) => (v.status === 'registered' && !v.canCheckIn) || v.status === 'in-consult').length)
+const myNotArrived = computed(() => (myQueue.value ?? []).filter((v) => v.status === 'registered' && v.canCheckIn).length)
 
 // 「時間經過」也會讓數字改變（例如給藥逾時），但資料沒變、dbVersion 不會動，所以每分鐘重查一次
 let timer: ReturnType<typeof setInterval> | undefined
@@ -73,20 +74,20 @@ const todos = computed<Todo[]>(() => {
       { roles: ['nurse'], label: '生物指示劑待判讀', count: s.value.cssdBiDue ?? 0, hint: '滅菌鍋次培養滿 24 小時：判讀陰性放行、陽性整鍋召回（手術室「器械滅菌」分頁）', route: 'or', icon: ShieldAlert, urgent: false },
     ] : []),
     { roles: ['doctor'], label: '住院點數接近 DRG 上限', count: (s.value.drgNear ?? 0) + (s.value.drgOver ?? 0), hint: s.value.drgOver ? `其中 ${s.value.drgOver} 位已超過上限（超出部分只給付 80%）：住院醫囑頁上方看預估 DRG` : '我主治的住院病人，目前健保點數已到 DRG 上限的 80%（住院醫囑頁上方看預估 DRG；只提示、不擋醫囑）', route: 'ipd', icon: ShieldAlert, urgent: !!s.value.drgOver },
-    ...(s.value.progressMissing ? [{ roles: ['doctor'], label: '病程紀錄缺漏', count: s.value.progressMissing, hint: '住院中的病人最近 7 天有幾天沒寫病程紀錄（每天至少一筆）：到「住院醫囑」頁補寫（「健保審查回覆」頁列出哪幾天）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
-    ...(s.value.recordIncomplete ? [{ roles: ['doctor'], label: '出院病歷待完成', count: s.value.recordIncomplete, hint: s.value.recordOverdue ? `其中 ${s.value.recordOverdue} 份出院超過 14 天（逾期）：出院病摘簽署、手術紀錄、死亡證明書、會診回覆` : '出院後 14 天內要完成：出院病摘簽署、手術紀錄、死亡證明書、會診回覆（「健保審查回覆」頁列出缺什麼）', route: 'claim-cuts', icon: ShieldAlert, urgent: !!s.value.recordOverdue }] : []),
-    ...(s.value.opdReviewToAck ? [{ roles: ['doctor'], label: '門診病歷抽審待回覆', count: s.value.opdReviewToAck, hint: '病歷室抽審我的門診病歷有不符合的項目：看意見、寫改善說明（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
-    { roles: ['doctor'], label: '編碼已修改', count: s.value.codingChanged ?? 0, hint: '病歷室修改了我的病人的出院診斷編碼（會影響 DRG）：看修改前後與理由後按已讀（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false },
+    ...(s.value.progressMissing ? [{ roles: ['doctor'], label: '病程紀錄缺漏', count: s.value.progressMissing, hint: '住院中的病人最近 7 天有幾天沒寫病程紀錄（每天至少一筆）：到「住院醫囑」頁補寫（「病歷與健保回覆」頁列出哪幾天）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
+    ...(s.value.recordIncomplete ? [{ roles: ['doctor'], label: '出院病歷待完成', count: s.value.recordIncomplete, hint: s.value.recordOverdue ? `其中 ${s.value.recordOverdue} 份出院超過 14 天（逾期）：出院病摘簽署、手術紀錄、死亡證明書、會診回覆` : '出院後 14 天內要完成：出院病摘簽署、手術紀錄、死亡證明書、會診回覆（「病歷與健保回覆」頁列出缺什麼）', route: 'claim-cuts', icon: ShieldAlert, urgent: !!s.value.recordOverdue }] : []),
+    ...(s.value.opdReviewToAck ? [{ roles: ['doctor'], label: '門診病歷抽審待回覆', count: s.value.opdReviewToAck, hint: '病歷室抽審我的門診病歷有不符合的項目：看意見、寫改善說明（「病歷與健保回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
+    { roles: ['doctor'], label: '編碼已修改', count: s.value.codingChanged ?? 0, hint: '病歷室修改了我的病人的出院診斷編碼（會影響 DRG）：看修改前後與理由後按已讀（「病歷與健保回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: false },
     ...(s.value.recordOverdueAll ? [{ roles: ['clerk', 'admin'], label: '病歷逾期未完成（全院）', count: s.value.recordOverdueAll, hint: '出院超過 14 天、病歷還沒完成（「編碼審查」頁「病歷完整性」分頁：各主治、每月準時完成率）', route: 'coding', icon: ShieldAlert, urgent: true }] : []),
     ...(s.value.opdReviewPending ? [{ roles: ['clerk', 'admin'], label: '門診病歷待抽審', count: s.value.opdReviewPending, hint: '已抽樣、還沒審查的門診病歷（「編碼審查」頁「門診病歷抽審」分頁）', route: 'coding', icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.codingDue !== undefined ? [{ roles: ['clerk', 'admin'], label: '待編碼審查', count: s.value.codingDue ?? 0, hint: s.value.codingOverdue ? `其中 ${s.value.codingOverdue} 位出院超過 7 天` : '已出院的住院：確認或修改主診斷與次診斷（「編碼審查」頁）', route: 'coding', icon: ShieldAlert, urgent: !!s.value.codingOverdue }] : []),
-    { roles: ['doctor'], label: '事前審查待填寫', count: s.value.preAuthToFill ?? 0, hint: '需健保事前審查的藥或特殊材料：填病情摘要與理由，或補件（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
+    { roles: ['doctor'], label: '事前審查待填寫', count: s.value.preAuthToFill ?? 0, hint: '需健保事前審查的藥或特殊材料：填病情摘要與理由，或補件（「病歷與健保回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
     ...(s.value.preAuthToSubmit !== undefined ? [{ roles: ['clerk', 'admin'], label: '事前審查待送審', count: s.value.preAuthToSubmit ?? 0, hint: s.value.preAuthOverdue ? `另有 ${s.value.preAuthOverdue} 件審查超過 14 天沒結果` : '主治已填好的送審單：送審（健保申報「事前審查」）', route: 'claims', query: { tab: 'preauth' }, icon: ShieldAlert, urgent: !!s.value.preAuthOverdue }] : []),
-    ...(s.value.claimCutsReplyOverdue ? [{ roles: ['doctor'], label: '核減回覆逾期', count: s.value.claimCutsReplyOverdue, hint: '核減後 14 天內要回覆（申報組要趕健保署的申復期限）：到「健保審查回覆」頁申復或接受', route: 'claim-cuts', icon: ShieldAlert, urgent: true }] : []),
+    ...(s.value.claimCutsReplyOverdue ? [{ roles: ['doctor'], label: '核減回覆逾期', count: s.value.claimCutsReplyOverdue, hint: '核減後 14 天內要回覆（申報組要趕健保署的申復期限）：到「病歷與健保回覆」頁申復或接受', route: 'claim-cuts', icon: ShieldAlert, urgent: true }] : []),
     ...(s.value.preAuthExpiring ? [{ roles: ['doctor'], label: '事前審查快到期', count: s.value.preAuthExpiring, hint: '門診核准 30 天內到期、或核准量（次數）快用完：病人還要繼續用的話，看診時在處方旁按「續約申請」', route: 'claim-cuts', icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.preAuthExpiringAll ? [{ roles: ['clerk', 'admin'], label: '事前審查快到期（全院）', count: s.value.preAuthExpiringAll, hint: '門診核准 30 天內到期或快用完、還沒續約：提醒主治看診時續約申請（健保申報「事前審查」可只看快到期）', route: 'claims', query: { tab: 'preauth' }, icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.claimToSubmit ? [{ roles: ['clerk', 'admin'], label: '健保申報待送出', count: s.value.claimToSubmit, hint: `上個月的申報還沒送：${s.value.claimSubmitText ?? ''}（每月 20 日前送上個月）`, route: 'claims', icon: ShieldAlert, urgent: !!s.value.claimSubmitUrgent }] : []),
-    { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「健保審查回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
+    { roles: ['doctor'], label: '健保核減待回覆', count: s.value.claimCutsToReply ?? 0, hint: '我的病人被健保核減：申復（寫理由）或接受（「病歷與健保回覆」頁）', route: 'claim-cuts', icon: ShieldAlert, urgent: true },
     ...(s.value.claimCutsAppealed !== undefined ? [{ roles: ['clerk', 'admin'], label: '申復結果待記錄', count: s.value.claimCutsAppealed ?? 0, hint: '醫師已申復的核減：健保署結果回來後記補付或維持（健保申報「核減與申復」）', route: 'claims', query: { tab: 'cuts' }, icon: ShieldAlert, urgent: false }] : []),
     ...(s.value.claimDisputes ? [{ roles: ['clerk', 'admin'], label: '爭議審議', count: s.value.claimDisputes, hint: '申復後仍維持核減（或只補付一部分）：60 天內可申請爭議審議；審議中的結果回來要記錄（健保申報「核減與申復」）', route: 'claims', query: { tab: 'cuts' }, icon: ShieldAlert, urgent: false }] : []),
     { roles: ['nurse'], label: '手術待排程', count: s.value.surgeryToSchedule ?? 0, hint: '醫師申請的手術，排手術房與時間（手術排程權限）', route: 'or', icon: Scissors, urgent: true },
@@ -101,8 +102,8 @@ const todos = computed<Todo[]>(() => {
     ...(s.value.pathToReport !== undefined ? [{ roles: ['doctor'], label: '病理待發報告', count: s.value.pathToReport ?? 0, hint: '已收件的手術檢體：寫病理診斷、良惡性、和術前診斷是否相符（「病理」頁）', route: 'pathology', icon: Scissors, urgent: false }] : []),
     ...(s.value.pathToReceive !== undefined ? [{ roles: ['lab'], label: '病理檢體待收件', count: s.value.pathToReceive ?? 0, hint: s.value.pathOverdue ? `其中 ${s.value.pathOverdue} 台送出超過 4 小時` : '手術完成送出的檢體：逐件核對收件（「病理」頁）', route: 'pathology', icon: Scissors, urgent: !!s.value.pathOverdue }] : []),
     { roles: ['doctor'], label: '手術紀錄待寫', count: s.value.opRecordsDue ?? 0, hint: '我主刀、已完成的手術：在住院醫囑「手術」分頁寫手術紀錄', route: 'ipd', icon: Scissors, urgent: true },
-    { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: '疼痛 ≥4 處置後 1 小時還沒重評（全院；護理站生命徵象記疼痛分數就算重評）', route: 'nursing', icon: Droplet, urgent: true },
-    { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: '導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（全院，護理站「管路」分頁）', route: 'nursing', icon: Droplet },
+    { roles: ['nurse'], label: '疼痛重評逾時', count: s.value.painReassessOverdue, hint: `疼痛 ≥4 處置後 1 小時還沒重評（${scopeWord.value}；護理站生命徵象記疼痛分數就算重評）`, route: 'nursing', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '管路待處理', count: s.value.lineTodo, hint: `導尿管、CVC 今天還沒評估還需要嗎、評估可移除；周邊留置針滿 96 小時（${scopeWord.value}，護理站「管路」分頁）`, route: 'nursing', icon: Droplet },
     { roles: ['doctor'], label: '管路滿 7 天', count: s.value.lineAttending ?? 0, hint: '你的住院病人導尿管或中心靜脈導管已放滿 7 天：請評估是否移除（住院醫囑「管路」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '疑似群聚待判定', count: s.value.clustersOpen ?? 0, hint: '同病房 14 天內兩例以上同菌種或同感染部位：確認（寫處置）或排除（寫原因）（「感染管制」頁）', route: 'infection', query: { tab: 'clusters' }, icon: Droplet, urgent: true },
     { roles: ['doctor', 'nurse', 'admin'], label: '法定傳染病通報逾時', count: s.value.notifiableOverdue ?? 0, hint: '隔離原因或診斷符合法定傳染病、超過通報時限還沒通報（「感染管制」頁）', route: 'infection', query: { tab: 'notify' }, icon: Droplet, urgent: true },
@@ -138,10 +139,10 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse', 'admin'], label: '換班請假待核准', count: s.value.shiftRequestsToApprove ?? 0, hint: '護理師的換班（對方已同意）與請假申請：到「護理排班」核准或退回', route: 'nurse-schedule', icon: Droplet, urgent: true },
     { roles: ['nurse', 'admin'], label: '出院準備待篩選', count: s.value.planScreenDue ?? 0, hint: '入院 72 小時內要做出院準備篩選：快到期或已逾時的（全院）', route: 'discharge-plan', icon: Droplet },
     { roles: ['nurse', 'admin'], label: '出院後待電話追蹤', count: s.value.planFollowUp ?? 0, hint: '出院準備收案的病人出院後 7 天內電話追蹤', route: 'discharge-plan', icon: Droplet, urgent: true },
-    { roles: ['nurse'], label: '約束查核逾時', count: s.value.restraintCheckOverdue, hint: '約束中每 2 小時查末梢循環、皮膚、是否還需要（全院，護理站「譫妄與約束」分頁）', route: 'nursing', icon: Droplet, urgent: true },
+    { roles: ['nurse'], label: '約束查核逾時', count: s.value.restraintCheckOverdue, hint: `約束中每 2 小時查末梢循環、皮膚、是否還需要（${scopeWord.value}，護理站「譫妄與約束」分頁）`, route: 'nursing', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '譫妄陽性待確認', count: s.value.deliriumPositive ?? 0, hint: '護理師 CAM 評估陽性：請查找原因（感染、藥物、電解質）並確認（住院醫囑「譫妄與約束」分頁）', route: 'ipd', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '約束醫囑待補或到期', count: s.value.restraintOrder ?? 0, hint: '緊急約束 1 小時內要補醫囑；約束醫囑每次最長 24 小時，到期請續開或解除', route: 'ipd', icon: Droplet, urgent: true },
-    { roles: ['nurse'], label: '營養篩檢', count: s.value.nutritionScreenDue, hint: '入院 48 小時內要做營養篩檢：快到期或已逾時的（全院，護理站「營養」分頁）', route: 'nursing', icon: Droplet },
+    { roles: ['nurse'], label: '營養篩檢', count: s.value.nutritionScreenDue, hint: `入院 48 小時內要做營養篩檢：快到期或已逾時的（${scopeWord.value}，護理站「營養」分頁）`, route: 'nursing', icon: Droplet },
     { roles: ['diet'], label: '營養師待評估', count: s.value.nutritionToAssess ?? 0, hint: '營養篩檢 ≥3 分、還沒評估的住院病人', route: 'nutrition', icon: Droplet, urgent: true },
     { roles: ['doctor'], label: '營養評估待已閱', count: s.value.nutritionUnseen ?? 0, hint: '營養師對你的住院病人寫了評估與建議：請看過按已閱（住院醫囑「營養」分頁）', route: 'ipd', icon: Droplet },
     { roles: ['nurse'], label: '輸血待處理', count: s.value.transfusionTodo, hint: '已發血待床邊核對輸血、輸血中該量 15 分鐘生命徵象（全院）', route: 'nursing', icon: Droplet, urgent: true },
@@ -180,7 +181,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['doctor'], label: '會診已回覆', count: s.value.consultReplies ?? 0, hint: '我申請的門診會診已回覆，看過按已閱', route: 'opd', icon: Stethoscope },
     { roles: ['doctor'], label: '會診醫師新開的醫囑', count: s.value.consultOrdersUnseen ?? 0, hint: '我的住院病人：會診醫師開了醫囑，看過後按「已閱」', route: 'ipd', icon: Stethoscope, urgent: true },
     { roles: ['doctor'], label: '護理師醫囑疑問', count: s.value.orderQueries ?? 0, hint: '我的住院病人，待回覆（回覆前給藥暫停）', route: 'ipd', icon: Stethoscope, urgent: true },
-    { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: '今日全部診次・含看診中', route: 'opd', icon: Stethoscope },
+    { roles: ['doctor'], label: '我的候診病人', count: myWaiting.value, hint: `今日全部診次・含看診中${myNotArrived.value ? `；另 ${myNotArrived.value} 位預約還沒報到` : ''}`, route: 'opd', icon: Stethoscope },
     { roles: ['clerk'], label: '待批價', count: s.value.opd.toCharge, hint: '看診完成，等待結帳', route: 'charge', icon: Receipt },
     { roles: ['clerk'], label: '住院待結帳', count: s.value.ipdToBill, hint: '醫師已簽准出院：結清住院費用後才能辦出院', route: 'charge', query: { tab: 'ipd' }, icon: Receipt, urgent: true },
     ...(s.value.preAnesDue !== undefined ? [{ roles: ['doctor'], label: '麻醉前評估待做', count: s.value.preAnesDue ?? 0, hint: s.value.preAnesBrief ? `另有 ${s.value.preAnesBrief} 台急刀是精簡版，病史與麻醉計畫待補` : '急刀、今明兩天的手術：ASA、呼吸道、禁食、病史、麻醉計畫（沒評估不能做麻醉前查核）', route: 'or', icon: ShieldAlert, urgent: false }] : []),
@@ -192,7 +193,7 @@ const todos = computed<Todo[]>(() => {
     { roles: ['clerk'], label: '建議期中繳款', count: s.value.ipdInterim, hint: '住很久、累計費用很多的住院病人：可以先收一部分，出院結帳時扣抵', route: 'charge', query: { tab: 'ipd' }, icon: Receipt },
     { roles: ['clerk'], label: '待退費', count: s.value.pendingRefunds, hint: '部分退藥、檢驗處置未執行後，退還病人差額（可能是前幾天看的診）', route: 'charge', icon: Receipt, urgent: true },
     { roles: ['clerk'], label: '停診待通知', count: s.value.suspendNoticesPending, hint: '停診退掛的病人，需電話通知', route: 'booking', icon: PhoneCall, urgent: true },
-    ...((s.value.wardExpired ?? 0) + (s.value.wardExpirySoon ?? 0) ? [{ roles: ['pharmacist'], label: '病房常備效期待收回', count: (s.value.wardExpired ?? 0) + (s.value.wardExpirySoon ?? 0), hint: `${s.value.wardExpired ? `已過期 ${s.value.wardExpired} 批、` : ''}30 天內到期 ${s.value.wardExpirySoon ?? 0} 批：收回到住院藥局（「藥品管理」→「病房常備」）`, route: 'drugs', query: { tab: 'ward' }, icon: Pill, urgent: !!s.value.wardExpired }] : []),
+    ...((s.value.wardExpired ?? 0) + (s.value.wardExpirySoon ?? 0) ? [{ roles: ['pharmacist'], label: '病房常備效期待收回', count: (s.value.wardExpired ?? 0) + (s.value.wardExpirySoon ?? 0), hint: `${s.value.wardExpired ? `已過期 ${s.value.wardExpired} 批、` : ''}30 天內到期 ${s.value.wardExpirySoon ?? 0} 批：收回到住院藥局（「藥品庫存」→「病房常備」）`, route: 'drugs', query: { tab: 'ward' }, icon: Pill, urgent: !!s.value.wardExpired }] : []),
     { roles: ['pharmacist'], label: '出院帶藥待調劑', count: s.value.dischargeRxToDispense, hint: '醫師已簽准出院：調好後櫃台才能結帳', route: 'ud', icon: Pill, urgent: true },
     { roles: ['pharmacist'], label: '住院醫囑待審核', count: s.value.pharmReview ?? 0, hint: s.value.pharmReviewStat ? `其中 ${s.value.pharmReviewStat} 筆臨時醫囑（先給後審）` : '長期醫囑審核通過才能每日調劑；系統已列出過敏、交互作用、劑量、腎功能等問題', route: 'ud', query: { tab: 'review' }, icon: Pill, urgent: !!s.value.pharmReviewStat },
     { roles: ['pharmacist'], label: '藥物不良反應待評估', count: s.value.adrPending ?? 0, hint: s.value.adrUrgent ? `其中 ${s.value.adrUrgent} 筆嚴重型（過敏性休克、SJS），24 小時內要評估` : '醫師、護理師通報的不良反應：用 Naranjo 量表評估因果，很可能以上可加入過敏', route: 'ud', query: { tab: 'adr' }, icon: Pill, urgent: !!s.value.adrUrgent },
@@ -203,10 +204,10 @@ const todos = computed<Todo[]>(() => {
     { roles: ['nurse'], label: '藥車待點收', count: s.value.udToReceive, hint: '藥局已核對送出的藥盒（全院），在護理站本班待辦點收', route: 'nursing', icon: Pill },
     { roles: ['pharmacist'], label: '病房常備待補充', count: s.value.wardRefillDue, hint: '各病房低於基準量的品項，在住院藥局補充', route: 'ud', icon: Pill },
     { roles: ['nurse'], label: '本班未點班', count: s.value.wardCountDue, hint: '病房常備還沒點班的病房（全院），在護理站「常備點班」', route: 'nursing', query: { tab: 'stock' }, icon: Pill },
-    { roles: ['nurse'], label: '風險評估逾時', count: s.value.riskOverdue, hint: '跌倒、壓傷評估過了期限（全院）：入院 24 小時內、高風險每天、轉床轉科後', route: 'nursing', icon: ShieldAlert, urgent: true },
+    { roles: ['nurse'], label: '風險評估逾時', count: s.value.riskOverdue, hint: `跌倒、壓傷評估過了期限（${scopeWord.value}）：入院 24 小時內、高風險每天、轉床轉科後`, route: 'nursing', icon: ShieldAlert, urgent: true },
     { roles: ['nurse'], label: '待送回藥局', count: s.value.udSendBack, hint: '沒給的 UD 藥（含出院病人），在護理站本班待辦送回', route: 'nursing', icon: Pill },
-    { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價，等待調劑發藥', route: 'pharmacy', icon: Pill },
-    { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '已過預定時間尚未執行', route: 'nursing', icon: AlertTriangle, urgent: true },
+    { roles: ['pharmacist'], label: '待領藥', count: s.value.opd.toDispense, hint: '已批價還沒發藥（藥局「待調劑」＋「已核對」）', route: 'pharmacy', icon: Pill },
+    { roles: ['nurse'], label: '逾時未給藥', count: s.value.ipd.overdueMar, hint: '全院各病房合計（護理站上方是目前病房的）', route: 'nursing', icon: AlertTriangle, urgent: true },
     { roles: ['clerk', 'nurse'], label: '今日待報到住院', count: s.value.ipd.reservedToday, hint: '預約入院日為今天或更早（含逾期未報到）', route: 'admission', icon: DoorOpen },
     { roles: ['pharmacist'], label: '缺貨或低於安全庫存', count: s.value.lowStockDrugs, hint: '門診藥局需要補貨的藥品', route: 'drugs', query: { filter: 'short' }, icon: Package, urgent: true },
     { roles: ['pharmacist'], label: '補貨申請待到貨', count: s.value.restockOpen, hint: s.value.transferRequested !== undefined ? '已申請、門診藥局還沒簽收撥補' : '已申請、還沒到貨入庫', route: 'drugs', query: { filter: 'restock' }, icon: Truck },
@@ -231,6 +232,13 @@ const todos = computed<Todo[]>(() => {
   return list.filter((t) => t.roles.includes(role ?? '') && reachable(t.route))
 })
 
+// 有事的排前面（緊急的再優先，其餘照原本的工作流程順序）；0 的收起來——角色的卡片多，全列出來真正要做的會被淹沒
+const activeTodos = computed(() => todos.value.filter((t) => t.count > 0).sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)))
+const idleTodos = computed(() => todos.value.filter((t) => !(t.count > 0)))
+const showIdle = ref(false)
+// 護理師這一班有分床時，疼痛、管路等只算自己的病人：說明照實寫
+const scopeWord = computed(() => (s.value?.nurseScoped ? '我的病人' : '全院'))
+
 const trend = computed(() =>
   (s.value?.trend ?? []).map((t) => ({ label: t.date.slice(5).replace('-', '/'), title: t.date, value: t.count })),
 )
@@ -245,10 +253,10 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
     <LabAcksCard v-if="auth.user?.role === 'doctor'" />
     <!-- 我的待辦 -->
     <section v-if="todos.length">
-      <h2 class="mb-2 text-sm font-semibold text-slate-600">{{ auth.user?.name }}，您目前的待辦</h2>
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <h2 class="mb-2 text-sm font-semibold text-slate-600">{{ auth.user?.name }}，您目前的待辦<template v-if="!activeTodos.length">：目前都處理完了</template></h2>
+      <div v-if="activeTodos.length" class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <button
-          v-for="t in todos"
+          v-for="t in activeTodos"
           :key="t.label"
           :class="[
             'group flex items-center gap-3 rounded-lg border bg-white p-4 text-left shadow-sm transition hover:shadow',
@@ -266,6 +274,14 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
           <div :class="['tabular text-2xl font-semibold', t.urgent && t.count > 0 ? 'text-red-600' : 'text-slate-800']">{{ t.count }}</div>
           <ChevronRight class="h-4 w-4 text-slate-300 group-hover:text-slate-500" />
         </button>
+      </div>
+      <div v-if="idleTodos.length" class="mt-2">
+        <button type="button" class="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-brand-700" :aria-expanded="showIdle" @click="showIdle = !showIdle">
+          <ChevronRight :class="['h-3.5 w-3.5 transition', showIdle && 'rotate-90']" />{{ showIdle ? '收起' : '另有' }} {{ idleTodos.length }} 項目前沒有待辦
+        </button>
+        <div v-if="showIdle" class="mt-2 flex flex-wrap gap-1.5">
+          <button v-for="t in idleTodos" :key="t.label" type="button" class="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:border-brand-300 hover:text-brand-700" :title="t.hint" @click="router.push({ name: t.route, query: t.query })">{{ t.label }} 0</button>
+        </div>
       </div>
     </section>
 
@@ -306,4 +322,6 @@ const deptMax = computed(() => Math.max(1, ...(s.value?.byDept ?? []).map((d) =>
       </UCard>
     </section>
   </div>
+  <!-- 資料回來前（或查詢失敗）不要整頁空白 -->
+  <UQueryState v-else :loading="homeLoading" :ready="false" empty-title="首頁資料讀取失敗" empty-description="請重新整理頁面" />
 </template>

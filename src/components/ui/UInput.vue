@@ -20,6 +20,7 @@ function onInput(e: Event) {
     <input
       :id="id"
       v-bind="$attrs"
+      :aria-label="label ? undefined : (($attrs['aria-label'] as string | undefined) ?? ($attrs.placeholder as string | undefined))"
       :type="type ?? 'text'"
       :value="model ?? ''"
       :class="['form-control', error && 'form-control-error']"

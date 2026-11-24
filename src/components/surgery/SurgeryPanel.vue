@@ -86,8 +86,8 @@ const refOptions = computed(() => (marking.value?.key === 'blood' ? v.value?.blo
 const markAct = useAction(surgeryApi.markPrep, { success: '已記錄' })
 // 自費植入物：病人（或家屬）同意（選填，沒有就不能登記自費品項）
 const consentAct = useAction(implantApi.consentSelfPayImplant, { success: '已記錄病人同意自費植入物' })
-// 需健保事前審查的特殊材料：主刀申請（之後在「健保審查回覆」頁填寫）
-const paAct = useAction(preAuthApi.requestImplantPreAuth, { success: (p) => `已建立事前審查 ${p.no}：請到「健保審查回覆」頁填寫病情與理由` })
+// 需健保事前審查的特殊材料：主刀申請（之後在「病歷與健保回覆」頁填寫）
+const paAct = useAction(preAuthApi.requestImplantPreAuth, { success: (p) => `已建立事前審查 ${p.no}：請到「病歷與健保回覆」頁填寫病情與理由` })
 async function submitMark() {
   const m = marking.value
   if (!m) return

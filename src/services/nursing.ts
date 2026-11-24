@@ -136,7 +136,8 @@ export function listWardPatients(ward: string): Promise<WardPatient[]> {
           abnormal: latest ? (Object.keys(vitalSpecs) as VitalKey[]).filter((k) => isAbnormal(k, latest[k])).map((k) => vitalSpecs[k].label) : [],
           overdueCount: pending.filter((u) => u === 'overdue').length,
           dueCount: pending.filter((u) => u === 'due').length,
-          pendingStatCount: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication').length,
+          // 影像不算護理師的待執行（由檢查室完成）
+          pendingStatCount: db.ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication' && !isImagingOrder(o)).length,
           unackedCount: db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length,
           measuredThisShift: measuredThisShift(latest?.at, t),
           ...(() => {
@@ -257,8 +258,10 @@ export function listWardTasks(ward: string): Promise<WardTask[]> {
         tasks.push({ ...base, id: m.id, kind: 'mar', urgency, at: m.scheduledAt, text: `${o?.content ?? ''}${o?.dose ? ` ${o.dose} ${d ? doseUnitOf(d) : ''}` : ''}${o?.route ? `・${o.route}` : ''}` })
       }
       // 臨時醫囑（檢驗、處置）：開了就該做
-      for (const o of db.ipdOrders.filter((x) => x.admissionId === a.id && x.type === 'stat' && x.status === 'active' && x.category !== 'medication')) {
-        tasks.push({ ...base, id: o.id, kind: 'stat', urgency: 'due', at: o.startAt, text: `臨時醫囑：${o.content}` })
+      // 影像由檢查室完成，不列；檢驗要掃描採檢的，說要去哪裡做
+      for (const o of db.ipdOrders.filter((x) => x.admissionId === a.id && x.type === 'stat' && x.status === 'active' && x.category !== 'medication' && !isImagingOrder(x))) {
+        const where = statElsewhere(o)
+        tasks.push({ ...base, id: o.id, kind: 'stat', urgency: 'due', at: o.startAt, text: `臨時醫囑：${o.content}${where ? `（${where}）` : ''}` })
       }
       const unacked = db.ipdOrders.filter((o) => o.admissionId === a.id && needsAck(o)).length
       if (unacked) tasks.push({ ...base, id: `ack-${a.id}`, kind: 'ack', urgency: 'todo', text: `${unacked} 項醫囑異動待核對` })
@@ -345,7 +348,8 @@ export interface PrnView extends OrderView {
 export interface MarBoard {
   mar: MarView[]
   prn: PrnView[]
-  stat: OrderView[]
+  /** elsewhere：不在這裡按完成（影像由檢查室、要掃描的檢驗到「檢體」），畫面顯示這段說明 */
+  stat: (OrderView & { elsewhere?: string })[]
 }
 
 export function getMarBoard(admissionId: string, date: string): Promise<MarBoard> {
@@ -360,7 +364,7 @@ export function getMarBoard(admissionId: string, date: string): Promise<MarBoard
           ...orderView(o),
           lastGivenAt: db.mar.filter((m) => m.orderId === o.id && m.status === 'given').map((m) => m.executedAt ?? '').sort().pop(),
         })),
-      stat: orders.filter((o) => o.type === 'stat' && o.category !== 'medication').map(orderView),
+      stat: orders.filter((o) => o.type === 'stat' && o.category !== 'medication').map((o) => ({ ...orderView(o), ...((w) => (w ? { elsewhere: w } : {}))(statElsewhere(o)) })),
     }
   })
 }
@@ -562,6 +566,17 @@ function holdForQuery(o: IpdOrder, force?: { reason: string }): string | undefin
   if (!why) fail(`這筆醫囑${q ? `有疑問、待醫師回覆（${q.reason}）` : `有藥師疑義、待醫師回覆（${pq!.text}）`}；執行暫停，緊急時請寫原因強制執行`, 'CONFLICT', 'query')
   return why
 }
+
+/**
+ * 這筆臨時醫囑不是在給藥紀錄按「完成」：影像由檢查室完成（醫囑自動完成）；要掃描核對的醫院，檢驗要到「檢體」掃描採檢。
+ * 回傳要給護理師看的說明（護理站不顯示「完成」鈕，免得先確認才被告知做不了）
+ */
+export function statElsewhere(o: IpdOrder): string | undefined {
+  if (o.procId && find.procedure(o.procId)?.imaging) return '由影像檢查室排程、完成（完成後醫囑自動完成）'
+  if (isLabOrder(o) && scanRequired()) return '到病人分頁「檢體」印條碼、掃描採檢'
+  return undefined
+}
+const isImagingOrder = (o: IpdOrder) => !!o.procId && !!find.procedure(o.procId)?.imaging
 
 /** 執行臨時醫囑（檢驗、處置等非給藥） */
 /** 回傳 { ok: true }：讓呼叫端分得出「成功」與「失敗被擋」（void 的話兩者都是 undefined） */

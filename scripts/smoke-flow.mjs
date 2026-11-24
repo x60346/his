@@ -3422,7 +3422,7 @@ try {
     const C = api.chargeApi
     const db = () => dbm.db
     const chOf = (id) => db().charges.find((c) => c.id === id)
-    // 以前欠款的收據（種子：林俊傑 100005）：藥已發出要先退藥
+    // 以前欠款的收據（種子：林俊德 100005）：藥已發出要先退藥
     const pt = db().patients.find((x) => x.chartNo === '100005')
     let debt = db().charges.find((c) => c.patientId === pt.id && !c.voided && (c.owed ?? 0) > 0 && c.paidAt.slice(0, 10) < T)
     ok(!!debt, '有一張以前記欠款的收據')
@@ -14473,6 +14473,32 @@ try {
     ok(msg.includes('已結帳'), `住院結帳後再開 → 「${msg}」`)
     await as('nurse01')
     await expectError(() => CT.printCertificate(ic.id), '護理師印證明書')
+  }
+
+  // 健檢（使用者、UI/UX、PM 三方）修正：影像臨時醫囑不在護理站按完成、不算護理師待執行；藥師、放射師查得到值班表
+  console.log('\n[健檢修正]')
+  {
+    resetDb('small')
+    const db = () => dbm.db
+    const isImg = (o) => !!o.procId && !!db().procedures.find((p) => p.id === o.procId)?.imaging
+    const img = db().ipdOrders.find((o) => o.type === 'stat' && o.status === 'active' && isImg(o) && db().admissions.find((a) => a.id === o.admissionId)?.status === 'admitted')
+    await as('nurse01')
+    if (img) {
+      const a = db().admissions.find((x) => x.id === img.admissionId)
+      const ward = db().beds.find((b) => b.id === a.bedId)?.ward
+      const board = await api.nursingApi.getMarBoard(a.id, T)
+      const row = board.stat.find((x) => x.id === img.id)
+      ok(row?.elsewhere?.includes('影像檢查室'), `影像臨時醫囑在給藥紀錄顯示「${row?.elsewhere}」，不給「完成」鈕`)
+      const wp = (await api.nursingApi.listWardPatients(ward)).find((p) => p.id === a.id)
+      const nonImg = db().ipdOrders.filter((o) => o.admissionId === a.id && o.type === 'stat' && o.status === 'active' && o.category !== 'medication' && !isImg(o)).length
+      ok(wp?.pendingStatCount === nonImg, `病人清單「待執行臨時醫囑」不算影像（${wp?.pendingStatCount}）`)
+      const tasks = await api.nursingApi.listWardTasks(ward)
+      ok(!tasks.some((t) => t.id === img.id), '本班待辦不列影像臨時醫囑')
+    } else ok(true, '（今天的種子沒有影像臨時醫囑，略過）')
+    for (const u of ['ph01', 'rt01']) {
+      await as(u)
+      ok(!!(await api.dutyApi.dutyRoster()), `${u} 查得到醫師值班表（README 說櫃台、檢驗、放射、藥局都查得到）`)
+    }
   }
 
   // 大型醫院的住院藥局：種子備量夠用（出院帶藥、明天調劑、病房常備補充一起做也夠）；

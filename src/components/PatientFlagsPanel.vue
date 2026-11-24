@@ -28,7 +28,7 @@ const { data: doctors } = useQuery(() => masterApi.listDoctors(undefined, true))
 // 法定傳染病：隔離原因或診斷符合就列待通報（時限、逾時）；主治或感染管制按「通報」
 const { data: nfData, reload: reloadNf } = useQuery(() => ipcApi.patientNotifiable(props.patientId), [() => props.patientId])
 const nf = computed(() => (nfData.value?.patientId === props.patientId ? nfData.value : undefined))
-const reportAct = useAction(ipcApi.reportNotifiable, { success: (r) => `已通報 ${r.label}（${r.cdcNo}）` })
+const reportAct = useAction(ipcApi.reportNotifiable, { success: (r) => `已記錄通報 ${r.label}（模擬單號 ${r.cdcNo}，示範系統未連線疾管署）` })
 async function report(disease: string) {
   if (await reportAct.run(props.patientId, disease)) reloadNf()
 }
@@ -129,7 +129,7 @@ const docWho = (d: DnrView) =>
               <span class="text-xs text-slate-600">{{ p.basis }}・時限 {{ p.dueAt.slice(5, 16).replace('-', '/') }}{{ p.state === 'overdue' ? '（已逾時）' : p.state === 'soon' ? '（快到期）' : '' }}</span>
               <UButton v-if="nf?.canReport" class="ml-auto" size="sm" :loading="reportAct.pending.value" @click="report(p.disease)">通報</UButton>
             </div>
-            <p v-for="r in nf?.reported ?? []" :key="r.id" class="text-xs text-slate-600">已通報 {{ r.label }}：{{ r.cdcNo }}（{{ r.reportedAt.slice(5, 16).replace('-', '/') }}）</p>
+            <p v-for="r in nf?.reported ?? []" :key="r.id" class="text-xs text-slate-600">已通報 {{ r.label }}：模擬單號 {{ r.cdcNo }}（{{ r.reportedAt.slice(5, 16).replace('-', '/') }}）</p>
             <ul v-if="f.isolations.length" class="space-y-2">
               <li v-for="i in f.isolations" :key="i.id" class="rounded border border-amber-200 bg-amber-50/50 px-3 py-2">
                 <div class="flex flex-wrap items-center gap-2">
@@ -197,7 +197,7 @@ const docWho = (d: DnrView) =>
             <input v-model="iso.kind" type="radio" name="iso-kind" :value="k" class="h-4 w-4 text-brand-600" />{{ ISOLATION_KIND_LABEL[k] }}
           </label>
         </fieldset>
-        <p v-if="iso.kind === 'airborne'" class="text-xs text-red-700">空氣隔離只能住單人房（示範資料沒有負壓病房，以單人房代替）。</p>
+        <p v-if="iso.kind === 'airborne'" class="text-xs text-red-700">空氣隔離優先排負壓隔離室；沒有空的負壓床時排單人房（加護病房只有負壓床能收）。</p>
         <UInput v-model="iso.organism" label="原因或菌種" required :error="start.fieldErrors.value.organism" />
         <div class="flex flex-wrap gap-1.5">
           <button v-for="p in ISOLATION_PRESETS[iso.kind]" :key="p" type="button" class="rounded border border-slate-300 px-2 py-0.5 text-xs hover:bg-slate-100" @click="iso.organism = p">{{ p }}</button>

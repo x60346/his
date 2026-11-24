@@ -164,7 +164,7 @@ const patientRows: PatientRow[] = [
   ['李美玲', 'F', 47, '01', ['Penicillin'], ['乳癌'], false, false],
   ['張家豪', 'M', 35, '01', [], [], true, true],
   ['陳淑芬', 'F', 66, '01', [], ['糖尿病', '心臟病'], false, false],
-  ['林俊傑', 'M', 72, '02', ['Aspirin'], ['中風'], true, false],
+  ['林俊德', 'M', 72, '02', ['Aspirin'], ['中風'], true, false],
   ['黃雅琪', 'F', 31, '01', [], [], false, false],
   ['吳宗翰', 'M', 5, '01', [], [], false, false],
   ['劉怡君', 'F', 52, '01', [], ['大腸癌'], false, false],

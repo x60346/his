@@ -25,7 +25,7 @@ const deptDoctors = (deptId: string) =>
 
 export function dutyRoster(from: string = today(), days = 7): Promise<DutyRoster> {
   return query(() => {
-    const u = requireUser('doctor', 'nurse', 'admin', 'clerk', 'lab')
+    const u = requireUser('doctor', 'nurse', 'admin', 'clerk', 'lab', 'pharmacist', 'radtech')
     const t = now()
     return {
       from,

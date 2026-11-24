@@ -159,6 +159,10 @@ const { data: refills } = useQuery(async () => (patient.value ? bookingApi.listR
 const registerRefill = useAction(bookingApi.registerRefill, { success: (v) => `已登記 ${v.patientName} 慢箋第 ${v.refillSeq} 次領藥，請至批價` })
 const cancelRefill = useAction(bookingApi.cancelVisit, { success: (v) => `已取消 ${v.patientName} 的慢箋領藥登記` })
 const md = (d: string) => d.slice(5).replace('-', '/')
+// 和一般退掛一樣要確認：「登記領藥」和「取消登記」在同一個位置，連點兩下就把剛登記的取消了
+async function onCancelRefill(visitId: string) {
+  if (await ui.confirm({ title: '取消慢箋領藥登記', message: '取消這次的慢箋領藥登記？', okText: '取消登記', cancelText: '保留', danger: true })) cancelRefill.run(visitId)
+}
 
 // 之前的欠款：只提醒，不擋掛號（病人生病來看診，不能因為欠錢就不給掛）；批價時一併收回
 const { data: debts } = useQuery(async () => (patient.value ? chargeApi.listDebts(patient.value.id) : []), [patient])
@@ -390,7 +394,7 @@ function openIdentity(v: VisitView) {
               <div v-for="f in refills" :key="f.encounterId" class="rounded border border-slate-200 bg-white px-2 py-1.5">
                 <div class="flex items-center gap-2">
                   <span class="min-w-0 flex-1 text-slate-700">{{ md(f.date) }} {{ f.deptName }} {{ f.doctorName }}・{{ f.days }} 天・第 <b>{{ f.pendingVisitId ? f.used : f.nextSeq }}</b>/{{ f.total }} 次</span>
-                  <UButton v-if="f.pendingVisitId" size="sm" variant="ghost" :loading="cancelRefill.pending.value" @click="cancelRefill.run(f.pendingVisitId)">取消登記</UButton>
+                  <UButton v-if="f.pendingVisitId" size="sm" variant="ghost" :loading="cancelRefill.pending.value" @click="onCancelRefill(f.pendingVisitId)">取消登記</UButton>
                   <UButton v-else size="sm" variant="secondary" :disabled="!f.canRegister" :loading="registerRefill.pending.value" @click="registerRefill.run(f.encounterId)">登記領藥</UButton>
                 </div>
                 <div class="truncate text-slate-500">{{ f.medicationNames.join('、') }}</div>
@@ -593,7 +597,7 @@ function openIdentity(v: VisitView) {
           </span>
         </template>
         <template #cell-actions="{ row }">
-          <UButton v-if="row.canCheckIn" size="sm" variant="secondary" :loading="checkIn.pending.value" @click="checkIn.run(row.id)">報到</UButton>
+          <UButton v-if="row.canCheckIn" size="sm" variant="secondary" :loading="checkIn.runningWith(row.id)" :disabled="checkIn.pending.value" @click="checkIn.run(row.id)">報到</UButton>
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status)" size="sm" variant="ghost" @click="openIdentity(row)">更正身分</UButton>
           <UButton v-if="['registered', 'in-consult', 'consulted'].includes(row.status) && !row.refillOf && can('visit.register')" size="sm" variant="ghost" @click="(refVisit = row), (refOpen = true)">轉診單</UButton>
           <UButton v-if="row.status === 'registered' && !row.refillOf" size="sm" variant="ghost" @click="openSlip(row)">補印</UButton>

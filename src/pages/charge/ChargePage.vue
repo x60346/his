@@ -20,7 +20,7 @@ import ReasonDialog from '@/components/ReasonDialog.vue'
 import { useAction, useQuery } from '@/composables/useService'
 import { followToday } from '@/composables/useClock'
 import { periodLabel, today } from '@/utils/date'
-import { visitStatus } from '@/utils/labels'
+import { money, visitStatus } from '@/utils/labels'
 import type { PayMethod } from '@/types'
 
 // 首頁「住院待結帳」帶 ?tab=ipd 進來直接看住院結帳
@@ -261,8 +261,8 @@ const identityOpen = ref(false)
           <div class="mb-1 text-xs font-semibold text-amber-900">門診加做待補收（自費）{{ addonDue.length }} 筆</div>
           <div v-for="a in addonDue" :key="`${a.encounterId}:${a.procId}`" class="flex flex-wrap items-center gap-2 py-1 text-sm">
             <span class="min-w-0 flex-[1_1_10rem] truncate">{{ a.patientName }} <span class="text-xs text-slate-500">{{ a.procName }}・{{ a.doctorName }} {{ a.at.slice(11) }}</span></span>
-            <UButton size="sm" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'cash', received: a.amount })">現金 ${{ a.amount }}</UButton>
-            <UButton size="sm" variant="secondary" :loading="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'card' })">刷卡</UButton>
+            <UButton size="sm" :loading="payAddon.runningWith(a.encounterId, a.procId)" :disabled="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'cash', received: a.amount })">現金 {{ money(a.amount) }}</UButton>
+            <UButton size="sm" variant="secondary" :loading="payAddon.runningWith(a.encounterId, a.procId)" :disabled="payAddon.pending.value" @click="payAddon.run(a.encounterId, a.procId, { payMethod: 'card' })">刷卡</UButton>
           </div>
         </div>
         <UQueryState :loading="listLoading" :ready="!!shown.length" :empty-title="kw.trim() ? `沒有符合「${kw.trim()}」的病人` : '沒有看診完成的病人'">

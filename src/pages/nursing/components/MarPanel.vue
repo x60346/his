@@ -352,7 +352,8 @@ async function fastDone(opts: { fasting?: boolean; note?: string }) {
                 <div class="tabular text-xs text-slate-500">{{ o.startAt.slice(5) }} 開立・{{ o.doctorName }}</div>
                 <div v-if="o.pendingQuery" class="text-xs text-amber-800">護理師疑問：{{ o.pendingQuery.reason }}（執行暫停）</div>
               </div>
-              <UButton size="sm" :icon="Check" @click="complete(o)">完成</UButton>
+              <span v-if="o.elsewhere" class="text-xs text-slate-600">{{ o.elsewhere }}</span>
+              <UButton v-else size="sm" :icon="Check" @click="complete(o)">完成</UButton>
             </li>
           </ul>
         </section>

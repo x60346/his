@@ -27,7 +27,7 @@ const confirmOpen = computed({
     <!-- 上方置中：右上角是頁面主要按鈕、底部是看診操作列，提示框都不該擋住 -->
     <div class="pointer-events-none fixed left-1/2 top-3 z-[60] flex w-80 -translate-x-1/2 flex-col gap-2" aria-live="polite">
       <TransitionGroup enter-from-class="-translate-y-2 opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-200" leave-active-class="transition duration-150">
-        <div v-for="t in ui.toasts" :key="t.id" :class="['pointer-events-auto flex items-start gap-2 rounded-md border bg-white px-3 py-2.5 text-sm shadow-lg', colors[t.kind]]">
+        <div v-for="t in ui.toasts" :key="t.id" :role="t.kind === 'error' ? 'alert' : undefined" :class="['pointer-events-auto flex items-start gap-2 rounded-md border bg-white px-3 py-2.5 text-sm shadow-lg', colors[t.kind]]">
           <component :is="icons[t.kind]" class="mt-0.5 h-4 w-4 shrink-0" />
           <!-- pre-line：訊息裡的換行要照樣顯示（例：匯入錯誤第二行列出缺少的資料） -->
           <span class="flex-1 whitespace-pre-line break-words">{{ t.message }}</span>

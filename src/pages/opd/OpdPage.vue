@@ -57,7 +57,9 @@ const { data: queue, loading: queueLoading } = useQuery(() => opdApi.listQueue({
 const counts = computed(() => {
   const q = queue.value ?? []
   return {
-    waiting: q.filter((v) => v.status === 'registered').length,
+    // 候診只算已報到的；電話預約還沒到院的另外列（清晨的資料大多是預約，全算進候診會以為有 20 人在等）
+    waiting: q.filter((v) => v.status === 'registered' && !v.canCheckIn).length,
+    notArrived: q.filter((v) => v.status === 'registered' && v.canCheckIn).length,
     inConsult: q.filter((v) => v.status === 'in-consult').length,
     done: q.filter((v) => !['registered', 'in-consult'].includes(v.status)).length,
   }
@@ -478,7 +480,7 @@ const lastOpen = ref(true)
     <UCard :padded="false" class="self-start">
       <template #title>
         <div class="text-sm font-semibold text-slate-800">今日候診</div>
-        <div class="text-xs text-slate-500">候診 {{ counts.waiting }}・看診中 {{ counts.inConsult }}・完成 {{ counts.done }}</div>
+        <div class="text-xs text-slate-500">候診 {{ counts.waiting }}<template v-if="counts.notArrived">（另 {{ counts.notArrived }} 未報到）</template>・看診中 {{ counts.inConsult }}・完成 {{ counts.done }}</div>
       </template>
       <div v-if="isAdmin" class="border-b border-slate-100 p-3">
         <USelect v-model="doctorId" label="檢視醫師（管理員）" :options="(doctors ?? []).map((d) => ({ label: d.name, value: d.id }))" />
@@ -565,13 +567,13 @@ const lastOpen = ref(true)
       <div v-if="labAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
         <FlaskConical class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>檢驗{{ labAlerts.some((r) => r.hasCritical) ? '危急值' : '報告更正' }}待確認：</b>{{ labAlerts.map((r) => `${r.procName}（${r.values.filter((v) => v.critical || v.flag).map((v) => `${v.name} ${v.value}`).join('、') || '已更正'}）`).join('；') }}</span>
-        <UButton size="sm" variant="danger" @click="tab = 'labs'">查看</UButton>
+        <UButton size="sm" variant="secondary" @click="tab = 'labs'">查看</UButton>
       </div>
       <!-- 影像重要發現（或補充過）還沒確認 -->
       <div v-if="imgAlerts.length" class="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
         <ScanLine class="h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-[1_1_10rem]"><b>影像{{ imgAlerts.some((r) => r.significant) ? '重要發現' : '補充報告' }}待確認：</b>{{ imgAlerts.map((r) => `${r.procName}：${r.impression}`).join('；') }}</span>
-        <UButton size="sm" variant="danger" @click="tab = 'imaging'">查看</UButton>
+        <UButton size="sm" variant="secondary" @click="tab = 'imaging'">查看</UButton>
       </div>
       <!-- 預約回診：已約的下次門診；按鈕開預約對話框 -->
       <div v-if="canFollowUp" class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
@@ -733,7 +735,7 @@ const lastOpen = ref(true)
 
       <!-- 操作列：固定在畫面底部 -->
       <div v-if="editable" class="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
-        <span v-if="dirty" class="text-xs text-amber-600">● 有未儲存的修改</span>
+        <span v-if="dirty" class="text-xs font-medium text-amber-700">● 有未儲存的修改</span>
         <span v-else class="text-xs text-slate-400">已儲存</span>
         <div class="ml-auto flex flex-wrap justify-end gap-2">
           <UButton variant="ghost" :icon="SkipForward" :loading="skip.pending.value" @click="onSkip">過號</UButton>

@@ -149,6 +149,6 @@ const kindNow = computed(() => (caring.value ? caring.value.kind : nw.kind))
       </template>
     </UDialog>
 
-    <ReasonDialog :model-value="!!closing" title="傷口結案" label="原因" :presets="['已癒合，上皮化完整', '出院（轉居家護理）', '轉院']" :pending="close.pending.value" :error="close.fieldErrors.value.reason" @update:model-value="(x: boolean) => !x && (closing = undefined)" @confirm="onClose" />
+    <ReasonDialog :model-value="!!closing" title="傷口結案" label="原因" ok-text="結案" :presets="['已癒合，上皮化完整', '出院（轉居家護理）', '轉院']" :pending="close.pending.value" :error="close.fieldErrors.value.reason" @update:model-value="(x: boolean) => !x && (closing = undefined)" @confirm="onClose" />
   </div>
 </template>

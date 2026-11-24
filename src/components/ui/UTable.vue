@@ -59,11 +59,15 @@ function cellText(row: T, col: Column<T>) {
           :key="rowKey(row)"
           :class="[
             'border-b border-slate-100 last:border-0',
-            clickable && 'cursor-pointer hover:bg-brand-50/60',
+            clickable && 'cursor-pointer hover:bg-brand-50/60 focus:outline-none focus-visible:bg-brand-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500',
             selectedKey === rowKey(row) && 'bg-brand-50',
             rowClass?.(row),
           ]"
+          :tabindex="clickable ? 0 : undefined"
+          :aria-selected="clickable ? selectedKey === rowKey(row) : undefined"
           @click="$emit('row-click', row)"
+          @keydown.enter.self.prevent="clickable && $emit('row-click', row)"
+          @keydown.space.self.prevent="clickable && $emit('row-click', row)"
         >
           <!-- 靠右、純文字的欄（數量、金額）不換行：「3200 TAB」被擠成兩行很難讀；按鈕欄（有 slot）照常可換行，不然會把別欄擠成一字一行 -->
           <td v-for="c in columns" :key="c.key" :class="[dense ? 'px-3 py-1.5' : 'px-3 py-2.5', alignCls[c.align ?? 'left'], (c.nowrap || (c.align === 'right' && !$slots[`cell-${c.key}`])) && 'whitespace-nowrap', 'tabular']">
@@ -71,12 +75,12 @@ function cellText(row: T, col: Column<T>) {
           </td>
         </tr>
         <tr v-if="!list.length && !loading">
-          <td :colspan="columns.length" class="px-3 py-10 text-center text-sm text-slate-400">{{ emptyText }}</td>
+          <td :colspan="columns.length" class="px-3 py-10 text-center text-sm text-slate-500">{{ emptyText }}</td>
         </tr>
       </tbody>
     </table>
-    <div v-if="loading" class="absolute inset-0 flex items-start justify-center bg-white/60 pt-10">
-      <Loader2 class="h-5 w-5 animate-spin text-brand-600" />
+    <div v-if="loading" class="absolute inset-0 flex items-start justify-center gap-2 bg-white/60 pt-10 text-sm text-slate-600" role="status">
+      <Loader2 class="h-5 w-5 animate-spin text-brand-600" />載入中…
     </div>
   </div>
 </template>

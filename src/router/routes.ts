@@ -29,8 +29,9 @@ declare module 'vue-router' {
   }
 }
 
-export type MenuGroup = '總覽' | '門診' | '住院' | '其他' | '系統'
-export const menuGroups: MenuGroup[] = ['總覽', '門診', '住院', '其他', '系統']
+// 「醫技與支援」以前叫「其他」：檢驗、影像、藥品庫存是醫檢師、放射師、藥師的主要工作，叫「其他」像附屬功能
+export type MenuGroup = '總覽' | '門診' | '住院' | '醫技與支援' | '系統'
+export const menuGroups: MenuGroup[] = ['總覽', '門診', '住院', '醫技與支援', '系統']
 
 
 export const appRoutes: RouteRecordRaw[] = [
@@ -57,24 +58,25 @@ export const appRoutes: RouteRecordRaw[] = [
   { path: 'palliative', name: 'palliative', component: () => import('@/pages/palliative/PalliativePage.vue'), meta: { title: '安寧', icon: HeartPulse, group: '住院', roles: ['doctor', 'admin'], permission: 'palliative' } },
   { path: 'rrt', name: 'rrt', component: () => import('@/pages/rrt/RrtPage.vue'), meta: { title: '快速反應', icon: Siren, group: '住院', roles: ['doctor', 'admin'], permission: 'rrt' } },
   { path: 'icu', name: 'icu', component: () => import('@/pages/icu/IcuPage.vue'), meta: { title: '加護病房', icon: Activity, group: '住院', roles: ['doctor', 'admin'], permission: 'icu.attending' } },
-  { path: 'infection', name: 'infection', component: () => import('@/pages/infection/InfectionPage.vue'), meta: { title: '感染管制', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'admin'], permission: 'infection.control' } },
-  { path: 'pathology', name: 'pathology', component: () => import('@/pages/pathology/PathologyPage.vue'), meta: { title: '病理', icon: Microscope, group: '其他', roles: ['lab', 'doctor', 'admin'], permission: 'pathology' } },
-  { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '其他', roles: ['lab'] } },
-  { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '其他', roles: ['lab'] } },
-  { path: 'incidents', name: 'incidents', component: () => import('@/pages/incident/IncidentPage.vue'), meta: { title: '病安通報', icon: ShieldAlert, group: '其他', roles: ['doctor', 'nurse', 'pharmacist', 'lab', 'radtech', 'clerk', 'diet', 'admin'] } },
-  { path: 'duty', name: 'duty', component: () => import('@/pages/duty/DutyPage.vue'), meta: { title: '醫師值班', icon: Users, group: '其他', roles: ['doctor', 'nurse', 'admin', 'clerk', 'lab'] } },
-  { path: 'exam', name: 'exam', component: () => import('@/pages/exam/ExamRoomPage.vue'), meta: { title: '影像檢查室', icon: ScanLine, group: '其他', roles: ['clerk', 'radtech', 'doctor', 'nurse'] } },
-  { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '其他', roles: ['doctor'] } },
-  { path: 'abx', name: 'abx', component: () => import('@/pages/abx/AbxReviewPage.vue'), meta: { title: '抗生素審核', icon: Bug, group: '其他', roles: ['doctor'] } },
-  { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '其他', roles: ['doctor', 'nurse'] } },
-  { path: 'drugs', name: 'drugs', component: () => import('@/pages/drugs/DrugsPage.vue'), meta: { title: '藥品庫存', icon: Activity, group: '其他', roles: ['pharmacist'] } },
+  { path: 'infection', name: 'infection', component: () => import('@/pages/infection/InfectionPage.vue'), meta: { title: '感染管制', icon: ShieldAlert, group: '醫技與支援', roles: ['doctor', 'nurse', 'admin'], permission: 'infection.control' } },
+  { path: 'pathology', name: 'pathology', component: () => import('@/pages/pathology/PathologyPage.vue'), meta: { title: '病理', icon: Microscope, group: '醫技與支援', roles: ['lab', 'doctor', 'admin'], permission: 'pathology' } },
+  { path: 'lab', name: 'lab', component: () => import('@/pages/lab/LabPage.vue'), meta: { title: '檢驗', icon: FlaskConical, group: '醫技與支援', roles: ['lab'] } },
+  { path: 'blood', name: 'blood', component: () => import('@/pages/blood/BloodBankPage.vue'), meta: { title: '血庫', icon: Droplet, group: '醫技與支援', roles: ['lab'] } },
+  { path: 'incidents', name: 'incidents', component: () => import('@/pages/incident/IncidentPage.vue'), meta: { title: '病安通報', icon: ShieldAlert, group: '醫技與支援', roles: ['doctor', 'nurse', 'pharmacist', 'lab', 'radtech', 'clerk', 'diet', 'admin'] } },
+  { path: 'duty', name: 'duty', component: () => import('@/pages/duty/DutyPage.vue'), meta: { title: '醫師值班', icon: Users, group: '醫技與支援', roles: ['doctor', 'nurse', 'admin', 'clerk', 'lab', 'pharmacist', 'radtech'] } },
+  { path: 'exam', name: 'exam', component: () => import('@/pages/exam/ExamRoomPage.vue'), meta: { title: '影像檢查室', icon: ScanLine, group: '醫技與支援', roles: ['clerk', 'radtech', 'doctor', 'nurse'] } },
+  { path: 'imaging', name: 'imaging', component: () => import('@/pages/imaging/ImagingPage.vue'), meta: { title: '影像判讀', icon: ScanLine, group: '醫技與支援', roles: ['doctor'] } },
+  { path: 'abx', name: 'abx', component: () => import('@/pages/abx/AbxReviewPage.vue'), meta: { title: '抗生素審核', icon: Bug, group: '醫技與支援', roles: ['doctor'] } },
+  { path: 'prevent', name: 'prevent', component: () => import('@/pages/prevent/PreventPage.vue'), meta: { title: '預防保健', icon: ShieldCheck, group: '醫技與支援', roles: ['doctor', 'nurse'] } },
+  { path: 'drugs', name: 'drugs', component: () => import('@/pages/drugs/DrugsPage.vue'), meta: { title: '藥品庫存', icon: Activity, group: '醫技與支援', roles: ['pharmacist'] } },
 
-  { path: 'claim-cuts', name: 'claim-cuts', component: () => import('@/pages/claim/ClaimReplyPage.vue'), meta: { title: '健保審查回覆', icon: FileSpreadsheet, group: '其他', roles: ['doctor'] } },
+  { path: 'claim-cuts', name: 'claim-cuts', component: () => import('@/pages/claim/ClaimReplyPage.vue'), meta: { title: '病歷與健保回覆', icon: FileSpreadsheet, group: '醫技與支援', roles: ['doctor'] } },
   { path: 'coding', name: 'coding', component: () => import('@/pages/claim/CodingPage.vue'), meta: { title: '編碼審查', icon: FileSpreadsheet, group: '系統', permission: 'coding' } },
   { path: 'claims', name: 'claims', component: () => import('@/pages/claim/ClaimPage.vue'), meta: { title: '健保申報', icon: FileSpreadsheet, group: '系統', permission: 'nhi.claim' } },
   { path: 'management', name: 'management', component: () => import('@/pages/management/ManagementPage.vue'), meta: { title: '經營月報', icon: BarChart3, group: '系統', permission: 'report.management' } },
   { path: 'admin', name: 'admin', component: () => import('@/pages/admin/AdminPage.vue'), meta: { title: '系統管理', icon: Settings, group: '系統', roles: ['admin'] } },
-  { path: 'dev/ui', name: 'ui-gallery', component: () => import('@/pages/dev/UiGallery.vue'), meta: { title: 'UI 元件展示', icon: Palette, group: '系統', roles: ['admin'] } },
+  // 開發用頁面：只在開發環境出現（展示站的管理員選單不該有「模擬一個會失敗的寫入」這種東西）
+  ...(import.meta.env.DEV ? [{ path: 'dev/ui', name: 'ui-gallery', component: () => import('@/pages/dev/UiGallery.vue'), meta: { title: 'UI 元件展示', icon: Palette, group: '系統' as const, roles: ['admin' as const] } }] : []),
 
   { path: 'forbidden', name: 'forbidden', component: () => import('@/pages/ForbiddenPage.vue'), meta: { title: '沒有權限' } },
 ]

@@ -15,7 +15,7 @@ import { admissionApi, bookingApi, patientApi, preventApi, type VisitView } from
 import { useDebounced, useQuery } from '@/composables/useService'
 import { useAuth } from '@/stores/auth'
 import { ageText, periodLabel } from '@/utils/date'
-import { genderLabel, visitStatus } from '@/utils/labels'
+import { admissionStatus, genderLabel, visitStatus } from '@/utils/labels'
 import type { Patient } from '@/types'
 
 const auth = useAuth()
@@ -53,7 +53,6 @@ const { data: eligibility } = useQuery(async () => (selectedId.value ? preventAp
 const visitsDesc = computed(() => [...(visits.value ?? [])].reverse())
 // 住院紀錄（取消的預約不列）：出院病摘以前存了卻沒有地方看
 const { data: admissions } = useQuery(async () => (selectedId.value ? admissionApi.listAdmissions({ patientId: selectedId.value, status: ['reserved', 'admitted', 'discharged'] }) : []), [selectedId])
-const admissionStatusLabel = { reserved: '待報到', admitted: '住院中', discharged: '已出院', cancelled: '已取消' } as const
 const openSummary = ref<string>()
 
 const listColumns: Column<Patient>[] = [
@@ -105,7 +104,7 @@ const fields = computed(() => {
 <template>
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)]">
     <!-- 右欄 minmax(0,1fr)：不被裡面的分頁、表格撐開（以前用 1fr，窄畫面會左右捲動）；1024–1280 左欄窄一點 -->
-    <UCard title="病患搜尋" :padded="false">
+    <UCard title="病人搜尋" :padded="false">
       <template #actions>
         <UButton v-if="canEdit" size="sm" :icon="UserPlus" @click="openCreate">新增</UButton>
       </template>
@@ -119,7 +118,7 @@ const fields = computed(() => {
           :selected-key="selectedId"
           clickable
           dense
-          empty-text="查無病患"
+          empty-text="查無病人"
           @row-click="(p) => (selectedId = p.id)"
         />
       </div>
@@ -169,7 +168,7 @@ const fields = computed(() => {
           <ul v-else class="divide-y divide-slate-100">
             <li v-for="a in admissions" :key="a.id" class="px-4 py-2.5 text-sm">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <UBadge :tone="a.status === 'admitted' ? 'blue' : a.status === 'reserved' ? 'yellow' : 'gray'">{{ admissionStatusLabel[a.status] }}</UBadge>
+                <UStatusBadge :map="admissionStatus" :value="a.status" />
                 <span class="tabular text-slate-600">{{ (a.admittedAt ?? a.expectedDate).slice(0, 10) }}<template v-if="a.dischargedAt"> ～ {{ a.dischargedAt.slice(0, 10) }}（{{ a.days }} 天）</template></span>
                 <span class="text-slate-800">{{ a.diagnosis }}</span>
                 <span class="text-xs text-slate-500">{{ a.deptName }}・{{ a.doctorName }}</span>
@@ -201,7 +200,7 @@ const fields = computed(() => {
         </ul>
       </UCard>
     </div>
-    <UCard v-else data-detail><UEmpty title="請從清單選擇病患" description="可用病歷號、姓名、身分證或電話搜尋" /></UCard>
+    <UCard v-else data-detail><UEmpty title="請從清單選擇病人" description="可用病歷號、姓名、身分證或電話搜尋" /></UCard>
 
     <PatientEditDialog v-model="editOpen" :patient="editing" @saved="onSaved" />
   </div>

@@ -4,7 +4,7 @@
 // 防止誤關：使用者在對話框裡輸入或選擇過任何內容後，點背景、按 Esc 都不會關閉，
 // 只能按「取消」或 ×。以前點到灰色背景就關掉，重開時內容已清空——醫囑、出院摘要寫到一半就沒了。
 // 沒有輸入過的（例如單純的確認框）照舊可以點背景關閉。
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 
 const open = defineModel<boolean>({ default: false })
@@ -47,6 +47,21 @@ function close() {
   }
   open.value = false
 }
+/** Tab 只在對話框裡循環：以前按 Tab 會跑到背後的頁面按鈕 */
+function trapTab(e: KeyboardEvent) {
+  const els = [...(panel.value?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])].filter((x) => x.offsetParent !== null)
+  if (!els.length) return
+  const first = els[0]
+  const last = els[els.length - 1]
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+const titleId = useId()
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') close()
 }
@@ -105,7 +120,9 @@ onBeforeUnmount(() => {
           :class="['w-full rounded-lg bg-white shadow-xl outline-none', widths[size]]"
           role="dialog"
           aria-modal="true"
+          :aria-labelledby="title ? titleId : undefined"
           tabindex="-1"
+          @keydown.tab="trapTab"
           :novalidate="onSubmit ? true : undefined"
           @input="touched = true"
           @change="touched = true"
@@ -113,7 +130,7 @@ onBeforeUnmount(() => {
         >
           <header v-if="title || $slots.header" class="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <slot name="header">
-              <h2 class="text-base font-semibold text-slate-800">{{ title }}</h2>
+              <h2 :id="titleId" class="text-base font-semibold text-slate-800">{{ title }}</h2>
             </slot>
             <!-- type="button"：在 <form> 裡沒寫 type 的按鈕預設是送出，按 × 會變成送出表單 -->
             <button type="button" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="關閉" @click="open = false">

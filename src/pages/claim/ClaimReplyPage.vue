@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 健保審查回覆（主治醫師）：事前審查（填寫、補件、自費、緊急先用）；我的病人被健保核減的——申復（寫理由）或接受，之後看得到申復結果。
+// 病歷與健保回覆（主治醫師）：事前審查（填寫、補件、自費、緊急先用）；我的病人被健保核減的——申復（寫理由）或接受，之後看得到申復結果。
 // 申復後仍維持的，申報組可再申請爭議審議（醫師這裡看得到進度）。誰能回覆、只回覆一次由服務層判斷（claim-cut.replyCut）
 import { computed, reactive, ref } from 'vue'
 import { UBadge, UButton, UDialog, UPageHeader, UQueryState, USelect, UTextarea } from '@/components/ui'
@@ -28,7 +28,7 @@ async function submit() {
 
 <template>
   <div class="space-y-4">
-    <UPageHeader title="健保審查回覆" description="事前審查的填寫與補件；病歷室修改的編碼；出院病歷待完成；門診病歷抽審；我的病人被健保核減的：申復（寫理由）或接受" />
+    <UPageHeader title="病歷與健保回覆" description="事前審查的填寫與補件；病歷室修改的編碼；出院病歷待完成；門診病歷抽審；我的病人被健保核減的：申復（寫理由）或接受" />
     <PreAuthDoctorSection />
     <CodingDoctorSection />
     <RecordDoctorSection />

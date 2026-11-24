@@ -37,7 +37,7 @@ function onChange(e: Event) {
 
 <template>
   <UField :label="label" :required="required" :error="error" :hint="hint" :for-id="id">
-    <select :id="id" v-bind="$attrs" :value="model ?? ''" :class="['form-control pr-8', error && 'form-control-error']" @change="onChange">
+    <select :id="id" v-bind="$attrs" :aria-label="label ? undefined : (($attrs['aria-label'] as string | undefined) ?? placeholder)" :value="model ?? ''" :class="['form-control pr-8', error && 'form-control-error']" @change="onChange">
       <option v-if="placeholder !== undefined" value="">{{ placeholder }}</option>
       <template v-for="g in groups" :key="g.label">
         <optgroup v-if="g.label" :label="g.label">

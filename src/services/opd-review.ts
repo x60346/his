@@ -1,5 +1,5 @@
 // 門診病歷品質抽審（病歷室，權限「疾病分類」）：選月份 → 每位醫師抽 2 份那個月完成的門診病歷（急診、慢箋領藥不抽）→
-// 逐項審查（符合／不符合）、寫意見 → 有不符合的，醫師在「健保審查回覆」頁看並寫改善說明。每月各醫師平均分數。規則在 opd-review-rules
+// 逐項審查（符合／不符合）、寫意見 → 有不符合的，醫師在「病歷與健保回覆」頁看並寫改善說明。每月各醫師平均分數。規則在 opd-review-rules
 import type { OpdRecordReview } from '@/types'
 import { db, newId } from '@/mock/db'
 import { now, today } from '@/utils/date'

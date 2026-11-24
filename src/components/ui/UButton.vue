@@ -32,7 +32,7 @@ const sizes = { sm: 'h-7 px-2.5 text-xs gap-1', md: 'h-9 px-3.5 text-sm gap-1.5'
     :type="props.type"
     :disabled="disabled || loading"
     :class="[
-      'inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:cursor-not-allowed disabled:opacity-50',
+      'inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
       variants[variant],
       sizes[size],
       block && 'w-full',

@@ -81,8 +81,18 @@ const give = useAction(pharmacyApi.dispense, { success: (x) => `領藥號 ${x.pi
 const returnOpen = ref(false)
 const returnsOf = computed(() => (d.value?.returns ?? []).map((r) => ({ ...r, text: r.lines.map((l) => `${d.value!.items[l.idx]?.drugName} ${l.qty}${l.scrap ? '（報廢）' : ''}`).join('、') })))
 
-/** 下一張待處理的單：發藥後自動帶到下一位，減少點擊 */
-const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x) && x.id !== selectedId.value))
+/** 下一張待處理的單：發藥後自動帶到下一位，減少點擊（雙人核對時，自己核對、不能自己發的不算） */
+const nextPending = computed(() => (all.value ?? []).find((x) => dispenseOpen(x) && x.id !== selectedId.value && !x.dispenseBlocked))
+/**
+ * 核對：雙人核對時核對完這張自己不能發（等另一位藥師），直接帶到下一張待核對的，
+ * 不用每張都切回「待調劑」再點下一位
+ */
+async function onVerify(id: string) {
+  const x = await verify.run(id)
+  if (!x?.dispenseBlocked) return
+  const next = (all.value ?? []).find((y) => y.status === 'pending' && y.id !== id)
+  if (next) selectedId.value = next.id
+}
 // ---------- 發藥前確認身分：請病人說出出生月日，或登記代領人（比對在服務層） ----------
 const pickupOpen = ref(false)
 const pickup = ref({ proxy: false, birthMMDD: '', proxyName: '', relation: '', idNo: '' })
@@ -261,7 +271,7 @@ const print = () => window.print()
         <div class="ml-auto flex gap-2">
           <UButton v-if="d.specialRx" variant="secondary" @click="rxOpen = true">專用處方箋</UButton>
           <UButton variant="secondary" :icon="Printer" @click="bagOpen = true">藥袋</UButton>
-          <UButton v-if="d.status === 'pending'" :icon="ClipboardCheck" :disabled="shortages.length > 0" :loading="verify.pending.value" @click="verify.run(d.id)">核對處方</UButton>
+          <UButton v-if="d.status === 'pending'" :icon="ClipboardCheck" :disabled="shortages.length > 0" :loading="verify.pending.value" @click="onVerify(d.id)">核對處方</UButton>
           <UButton v-if="d.status === 'dispensed'" variant="ghost" :icon="Undo2" @click="returnOpen = true">退藥</UButton>
           <UButton v-if="d.status === 'verified'" variant="success" :icon="CheckCheck" :disabled="shortages.length > 0 || !!d.dispenseBlocked" :loading="give.pending.value" @click="onDispense">發藥</UButton>
         </div>

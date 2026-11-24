@@ -62,8 +62,11 @@ watch(() => form.proc?.id, () => (addonUse.value = true))
 const abx = reactive({ reason: '' as AbxReason | '', site: '' as string | number | undefined, organism: '', note: '' })
 const ABX_REASONS = Object.keys(ABX_REASON_LABEL) as AbxReason[]
 
+/** 給藥醫囑上次選的類型（長期／臨時），切類別回來時恢復 */
+let medType: 'long' | 'stat' = 'long'
 watch(open, (v) => {
   if (v) {
+    medType = 'long'
     Object.assign(form, { type: 'long', category: 'medication', drug: null, dose: 1, freq: 'QD', route: 'PO', timing: '', proc: null, content: '' })
     Object.assign(abx, { reason: '', site: '', organism: '', note: '' })
     dietKind.value = ''
@@ -82,7 +85,10 @@ async function applyPreset(p: NonNullable<typeof props.preset>) {
   if (p.route) form.route = p.route
 }
 // 檢驗、處置通常是臨時醫囑；飲食、護理通常是長期醫囑
-watch(() => form.category, (c) => {
+// 給藥沒有固定的預設：切到別的類別再切回來，恢復成切走前給藥用的類型（以前會停在處置的「臨時」，醫師以為開長期 BID、送出的是單次 STAT）
+watch(() => form.category, (c, prev) => {
+  if (prev === 'medication') medType = form.type
+  if (c === 'medication') form.type = medType
   if (c === 'procedure') form.type = 'stat'
   if (c === 'diet' || c === 'nursing') form.type = 'long'
 })

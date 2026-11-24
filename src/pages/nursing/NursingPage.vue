@@ -281,10 +281,10 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.ppe.length" tone="red" :title="`防護：${p.ppe.join('、')}`">{{ p.ppe.includes('N95') ? 'N95' : p.ppe.includes('外科口罩') ? '口罩' : '隔離衣' }}</UBadge>
                     <UBadge v-if="p.death" tone="gray" title="已宣告死亡：遺體護理、送太平間">已宣告死亡</UBadge>
                     <UBadge v-if="p.rrtPending" tone="red" title="已呼叫快速反應小組，等到場評估">快速反應</UBadge>
-                    <UBadge v-if="p.news && p.news.level !== 'low'" :tone="p.news.level === 'high' || p.news.recheck === 'overdue' ? 'red' : 'yellow'" :title="`NEWS2 ${p.news.score} 分（${p.news.at.slice(11)}）：${p.news.recheck === 'overdue' ? '1 小時內再量已逾時' : '1 小時內再量'}`">NEWS {{ p.news.score }}</UBadge>
+                    <UBadge v-if="p.news && p.news.level !== 'low'" :tone="p.news.level === 'high' || p.news.recheck === 'overdue' ? 'red' : 'yellow'" :title="`NEWS2 ${p.news.score} 分（${p.news.at.slice(11)}）：${p.news.recheck === 'overdue' ? '1 小時內再量已逾時' : '1 小時內再量'}`">NEWS {{ p.news.score }}<template v-if="p.news.recheck === 'overdue'">・再量逾時</template></UBadge>
                     <UBadge v-if="p.icu?.late" tone="red" title="重症流程表超過 75 分鐘沒記">流程表 {{ p.icu.minutes }} 分</UBadge>
                     <UBadge v-if="p.vent?.on" tone="blue" title="使用呼吸器">呼吸器</UBadge>
-                    <UBadge v-if="p.vent?.todo" :tone="p.vent.overdue ? 'red' : 'yellow'" title="呼吸器實測、RASS 每 4 小時（記在重症流程表）">實測／RASS {{ p.vent.todo }}</UBadge>
+                    <UBadge v-if="p.vent?.todo" :tone="p.vent.overdue ? 'red' : 'yellow'" title="呼吸器實測、RASS 每 4 小時（記在重症流程表）">實測／RASS {{ p.vent.todo }}<template v-if="p.vent.overdue">・逾時</template></UBadge>
                     <UBadge v-if="p.vent?.rassOut" tone="red" title="最近一次 RASS 超出鎮靜目標">RASS 超出目標</UBadge>
                     <UBadge v-if="p.overdueCount" tone="red">逾時 {{ p.overdueCount }}</UBadge>
                     <UBadge v-if="p.dueCount" tone="yellow">待給 {{ p.dueCount }}</UBadge>
@@ -297,7 +297,7 @@ const wardTotals = computed(() => ({
                     <UBadge v-if="p.painReassess === 'overdue'" tone="red" title="疼痛 ≥4 處置後 1 小時沒重評">疼痛重評逾時</UBadge>
                     <UBadge v-if="p.infusion?.todo" :tone="p.infusion.overdue ? 'red' : 'yellow'" title="點滴：待接上、快滴完或已滴完要換瓶、醫囑停了還在滴">點滴 {{ p.infusion.todo }}</UBadge>
                     <UBadge v-if="p.pca" :tone="p.pca.alert || p.pca.record === 'overdue' ? 'red' : 'blue'" :title="p.pca.alert ? 'PCA 警示待醫師處理' : p.pca.status === 'ordered' ? 'PCA 已開，待雙人核對架設' : 'PCA 使用中'">PCA</UBadge>
-                    <UBadge v-if="p.restraint" :tone="p.restraint.check === 'overdue' || p.restraint.orderProblem ? 'red' : 'purple'" :title="p.restraint.check === 'overdue' ? '約束查核逾時' : p.restraint.orderProblem ? '約束醫囑待補或到期' : '約束中'">約束中</UBadge>
+                    <UBadge v-if="p.restraint" :tone="p.restraint.check === 'overdue' || p.restraint.orderProblem ? 'red' : 'purple'" :title="p.restraint.check === 'overdue' ? '約束查核逾時' : p.restraint.orderProblem ? '約束醫囑待補或到期' : '約束中'">{{ p.restraint.check === 'overdue' ? '約束查核逾時' : p.restraint.orderProblem ? '約束醫囑待補' : '約束中' }}</UBadge>
                     <UBadge v-if="p.deliriumPositive" tone="red" title="最近一次 CAM 陽性">譫妄</UBadge>
                     <UBadge v-if="p.tube?.highResidual" tone="red" title="最近一次管灌反抽超過 200 ml">反抽過多</UBadge>
                     <UBadge v-else-if="p.tube?.overdue" tone="red" title="管灌該灌沒記">管灌逾時</UBadge>
