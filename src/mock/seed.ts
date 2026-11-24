@@ -172,7 +172,7 @@ const patientRows: PatientRow[] = [
   ['楊佩珊', 'F', 41, '01', ['NSAIDs'], ['乳癌'], false, false],
   ['許文彬', 'M', 49, '01', [], ['高血壓'], false, true],
   ['鄭惠如', 'F', 78, '03', [], ['高血壓', '糖尿病'], false, false],
-  ['謝承翰', 'M', 2, '06', [], [], false, false],
+  ['謝承恩', 'M', 2, '06', [], [], false, false],
   ['郭欣怡', 'F', 28, '01', [], [], false, false],
   ['洪志強', 'M', 55, '05', ['Sulfa'], ['腎臟病'], true, false],
   ['曾秀英', 'F', 69, '01', [], ['肺癌'], false, false],
@@ -736,7 +736,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   }
   const ipdScenarios: IpdScenario[] = [
     { dept: 'D02', doctor: 'DR02', dx: 'J18.9 肺炎', reason: '發燒咳嗽、血氧偏低', diet: '普通飲食', meds: [['M036', 1, 'Q12H', 'IV'], ['M037', 1, 'QD', 'IV'], ['M010', 1, 'TID', 'PO']], prn: [['M001', 1, 'PO']], nursing: ['Vital signs Q4H', '監測血氧，SpO2 < 92% 給予氧氣'] },
-    { dept: 'D02', doctor: 'DR03', dx: 'E11.65 糖尿病伴高血糖', reason: '血糖控制不佳', diet: '糖尿病飲食 1800 kcal', meds: [['M015', 1, 'BID', 'PO', 'PC'], ['M038', 10, 'HS', 'SC']], nursing: ['AC/HS 血糖監測', '糖尿病衛教'] },
+    { dept: 'D02', doctor: 'DR03', dx: 'E11.10 糖尿病酮酸中毒', reason: '血糖過高、酮酸中毒（左足傷口感染誘發）', diet: '糖尿病飲食 1800 kcal', meds: [['M015', 1, 'BID', 'PO', 'PC'], ['M038', 10, 'HS', 'SC']], nursing: ['AC/HS 血糖監測', '糖尿病衛教'] },
     { dept: 'D03', doctor: 'DR04', dx: 'K35.80 急性闌尾炎', reason: '右下腹痛，安排手術', diet: '禁食', meds: [['M036', 1, 'Q12H', 'IV'], ['M037', 1, 'QD', 'IV']], prn: [['M039', 1, 'IM']], nursing: ['術後傷口護理', 'Vital signs Q4H'] },
     { dept: 'D06', doctor: 'DR07', dx: 'S52.501A 右橈骨遠端骨折', reason: '跌倒骨折，安排復位固定', diet: '普通飲食', meds: [['M030', 1, 'BID', 'PO'], ['M022', 1, 'QD', 'PO']], prn: [['M031', 1, 'PO']], nursing: ['患肢抬高、觀察末梢循環'] },
     { dept: 'D02', doctor: 'DR02', dx: 'I63.9 腦梗塞', reason: '右側肢體無力', diet: '吞嚥困難軟質飲食', meds: [['M019', 1, 'QD', 'PO'], ['M018', 1, 'HS', 'PO'], ['M012', 1, 'QD', 'PO']], nursing: ['神經學評估 Q4H', '預防跌倒', '翻身 Q2H'] },
@@ -917,7 +917,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
   // 肺炎那位昨天會診耳鼻喉科，dr08 已回覆（主治 dr02 在醫囑頁看得到回覆）
   const consults: Consult[] = []
   {
-    const dm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11.65'))
+    const dm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11.10'))
     if (dm) {
       const at = notFuture(`${T} 09:10`, 10)
       consults.push({ id: 'CS-SEED-1', admissionId: dm.id, fromDeptId: dm.deptId, fromDoctorId: dm.doctorId, toDeptId: 'D03', question: '左足大拇趾傷口紅腫滲液三天，請評估是否需要清創', urgent: false, requestedAt: at, status: 'pending' })
@@ -1862,7 +1862,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
 
   // ---------- 影像報告（同檢驗：不抽亂數、不用流水號；今天以前的都已判讀）----------
   // 放射科 DR10 判讀 X 光、超音波、電腦斷層；心電圖由開立醫師判讀。大多正常，少數有發現（依 id 雜湊決定）。
-  // 示範重要發現：第二位住院病人昨天下午的胸部 X 光「左側氣胸」，主治還沒確認
+  // 示範重要發現：跌倒骨折那位昨天下午的胸部 X 光「左側肋骨骨折併氣胸」（跌倒時撞到胸壁），主治還沒確認。
+  // 以前放在「第二位住院病人」（糖尿病酮酸中毒那位），同一個人身上疊了太多事，臨床上說不通
   const imagingReports: ImagingReport[] = []
   {
     const hash = (s: string) => {
@@ -1899,14 +1900,14 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const at = addMinutes(o.stopAt, 90)
       imagingReports.push({ id: `IR-SEED-${imagingReports.length + 1}`, no: no(at), patientId: a.patientId, procId: o.procId!, orderId: o.id, admissionId: a.id, doctorId: o.doctorId, orderedAt: o.createdAt, ...textOf(o.procId!, o.id), readerId: im.reader === 'orderer' ? o.doctorId : 'DR10', reportedAt: at })
     }
-    const adm = admissions.filter((a) => a.status === 'admitted')[1]
+    const adm = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('S52') && a.admittedAt! < `${addDays(T, -1)} 12:00`) ?? admissions.filter((a) => a.status === 'admitted')[1]
     if (adm) {
       const orderedAt = `${addDays(T, -1)} 13:30`
       ipdOrders.push({ id: 'IO-SEED-IMG1', admissionId: adm.id, type: 'stat', category: 'procedure', procId: 'P013', content: '胸部 X 光', startAt: orderedAt, stopAt: `${addDays(T, -1)} 14:00`, status: 'done', doctorId: adm.doctorId, createdAt: orderedAt, ackAt: `${addDays(T, -1)} 13:40`, ackBy: 'U201' })
       const at = `${addDays(T, -1)} 14:40`
       imagingReports.push({
         id: 'IR-SEED-IPD1', no: no(at), patientId: adm.patientId, procId: 'P013', orderId: 'IO-SEED-IMG1', admissionId: adm.id, doctorId: adm.doctorId, orderedAt,
-        findings: '左側肺尖可見無肺紋理區，肺邊緣距胸壁約 2 公分，估計氣胸約 20%；縱膈腔無偏移。右肺清晰。', impression: '左側氣胸（約 20%），建議立即處置。',
+        findings: '左側第 6、7 肋骨骨折；左側肺尖可見無肺紋理區，肺邊緣距胸壁約 2 公分，估計氣胸約 20%；縱膈腔無偏移。右肺清晰。', impression: '左側肋骨骨折併氣胸（約 20%），建議立即處置。',
         significant: true, readerId: 'DR10', reportedAt: at,
       })
     }
@@ -2231,7 +2232,7 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
         })
       }
     }
-    // 急刀插台順延：糖尿病高血糖那位今天發現足部壞死性筋膜炎，申請次緊急清創（24 小時內），排明天 OR1 08:00（開放前），
+    // 急刀插台順延：糖尿病酮酸中毒那位（誘因是左足傷口感染）今天確診足部壞死性筋膜炎，申請次緊急清創（24 小時內），排明天 OR1 08:00（開放前），
     // 同房 09:00 的骨折手術（SG-SEED-1）照規則往後推；主刀、病房都還沒讀。
     // 清晨（09:30 前）重建不放：一小時前申請的次緊急，時限要過明天 08:00 才合理
     if (nowStr >= `${T} 09:30`) {
@@ -2637,7 +2638,8 @@ export function buildSeed(opts: { scale?: HospitalScale } = {}): Database {
       const dropped = down < nowStr
       infusions.push({ id: 'INFU-VASO-SEED-1', orderId: 'IO-VASO-SEED-1', admissionId: sep.id, bagNo: 1, startAt: st, startBy: 'U213', rateMlH: dropped ? 18 : 27, rateChanges: dropped ? [{ at: down, by: 'U213', from: 27, to: 18, reason: 'MAP 高於目標，調降' }] : [], txnIds: [] })
     }
-    // 糖尿病酮酸中毒：兩天前（或入院 2 小時後）申請轉入、加護病房主治 dr03 同意轉到 ICU2；現在穩定，等醫師寫轉出摘要再轉回病房
+    // 糖尿病酮酸中毒（左足傷口感染誘發）：兩天前（或入院 2 小時後）低血鉀心室顫動急救後轉入、加護病房主治 dr03 同意轉到 ICU2。
+    // 之後的事都在同一條線上：胰島素點滴中今天血糖掉到 32（危急值）、足部傷口確診壞死性筋膜炎排明天清創——還在加護病房治療中，不是「穩定待轉出」
     const dka = admissions.find((a) => a.status === 'admitted' && a.diagnosis.startsWith('E11'))
     const icu2 = beds.find((b) => b.ward === codes.icuWard && b.status === 'empty')
     if (dka && icu2) {

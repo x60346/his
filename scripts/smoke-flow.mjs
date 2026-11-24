@@ -4245,7 +4245,7 @@ try {
     await as('dr04')
     const inc = await CS.listIncomingConsults()
     const it = inc.find((x) => x.consult.id === 'CS-SEED-1')
-    ok(it && it.summary.admission.diagnosis.startsWith('E11.65') && it.summary.orders.length > 0 && it.consult.waitingHours >= 0 && (await api.dashboardApi.getDashboard()).consultIncoming >= 1,
+    ok(it && it.summary.admission.diagnosis.startsWith('E11.10') && it.summary.orders.length > 0 && it.consult.waitingHours >= 0 && (await api.dashboardApi.getDashboard()).consultIncoming >= 1,
       `外科 dr04：待回覆會診（附病人摘要：${it?.summary.orders.length} 筆執行中醫囑、最近病程），首頁待辦也有`)
     await as('dr05')
     ok(!(await CS.listIncomingConsults()).some((x) => x.consult.id === 'CS-SEED-1'), '別科（小兒科）看不到外科的會診')

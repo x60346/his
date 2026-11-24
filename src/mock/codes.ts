@@ -35,7 +35,7 @@ export const departments: Department[] = [
   { id: 'D11', code: 'ER', name: '急診科', active: true },
 ]
 
-/** 管制藥品使用執照（展示用）：DR08 鄭雅婷沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
+/** 管制藥品使用執照（展示用）：DR08 鄭雅文沒有、DR09 許立群已過期（不能開第一～三級管制藥），其他有效。
  * 有效期限依示範日期在 seed 填（空字串＝今年起算三年後年底、expired＝四個月前），示範哪一天打開都一樣 */
 export const doctors: Doctor[] = [
   { id: 'DR01', name: '林子謙', deptId: 'D01', title: '主治醫師', licenseNo: 'A100231', controlledLicense: { no: 'C11-0231', validUntil: '' }, active: true },
@@ -45,14 +45,14 @@ export const doctors: Doctor[] = [
   { id: 'DR05', name: '吳佳穎', deptId: 'D04', title: '主治醫師', licenseNo: 'A101315', controlledLicense: { no: 'C11-1315', validUntil: '' }, active: true },
   { id: 'DR06', name: '劉書妤', deptId: 'D05', title: '主治醫師', licenseNo: 'A101536', controlledLicense: { no: 'C11-1536', validUntil: '' }, active: true },
   { id: 'DR07', name: '蔡承恩', deptId: 'D06', title: '主治醫師', licenseNo: 'A101757', controlledLicense: { no: 'C11-1757', validUntil: '' }, active: true },
-  { id: 'DR08', name: '鄭雅婷', deptId: 'D07', title: '主治醫師', licenseNo: 'A101978', active: true },
+  { id: 'DR08', name: '鄭雅文', deptId: 'D07', title: '主治醫師', licenseNo: 'A101978', active: true },
   { id: 'DR09', name: '許立群', deptId: 'D08', title: '主治醫師', licenseNo: 'A102199', controlledLicense: { no: 'C08-2199', validUntil: 'expired' }, active: true },
   // 放射科醫師：判讀 X 光、超音波、電腦斷層（不看門診）
   { id: 'DR10', name: '杜明遠', deptId: 'D09', title: '主治醫師', licenseNo: 'A102420', controlledLicense: { no: 'C11-2420', validUntil: '' }, active: true },
   // 感染科醫師：審核管制性抗生素（不看門診）
   { id: 'DR11', name: '高子晴', deptId: 'D10', title: '主治醫師', licenseNo: 'A102641', controlledLicense: { no: 'C11-2641', validUntil: '' }, active: true },
   // 急診醫師（不排門診表；急診病人在「門診看診」的急診診次看）
-  { id: 'DR12', name: '江承翰', deptId: 'D11', title: '主治醫師', licenseNo: 'A102862', controlledLicense: { no: 'C11-2862', validUntil: '' }, active: true },
+  { id: 'DR12', name: '江承諺', deptId: 'D11', title: '主治醫師', licenseNo: 'A102862', controlledLicense: { no: 'C11-2862', validUntil: '' }, active: true },
 ]
 
 export const identities: Identity[] = [
@@ -125,6 +125,7 @@ export const icdCodes: IcdCode[] = [
   { code: 'I48.91', name: '心房顫動', nameEn: 'Unspecified atrial fibrillation' },
   { code: 'E11.9', name: '第二型糖尿病，無併發症', nameEn: 'Type 2 diabetes mellitus without complications' },
   { code: 'E11.65', name: '第二型糖尿病伴高血糖', nameEn: 'Type 2 diabetes mellitus with hyperglycemia' },
+  { code: 'E11.10', name: '第二型糖尿病伴酮酸中毒', nameEn: 'Type 2 diabetes mellitus with ketoacidosis without coma' },
   { code: 'E78.5', name: '高血脂症', nameEn: 'Hyperlipidemia, unspecified' },
   { code: 'E03.9', name: '甲狀腺功能低下', nameEn: 'Hypothyroidism, unspecified' },
   { code: 'E66.9', name: '肥胖', nameEn: 'Obesity, unspecified' },
