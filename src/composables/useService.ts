@@ -1,7 +1,7 @@
 // 頁面呼叫服務層的兩個標準姿勢：
 //   useQuery  —— 讀資料：自動帶 loading、錯誤提示；條件變動或任何寫入（dbVersion 變了）就重新查詢
 //   useAction —— 寫資料：防止重複送出、成功提示、ServiceError 自動顯示成 toast
-import { ref, shallowRef, watch, type Ref, type WatchSource } from 'vue'
+import { nextTick, ref, shallowRef, watch, type Ref, type WatchSource } from 'vue'
 import { dbVersion, ServiceError } from '@/services'
 import { useUi } from '@/stores/ui'
 import { useAuth } from '@/stores/auth'
@@ -79,6 +79,21 @@ export class Cancelled extends Error {
   }
 }
 
+/**
+ * 第一個標紅的欄位在畫面外（例：長清單最下面的一格、按鈕在最上面）：捲過去並聚焦。
+ * 在畫面內的不動（對話框裡的欄位通常都看得到，不要讓畫面亂跳）
+ */
+function revealFirstError() {
+  nextTick(() => {
+    const el = document.querySelector<HTMLElement>('.form-control-error')
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    if (r.top >= 0 && r.bottom <= window.innerHeight) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.focus({ preventScroll: true })
+  })
+}
+
 export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>, opts: { success?: string | ((r: R) => string) } = {}) {
   const ui = useUi()
   const pending = ref(false)
@@ -103,6 +118,7 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
         // 欄位錯誤顯示在欄位下方；仍給一個簡短提示，避免欄位在畫面外時使用者沒注意到
         fieldErrors.value = e.fields ?? { [e.field]: e.message }
         ui.toast.warning('請修正標示的欄位')
+        revealFirstError()
       } else {
         ui.toast.error(errorMessage(e))
       }
