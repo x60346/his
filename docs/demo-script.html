@@ -111,13 +111,13 @@ footer { color: var(--muted); font-size: 13px; }
     <div class="meta">
       <span>網址 <b><a href="https://x60346.github.io/his/" target="_blank" rel="noopener">x60346.github.io/his</a></b></span>
       <span>密碼一律 <b>1234</b>（登入頁右側點帳號可快速登入）</span>
-      <span>2026/11/25 依本稿從重置開始完整走過一遍</span>
+      <span>2026/11/25 依本稿從重置開始完整走過兩遍</span>
     </div>
   </header>
 
   <nav class="plan" aria-label="段落總覽">
     <a href="#prep"><span class="min">開場前</span><span class="t">準備</span><span class="d">重置資料、開兩個分頁</span></a>
-    <a href="#opd"><span class="min">6 分鐘</span><span class="t">門診</span><span class="d">掛號 → 看診被擋 → 批價 → 發藥</span></a>
+    <a href="#opd"><span class="min">6 分鐘</span><span class="t">門診</span><span class="d">看診被擋 → 批價 → 掃描發藥</span></a>
     <a href="#ipd"><span class="min">8 分鐘</span><span class="t">住院重症：羅志偉</span><span class="d">待辦直達、事件串成一條線</span></a>
     <a href="#nursing"><span class="min">5 分鐘</span><span class="t">護理站</span><span class="d">掃描給藥、紀錄更正</span></a>
     <a href="#close"><span class="min">2 分鐘</span><span class="t">收尾</span><span class="d">影像重要發現送到主治</span></a>
@@ -136,41 +136,39 @@ footer { color: var(--muted); font-size: 13px; }
 
   <section id="opd">
     <div class="sec-head"><h2>門診：開錯會被擋，而且講清楚為什麼</h2><span class="min">6 分鐘</span></div>
-    <p class="sec-goal">主角李美玲（病歷號 100002）對 Penicillin 過敏，這是固定的示範資料。</p>
+    <p class="sec-goal">主角楊佩珊（病歷號 100010）對 NSAIDs（非類固醇止痛消炎藥）過敏。她掛林子謙醫師上午診 5 號，示範資料不論幾點重置，她都還在候診。</p>
     <ol class="steps">
       <li><div class="step">
         <div class="who"><span class="acct">clerk01</span><span class="where">掛號作業</span><span class="tab">右分頁</span></div>
         <ul class="do">
-          <li>搜尋「李美玲」：病人卡一次看到過敏 Penicillin、慢性病連續處方（下次可領的日期）、可加做的預防保健。</li>
-          <li>重置後她已經掛好林子謙醫師上午診 1 號、已報到，不用再掛；指給觀眾看「已有預約：…已報到」就好。</li>
+          <li>搜尋「楊佩珊」：病人卡一次看到過敏、慢性病連續處方、可加做的預防保健。她已經掛好號，不用再掛。</li>
         </ul>
-        <p class="note">想示範掛號本身，就另外找一位病人掛號：選診次 → 確認區顯示預估應收 → 掛號（預設「同時報到」）。</p>
+        <p class="note">想示範掛號本身，另外找一位病人：選診次 → 確認區顯示預估應收 → 掛號（預設「同時報到」）。</p>
       </div></li>
       <li><div class="step">
         <div class="who"><span class="acct">dr01</span><span class="where">門診看診</span><span class="tab">左分頁</span></div>
         <ul class="do">
-          <li>左邊候診清單點李美玲：右上角紅色「<span class="ui">過敏：Penicillin</span>」，上方還有外院轉診單。</li>
+          <li>左邊候診清單點楊佩珊（上午診 5 號）：右上角紅色「<span class="ui">過敏：NSAIDs</span>」。</li>
           <li>按 <span class="ui">叫號・開始看診</span> → 診斷輸入 <code>J06</code> 按 Enter。</li>
-          <li>藥品搜尋 <code>Amox</code> → 選 Amoxicillin 500mg：這一列立刻標「病人對 Penicillin 過敏」。</li>
+          <li>藥品搜尋 <code>Ibuprofen</code> → 選 Ibuprofen 400mg：這一列立刻標「病人對 NSAIDs 過敏」。</li>
           <li>按 <span class="ui">完成看診</span> → 跳出「過敏警示」，要醫師明確確認。</li>
           <li>按取消、按這一列右邊的刪除，改從組套選「上呼吸道感染」→ 套用。</li>
-          <li>套用後馬上出現黃色「用藥提醒：重複用藥」：她耳鼻喉科開的 Acetaminophen 還沒吃完。</li>
-          <li>按完成看診 → 提醒要確認，說明欄寫「已叮囑病人停用耳鼻喉科的普拿疼」→ 確認，仍要開立。</li>
+          <li>如果她上次開的藥還沒吃完，會出現黃色「用藥提醒：重複用藥」（例：上次的 Ambroxol 還有 1 天）。按完成看診時提醒要確認，說明欄寫一句理由 → 確認，仍要開立。</li>
         </ul>
         <div class="say">不是不能開，是要醫師明確確認、留下紀錄。系統把風險擺在眼前，決定權還在醫師；醫師寫的理由，等一下藥師也看得到。</div>
       </div></li>
       <li><div class="step">
         <div class="who"><span class="acct">clerk01</span><span class="where">批價結帳</span><span class="tab">右分頁</span></div>
         <ul class="do">
-          <li>清單上就看得到預估應收 → 收款 → 印收據。</li>
+          <li>清單上點楊佩珊，看得到收費明細與應收 → 確認收款 → 列印收據。</li>
         </ul>
       </div></li>
       <li><div class="step">
         <div class="who"><span class="acct">ph01</span><span class="where">門診藥局</span><span class="tab">右分頁</span></div>
         <ul class="do">
-          <li>輸入領藥號 <code>1</code> 按 Enter：上方黃框是「醫師開立時已確認」的重複用藥提醒，連同醫師寫的理由。</li>
-          <li>按 <span class="ui">核對處方</span> → <span class="ui">發藥</span> → 逐項掃藥品條碼。用「示範：模擬掃描」先選「拿錯：Ibuprofen」，當場紅字擋下；再依序選三個正確的藥 → 確認，下一步。</li>
-          <li>確認領藥人：請病人說出姓名與生日，輸入月日 <code>0105</code> → 確認發藥。庫存數字當場扣掉。</li>
+          <li>待調劑清單點楊佩珊（領藥號依重置時間不同）：有用藥提醒的話，上方黃框寫「醫師開立時已確認」，連同醫師寫的理由。</li>
+          <li>按 <span class="ui">核對處方</span> → <span class="ui">發藥</span> → 逐項掃藥品條碼。用「示範：模擬掃描」先選「拿錯：Ibuprofen」，當場紅字「藥品不對！」擋下；再依序選三個正確的藥 → 確認，下一步。</li>
+          <li>確認領藥人：請病人說出姓名與生日，輸入月日 <code>0422</code> → 確認發藥。庫存數字當場扣掉。</li>
         </ul>
         <p class="note">時間不夠時，3、4 步只講不做。</p>
       </div></li>
@@ -235,7 +233,7 @@ footer { color: var(--muted); font-size: 13px; }
       <li><div class="step">
         <div class="who"><span class="where">同一筆紀錄 → 更正</span></div>
         <ul class="do">
-          <li>剛給完的那一列有 <span class="ui">更正</span>：改成「暫停」，原因點快選「紀錄錯誤（按錯列，藥其實沒給）」→ 更正為暫停。</li>
+          <li>剛給完的那一列有 <span class="ui">更正</span>：改成「暫停」，原因點快選「記錄錯誤（按錯列，藥其實沒給）」→ 更正為暫停。</li>
           <li>原本的紀錄沒有消失，下方標「更正 時間・誰：原記已給藥 時間・誰」。</li>
         </ul>
         <div class="say">病歷只能增補、不能改寫。改了什麼、誰改的、為什麼改，全部留著。</div>
