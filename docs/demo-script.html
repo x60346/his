@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 展示稿：直接用瀏覽器開這個檔即可；線上版同內容 -->
+<title>HIS 展示稿</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 版面：一張照著走的「流程單」——左邊時間軸（段落與分鐘），右邊每一步：誰登入、點哪裡、講什麼 */
+:root {
+  --bg: #f5f7f8;
+  --paper: #ffffff;
+  --ink: #18242b;
+  --muted: #56656e;
+  --line: #d9e1e5;
+  --accent: #0b6e72;
+  --accent-soft: #e2f1f1;
+  --say: #fff7e0;
+  --say-line: #e2b33c;
+  --warn: #a4372b;
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11181c; --paper: #182227; --ink: #e4ecef; --muted: #9aabb3; --line: #2b3a41;
+    --accent: #5cc4c4; --accent-soft: #163536; --say: #2e2816; --say-line: #b48a2a; --warn: #f08a7c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11181c; --paper: #182227; --ink: #e4ecef; --muted: #9aabb3; --line: #2b3a41;
+  --accent: #5cc4c4; --accent-soft: #163536; --say: #2e2816; --say-line: #b48a2a; --warn: #f08a7c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body);
+  font-size: 15px; line-height: 1.75;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+.wrap { max-width: 880px; margin: 0 auto; display: grid; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.35; margin: 0; }
+h1 { font-size: 28px; font-weight: 700; }
+h2 { font-size: 20px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 700; }
+p { margin: 0; }
+a { color: var(--accent); }
+.lede { color: var(--muted); max-width: 62ch; }
+header { display: grid; gap: 10px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 14px; }
+.meta b { color: var(--ink); font-weight: 500; }
+
+/* 總覽列：四段、各幾分鐘 */
+.plan { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.plan a { text-decoration: none; color: inherit; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: grid; gap: 2px; }
+.plan a:hover { border-color: var(--accent); }
+.plan a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.plan .min { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+.plan .t { font-weight: 500; }
+.plan .d { font-size: 13px; color: var(--muted); }
+
+section { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; display: grid; gap: 16px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.sec-head .min { font-family: var(--font-mono); font-size: 13px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 8px; }
+.sec-goal { color: var(--muted); font-size: 14px; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; counter-reset: s; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 4px 12px; }
+ol.steps > li::before {
+  content: counter(s); font-family: var(--font-mono); font-size: 13px; width: 26px; height: 26px; border-radius: 50%;
+  border: 1.5px solid var(--accent); color: var(--accent); display: grid; place-items: center; margin-top: 2px;
+}
+.step { display: grid; gap: 8px; min-width: 0; }
+.who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.acct { font-family: var(--font-mono); font-size: 13px; background: var(--ink); color: var(--paper); border-radius: 4px; padding: 1px 8px; }
+.where { font-weight: 500; }
+.tab { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
+.do { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+.do li { padding-left: 2px; }
+.ui { font-weight: 500; color: var(--accent); }
+.say { background: var(--say); border-left: 3px solid var(--say-line); border-radius: 0 6px 6px 0; padding: 8px 12px; }
+.say::before { content: "講："; font-weight: 700; }
+.note { font-size: 13px; color: var(--muted); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.card ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+ul.check { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+ul.check li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; }
+ul.check li::before { content: ""; width: 14px; height: 14px; border: 1.5px solid var(--muted); border-radius: 3px; margin-top: 6px; }
+.dont li::before { border-color: var(--warn); }
+code { font-family: var(--font-mono); font-size: 13px; background: var(--accent-soft); border-radius: 3px; padding: 0 5px; overflow-wrap: anywhere; }
+footer { color: var(--muted); font-size: 13px; }
+
+@media (max-width: 520px) {
+  section { padding: 18px 16px; }
+  h1 { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>HIS 展示系統：展示稿</h1>
+    <p class="lede">一條約 20 分鐘的主線，用同一套資料、幾個角色接力，讓觀眾看到「事情怎麼被送到該負責的人面前」。每一步寫明用哪個帳號、點哪裡、講哪句話；最後依對象加碼 5–10 分鐘。</p>
+    <div class="meta">
+      <span>網址 <b><a href="https://x60346.github.io/his/" target="_blank" rel="noopener">x60346.github.io/his</a></b></span>
+      <span>密碼一律 <b>1234</b>（登入頁右側點帳號可快速登入）</span>
+      <span>步驟已在 2026/11/25 的版本實際走過</span>
+    </div>
+  </header>
+
+  <nav class="plan" aria-label="段落總覽">
+    <a href="#prep"><span class="min">開場前</span><span class="t">準備</span><span class="d">重置資料、開兩個分頁</span></a>
+    <a href="#opd"><span class="min">6 分鐘</span><span class="t">門診</span><span class="d">掛號 → 看診被擋 → 批價 → 發藥</span></a>
+    <a href="#ipd"><span class="min">8 分鐘</span><span class="t">住院重症：羅志偉</span><span class="d">待辦直達、事件串成一條線</span></a>
+    <a href="#nursing"><span class="min">5 分鐘</span><span class="t">護理站</span><span class="d">掃描給藥、紀錄更正</span></a>
+    <a href="#close"><span class="min">2 分鐘</span><span class="t">收尾</span><span class="d">影像重要發現送到主治</span></a>
+  </nav>
+
+  <section id="prep">
+    <div class="sec-head"><h2>開場前準備</h2><span class="min">提前 10 分鐘</span></div>
+    <ul class="check">
+      <li><span>用<strong>線上網址</strong>，不要用本機開發伺服器；在要上台的那台電腦、那個瀏覽器先完整走一遍。</span></li>
+      <li><span><span class="acct">admin</span> 登入 → <span class="ui">系統管理 → 展示資料 → 重置展示資料</span>。資料會以「今天」為基準重建，所以每次重置後日期、住院天數可能不同；<strong>找病人一律用姓名</strong>，不要背床號或日期。</span></li>
+      <li><span>開<strong>兩個分頁並排</strong>（左右各半個螢幕）。兩個分頁共用同一份資料，但登入身分各自獨立：左邊登醫師、右邊登藥師或護理師，一邊開醫囑，另一邊的數字會自己更新。</span></li>
+      <li><span>畫面 15 分鐘沒動作會<strong>鎖定</strong>（不是登出），輸入 1234 就解鎖，寫到一半的東西還在。</span></li>
+    </ul>
+    <div class="say">這是前端展示版：沒有後端，資料存在這個瀏覽器裡，病人、醫師都是虛構的。重點是流程和規則，不是介面長怎樣。</div>
+  </section>
+
+  <section id="opd">
+    <div class="sec-head"><h2>門診：開錯會被擋，而且講清楚為什麼</h2><span class="min">6 分鐘</span></div>
+    <p class="sec-goal">主角李美玲（病歷號 100002）對 Penicillin 過敏，這是固定的示範資料。</p>
+    <ol class="steps">
+      <li><div class="step">
+        <div class="who"><span class="acct">clerk01</span><span class="where">掛號作業</span><span class="tab">右分頁</span></div>
+        <ul class="do">
+          <li>搜尋「李美玲」→ 選家醫科（林子謙醫師）目前的診次 → 掛號，預設「同時報到」。</li>
+          <li>確認區會先顯示預估應收。</li>
+        </ul>
+        <p class="note">如果她已經在林子謙醫師今天的候診清單上，這步跳過。</p>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="acct">dr01</span><span class="where">門診看診</span><span class="tab">左分頁</span></div>
+        <ul class="do">
+          <li>左邊候診清單點李美玲：右上角紅色「<span class="ui">過敏：Penicillin</span>」，上方還有外院轉診單。</li>
+          <li>按 <span class="ui">叫號・開始看診</span> → 診斷輸入 <code>J06</code> 按 Enter。</li>
+          <li>藥品搜尋 <code>Amox</code> → 選 Amoxicillin 500mg：這一列立刻標「病人對 Penicillin 過敏」。</li>
+          <li>按 <span class="ui">完成看診</span> → 跳出「過敏警示」，要醫師明確確認。</li>
+          <li>按取消、刪掉這一列，改從組套選「上呼吸道感染」套用 → 完成看診。</li>
+        </ul>
+        <div class="say">不是不能開，是要醫師明確確認、留下紀錄。系統把風險擺在眼前，決定權還在醫師。</div>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="acct">clerk01</span><span class="where">批價結帳</span><span class="tab">右分頁</span></div>
+        <ul class="do">
+          <li>清單上就看得到預估應收 → 收款 → 印收據。</li>
+        </ul>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="acct">ph01</span><span class="where">門診藥局</span><span class="tab">右分頁</span></div>
+        <ul class="do">
+          <li>輸入領藥號按 Enter → 核對處方 → 發藥（依效期先後扣庫存）→ 列印藥袋。</li>
+        </ul>
+        <p class="note">時間不夠時，3、4 步只講不做。</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <section id="ipd">
+    <div class="sec-head"><h2>住院重症：一位病人、一條故事線</h2><span class="min">8 分鐘</span></div>
+    <p class="sec-goal">主角羅志偉，主治 <span class="acct">dr03</span> 黃柏翰（內科）。</p>
+    <ol class="steps">
+      <li><div class="step">
+        <div class="who"><span class="acct">dr03</span><span class="where">首頁</span><span class="tab">左分頁</span></div>
+        <ul class="do">
+          <li>最上面「<span class="ui">待確認的報告</span>」：羅志偉，住院危急值，飯前血糖 32 ↓。</li>
+          <li>下面是待辦卡片：NEWS2 警示、加護病房轉入、鎮靜超出目標、值班紀錄待看…；沒有待辦的收在「另有 N 項目前沒有待辦」。</li>
+          <li>點任一張卡（例如「傷口 2 週沒變小」）→ 直接帶到那位病人、那個分頁，上方列出這張卡涵蓋的病人。</li>
+        </ul>
+        <div class="say">醫師不用自己去翻每一位病人，要處理的事會被送到面前，一點就到。</div>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="acct">dr03</span><span class="where">住院醫囑 → 羅志偉（ICU）</span></div>
+        <ul class="do">
+          <li>病人上方由上而下：<strong>值班紀錄</strong>（夜間發燒 38.6°C、抽血培養兩套）→ <strong>危急值紅條</strong>（血糖 32）→ <strong>外科會診待回覆</strong>（左足大拇趾傷口紅腫滲液，評估清創）→ 入院診斷 E11.10 糖尿病酮酸中毒。</li>
+          <li>分頁「<span class="ui">急救</span>」：心室顫動、電擊、Epinephrine，抽血 K 2.6 補鉀，恢復自主循環，轉加護病房；每一筆記錄是誰做的。</li>
+          <li>分頁「<span class="ui">加護病房</span>」：每日 SOFA、APACHE II 與預估死亡率；轉出摘要還沒寫，住院中心就不能把他轉出去。</li>
+        </ul>
+        <div class="say">足部感染誘發酮酸中毒，治療中低血鉀引發心室顫動，急救後轉加護病房；夜裡發燒、會診外科看傷口；今天打胰島素點滴時血糖掉到 32。每件事都有通報、有人接、有紀錄。</div>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="acct">dr03</span> 左分頁 ＋ <span class="acct">ph01</span> 右分頁<span class="where">兩邊並排</span></div>
+        <ul class="do">
+          <li>右分頁 <span class="acct">ph01</span> 停在首頁，先指給觀眾看「<span class="ui">住院醫囑待審核</span>」的數字。</li>
+          <li>左分頁羅志偉按 <span class="ui">新增醫囑</span> → 給藥、長期 → 搜尋 <code>Omeprazole</code> → 開立。</li>
+          <li>右分頁的數字自己加 1，不用重新整理。</li>
+          <li>右分頁進 <span class="ui">住院藥局 → 醫囑審核</span>：剛開的醫囑在清單上，右邊列出系統查到的問題（過敏、交互作用、劑量、腎功能），藥師按「通過」或「疑義」。</li>
+        </ul>
+        <div class="say">醫師一開完，藥師那邊馬上看到；長期醫囑要藥師審過才會進每日調劑。</div>
+      </div></li>
+    </ol>
+  </section>
+
+  <section id="nursing">
+    <div class="sec-head"><h2>護理站：給對人、給對藥，給錯了怎麼留紀錄</h2><span class="min">5 分鐘</span></div>
+    <ol class="steps">
+      <li><div class="step">
+        <div class="who"><span class="acct">nurse01</span><span class="where">護理站</span><span class="tab">右分頁</span></div>
+        <ul class="do">
+          <li>上方切換病房；「<span class="ui">本班待辦</span>」依急迫排序（逾時紅、現在黃），旁邊是全病房逾時給藥、待執行臨時醫囑的數字。</li>
+          <li>如果登入的是當班護理師（護理站上方寫著這一班是誰），還會有「我的病人／全病房」切換。</li>
+        </ul>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="where">點一位有「待給藥」的病人 → 給藥紀錄</span></div>
+        <ul class="do">
+          <li>在一筆到時間的藥按 <span class="ui">給藥</span> → 跳出「給藥前核對：掃描條碼」。</li>
+          <li>沒有掃描槍，用下方「<span class="ui">示範：模擬掃描</span>」：先故意選「<strong>別床病人的腕帶</strong>」，當場大紅字擋下，並記一筆「差點給錯」。</li>
+          <li>再選「本人腕帶」和「正確的藥」→ 完成給藥。</li>
+        </ul>
+        <div class="say">掃錯人、拿錯藥，在給下去之前就被擋住，而且這次「差點出錯」也會記下來，之後可以檢討。</div>
+      </div></li>
+      <li><div class="step">
+        <div class="who"><span class="where">同一筆紀錄 → 更正</span></div>
+        <ul class="do">
+          <li>剛給完的那一列有 <span class="ui">更正</span>：寫原因（例：按錯列），改成「暫停」。</li>
+          <li>原本的紀錄沒有消失，下方標「更正 時間・誰：原記…」。</li>
+        </ul>
+        <div class="say">病歷只能增補、不能改寫。改了什麼、誰改的、為什麼改，全部留著。</div>
+        <p class="note">更正有限制：8 小時內、只限長期排程的藥；管制藥、臨時與需要時給的藥不能改成沒給。</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <section id="close">
+    <div class="sec-head"><h2>收尾：危急的事送到該負責的人</h2><span class="min">2 分鐘</span></div>
+    <ol class="steps">
+      <li><div class="step">
+        <div class="who"><span class="acct">dr07</span><span class="where">首頁</span><span class="tab">左分頁</span></div>
+        <ul class="do">
+          <li>「待確認的報告」：潘家銘，左側肋骨骨折併氣胸，建議立即處置。</li>
+          <li>按 <span class="ui">已知悉</span>，系統記下時間。</li>
+        </ul>
+        <div class="say">放射科發現重要問題，不是等主治剛好打開報告，而是直接出現在主治的首頁，誰在什麼時間看過都有紀錄。</div>
+      </div></li>
+    </ol>
+  </section>
+
+  <section id="extra">
+    <div class="sec-head"><h2>依對象加碼</h2><span class="min">擇一，5–10 分鐘</span></div>
+    <div class="cols">
+      <div class="card">
+        <h3>醫院主管、院長</h3>
+        <ul>
+          <li><span class="acct">admin</span> 經營月報：門診量、住院、收入，近 12 個月健保淨核減率、退件率趨勢。</li>
+          <li>健保申報：門診、住院分開申報，核減與申復，送件期限。</li>
+          <li>住院醫囑的「預估 DRG」：這位病人目前用掉多少點、照現在給付是賺是賠。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>臨床人員</h3>
+        <ul>
+          <li>手術室：<span class="acct">dr03</span> 麻醉前評估、三段安全查核、器械逐件清點、病理檢體、恢復室。</li>
+          <li>急診：<span class="acct">nurse01</span> 檢傷（血氧 88% 自動建議 2 級，不能選得比建議輕）→ <span class="acct">dr12</span> 決定去向、留觀。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>資訊、技術人員</h3>
+        <ul>
+          <li>規則都寫在服務層、純函式，所有頁面共用；頁面上的判斷只是為了體驗。</li>
+          <li>流程測試 5111 項，用 13 個不同日期跑。</li>
+          <li>每次推送都先跑測試和建置，全過才自動部署（GitHub Actions）。</li>
+          <li>README〈設計原則〉16 條可以直接當投影片講。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="tips">
+    <div class="sec-head"><h2>現場注意</h2></div>
+    <div class="cols">
+      <div class="card">
+        <h3>要做</h3>
+        <ul class="check">
+          <li><span>每一段從<strong>首頁待辦</strong>出發，讓觀眾看到事情是被送來的。</span></li>
+          <li><span>一開始就交代這是展示版，主動提 README〈已知的簡化與限制〉，比被問倒好。</span></li>
+          <li><span>操作改亂了：<span class="acct">admin</span> 重置展示資料，一分鐘回到初始狀態。</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>不要做</h3>
+        <ul class="check dont">
+          <li><span>不要從選單逐頁點過去；功能太多，會失焦。</span></li>
+          <li><span>不要背床號、日期、住院第幾天；每次重置都可能不同，用姓名找人。</span></li>
+          <li><span>不要在台上第一次走某個流程；沒預演過的就不要臨時加。</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>帳號對照：dr01 林子謙（家醫科）・dr03 黃柏翰（內科、加護病房主治、麻醉）・dr07 蔡承恩（骨科）・dr12 江承諺（急診）・nurse01 周怡萱・ph01 方建志・clerk01 掛號批價・admin 系統管理員。</footer>
+</div>
+</html>
