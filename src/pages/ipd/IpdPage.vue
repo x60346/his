@@ -255,6 +255,8 @@ const todoKey = ref(typeof useRoute().query.todo === 'string' ? String(useRoute(
 const todoLabel = typeof useRoute().query.label === 'string' ? String(useRoute().query.label) : '首頁待辦'
 const { data: todoTargets } = useQuery(async () => (todoKey.value && !isAdmin ? doctorTodoApi.doctorTodoTargets(todoKey.value) : []), [todoKey])
 let todoJumped = false
+// 待辦帶開的分頁（例：傷口）：之後從左邊清單點別的病人，不該還停在這個分頁（那位病人可能根本沒有傷口）
+let todoTab = ''
 function openTodo(x: DoctorTodoTarget) {
   if (x.discharged) {
     router.push({ name: 'or', query: x.surgeryDate ? { date: x.surgeryDate } : {} })
@@ -262,6 +264,16 @@ function openTodo(x: DoctorTodoTarget) {
   }
   admissionId.value = x.admissionId
   tab.value = x.tab
+  todoTab = x.tab
+}
+// 從左邊清單選病人：也是這件待辦的病人就照待辦開分頁；不是的話，分頁還停在待辦帶開的那個就回到「醫囑」
+// （自己切過的分頁照舊保留，換病人時常要對照同一個分頁）
+function pickPatient(id: string) {
+  const t = todoKey.value ? todoTargets.value?.find((x) => x.admissionId === id && !x.discharged) : undefined
+  if (t) return openTodo(t)
+  admissionId.value = id
+  if (todoTab && tab.value === todoTab) tab.value = 'orders'
+  todoTab = ''
 }
 watch(todoTargets, (xs) => {
   if (todoJumped || !xs?.length) return
@@ -432,7 +444,7 @@ async function submitNote() {
       <UQueryState :loading="loading" :ready="myPatients.length > 0" empty-title="目前沒有住院病人">
         <ul class="max-h-[calc(100vh-12rem)] divide-y divide-slate-100 overflow-y-auto">
           <li v-for="a in myPatients" :key="a.id">
-            <button :class="['w-full px-3 py-2.5 text-left hover:bg-slate-50', a.id === admissionId && '!bg-brand-50']" @click="admissionId = a.id">
+            <button :class="['w-full px-3 py-2.5 text-left hover:bg-slate-50', a.id === admissionId && '!bg-brand-50']" @click="pickPatient(a.id)">
               <div class="flex items-center gap-2">
                 <span class="tabular rounded bg-slate-100 px-1.5 text-xs font-medium text-slate-700">{{ a.bed?.bedNo }}</span>
                 <span class="shrink-0 whitespace-nowrap font-medium text-slate-800">{{ a.patientName }}</span>
